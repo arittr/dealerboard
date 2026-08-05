@@ -2,7 +2,7 @@
 
 Date: 2026-08-05
 
-Status: Approved design
+Status: Design approved; written spec pending Drew's review
 
 ## Summary
 
@@ -109,7 +109,7 @@ A Codex App or Kimi Web task is present while the harness reports it as unarchiv
 
 ### Leases
 
-Every upsert or reconcile refreshes the adapter's observation lease. An authoritative close, exit, or archive removes immediately; otherwise a disconnected source remains present only until its monotonic lease deadline. Expiry removes the tile with no visible stale state. A later observation creates it again and it allocates normally.
+Every upsert or reconcile refreshes the adapter's observation lease. V1 uses a 15-second default lease and requires a non-authoritative observer to refresh at least every five seconds. An authoritative close, exit, or archive removes immediately; otherwise a disconnected source remains present only until its monotonic lease deadline. Expiry removes the tile with no visible stale state. A later observation creates it again and it allocates normally.
 
 ### Turn state
 
@@ -125,6 +125,8 @@ error > waiting > working > idle
 ```
 
 Subagents never receive keys. The badge is the total number of live descendants attached to the top-level session and is omitted at zero.
+
+A record that declares a parent is never promoted to a tile. If its top-level ancestor has not arrived yet, the daemon keeps the record unplaced until the ancestor appears or the record's lease expires. Removing a top-level session removes its tile even if late child observations remain; children are never promoted implicitly.
 
 ## Adapter contract
 
@@ -144,7 +146,7 @@ Supplies the complete live set for an explicitly named authoritative provider sc
 
 The daemon serializes mutations in receive order. V1 has no adapter epoch protocol, universal sequence numbers, delta replay log, or wall-clock conflict resolver. Incarnations prevent old-surface removal races, and complete reconciliation repairs missed hook events. An adapter may use a harness-provided ordering token internally when that harness exposes one, but it is not part of the shared contract.
 
-Hook delivery has a hard local deadline and never blocks or fails the agent workflow. A missed transient state update is acceptable because the next observation corrects it; membership is repaired by reconciliation.
+Installed hook delivery has a 250-millisecond hard deadline. Delivery failure is logged locally but is not propagated to the agent workflow. A missed transient state update is acceptable because the next observation corrects it; membership is repaired by reconciliation.
 
 ## Provider adapters
 
@@ -200,21 +202,23 @@ The primary label is the harness session or task title. Fallback order is reposi
 - Removal releases its logical slot for the next session.
 - Existing live sessions are never compacted to fill a gap.
 
-With 15 or fewer sessions, logical slots 1 through 15 map directly to physical keys 1 through 15.
+Outside overflow mode, logical slots 1 through 15 map directly to physical keys 1 through 15. Session count alone does not exit overflow after gaps; the higher logical assignments remain authoritative until those sessions close.
 
 ### Overflow
 
-When the 16th session arrives, the deck enters overflow mode:
+When logical slots 1 through 15 are occupied and the 16th session arrives, the deck enters overflow mode:
 
 - Physical keys 1 through 14 display sessions from the current page.
 - Physical key 15 displays `NEXT` on every page.
+- Overflow page `p` maps logical slots `14 × (p - 1) + 1` through `14 × p` to physical keys 1 through 14.
 - The prior logical-slot-15 session becomes the first session on page two. This is the only permitted movement caused by entering overflow.
 - The new logical-slot-16 session becomes the second session on page two.
 - Further pages contain 14 logical slots each.
 - Pressing `NEXT` cycles through pages and wraps from the last page to the first.
-- Session closure does not compact higher pages. Overflow remains while any live session occupies a higher-page logical slot.
+- Session closure does not compact higher pages. A vacated cell stays blank until a new session claims that lowest free logical slot. Overflow remains while any live session occupies a higher-page logical slot.
 - If the current page becomes empty after removals, the view moves to the nearest earlier non-empty page.
 - When no live session remains above logical slot 14, overflow ends and key 15 returns to session use.
+- Current page is runtime-only state. A daemon restart begins on page one; a plugin reconnect to a still-running daemon preserves the daemon's current page.
 
 Paging changes the view, not logical assignments.
 
@@ -235,7 +239,8 @@ The `NEXT` control is handled as a deck projection action, not as a session acti
 ## Local transport and security
 
 - The daemon listens on `127.0.0.1` only.
-- A random bearer token is stored in a mode-`0600` file under the per-user application-support directory.
+- Runtime files live under `~/Library/Application Support/Stream Deck Agents/`.
+- A random bearer token is stored there in a mode-`0600` file.
 - Hooks, `agentctl`, and the Stream Deck plugin read the token from disk; it is never embedded in provider configuration.
 - Ingress uses versioned JSON requests.
 - The plugin subscribes over a local authenticated WebSocket.
