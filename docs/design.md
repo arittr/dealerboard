@@ -1,0 +1,270 @@
+# Stream Deck Agents: Product Design
+
+Date: 2026-08-05
+
+Status: Candidate product design. Provider capabilities, packaging, and activation remain hypotheses until Gate 0 evidence is complete.
+
+Gate 0 spec: [2026-08-05-stream-deck-agent-gate-0-design.md](superpowers/specs/2026-08-05-stream-deck-agent-gate-0-design.md)
+
+## Purpose of this document
+
+This document records the product Drew wants and the architectural direction that survived design review. It is not an implementation contract. Statements about provider APIs, current-session inventory, state recovery, lineage, focus, Stream Deck lifecycle, and packaging must be proven by Gate 0 before they become implementation requirements.
+
+## Product intent
+
+Build a macOS-local system that projects currently active agent sessions onto Drew's 15-key Stream Deck. The target providers are Codex App and CLI, Claude Code CLI, and Kimi Code CLI and Web.
+
+The deck is a glanceable status and navigation surface. It is not a second agent dashboard, transcript viewer, command console, or historical inbox.
+
+## Prior-art checkpoint
+
+We installed and exercised AgentDeck 1.0.2 with its Stream Deck plugin 1.0.4.0. It confirmed that status-first session tiles and a local registry are useful, while exposing boundaries for this product:
+
+- Hook-only discovery missed quiet existing sessions that `claude agents --json` could enumerate.
+- Its tiles used project names rather than the session titles Drew wants.
+- Its Codex setup did not safely merge an existing user-owned `[features]` table.
+- It did not support Kimi.
+- A key press opened an AgentDeck detail view instead of focusing the source surface.
+- It reserved deck keys for quota information instead of using the deck as a session surface.
+
+We retain the useful interaction ideas, but AgentDeck and Herdr are neither dependencies nor integration targets.
+
+## Locked user experience
+
+### One tile per logical top-level session
+
+- Top-level sessions receive tiles.
+- Subagents never receive their own keys.
+- A bare numeric badge shows the total live descendants when that count is authoritatively known and greater than zero.
+- The badge has no `+` prefix.
+- Unknown lineage must not be represented as a known zero; Gate 0 determines whether every target provider can support the strict badge contract.
+
+### Status is color-only
+
+Session tiles use a thick status-colored frame around a dark interior:
+
+- Working: blue `#20B8FF`
+- Waiting for Drew: amber `#FFB020`
+- Idle: slate `#94A3B8`
+- Error requiring attention: red `#FF4D67`
+
+There is no visible status word or status glyph. A session whose current state is unknown must not be rendered as known-idle. Gate 0 must determine whether unknown sessions receive a distinct neutral treatment or remain hidden until state becomes known.
+
+Each tile also has:
+
+- A small provider mark in the upper-left.
+- A two-line session/task title.
+- Repository or worktree name as the first fallback.
+- Provider plus shortened session identifier as the final fallback.
+
+### Membership, not completion history
+
+The product should show sessions that are currently attached, loaded, running, or otherwise positively live according to a provider-supported complete inventory.
+
+- An authoritative process exit, attachment close, or archive removes a session.
+- Archive can be an authoritative negative fact, but lack of archive is not positive liveness.
+- A stale observation disappears; reconnecting observation creates it again.
+- A completed turn becomes idle rather than done.
+- Closed, done, and stale are not visible tile states.
+- There is no manual dismissal or retained closed-session history.
+
+Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. Gate 0 measures the relevant polling, heartbeat, exit, and sleep/wake behavior; there is no universal lease duration.
+
+The previous proposal equated unarchived App/Web tasks with active tasks. That is rejected: on 2026-08-05 this host had 288 unarchived top-level Codex threads, which would turn the deck into a historical inbox.
+
+### Stable logical placement
+
+- A new top-level session takes the lowest free logical slot.
+- State, title, badge, and capability changes never reassign it.
+- Removal releases the slot.
+- Other live sessions are not compacted into gaps.
+- Stability is guaranteed only while registry membership is uninterrupted. A lease expiry removes the assignment; a later observation allocates normally.
+
+With no overflow, logical slots 1 through 15 map to physical keys 1 through 15.
+
+### Overflow
+
+When all first 15 logical slots are occupied and another session arrives:
+
+- Physical keys 1 through 14 display sessions from the current page.
+- Physical key 15 becomes `NEXT` on every page.
+- The session in logical slot 15 becomes the first session on page two.
+- The new logical-slot-16 session becomes the second session on page two.
+- Further pages contain 14 logical slots each.
+- `NEXT` cycles through non-empty pages and wraps.
+- Vacated logical cells remain blank until reused by the lowest-free allocator.
+- If the current page empties, select the nearest earlier non-empty page; if none exists, select the earliest later page.
+
+Drew chose not to compact slot 15 back automatically after overflow. Therefore overflow is an explicit persisted projection latch, not something derived solely from the current count. It ends when no live higher-page session remains, including the slot-15 session moved to page two. Moving slot 15 into overflow is the only permitted live-session movement.
+
+## Candidate architecture
+
+The staff review unanimously retained this three-layer shape.
+
+### First-party provider adapters
+
+Built-in adapters observe supported provider surfaces and own provider-specific joining, inventory, state, and event ordering. V1 does not expose an adapter SDK or accept arbitrary third-party normalized mutations.
+
+### One per-user daemon
+
+A small TypeScript daemon runs as a LaunchAgent and is the sole owner of:
+
+- Logical sessions and runtime attachments.
+- Known and unknown facts.
+- Parent/descendant topology.
+- Membership leases.
+- Effective state and badge projection.
+- Stable logical placement and paging.
+- Complete Stream Deck snapshots.
+- Diagnostics and capability health.
+
+Provider calls and raw-hook queues must be bounded. External I/O must not run while the pure reducer's serialization path is held.
+
+### Thin consumers
+
+- The Stream Deck plugin renders complete daemon snapshots and reports key events.
+- `agentctl` sends bounded raw hook events and provides read-only `status` and `doctor` output.
+- There is no desktop dashboard.
+
+## Candidate logical model
+
+A logical provider session can have multiple runtime attachments. This avoids duplicate tiles when the same session appears through CLI, App, or Web. The logical session is visible while at least one attachment is positively live. Closing one attachment removes only that attachment; the tile disappears when no live attachment remains.
+
+```ts
+type LogicalSessionIdentity = {
+  provider: "codex" | "claude" | "kimi";
+  sessionId: string;
+};
+
+type RuntimeAttachment = {
+  surface: "app" | "cli" | "web" | "background";
+  hostInstance: string;
+  incarnation: string;
+  membership: "live" | "unknown";
+  activity: "working" | "idle" | "unknown";
+  attention: "waiting" | "clear" | "unknown";
+  failure: "error" | "clear" | "unknown";
+  lineageComplete: boolean;
+  descendantCount?: number;
+  canActivate: boolean;
+};
+```
+
+Gate 0 must prove a deterministic identity and incarnation recipe for each surface. An incarnation must remain stable across daemon restart for one live attachment and change after an authoritative close followed by reopen. If a provider cannot supply both properties, that surface cannot claim strict support.
+
+Effective state retains the selected priority:
+
+```text
+error > waiting > working > idle
+```
+
+State and descendants aggregate across all live attachments and the complete live subtree. Idle requires positive evidence that activity is idle, attention is clear, and failure is clear everywhere in that aggregate. Unknown facts do not collapse to idle. Parent topology must reject self-parenting, cycles, illegal cross-scope links, and unbounded traversal.
+
+## Candidate adapter ownership and causality
+
+The former public `UPSERT` / `REMOVE` / `RECONCILE` contract is retired. Receive-order serialization cannot prevent an old inventory from deleting a new session, resurrecting a closed session, or overwriting newer waiting state.
+
+Each provider/surface scope instead has one exclusive, stateful in-process owner:
+
+- Raw hooks enqueue bounded provider events to that owner; they do not mutate the normalized registry directly.
+- Membership snapshots establish only membership.
+- Fact patches update title, activity, attention, failure, lineage, and capability without renewing membership or resurrecting a closed attachment.
+- Authoritative incarnation-end events remove membership and create an in-memory exact-incarnation tombstone for the daemon lifetime.
+- One reconcile can be in flight per scope.
+- Reconcile begin captures a scope generation and the current identity mutation revisions.
+- Reconcile commit applies inclusion and omission only to identities unchanged since that fence.
+- Events observed during the inventory are applied after the inventory result.
+
+This is local scope fencing, not a global event log, distributed clock, database, or generalized epoch protocol.
+
+## Target provider capabilities
+
+The product goal remains all requested surfaces, but none is declared supported before Gate 0.
+
+| Surface | Current evidence | Unproven requirements |
+|---|---|---|
+| Claude Code CLI/background | `claude agents --json` can enumerate quiet top-level interactive and background sessions. | Complete state recovery, descendant inventory, incarnation recipe, exact terminal focus. |
+| Codex App | Stored thread metadata and an embedded app-server exist. | Supported external live-attachment inventory, state subscription, lineage, exact task focus. |
+| Codex CLI | Process and rollout evidence exist. | Complete quiet process-to-session join, current state, lineage, terminal focus. |
+| Kimi Code CLI | Hooks and process/session artifacts exist. | Complete quiet process-to-session join, restart-safe state and lineage, terminal focus. |
+| Kimi Web | Authenticated local server APIs expose stored sessions and aggregate state while a server runs. | Browser-client attachment inventory, cold-history distinction, lineage, exact existing-tab focus. |
+
+Gate 0 produces a capability matrix. Drew then decides whether the product retains one strict universal contract or permits explicit capability tiers. Missing evidence is never silently replaced with recency, LRU, title/CWD matching, accessibility scraping, or undocumented IPC.
+
+## Activation boundary
+
+Exact focus remains a product goal, not a v1 implementation promise.
+
+- Every surface starts with `canActivate=false`.
+- No concrete activation target union or broker is implemented until Gate 0 proves an identity-to-target join for at least one surface.
+- A session key with no proven target safely no-ops and invokes the current Stream Deck action context's native alert.
+- Focus must select the exact existing surface. Opening a duplicate browser tab or matching a window by title, repository, or working directory does not pass.
+- If multiple attachments are live and no authoritative target can be selected, activation remains disabled.
+
+Allocation revision fencing remains part of the eventual boundary so a recycled key can never activate its previous owner.
+
+## Stream Deck boundary
+
+V1 targets exactly one connected compatible 5×3 device.
+
+- Zero or multiple compatible connected devices means not ready.
+- The plugin binds `(deviceId, row, column)` to the current SDK action context on `willAppear`.
+- It drops the binding on `willDisappear` or disconnect.
+- SDK action contexts are ephemeral render/alert handles, never persisted identity.
+- Profile readiness requires all 15 expected live contexts.
+- On daemon disconnect, the plugin disables presses and blanks or renders an explicit offline treatment instead of leaving stale actionable tiles.
+- Authenticated reconnection replaces the complete projection from one current snapshot.
+
+The exact profile install/uninstall behavior and physical rendering are Gate 0 proofs.
+
+## Persistence direction
+
+There is no database. Runtime facts are rebuilt from providers.
+
+An atomic, mode-`0600` JSON file may persist only placement hints, allocation revisions, and the explicit overflow latch. Identities are stored as structured fields rather than delimiter-concatenated strings. The parser must bound file size and validate unique identities, slots, revisions, and safe integers.
+
+Hints remain invisible until their owning provider scope confirms membership. They release after that scope's first complete reconcile or a declared per-scope failure deadline. Failed writes use bounded retry/backoff and surface degraded health.
+
+## Transport and security direction
+
+- Communication remains local to the current macOS user.
+- Full Stream Deck snapshots are preferred to delta replay.
+- A `0700` runtime directory and capability-specific bounded validation are required.
+- Hostile same-UID processes are out of scope and must be documented; a `0600` token is not a boundary against them.
+- Raw hooks cannot submit activation targets.
+- Gate 0 decides loopback bearer transport versus a mode-`0600` Unix socket based on what the Stream Deck runtime can reliably access.
+
+## Packaging and ownership direction
+
+The LaunchAgent must use an owned runtime or self-contained bundle and absolute paths. It cannot depend on an interactive shell, nvm, repository checkout, or ambient `PATH`.
+
+Installation remains additive and reversible:
+
+- Preflight and parse every target before mutation.
+- Apply atomic semantic configuration edits.
+- Publish an ownership manifest last.
+- Record semantic entry identifiers and installed-content hashes.
+- Reinstall or uninstall only unchanged owned material.
+- Preserve and diagnose user-modified owned material instead of overwriting or deleting it.
+- Keep daemon/hook ownership separate from Stream Deck plugin/profile ownership until supported removal is proven.
+
+Apple Events, TCC identity, signing, profile prompts, login launch, sleep/wake, and upgrade behavior are evidence gates rather than paper assumptions.
+
+## Non-goals
+
+- No AgentDeck or Herdr dependency or integration.
+- No database, replay log, generalized adapter SDK, or remote service.
+- No session history, desktop dashboard, or manual dismissal.
+- No stop, approve, archive, prompt injection, or other agent-control action.
+- No fuzzy focus or screen scraping.
+- No automatic updater in the first version.
+- No full product implementation plan until Gate 0 is reviewed.
+
+## Decision after Gate 0
+
+Gate 0 does not automatically weaken or cut the product. It reports evidence. Drew then chooses one of two explicit outcomes:
+
+1. Keep the strict universal contract and exclude or block surfaces that cannot satisfy it.
+2. Approve capability tiers that truthfully represent reduced membership, state, lineage, or activation support.
+
+Only after that choice do we revise this candidate design into an implementation contract and write the full product plan.
