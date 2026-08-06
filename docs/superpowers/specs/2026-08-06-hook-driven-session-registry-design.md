@@ -20,8 +20,10 @@ The core must remain independent of Stream Deck so a different local display can
 - Hooks write normalized events directly to a shared SQLite database through one small command-line helper.
 - There are no leases, heartbeats, status-expiry timers, provider inventories, reconciliation jobs, or tombstones.
 - The database contains only active sessions. An end event deletes its row.
-- A Bun/TypeScript daemon derives hierarchy, effective status, and stable logical ordering, then atomically publishes a complete JSON snapshot.
+- The event transaction validates hierarchy and assigns stable logical slots before commit.
+- A read-only Bun/TypeScript daemon derives effective top-level projections and atomically publishes a complete JSON snapshot.
 - The Stream Deck plugin is a TypeScript consumer running in Stream Deck's supported Node.js runtime. It owns all device layout, paging, SVG rendering, animation, and action-context behavior.
+- One bundled 5x3 Stream Deck profile provisions the 15 action contexts required by the product.
 - Session keys are display-only in V1. The only key action is paging with `NEXT` when overflow exists.
 - Tests stay concentrated on the actual data flow and core contracts. This is a personal tool, not a production service.
 
@@ -31,18 +33,38 @@ The core must remain independent of Stream Deck so a different local display can
 Claude / Codex / Kimi hooks
              |
              v
-  event helper -> SQLite <- projection daemon
-                                  |
-                                  v
-                       atomic session snapshot
-                                  |
-                    +-------------+-------------+
-                    |                           |
-                    v                           v
-          Stream Deck plugin          future local surface
+       event helper -> SQLite
+                          |
+                          | read-only query
+                          v
+                 projection daemon
+                          |
+                          v
+               atomic session snapshot
+                          |
+             +------------+------------+
+             |                         |
+             v                         v
+   Stream Deck plugin        future local surface
 ```
 
 The database and snapshot live in a per-user application-support directory with permissions restricted to the current user. There is no network listener or remote service.
+
+### Canonical local paths
+
+Every component resolves the current macOS user's home directory through its runtime's operating-system API, never by passing a literal `~`, using its working directory, or consulting ambient `PATH`:
+
+```text
+~/Library/Application Support/com.drewritter.stream-deck-agents/
+  bin/stream-deck-agents
+  registry.sqlite3
+  snapshot-v1.json
+  logs/
+
+~/Library/LaunchAgents/com.drewritter.stream-deck-agents.plist
+```
+
+The application-support directory and installed executable use mode `0700`. The database, snapshot, and LaunchAgent plist use mode `0600`. Snapshot temporary files are created in the same application-support directory so replacement remains atomic.
 
 ## Components
 
@@ -58,9 +80,11 @@ One TypeScript command-line program receives a provider name plus native hook in
 
 The helper never stores prompts, transcripts, tool arguments, tool output, environment variables, credentials, or arbitrary hook payloads.
 
-Each invocation validates its input and performs one short SQLite transaction. It does not contact the daemon or Stream Deck plugin. This keeps hooks useful when either consumer is absent.
+Each invocation validates its input and performs one short `BEGIN IMMEDIATE` SQLite transaction. It does not contact the daemon or Stream Deck plugin. This keeps hooks useful when either consumer is absent.
 
-The installed core is one compiled Bun executable named `stream-deck-agents`. Hooks invoke its `event` subcommand, `launchd` invokes its `daemon` subcommand, and Drew uses its `sessions` subcommands for inspection and repair. The responsibilities remain separate inside the codebase even though installation uses one binary.
+The event and repair subcommands share one registry mutation layer. That layer owns event-role validation, composite provider/session identity, parent existence and provider equality, prospective-cycle rejection, cascading removal, and logical-slot allocation. No other component mutates active registry state during normal operation.
+
+The installed core is one compiled Bun executable named `stream-deck-agents`. Installation invokes its `init` subcommand, hooks invoke `event`, `launchd` invokes `daemon`, and Drew uses `sessions` subcommands for inspection and repair. The responsibilities remain separate inside the codebase even though installation uses one binary.
 
 ### Active-session database
 
@@ -86,34 +110,43 @@ type ActiveSession = {
 
 The database has no closed-session table or event history. `updatedAt` is diagnostic metadata only; it never changes membership or status by age.
 
-`SessionStart` initially permits a null slot. The daemon assigns and persists the lowest free slot before publishing that session. Child sessions always retain a null slot. Persisting assignments alongside active state prevents daemon restart from reordering the deck.
+Every committed top-level row has a positive logical slot. `SessionStart` preserves the slot of an existing active identity or allocates the lowest free positive slot inside its write transaction. Child sessions always have a null slot. A partial unique index rejects duplicate non-null slots, and a table constraint rejects top-level rows without slots or child rows with slots. Persisting assignments alongside active state prevents daemon restart from reordering the deck.
+
+The composite parent key `(provider, parentSessionId)` references `(provider, sessionId)` with `ON DELETE CASCADE`. Mutation validation still checks parent role and prospective cycles because foreign keys alone cannot express those invariants.
+
+### Schema ownership
+
+`stream-deck-agents init` is the only schema owner. It creates the application-support directory and absent database, enables WAL, and applies known non-destructive migrations in one transaction using `PRAGMA user_version`. Every database connection enables foreign-key enforcement. Installation runs `init` before loading the daemon, installing hooks, or accepting events.
+
+Every runtime subcommand validates `user_version`. Hooks fail open on an unsupported schema, repair commands fail without mutation, and the daemon publishes an unhealthy snapshot. No runtime path automatically deletes or recreates an unrecognized database.
 
 ### Projection daemon
 
-A small Bun/TypeScript daemon runs under `launchd`. It periodically checks SQLite for committed changes and recomputes the projection only when the data changes.
+A small Bun/TypeScript daemon runs under `launchd` with one long-lived read-only SQLite connection. It publishes once at startup, then checks `PRAGMA data_version` every 250 milliseconds and recomputes only after another connection commits. It reads each projection from one consistent SQLite read transaction and compares the structured result before replacing the snapshot.
 
 The daemon owns:
 
-- Parent/descendant validation and traversal.
+- Defensive parent/descendant validation and bounded traversal.
 - Descendant counts.
 - Effective top-level status.
-- Lowest-free logical-slot assignment and release.
+- Ordering by the slots already committed with active top-level sessions.
 - The surface-neutral JSON schema.
 - Atomic snapshot publication.
 - Database and projection diagnostics.
 
-It does not know the Stream Deck's dimensions, action contexts, pages, SVG format, animation phase, or profile settings.
+The daemon never mutates the registry. It does not know the Stream Deck's dimensions, action contexts, pages, SVG format, animation phase, or profile settings.
+
+A one-shot `snapshot` subcommand polled by the plugin was considered and rejected for V1. At a one-second interval it could launch 86,400 processes per day while moving deadline, child-process, output-bound, and failure handling into the plugin. The long-lived read-only daemon performs cheaper in-process polls and remains useful to any later local surface.
 
 ### Surface-neutral snapshot
 
 The daemon writes one complete snapshot using a temporary file followed by atomic replacement. Consumers poll the file's modification time and reread only after it changes. This avoids a local server, socket protocol, authentication token, reconnect state machine, and delta replay.
 
-The snapshot contains a schema version, an informational publication revision, health, and ordered top-level sessions:
+The snapshot contains a schema version, health, and ordered top-level sessions:
 
 ```ts
 type SessionSnapshotV1 = {
   schemaVersion: 1;
-  revision: number;
   health: {
     status: "ok" | "error";
     message?: string;
@@ -126,19 +159,19 @@ type SessionSnapshotV1 = {
     project: string | null;
     descendantCount: number;
     logicalSlot: number;
-    openedAt: string;
-    updatedAt: string;
   }>;
 };
 ```
 
-`revision` is informative within one daemon run. Consumers always treat a snapshot as a complete replacement and must not depend on revisions being monotonic across daemon restarts.
+Consumers always treat a valid snapshot as a complete replacement. Timestamps remain available in SQLite and `sessions list` for diagnostics but are not part of the consumer contract.
 
 A future surface reads this same contract and supplies its own layout and rendering. V1 adds no surface registration system or shared rendering abstraction.
 
 ### Stream Deck plugin
 
-The plugin uses TypeScript and the official `@elgato/streamdeck` SDK. It follows the standard Stream Deck TypeScript/Rollup scaffold and runs as JavaScript under the Node.js version declared in its manifest. Bun may install dependencies and run build commands, but Stream Deck does not execute the plugin under Bun.
+The plugin uses TypeScript and the official `@elgato/streamdeck` SDK. It follows the standard Stream Deck TypeScript/Rollup scaffold, declares Node.js 24 and Stream Deck 7.1 as its minimum runtimes, and uses SDK version 3. Bun may install dependencies and run build commands, but Stream Deck does not execute the plugin under Bun.
+
+The plugin bundle includes one read-only profile for device type `0`, containing the same single action in all 15 row-major cells. The manifest registers that `.streamDeckProfile` with `AutoInstall: true`, `Readonly: true`, and `DontAutoSwitchWhenInstalled: false`. Installing and selecting this profile is part of setup and physical verification; installing the plugin alone is not considered ready.
 
 The plugin owns:
 
@@ -150,7 +183,11 @@ The plugin owns:
 - Dynamic SVG generation and animation scheduling.
 - Missing, malformed, or unhealthy snapshot treatment.
 
-The plugin uses one shared animation clock, updates only visible keys whose rendered frame changed, and stays within the SDK's programmatic-update guidance. It generates SVG frames through `setImage`; it does not depend on animated GIF support or attempt video-rate animation.
+On `willAppear`, the plugin verifies one 5x3 keypad device, registers the action's device, context, row, and column, reads the current snapshot when the first context appears, and immediately renders that context from cached state. While at least one relevant context is visible, it checks the canonical snapshot path every 250 milliseconds and rereads after replacement. `willDisappear` unregisters the context and cancels its queued image work; device disconnect clears all contexts for that device. Snapshot polling stops when no relevant context is visible.
+
+The plugin uses one shared animation clock, coalesces obsolete frames, and updates only visible keys whose rendered frame changed. The initial cadence is at most four frames per second for any animated key and never exceeds the SDK's ten-programmatic-updates-per-second guidance for a key. A worst-case page with 14 animated keys is tuned and checked on the physical device rather than assuming a global SDK quota that the published guidance does not define.
+
+Dynamic titles and labels are length-bounded and XML-escaped before SVG construction. The complete SVG data URL is percent-encoded before `setImage`. The plugin does not depend on animated GIF support or attempt video-rate animation.
 
 ## Event and lifecycle contract
 
@@ -158,7 +195,7 @@ Provider adapters map native hooks into these normalized transitions:
 
 | Normalized event | Database effect |
 |---|---|
-| `SessionStart` | Insert or reset a top-level session as `idle`, preserving an existing logical slot for the same active identity. |
+| `SessionStart` | In one `BEGIN IMMEDIATE` transaction, insert or reset a top-level session as `idle`, preserve its existing slot, or allocate the lowest free positive slot. |
 | `Activity` | Update an existing session to `working`. Prompt and tool activity map here. |
 | `Attention` | Update an existing session to `waiting`. Permission and other user-attention hooks map here. |
 | `Stop` | Update an existing session to `idle`. |
@@ -167,7 +204,7 @@ Provider adapters map native hooks into these normalized transitions:
 | `SubagentStart` | Insert or reset a child as `idle` when its parent is active. The child receives no logical slot. |
 | `SubagentStop` | Delete the existing child and its active descendants. |
 
-Only `SessionStart` and `SubagentStart` may create rows. Every other event updates or deletes an existing row and otherwise becomes a logged no-op. Therefore a delayed activity or stop event cannot resurrect a session after its end event. A start with an invalid or missing parent is also a logged no-op.
+Only `SessionStart` and `SubagentStart` may create rows. Every other event updates or deletes an existing row and otherwise becomes a logged no-op. Therefore a delayed activity or stop event cannot resurrect a session after its end event. A start that violates role, parent, provider, slot, or prospective-cycle invariants is also a logged no-op.
 
 V1 trusts each harness to deliver events for one session in useful order. It does not add sequence numbers, an event log, reconciliation, or incarnation fencing. Missed and reordered events are accepted limitations. Stale rows are repaired explicitly rather than inferred from elapsed time.
 
@@ -181,11 +218,11 @@ The daemon computes effective status across the top-level session and all active
 error > waiting > working > idle
 ```
 
-For example, an idle parent with one waiting child appears as waiting with descendant count `1`. Session mutations reject self-parenting, missing parents, and cross-provider parentage. The daemon additionally treats cycles or other corrupt topology as a projection error rather than traversing it.
+For example, an idle parent with one waiting child appears as waiting with descendant count `1`. The registry mutation layer rejects self-parenting, missing parents, cross-provider parentage, and prospective cycles before commit. The daemon defensively treats any topology that still violates those invariants as a projection error rather than traversing it.
 
 ## Stable ordering and Stream Deck paging
 
-A newly observed top-level session receives the lowest free positive logical slot. Status, title, project, and descendant changes do not move it. Deletion releases its slot, but remaining sessions do not compact.
+A newly observed top-level session receives the lowest free positive logical slot in the same transaction that creates it. Status, title, project, and descendant changes do not move it. Deletion releases its slot, but remaining sessions do not compact.
 
 Without overflow, logical slots 1 through 15 map to physical keys 1 through 15.
 
@@ -199,7 +236,7 @@ Once a live session occupies a logical slot above 15:
 - Vacated logical cells remain blank until reused by the lowest-free allocator.
 - If the current page empties, the plugin selects the nearest earlier non-empty page, or the earliest later page when none exists.
 
-Overflow is a Stream Deck projection concern. Its latch and current page live in plugin global settings, not in the database or core snapshot. The latch ends when no live session remains on a higher page, including the session moved from logical slot 15.
+Overflow is a Stream Deck projection concern. Its latch and current page live in plugin global settings, not in the database or core snapshot. Restored settings are validated and the page is clamped to a non-empty page; settings are written only after `NEXT` or clamping. The latch ends when no live session remains on a higher page, including the session moved from logical slot 15.
 
 ## Tile presentation and animation
 
@@ -224,13 +261,13 @@ Animation phase is local plugin state and never appears in the database or snaps
 
 ### Hook failures
 
-Hook execution is fail-open. The helper attempts one short transaction and one bounded retry for SQLite contention. Malformed input, an unavailable database, or a failed write is logged, then the helper exits without interrupting the harness.
+Hook execution is fail-open. The helper attempts one short transaction and one bounded retry for SQLite contention. Malformed input, an unavailable or unsupported database, or a failed write is logged, then the helper exits successfully so it does not interrupt the harness.
 
 ### Daemon and snapshot failures
 
-`launchd` keeps the daemon running. On a database or schema read failure, the daemon does not mutate or recreate the database. It publishes an unhealthy snapshot while retaining sessions from the last valid snapshot when one exists.
+`launchd` keeps the daemon running. On a database or schema read failure, the daemon does not mutate or recreate the database. It publishes a schema-valid snapshot with `health.status` set to `error` and an empty `sessions` array.
 
-The plugin validates `schemaVersion` and required fields. With a previous valid snapshot, a missing, malformed, or explicitly unhealthy snapshot retains the last good session rendering and adds a clear error treatment. Without a previous valid snapshot, it renders an otherwise blank offline treatment.
+The plugin validates `schemaVersion` and required fields. During one plugin process lifetime, a missing, malformed, or explicitly unhealthy snapshot retains the last good session rendering and adds a clear error treatment. A cold plugin without cached state renders an otherwise blank offline treatment.
 
 There is deliberately no snapshot heartbeat and no age-based daemon-health inference. A stale file is not used to expire sessions. `launchd` restart behavior and logs provide operational recovery.
 
@@ -252,28 +289,37 @@ The codebase uses TypeScript throughout:
 
 - Core helper and daemon run on Bun and use built-in `bun:sqlite`.
 - Shared event and snapshot types contain no Bun or Stream Deck imports.
-- The Stream Deck plugin builds with the official scaffold and runs under its declared Node.js runtime.
+- The Stream Deck plugin builds and packages with the official scaffold under Node.js 24, then runs under Stream Deck's Node.js 24 runtime.
 - Bun is the repository package manager and test runner where compatible.
 
-The first local installation compiles the Bun core to one standalone macOS executable, installs it at an absolute per-user path, loads a small LaunchAgent, and installs the Stream Deck plugin bundle. Drew adds the documented hook snippets to the three harnesses manually. V1 does not require a general installer, updater, marketplace package, cross-platform bundle, or automatic mutation of provider configuration.
+The first local installation proceeds in this order:
+
+1. Compile and install the Bun core at the canonical absolute path.
+2. Run `stream-deck-agents init` to create or migrate the database.
+3. Install and load the read-only projection daemon's LaunchAgent.
+4. Build, validate, and install the Stream Deck plugin and bundled 5x3 profile.
+5. Have Drew add the documented hook snippets to the three harnesses manually.
+
+Hooks are configured last so the first `SessionStart` cannot arrive before its schema exists. V1 does not require a general installer, updater, marketplace package, cross-platform bundle, or automatic mutation of provider configuration.
 
 ## Lean verification strategy
 
 Implementation uses TDD for the contracts that can silently corrupt the displayed state:
 
-1. **Event to SQLite:** start, status changes, end deletion, late-event non-resurrection, child linkage, effective status, descendant counts, and stable logical-slot reuse.
-2. **SQLite to snapshot:** a real temporary database produces the complete schema-versioned snapshot through atomic replacement.
-3. **Snapshot to key model:** representative snapshots produce the expected structured visible-key models, paging, provider identity, status treatment, and animation selection.
-4. **Concurrent hook smoke:** two real helper processes write different sessions to one SQLite database successfully.
+1. **Event to SQLite:** start, status changes, end deletion, late-event non-resurrection, invalid-topology rejection, cascading children, and stable logical-slot reuse.
+2. **SQLite to snapshot:** a real temporary database produces one transaction-consistent, schema-versioned snapshot through `data_version` detection and atomic replacement.
+3. **Snapshot to key model:** representative snapshots produce the expected structured visible-key models, paging, provider identity, status treatment, and animation selection. One renderer case includes bounded Unicode and XML metacharacters.
+4. **Concurrent hook smoke:** two real helper processes start different top-level sessions and receive distinct slots from one SQLite database.
+5. **Plugin lifecycle smoke:** appearing contexts render immediately from cached state, disappearing contexts stop receiving work, and the scheduler coalesces frames without exceeding the per-key update bound.
 
 Renderer tests assert structured key models and minimal SVG validity, not large generated SVG strings or aesthetic details. Animation quality is reviewed on the physical deck.
 
 Completion evidence is intentionally small and separate:
 
 - Typecheck and focused automated tests pass.
-- The Stream Deck plugin builds and packages under its declared Node.js runtime.
-- The plugin installs and renders representative states on Drew's device using the event CLI.
-- The physical check covers idle, working, waiting, error, descendant aggregation, session removal, and overflow paging.
+- The Stream Deck plugin builds and packages under Node.js 24 with the bundled profile registered in its manifest.
+- The plugin and profile install and expose all 15 expected contexts on Drew's device.
+- The physical check covers idle, working, waiting, error, descendant aggregation, session removal, overflow paging, profile switch away/back, and a page with 14 animated keys.
 
 The physical check does not re-prove that Codex Desktop or the other harnesses invoke their configured hooks; that premise is accepted for this personal V1.
 
@@ -300,6 +346,7 @@ The physical check does not re-prove that Codex Desktop or the other harnesses i
 
 - [Stream Deck SDK getting started](https://docs.elgato.com/streamdeck/sdk/introduction/getting-started/)
 - [Stream Deck key image API](https://docs.elgato.com/streamdeck/sdk/guides/keys/)
+- [Stream Deck bundled profiles](https://docs.elgato.com/streamdeck/sdk/guides/profiles/)
 - [Stream Deck plugin guidelines](https://docs.elgato.com/guidelines/stream-deck/plugins/)
 - [Stream Deck settings](https://docs.elgato.com/streamdeck/sdk/guides/settings/)
 - [Bun SQLite](https://bun.sh/docs/runtime/sqlite)
