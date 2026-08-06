@@ -1,0 +1,144 @@
+/**
+ * Shared contracts for the hook-driven session registry.
+ *
+ * This module is imported by both the Bun core and the Node.js Stream Deck
+ * plugin bundle, so it must stay free of runtime-specific and SDK imports.
+ */
+
+export type Provider = "claude" | "codex" | "kimi";
+
+export type SessionStatus = "idle" | "working" | "waiting" | "error";
+
+export type RegistryEvent =
+  | { kind: "SessionStart"; provider: Provider; sessionId: string; title: string | null; project: string | null; observedAt: string }
+  | { kind: "Activity" | "Attention" | "Stop" | "StopFailure"; provider: Provider; sessionId: string; observedAt: string }
+  | { kind: "SessionEnd"; provider: Provider; sessionId: string; observedAt: string }
+  | { kind: "SubagentStart"; provider: Provider; sessionId: string; parentSessionId: string; title: string | null; project: string | null; observedAt: string }
+  | { kind: "SubagentStop"; provider: Provider; sessionId: string; observedAt: string };
+
+export type ProjectedSession = {
+  provider: Provider;
+  sessionId: string;
+  status: SessionStatus;
+  title: string | null;
+  project: string | null;
+  descendantCount: number;
+  logicalSlot: number;
+};
+
+export type SnapshotHealth = {
+  status: "ok" | "error";
+  message?: string;
+};
+
+export type SessionSnapshotV1 = {
+  schemaVersion: 1;
+  health: SnapshotHealth;
+  sessions: ProjectedSession[];
+};
+
+const MAX_STRING_CODE_POINTS = 256;
+
+const PROVIDERS: ReadonlySet<string> = new Set(["claude", "codex", "kimi"]);
+const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isBoundedString = (value: unknown): value is string =>
+  typeof value === "string" && Array.from(value).length <= MAX_STRING_CODE_POINTS;
+
+const isNullableBoundedString = (value: unknown): value is string | null =>
+  value === null || isBoundedString(value);
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+const isPositiveInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 1;
+
+const invalid = (reason: string): never => {
+  throw new Error(`invalid session snapshot: ${reason}`);
+};
+
+const parseHealth = (value: unknown): SnapshotHealth => {
+  if (!isRecord(value)) {
+    return invalid("health must be an object");
+  }
+  if (value.status !== "ok" && value.status !== "error") {
+    return invalid("health.status must be ok or error");
+  }
+  if ("message" in value && !isBoundedString(value.message)) {
+    return invalid("health.message must be a bounded string");
+  }
+  const health: SnapshotHealth = { status: value.status };
+  if ("message" in value) {
+    health.message = value.message as string;
+  }
+  return health;
+};
+
+const parseSession = (value: unknown): ProjectedSession => {
+  if (!isRecord(value)) {
+    return invalid("session must be an object");
+  }
+  if (typeof value.provider !== "string" || !PROVIDERS.has(value.provider)) {
+    return invalid("session.provider is not a known provider");
+  }
+  if (!isBoundedString(value.sessionId)) {
+    return invalid("session.sessionId must be a bounded string");
+  }
+  if (typeof value.status !== "string" || !SESSION_STATUSES.has(value.status)) {
+    return invalid("session.status is not a known status");
+  }
+  if (!isNullableBoundedString(value.title)) {
+    return invalid("session.title must be null or a bounded string");
+  }
+  if (!isNullableBoundedString(value.project)) {
+    return invalid("session.project must be null or a bounded string");
+  }
+  if (!isNonNegativeInteger(value.descendantCount)) {
+    return invalid("session.descendantCount must be a non-negative integer");
+  }
+  if (!isPositiveInteger(value.logicalSlot)) {
+    return invalid("session.logicalSlot must be a positive integer");
+  }
+  return {
+    provider: value.provider as Provider,
+    sessionId: value.sessionId,
+    status: value.status as SessionStatus,
+    title: value.title,
+    project: value.project,
+    descendantCount: value.descendantCount,
+    logicalSlot: value.logicalSlot,
+  };
+};
+
+/**
+ * Validate an unknown value as a v1 session snapshot, returning a newly
+ * constructed snapshot. Throws on any contract violation; no coercion.
+ */
+export const parseSessionSnapshot = (value: unknown): SessionSnapshotV1 => {
+  if (!isRecord(value)) {
+    return invalid("snapshot must be an object");
+  }
+  if (value.schemaVersion !== 1) {
+    return invalid("schemaVersion must be 1");
+  }
+  if (!Array.isArray(value.sessions)) {
+    return invalid("sessions must be an array");
+  }
+  const sessions = value.sessions.map(parseSession);
+  const seenSlots = new Set<number>();
+  for (const session of sessions) {
+    if (seenSlots.has(session.logicalSlot)) {
+      return invalid(`duplicate logicalSlot ${session.logicalSlot}`);
+    }
+    seenSlots.add(session.logicalSlot);
+  }
+  return {
+    schemaVersion: 1,
+    health: parseHealth(value.health),
+    sessions,
+  };
+};
