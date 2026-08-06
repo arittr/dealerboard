@@ -2,7 +2,7 @@
 
 Date: 2026-08-06
 
-Status: Approved in conversation; written spec pending Drew's review.
+Status: Approved by Drew.
 
 Supersedes: The inventory-, reconciliation-, lease-, activation-, and daemon-rendering architecture in [`docs/design.md`](../../design.md). That document and the Gate 0 documents remain historical decision records, not implementation requirements for this design.
 
