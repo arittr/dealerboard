@@ -2,7 +2,7 @@
 
 Date: 2026-08-05
 
-Status: Candidate product design. Provider capabilities, packaging, and activation remain hypotheses until Gate 0 evidence is complete.
+Status: Superseded on 2026-08-06 by the [hook-driven session registry design](superpowers/specs/2026-08-06-hook-driven-session-registry-design.md). Retained as a historical decision record.
 
 Gate 0 spec: [2026-08-05-stream-deck-agent-gate-0-design.md](superpowers/specs/2026-08-05-stream-deck-agent-gate-0-design.md)
 
