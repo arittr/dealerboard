@@ -1,0 +1,650 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runCli, MAX_STDIN_BYTES, type CliDependencies } from "../src/core/cli";
+import { createFileDiagnostics, type DiagnosticRecord } from "../src/core/diagnostics";
+import { resolveAppPaths, type AppPaths } from "../src/core/paths";
+import { applyRegistryEvents, listSessions } from "../src/core/registry";
+import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
+import type { RegistryEvent } from "../src/protocol";
+
+const NOW = "2026-08-06T00:00:00.000Z";
+const DIAGNOSTIC_KEYS = new Set(["timestamp", "component", "code", "provider", "sessionId"]);
+
+let tempHome: string;
+let paths: AppPaths;
+
+beforeEach(() => {
+  tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-cli-"));
+  paths = resolveAppPaths(tempHome);
+});
+
+afterEach(() => {
+  rmSync(tempHome, { recursive: true, force: true });
+});
+
+const stdinOf = (text: string, chunkSize = Number.POSITIVE_INFINITY): AsyncIterable<Uint8Array> => {
+  const bytes = new TextEncoder().encode(text);
+  return (async function* () {
+    if (chunkSize === Number.POSITIVE_INFINITY) {
+      if (bytes.byteLength > 0) {
+        yield bytes;
+      }
+      return;
+    }
+    for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+      yield bytes.subarray(offset, offset + chunkSize);
+    }
+  })();
+};
+
+type Harness = {
+  deps: CliDependencies;
+  diagnostics: DiagnosticRecord[];
+  delays: number[];
+  stdout: () => string;
+  stderr: () => string;
+};
+
+const makeHarness = (overrides: Partial<CliDependencies> = {}): Harness => {
+  const diagnostics: DiagnosticRecord[] = [];
+  const delays: number[] = [];
+  let out = "";
+  let err = "";
+  const deps: CliDependencies = {
+    paths,
+    stdin: stdinOf(""),
+    now: () => NOW,
+    delay: (milliseconds) => {
+      delays.push(milliseconds);
+      return Promise.resolve();
+    },
+    diagnostics: (record) => {
+      diagnostics.push(record);
+    },
+    stdout: (text) => {
+      out += text;
+    },
+    stderr: (text) => {
+      err += text;
+    },
+    ...overrides,
+  };
+  return { deps, diagnostics, delays, stdout: () => out, stderr: () => err };
+};
+
+const startEvent = (sessionId: string, extra: Record<string, unknown> = {}): string =>
+  JSON.stringify({
+    hook_event_name: "SessionStart",
+    session_id: sessionId,
+    cwd: "/users/drew/project-x",
+    session_title: `Title for ${sessionId}`,
+    ...extra,
+  });
+
+const initRegistry = (): void => {
+  initializeDatabase(paths);
+};
+
+const listRows = (): ReturnType<typeof listSessions> => {
+  const db = openRegistryDatabase(paths.database, "readonly");
+  try {
+    return listSessions(db);
+  } finally {
+    db.close();
+  }
+};
+
+const sqliteError = (code: string, message: string): Error & { code: string } =>
+  Object.assign(new Error(message), { code });
+
+describe("init", () => {
+  test("creates a version 1 database and stays silent on stdout", async () => {
+    const harness = makeHarness();
+    expect(await runCli(["init"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+    } finally {
+      db.close();
+    }
+
+    // Re-running init is idempotent.
+    expect(await runCli(["init"], harness.deps)).toBe(0);
+  });
+
+  test("returns nonzero when the existing schema is unsupported", async () => {
+    initRegistry();
+    const raw = new Database(paths.database);
+    try {
+      raw.exec("PRAGMA user_version = 99");
+    } finally {
+      raw.close();
+    }
+
+    const harness = makeHarness();
+    expect(await runCli(["init"], harness.deps)).not.toBe(0);
+    expect(harness.stderr()).not.toBe("");
+    expect(harness.stdout()).toBe("");
+  });
+});
+
+describe("event ingress", () => {
+  test("applies valid native JSON to the registry and prints nothing", async () => {
+    initRegistry();
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1")) });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.diagnostics).toEqual([]);
+
+    expect(listRows()).toEqual([
+      {
+        provider: "claude",
+        sessionId: "s1",
+        parentSessionId: null,
+        status: "idle",
+        title: "Title for s1",
+        project: "project-x",
+        logicalSlot: 1,
+        openedAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+  });
+
+  test("reassembles a payload split across many stdin chunks", async () => {
+    initRegistry();
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1"), 7) });
+    expect(await runCli(["event", "kimi"], harness.deps)).toBe(0);
+    expect(listRows().map((row) => [row.provider, row.sessionId])).toEqual([["kimi", "s1"]]);
+  });
+
+  test("never creates a row from UserPromptSubmit before a SessionStart", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "s1",
+          prompt: "SENTINEL_PROMPT_NEVER_STORED",
+        }),
+      ),
+    });
+    expect(await runCli(["event", "codex"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(listRows()).toEqual([]);
+  });
+
+  test("returns zero with an invalid_input diagnostic for malformed JSON", async () => {
+    initRegistry();
+    const harness = makeHarness({ stdin: stdinOf('{"hook_event_name":"SessionStart",') });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.diagnostics).toEqual([
+      { timestamp: NOW, component: "cli", code: "invalid_input", provider: "claude" },
+    ]);
+    expect(listRows()).toEqual([]);
+  });
+
+  test("returns zero with an invalid_input diagnostic for non-object JSON", async () => {
+    initRegistry();
+    const harness = makeHarness({ stdin: stdinOf('["not","an","object"]') });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([
+      { timestamp: NOW, component: "cli", code: "invalid_input", provider: "claude" },
+    ]);
+  });
+
+  test("accepts exactly 65,536 stdin bytes and rejects 65,537", async () => {
+    initRegistry();
+    const prefix = '{"hook_event_name":"SessionStart","session_id":"s1","title":"';
+    const suffix = '"}';
+    const exact = `${prefix}${"x".repeat(MAX_STDIN_BYTES - prefix.length - suffix.length)}${suffix}`;
+    expect(new TextEncoder().encode(exact).byteLength).toBe(MAX_STDIN_BYTES);
+
+    const withinLimit = makeHarness({ stdin: stdinOf(exact) });
+    expect(await runCli(["event", "claude"], withinLimit.deps)).toBe(0);
+    expect(withinLimit.diagnostics).toEqual([]);
+    expect(listRows()).toHaveLength(1);
+
+    const overLimit = makeHarness({ stdin: stdinOf(`${exact.slice(0, -2)}x"}`) });
+    expect(new TextEncoder().encode(`${exact.slice(0, -2)}x"}`).byteLength).toBe(MAX_STDIN_BYTES + 1);
+    expect(await runCli(["event", "claude"], overLimit.deps)).toBe(0);
+    expect(overLimit.stdout()).toBe("");
+    expect(overLimit.diagnostics).toEqual([
+      { timestamp: NOW, component: "cli", code: "invalid_input", provider: "claude" },
+    ]);
+  });
+
+  test("stops reading stdin as soon as the byte cap is exceeded", async () => {
+    initRegistry();
+    let pulls = 0;
+    const chunk = new Uint8Array(40_000);
+    const stdin = (async function* () {
+      pulls += 1;
+      yield chunk;
+      pulls += 1;
+      yield chunk;
+      pulls += 1;
+      yield chunk;
+    })();
+    const harness = makeHarness({ stdin });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.diagnostics.map((record) => record.code)).toEqual(["invalid_input"]);
+    // 2 chunks cross 65,536 bytes; the third chunk is never pulled.
+    expect(pulls).toBe(2);
+  });
+
+  test("returns zero for unsupported or missing providers without touching stdin", async () => {
+    initRegistry();
+    let pulled = false;
+    const stdin = (async function* () {
+      pulled = true;
+      yield new Uint8Array(1);
+    })();
+
+    const unsupported = makeHarness({ stdin });
+    expect(await runCli(["event", "bogus"], unsupported.deps)).toBe(0);
+    expect(unsupported.stdout()).toBe("");
+    expect(unsupported.diagnostics).toEqual([
+      { timestamp: NOW, component: "cli", code: "unsupported_provider", provider: "bogus" },
+    ]);
+
+    const missing = makeHarness({ stdin });
+    expect(await runCli(["event"], missing.deps)).toBe(0);
+    expect(missing.diagnostics).toEqual([
+      { timestamp: NOW, component: "cli", code: "unsupported_provider" },
+    ]);
+    expect(pulled).toBe(false);
+  });
+
+  test("returns zero for extra event arguments", async () => {
+    initRegistry();
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1")) });
+    expect(await runCli(["event", "claude", "extra"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([
+      { timestamp: NOW, component: "cli", code: "invalid_input", provider: "claude" },
+    ]);
+    expect(listRows()).toEqual([]);
+  });
+
+  test("returns zero with a missing_database diagnostic and never creates the file", async () => {
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1")) });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.diagnostics).toEqual([
+      {
+        timestamp: NOW,
+        component: "cli",
+        code: "missing_database",
+        provider: "claude",
+        sessionId: "s1",
+      },
+    ]);
+    expect(existsSync(paths.database)).toBe(false);
+  });
+
+  test("returns zero with an unsupported_schema diagnostic for a future user_version", async () => {
+    initRegistry();
+    const raw = new Database(paths.database);
+    try {
+      raw.exec("PRAGMA user_version = 99");
+    } finally {
+      raw.close();
+    }
+
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1")) });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.diagnostics).toEqual([
+      {
+        timestamp: NOW,
+        component: "cli",
+        code: "unsupported_schema",
+        provider: "claude",
+        sessionId: "s1",
+      },
+    ]);
+  });
+});
+
+describe("event contention retry", () => {
+  const busyError = (): Error & { code: string } => sqliteError("SQLITE_BUSY", "database is locked");
+
+  test("retries once after a 25 ms delay and applies on the second attempt", async () => {
+    initRegistry();
+    let applyCalls = 0;
+    const applyEvents: typeof applyRegistryEvents = (db, events) => {
+      applyCalls += 1;
+      if (applyCalls === 1) {
+        throw busyError();
+      }
+      return applyRegistryEvents(db, events);
+    };
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1")), applyEvents });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(applyCalls).toBe(2);
+    expect(harness.delays).toEqual([25]);
+    expect(harness.diagnostics).toEqual([]);
+    expect(listRows().map((row) => row.sessionId)).toEqual(["s1"]);
+  });
+
+  test("gives up after the second busy failure with a sqlite_busy diagnostic", async () => {
+    initRegistry();
+    let applyCalls = 0;
+    const applyEvents: typeof applyRegistryEvents = () => {
+      applyCalls += 1;
+      throw busyError();
+    };
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1")), applyEvents });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(applyCalls).toBe(2);
+    expect(harness.delays).toEqual([25]);
+    expect(harness.diagnostics).toEqual([
+      {
+        timestamp: NOW,
+        component: "cli",
+        code: "sqlite_busy",
+        provider: "claude",
+        sessionId: "s1",
+      },
+    ]);
+    expect(listRows()).toEqual([]);
+  });
+
+  test("does not retry non-contention failures", async () => {
+    initRegistry();
+    let applyCalls = 0;
+    const applyEvents: typeof applyRegistryEvents = () => {
+      applyCalls += 1;
+      throw sqliteError("SQLITE_CONSTRAINT", "constraint failed");
+    };
+    const harness = makeHarness({ stdin: stdinOf(startEvent("s1")), applyEvents });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(applyCalls).toBe(1);
+    expect(harness.delays).toEqual([]);
+    expect(harness.diagnostics).toEqual([
+      {
+        timestamp: NOW,
+        component: "cli",
+        code: "internal_error",
+        provider: "claude",
+        sessionId: "s1",
+      },
+    ]);
+  });
+});
+
+describe("diagnostic records", () => {
+  test("contain only timestamp, component, code, provider, and bounded session ID", async () => {
+    initRegistry();
+    const harness = makeHarness({ stdin: stdinOf("not json") });
+    await runCli(["event", "claude"], harness.deps);
+    await runCli(["event", "bogus"], harness.deps);
+
+    const missingDbPaths = resolveAppPaths(join(tempHome, "nested", "missing"));
+    const missingDb = makeHarness({
+      paths: missingDbPaths,
+      stdin: stdinOf(startEvent("s1")),
+    });
+    await runCli(["event", "claude"], missingDb.deps);
+
+    const records = [...harness.diagnostics, ...missingDb.diagnostics];
+    expect(records.length).toBe(3);
+    for (const record of records) {
+      for (const key of Object.keys(record)) {
+        expect(DIAGNOSTIC_KEYS.has(key)).toBe(true);
+      }
+      expect(record.timestamp).toBe(NOW);
+      expect(record.component).toBe("cli");
+      if (record.sessionId !== undefined) {
+        expect(Array.from(record.sessionId).length).toBeLessThanOrEqual(256);
+      }
+    }
+  });
+
+  test("file diagnostics never contain raw payload sentinels or caught error text", async () => {
+    initRegistry();
+    const fileDiagnostics = createFileDiagnostics(paths.logsDirectory);
+
+    const malformed = makeHarness({
+      diagnostics: fileDiagnostics,
+      stdin: stdinOf('{"session_id":"s1","prompt":"SENTINEL_RAW_PAYLOAD",'),
+    });
+    expect(await runCli(["event", "claude"], malformed.deps)).toBe(0);
+
+    const busyWithSentinel = makeHarness({
+      diagnostics: fileDiagnostics,
+      stdin: stdinOf(startEvent("s2")),
+      applyEvents: () => {
+        throw sqliteError("SQLITE_BUSY", "database is locked by SENTINEL_ERROR_TEXT");
+      },
+    });
+    expect(await runCli(["event", "claude"], busyWithSentinel.deps)).toBe(0);
+
+    const logFile = join(paths.logsDirectory, "cli.log");
+    const content = readFileSync(logFile, "utf8");
+    expect(content).toContain("invalid_input");
+    expect(content).toContain("sqlite_busy");
+    expect(content).not.toContain("SENTINEL");
+
+    // Every line stays one bounded JSON record of allowlisted keys.
+    const lines = content.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      const record = JSON.parse(line) as Record<string, unknown>;
+      for (const key of Object.keys(record)) {
+        expect(DIAGNOSTIC_KEYS.has(key)).toBe(true);
+      }
+    }
+  });
+
+  test("a clean event run writes no diagnostic file content", async () => {
+    initRegistry();
+    const fileDiagnostics = createFileDiagnostics(paths.logsDirectory);
+    const harness = makeHarness({
+      diagnostics: fileDiagnostics,
+      stdin: stdinOf(startEvent("s1", { prompt: "SENTINEL_FIELD" })),
+    });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    const logFile = join(paths.logsDirectory, "cli.log");
+    if (existsSync(logFile)) {
+      expect(readFileSync(logFile, "utf8")).not.toContain("SENTINEL");
+    }
+  });
+
+  test("rotates component.log to component.log.1 before an append would exceed 256 KiB", () => {
+    mkdirSync(paths.logsDirectory, { recursive: true });
+    const logFile = join(paths.logsDirectory, "cli.log");
+    const rotated = join(paths.logsDirectory, "cli.log.1");
+    writeFileSync(logFile, "x".repeat(256 * 1024 - 10));
+
+    const sink = createFileDiagnostics(paths.logsDirectory);
+    sink({ timestamp: NOW, component: "cli", code: "invalid_input", provider: "claude" });
+
+    expect(statSync(rotated).size).toBe(256 * 1024 - 10);
+    expect(statSync(logFile).size).toBeLessThan(256 * 1024);
+    expect(JSON.parse(readFileSync(logFile, "utf8").trim())).toEqual({
+      timestamp: NOW,
+      component: "cli",
+      code: "invalid_input",
+      provider: "claude",
+    });
+  });
+
+  test("file diagnostics create the logs directory when init never ran", async () => {
+    const harness = makeHarness({
+      diagnostics: createFileDiagnostics(paths.logsDirectory),
+      stdin: stdinOf(startEvent("s1")),
+    });
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([]);
+    const content = readFileSync(join(paths.logsDirectory, "cli.log"), "utf8");
+    expect(content).toContain("missing_database");
+    expect(existsSync(paths.database)).toBe(false);
+  });
+});
+
+describe("sessions commands", () => {
+  const seed = (): void => {
+    initRegistry();
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      const at = (second: number): string =>
+        `2026-08-06T00:00:${String(second).padStart(2, "0")}.000Z`;
+      const events: RegistryEvent[] = [
+        {
+          kind: "SessionStart",
+          provider: "kimi",
+          sessionId: "b",
+          title: "B",
+          project: null,
+          observedAt: at(1),
+        },
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "a",
+          title: null,
+          project: null,
+          observedAt: at(2),
+        },
+        {
+          kind: "SubagentStart",
+          provider: "claude",
+          sessionId: "c2",
+          parentSessionId: "a",
+          title: null,
+          project: null,
+          observedAt: at(3),
+        },
+        {
+          kind: "SubagentStart",
+          provider: "claude",
+          sessionId: "c1",
+          parentSessionId: "a",
+          title: null,
+          project: null,
+          observedAt: at(4),
+        },
+      ];
+      applyRegistryEvents(db, events);
+    } finally {
+      db.close();
+    }
+  };
+
+  test("sessions list prints ActiveSession JSON ordered by slot then identity", async () => {
+    seed();
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "list"], harness.deps)).toBe(0);
+    expect(harness.stderr()).toBe("");
+    const listed = JSON.parse(harness.stdout()) as {
+      provider: string;
+      sessionId: string;
+      parentSessionId: string | null;
+      logicalSlot: number | null;
+    }[];
+    expect(
+      listed.map((row) => [row.provider, row.sessionId, row.parentSessionId, row.logicalSlot]),
+    ).toEqual([
+      ["kimi", "b", null, 1],
+      ["claude", "a", null, 2],
+      ["claude", "c1", "a", null],
+      ["claude", "c2", "a", null],
+    ]);
+  });
+
+  test("sessions list prints an empty array for an empty registry", async () => {
+    initRegistry();
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "list"], harness.deps)).toBe(0);
+    expect(JSON.parse(harness.stdout())).toEqual([]);
+  });
+
+  test("sessions list returns nonzero when the database is missing or unsupported", async () => {
+    const missing = makeHarness();
+    expect(await runCli(["sessions", "list"], missing.deps)).not.toBe(0);
+    expect(missing.stdout()).toBe("");
+    expect(missing.stderr()).not.toBe("");
+
+    initRegistry();
+    const raw = new Database(paths.database);
+    try {
+      raw.exec("PRAGMA user_version = 99");
+    } finally {
+      raw.close();
+    }
+    const unsupported = makeHarness();
+    expect(await runCli(["sessions", "list"], unsupported.deps)).not.toBe(0);
+    expect(unsupported.stdout()).toBe("");
+    expect(unsupported.stderr()).not.toBe("");
+  });
+
+  test("sessions clear removes one identity with its descendants and is idempotent", async () => {
+    seed();
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "clear", "claude", "a"], harness.deps)).toBe(0);
+    expect(listRows().map((row) => [row.provider, row.sessionId])).toEqual([["kimi", "b"]]);
+
+    expect(await runCli(["sessions", "clear", "claude", "a"], harness.deps)).toBe(0);
+    expect(listRows().map((row) => row.sessionId)).toEqual(["b"]);
+  });
+
+  test("sessions clear-all empties the registry", async () => {
+    seed();
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "clear-all"], harness.deps)).toBe(0);
+    expect(listRows()).toEqual([]);
+  });
+
+  test("sessions commands reject malformed usage with nonzero and stderr", async () => {
+    initRegistry();
+    for (const args of [
+      ["sessions"],
+      ["sessions", "bogus"],
+      ["sessions", "list", "extra"],
+      ["sessions", "clear", "claude"],
+      ["sessions", "clear", "bogus", "s1"],
+      ["sessions", "clear", "claude", "s1", "extra"],
+      ["sessions", "clear-all", "extra"],
+    ]) {
+      const harness = makeHarness();
+      expect(await runCli(args, harness.deps)).not.toBe(0);
+      expect(harness.stderr()).not.toBe("");
+      expect(harness.stdout()).toBe("");
+    }
+  });
+});
+
+describe("usage and routing", () => {
+  test("no arguments and unknown commands are usage errors", async () => {
+    for (const args of [[], ["bogus"], ["init", "extra"]]) {
+      const harness = makeHarness();
+      expect(await runCli(args, harness.deps)).not.toBe(0);
+      expect(harness.stderr()).not.toBe("");
+      expect(harness.stdout()).toBe("");
+    }
+  });
+
+  test("the daemon command is routed but not yet implemented", async () => {
+    const harness = makeHarness();
+    expect(await runCli(["daemon"], harness.deps)).not.toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.stderr()).not.toBe("");
+  });
+});

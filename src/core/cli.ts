@@ -1,0 +1,360 @@
+/**
+ * Compiled-binary entry point and command router.
+ *
+ * Grammar (exact):
+ *   stream-deck-agents init
+ *   stream-deck-agents event <claude|codex|kimi>
+ *   stream-deck-agents daemon
+ *   stream-deck-agents sessions list
+ *   stream-deck-agents sessions clear <provider> <session-id>
+ *   stream-deck-agents sessions clear-all
+ *
+ * The event path is fail-open for provider hooks: it reads at most 65,536
+ * stdin bytes, parses one JSON object, applies the decoded events in one
+ * transaction with a single bounded retry for SQLite contention, logs only
+ * fixed diagnostic codes, prints nothing, and always exits zero. The other
+ * subcommands report concise errors on stderr and return nonzero.
+ */
+
+import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
+import { resolveAppPaths, type AppPaths } from "./paths";
+import { decodeNativeHook } from "./providers";
+import {
+  applyRegistryEvents,
+  clearAllSessions,
+  clearSession,
+  listSessions,
+} from "./registry";
+import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
+import type { Provider } from "../protocol";
+
+export const MAX_STDIN_BYTES = 65_536;
+const RETRY_DELAY_MS = 25;
+const DIAGNOSTIC_COMPONENT = "cli";
+
+export type CliDependencies = {
+  paths: AppPaths;
+  stdin?: AsyncIterable<Uint8Array>;
+  now?: () => string;
+  delay?: (milliseconds: number) => Promise<void>;
+  diagnostics?: (record: DiagnosticRecord) => void;
+  stdout?: (text: string) => void;
+  stderr?: (text: string) => void;
+  openDatabase?: typeof openRegistryDatabase;
+  applyEvents?: typeof applyRegistryEvents;
+};
+
+type ResolvedDependencies = Required<CliDependencies>;
+
+const isProvider = (value: string | undefined): value is Provider =>
+  value === "claude" || value === "codex" || value === "kimi";
+
+const boundString = (value: string): string => Array.from(value).slice(0, 256).join("");
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const errorCode = (error: unknown): string | undefined => {
+  if (isRecord(error) && typeof error.code === "string") {
+    return error.code;
+  }
+  return undefined;
+};
+
+/** Only SQLite busy/locked failures qualify for the single bounded retry. */
+const isSqliteContention = (error: unknown): boolean => {
+  const code = errorCode(error);
+  return (
+    code === "SQLITE_BUSY" ||
+    code === "SQLITE_LOCKED" ||
+    code?.startsWith("SQLITE_BUSY_") === true ||
+    code?.startsWith("SQLITE_LOCKED_") === true
+  );
+};
+
+const isMissingDatabase = (error: unknown): boolean => errorCode(error) === "SQLITE_CANTOPEN";
+
+/**
+ * Consume stdin chunk by chunk, stopping as soon as the byte cap is crossed.
+ * Returns null when the input exceeds the cap; trailing chunks are never
+ * pulled.
+ */
+const readBoundedStdin = async (
+  stdin: AsyncIterable<Uint8Array>,
+  limit: number,
+): Promise<Uint8Array | null> => {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for await (const chunk of stdin) {
+    total += chunk.byteLength;
+    if (total > limit) {
+      return null;
+    }
+    chunks.push(chunk);
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+};
+
+const USAGE = `usage: stream-deck-agents <command>
+
+commands:
+  init
+  event <claude|codex|kimi>
+  daemon
+  sessions list
+  sessions clear <provider> <session-id>
+  sessions clear-all
+`;
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : "unknown error";
+
+const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Promise<number> => {
+  const providerArg = args[0];
+  const report = (record: Omit<DiagnosticRecord, "timestamp" | "component">): void => {
+    try {
+      deps.diagnostics({ timestamp: deps.now(), component: DIAGNOSTIC_COMPONENT, ...record });
+    } catch {
+      // A failing sink must never break the fail-open event path.
+    }
+  };
+
+  try {
+    if (!isProvider(providerArg)) {
+      report({
+        code: "unsupported_provider",
+        ...(providerArg !== undefined ? { provider: boundString(providerArg) } : {}),
+      });
+      return 0;
+    }
+    if (args.length !== 1) {
+      report({ code: "invalid_input", provider: providerArg });
+      return 0;
+    }
+
+    const input = await readBoundedStdin(deps.stdin, MAX_STDIN_BYTES);
+    if (input === null) {
+      report({ code: "invalid_input", provider: providerArg });
+      return 0;
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(new TextDecoder().decode(input));
+    } catch {
+      report({ code: "invalid_input", provider: providerArg });
+      return 0;
+    }
+    if (!isRecord(payload)) {
+      report({ code: "invalid_input", provider: providerArg });
+      return 0;
+    }
+
+    const events = decodeNativeHook(providerArg, payload, deps.now());
+    if (events.length === 0) {
+      return 0;
+    }
+    // Every decoded event carries the same payload's session identity; the
+    // first one is already bounded by the decoder.
+    const sessionId = events[0]?.sessionId;
+
+    let db: ReturnType<typeof openRegistryDatabase>;
+    try {
+      db = deps.openDatabase(deps.paths.database, "readwrite");
+    } catch (error) {
+      report({
+        code: error instanceof UnsupportedSchemaVersion
+          ? "unsupported_schema"
+          : isMissingDatabase(error)
+            ? "missing_database"
+            : "internal_error",
+        provider: providerArg,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      });
+      return 0;
+    }
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          deps.applyEvents(db, events);
+          return 0;
+        } catch (error) {
+          if (!isSqliteContention(error)) {
+            report({
+              code: "internal_error",
+              provider: providerArg,
+              ...(sessionId !== undefined ? { sessionId } : {}),
+            });
+            return 0;
+          }
+          if (attempt === 1) {
+            report({
+              code: "sqlite_busy",
+              provider: providerArg,
+              ...(sessionId !== undefined ? { sessionId } : {}),
+            });
+            return 0;
+          }
+          await deps.delay(RETRY_DELAY_MS);
+        }
+      }
+    } finally {
+      db.close();
+    }
+  } catch {
+    report({
+      code: "internal_error",
+      ...(isProvider(providerArg) ? { provider: providerArg } : {}),
+    });
+  }
+  return 0;
+};
+
+const runInit = (args: readonly string[], deps: ResolvedDependencies): number => {
+  if (args.length !== 0) {
+    deps.stderr(USAGE);
+    return 1;
+  }
+  try {
+    initializeDatabase(deps.paths);
+    return 0;
+  } catch (error) {
+    deps.stderr(`init failed: ${errorMessage(error)}\n`);
+    return 1;
+  }
+};
+
+const runSessions = (args: readonly string[], deps: ResolvedDependencies): number => {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "list": {
+      if (rest.length !== 0) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      try {
+        const db = deps.openDatabase(deps.paths.database, "readonly");
+        try {
+          deps.stdout(`${JSON.stringify(listSessions(db), null, 2)}\n`);
+        } finally {
+          db.close();
+        }
+        return 0;
+      } catch (error) {
+        deps.stderr(`sessions list failed: ${errorMessage(error)}\n`);
+        return 1;
+      }
+    }
+    case "clear": {
+      const [providerArg, sessionId, ...extra] = rest;
+      if (!isProvider(providerArg) || sessionId === undefined || sessionId.length === 0 || extra.length > 0) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      try {
+        const db = deps.openDatabase(deps.paths.database, "readwrite");
+        try {
+          clearSession(db, providerArg, sessionId);
+        } finally {
+          db.close();
+        }
+        return 0;
+      } catch (error) {
+        deps.stderr(`sessions clear failed: ${errorMessage(error)}\n`);
+        return 1;
+      }
+    }
+    case "clear-all": {
+      if (rest.length !== 0) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      try {
+        const db = deps.openDatabase(deps.paths.database, "readwrite");
+        try {
+          clearAllSessions(db);
+        } finally {
+          db.close();
+        }
+        return 0;
+      } catch (error) {
+        deps.stderr(`sessions clear-all failed: ${errorMessage(error)}\n`);
+        return 1;
+      }
+    }
+    default:
+      deps.stderr(USAGE);
+      return 1;
+  }
+};
+
+const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencies => ({
+  stdin: (async function* () {
+    // An absent stdin reads as empty input.
+  })(),
+  now: () => new Date().toISOString(),
+  delay: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  diagnostics: () => {},
+  stdout: (text) => process.stdout.write(text),
+  stderr: (text) => process.stderr.write(text),
+  openDatabase: openRegistryDatabase,
+  applyEvents: applyRegistryEvents,
+  ...dependencies,
+});
+
+export const runCli = async (
+  args: readonly string[],
+  dependencies: CliDependencies,
+): Promise<number> => {
+  const deps = resolveDependencies(dependencies);
+  const [command, ...rest] = args;
+  switch (command) {
+    case "init":
+      return runInit(rest, deps);
+    case "event":
+      return runEvent(rest, deps);
+    case "daemon":
+      deps.stderr("daemon is not available in this build\n");
+      return 1;
+    case "sessions":
+      return runSessions(rest, deps);
+    default:
+      deps.stderr(USAGE);
+      return 1;
+  }
+};
+
+/** Incremental stdin chunks for the compiled binary entry point. */
+const stdinChunks = async function* (): AsyncGenerator<Uint8Array> {
+  const reader = Bun.stdin.stream().getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value !== undefined && value.byteLength > 0) {
+        yield value;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+};
+
+if (import.meta.main) {
+  process.umask(0o077);
+  const paths = resolveAppPaths();
+  const exitCode = await runCli(process.argv.slice(2), {
+    paths,
+    stdin: stdinChunks(),
+    diagnostics: createFileDiagnostics(paths.logsDirectory),
+  });
+  process.exit(exitCode);
+}
