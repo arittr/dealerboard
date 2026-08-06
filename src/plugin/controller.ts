@@ -119,7 +119,14 @@ export class SessionGridController {
       this.scheduler.addContext(info.context);
       return;
     }
-    await this.ensureSettings();
+    try {
+      await this.ensureSettings();
+    } catch {
+      // A dropped settings IPC must not escape willAppear as an unhandled
+      // rejection. The context stays registered; the next lifecycle event
+      // retries the load through bootstrap and converges the grid then.
+      return;
+    }
     // Settings loading yields; the world may have changed underneath.
     if (!this.contexts.has(info.context)) {
       return;
@@ -129,13 +136,7 @@ export class SessionGridController {
       this.scheduler.addContext(info.context);
       return;
     }
-    if (this.view === null) {
-      this.refreshSnapshot();
-    }
-    // The scheduler's first render is immediate, so the context paints the
-    // current cached model without waiting for a poll or a tick.
-    this.scheduler.addContext(info.context);
-    this.startPolling();
+    this.convergeGrid();
   }
 
   willDisappear(context: string): void {
@@ -238,8 +239,22 @@ export class SessionGridController {
     if (this.unsupportedReason !== null || this.contexts.size === 0) {
       return;
     }
+    this.convergeGrid();
+  }
+
+  /**
+   * Converge on a live grid: snapshot cached, every registered context
+   * rendering, and the poller running. Scheduler registration is idempotent
+   * with an immediate first render, so contexts that missed an earlier
+   * registration — e.g. their willAppear hit a settings-load rejection — are
+   * caught up here with the current cached model.
+   */
+  private convergeGrid(): void {
     if (this.view === null) {
       this.refreshSnapshot();
+    }
+    for (const context of this.contexts.keys()) {
+      this.scheduler.addContext(context);
     }
     this.startPolling();
   }

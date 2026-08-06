@@ -106,9 +106,19 @@ class FakeSnapshotPort {
 
 class FakeSettingsPort {
   stored: unknown = settings(false, 0);
+  /** Number of getGlobalSettings calls that reject before reads succeed. */
+  failures = 0;
+  attempts = 0;
   readonly writes: LayoutSettingsV1[] = [];
 
-  readonly get = (): Promise<unknown> => Promise.resolve(this.stored);
+  readonly get = (): Promise<unknown> => {
+    this.attempts += 1;
+    if (this.failures > 0) {
+      this.failures -= 1;
+      return Promise.reject(new Error("settings_ipc_failure"));
+    }
+    return Promise.resolve(this.stored);
+  };
 
   readonly set = (value: LayoutSettingsV1): Promise<void> => {
     this.writes.push(value);
@@ -150,7 +160,7 @@ type Harness = {
 };
 
 const makeController = (
-  options: { autoResolve?: boolean; stored?: unknown; view?: SnapshotView } = {},
+  options: { autoResolve?: boolean; stored?: unknown; view?: SnapshotView; settingsFailures?: number } = {},
 ): Harness => {
   const clock = new FakeClock();
   const snapshot = new FakeSnapshotPort();
@@ -162,6 +172,7 @@ const makeController = (
   if (options.view !== undefined) {
     snapshot.view = options.view;
   }
+  settingsPort.failures = options.settingsFailures ?? 0;
   const controller = new SessionGridController({
     readSnapshot: snapshot.read,
     getGlobalSettings: settingsPort.get,
@@ -359,6 +370,45 @@ describe("SessionGridController", () => {
     await clock.advance(250);
     expect(lastImageFor(images, "ctx-a")).toContain("Slot 1");
     expect(snapshot.reads).toBe(2);
+  });
+
+  test("a settings-load rejection stays inside willAppear and the next event retries", async () => {
+    const { controller, clock, snapshot, settingsPort, images } = makeController({
+      settingsFailures: 1,
+      view: healthyView(sessionsAt(1)),
+    });
+
+    // The rejection is contained: willAppear settles normally, and nothing is
+    // read, written, or painted.
+    await controller.willAppear(appear("ctx-a", 0, 0));
+    expect(settingsPort.attempts).toBe(1);
+    expect(snapshot.reads).toBe(0);
+    expect(images.starts).toEqual([]);
+
+    // The next lifecycle event retries the load and converges the grid.
+    controller.deviceDidConnect("device-1", { columns: 5, rows: 3 });
+    await flushMicrotasks();
+    expect(settingsPort.attempts).toBe(2);
+    expect(snapshot.reads).toBe(1);
+    expect(lastImageFor(images, "ctx-a")).toContain("Slot 1");
+    await clock.advance(250);
+    expect(snapshot.reads).toBe(2);
+  });
+
+  test("a later successful appearance also converges contexts that hit the rejection", async () => {
+    const { controller, settingsPort, images } = makeController({
+      settingsFailures: 1,
+      view: healthyView(sessionsAt(1, 2)),
+    });
+
+    // The first appearance hits the rejecting load; the second succeeds.
+    await controller.willAppear(appear("ctx-a", 0, 0));
+    await controller.willAppear(appear("ctx-b", 0, 1));
+    expect(settingsPort.attempts).toBe(2);
+
+    // Both contexts paint the cached model with no further lifecycle event.
+    expect(lastImageFor(images, "ctx-b")).toContain("Slot 2");
+    expect(lastImageFor(images, "ctx-a")).toContain("Slot 1");
   });
 
   test("more than fifteen contexts is an unsupported layout and never mixes treatments", async () => {
