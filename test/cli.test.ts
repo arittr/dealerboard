@@ -612,6 +612,69 @@ describe("sessions commands", () => {
     expect(listRows()).toEqual([]);
   });
 
+  test("sessions clear targets only the exact provider/session composite identity", async () => {
+    initRegistry();
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "shared",
+          title: null,
+          project: null,
+          observedAt: NOW,
+        },
+        {
+          kind: "SessionStart",
+          provider: "kimi",
+          sessionId: "shared",
+          title: null,
+          project: null,
+          observedAt: NOW,
+        },
+      ]);
+    } finally {
+      db.close();
+    }
+
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "clear", "claude", "shared"], harness.deps)).toBe(0);
+    // The kimi row with the same session ID survives, slot uncompacted.
+    expect(listRows().map((row) => [row.provider, row.sessionId, row.logicalSlot])).toEqual([
+      ["kimi", "shared", 2],
+    ]);
+  });
+
+  test("sessions clear and clear-all reject an unsupported schema without mutating rows", async () => {
+    seed();
+    const before = listRows();
+    const raw = new Database(paths.database);
+    try {
+      raw.exec("PRAGMA user_version = 99");
+    } finally {
+      raw.close();
+    }
+
+    const clear = makeHarness();
+    expect(await runCli(["sessions", "clear", "claude", "a"], clear.deps)).not.toBe(0);
+    expect(clear.stdout()).toBe("");
+    expect(clear.stderr()).not.toBe("");
+
+    const clearAll = makeHarness();
+    expect(await runCli(["sessions", "clear-all"], clearAll.deps)).not.toBe(0);
+    expect(clearAll.stdout()).toBe("");
+    expect(clearAll.stderr()).not.toBe("");
+
+    const restore = new Database(paths.database);
+    try {
+      restore.exec("PRAGMA user_version = 1");
+    } finally {
+      restore.close();
+    }
+    expect(listRows()).toEqual(before);
+  });
+
   test("sessions commands reject malformed usage with nonzero and stderr", async () => {
     initRegistry();
     for (const args of [
@@ -640,11 +703,68 @@ describe("usage and routing", () => {
       expect(harness.stdout()).toBe("");
     }
   });
+});
 
-  test("the daemon command is routed but not yet implemented", async () => {
+describe("daemon command", () => {
+  test("routes to the projection daemon with the resolved paths and diagnostics sink", async () => {
     const harness = makeHarness();
-    expect(await runCli(["daemon"], harness.deps)).not.toBe(0);
+    let seenPaths: AppPaths | undefined;
+    let seenDiagnostics: unknown;
+    harness.deps.runDaemon = (daemonPaths, diagnostics) => {
+      seenPaths = daemonPaths;
+      seenDiagnostics = diagnostics;
+      return 0;
+    };
+    expect(await runCli(["daemon"], harness.deps)).toBe(0);
+    expect(seenPaths).toBe(paths);
+    expect(seenDiagnostics).toBe(harness.deps.diagnostics);
+    expect(harness.stdout()).toBe("");
+    expect(harness.stderr()).toBe("");
+  });
+
+  test("rejects extra arguments with usage and never starts the daemon", async () => {
+    const harness = makeHarness();
+    let started = false;
+    harness.deps.runDaemon = () => {
+      started = true;
+      return 0;
+    };
+    expect(await runCli(["daemon", "extra"], harness.deps)).not.toBe(0);
+    expect(started).toBe(false);
     expect(harness.stdout()).toBe("");
     expect(harness.stderr()).not.toBe("");
+  });
+});
+
+describe("two-process event smoke", () => {
+  test("two simultaneous Bun processes allocate distinct positive logical slots", async () => {
+    initRegistry();
+    const helper = join(import.meta.dir, "helpers", "event-process.ts");
+    const spawn = (sessionId: string) =>
+      Bun.spawn([process.execPath, helper, paths.database, sessionId], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    const first = spawn("process-a");
+    const second = spawn("process-b");
+    const [exitA, exitB, errA, errB] = await Promise.all([
+      first.exited,
+      second.exited,
+      new Response(first.stderr).text(),
+      new Response(second.stderr).text(),
+    ]);
+    expect(exitA).toBe(0);
+    expect(exitB).toBe(0);
+    expect(errA).toBe("");
+    expect(errB).toBe("");
+
+    const rows = listRows();
+    expect(rows.map((row) => row.sessionId).sort()).toEqual(["process-a", "process-b"]);
+    const slots = rows.map((row) => row.logicalSlot);
+    for (const slot of slots) {
+      expect(typeof slot).toBe("number");
+      expect(slot).toBeGreaterThan(0);
+    }
+    expect(new Set(slots).size).toBe(2);
   });
 });

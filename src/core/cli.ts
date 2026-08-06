@@ -12,10 +12,13 @@
  * The event path is fail-open for provider hooks: it reads at most 65,536
  * stdin bytes, parses one JSON object, applies the decoded events in one
  * transaction with a single bounded retry for SQLite contention, logs only
- * fixed diagnostic codes, prints nothing, and always exits zero. The other
- * subcommands report concise errors on stderr and return nonzero.
+ * fixed diagnostic codes, prints nothing, and always exits zero. The daemon
+ * subcommand starts the long-lived read-only projection loop and normally
+ * runs until the process is terminated. The other subcommands report concise
+ * errors on stderr and return nonzero.
  */
 
+import { ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
 import { resolveAppPaths, type AppPaths } from "./paths";
 import { decodeNativeHook } from "./providers";
@@ -42,6 +45,7 @@ export type CliDependencies = {
   stderr?: (text: string) => void;
   openDatabase?: typeof openRegistryDatabase;
   applyEvents?: typeof applyRegistryEvents;
+  runDaemon?: (paths: AppPaths, diagnostics: (record: DiagnosticRecord) => void) => number | Promise<number>;
 };
 
 type ResolvedDependencies = Required<CliDependencies>;
@@ -305,6 +309,13 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   stderr: (text) => process.stderr.write(text),
   openDatabase: openRegistryDatabase,
   applyEvents: applyRegistryEvents,
+  runDaemon: (daemonPaths, diagnostics) => {
+    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics });
+    daemon.start();
+    return new Promise<number>(() => {
+      // launchd owns the daemon lifetime; the poll timer keeps the process alive.
+    });
+  },
   ...dependencies,
 });
 
@@ -319,9 +330,13 @@ export const runCli = async (
       return runInit(rest, deps);
     case "event":
       return runEvent(rest, deps);
-    case "daemon":
-      deps.stderr("daemon is not available in this build\n");
-      return 1;
+    case "daemon": {
+      if (rest.length !== 0) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      return deps.runDaemon(deps.paths, deps.diagnostics);
+    }
     case "sessions":
       return runSessions(rest, deps);
     default:
