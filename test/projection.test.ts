@@ -1,0 +1,337 @@
+import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { resolveAppPaths } from "../src/core/paths";
+import {
+  ProjectionError,
+  projectRows,
+  readProjection,
+  type ProjectionRow,
+} from "../src/core/projection";
+import { applyRegistryEvents } from "../src/core/registry";
+import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
+import { writeSnapshotAtomically } from "../src/core/snapshot";
+import {
+  parseSessionSnapshot,
+  type Provider,
+  type SessionSnapshotV1,
+  type SessionStatus,
+} from "../src/protocol";
+
+const row = (
+  sessionId: string,
+  options: {
+    provider?: Provider;
+    parent?: string | null;
+    status?: SessionStatus;
+    title?: string | null;
+    project?: string | null;
+    slot?: number | null;
+  } = {},
+): ProjectionRow => {
+  const parent = options.parent ?? null;
+  return {
+    provider: options.provider ?? "claude",
+    sessionId,
+    parentSessionId: parent,
+    status: options.status ?? "idle",
+    title: options.title ?? null,
+    project: options.project ?? null,
+    logicalSlot: options.slot === undefined ? (parent === null ? 1 : null) : options.slot,
+  };
+};
+
+const projectionErrorCode = (rows: ProjectionRow[]): string => {
+  try {
+    projectRows(rows);
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProjectionError);
+    return (error as ProjectionError).code;
+  }
+  throw new Error("expected projectRows to throw ProjectionError");
+};
+
+describe("projectRows", () => {
+  test("returns only top-level rows ordered by stored logical slot, preserving gaps", () => {
+    const sessions = projectRows([
+      row("a", { slot: 3 }),
+      row("b", { slot: 1 }),
+      row("c", { parent: "a" }),
+      row("d", { slot: 7 }),
+      row("e", { parent: "c" }),
+    ]);
+
+    expect(sessions.map((session) => session.sessionId)).toEqual(["b", "a", "d"]);
+    expect(sessions.map((session) => session.logicalSlot)).toEqual([1, 3, 7]);
+  });
+
+  test("counts the full nested subtree as descendants and keeps root metadata", () => {
+    const sessions = projectRows([
+      row("p", { slot: 2, title: "Parent", project: "proj" }),
+      row("c1", { parent: "p" }),
+      row("g1", { parent: "c1" }),
+      row("c2", { parent: "p" }),
+    ]);
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toEqual({
+      provider: "claude",
+      sessionId: "p",
+      status: "idle",
+      title: "Parent",
+      project: "proj",
+      descendantCount: 3,
+      logicalSlot: 2,
+    });
+  });
+
+  test("reduces effective status by error > waiting > working > idle across the subtree", () => {
+    const effective = (rows: ProjectionRow[]): SessionStatus | undefined =>
+      projectRows(rows)[0]?.status;
+
+    expect(effective([row("p", { status: "idle" })])).toBe("idle");
+    expect(
+      effective([row("p", { status: "idle" }), row("c", { parent: "p", status: "working" })]),
+    ).toBe("working");
+    expect(
+      effective([row("p", { status: "working" }), row("c", { parent: "p", status: "waiting" })]),
+    ).toBe("waiting");
+    expect(
+      effective([
+        row("p", { status: "waiting" }),
+        row("c", { parent: "p", status: "idle" }),
+        row("g", { parent: "c", status: "error" }),
+      ]),
+    ).toBe("error");
+  });
+
+  test("keeps effective status and descendant counts independent between roots", () => {
+    const sessions = projectRows([
+      row("a", { slot: 1, status: "error" }),
+      row("b", { slot: 2, status: "idle" }),
+      row("c", { parent: "b", status: "working" }),
+    ]);
+
+    expect(sessions.map((session) => [session.sessionId, session.status])).toEqual([
+      ["a", "error"],
+      ["b", "working"],
+    ]);
+    expect(sessions.map((session) => session.descendantCount)).toEqual([0, 1]);
+  });
+
+  test("treats the same session id under different providers as distinct identities", () => {
+    const sessions = projectRows([row("shared"), row("shared", { provider: "kimi", slot: 2 })]);
+
+    expect(sessions.map((session) => [session.provider, session.sessionId])).toEqual([
+      ["claude", "shared"],
+      ["kimi", "shared"],
+    ]);
+  });
+
+  test("projects an empty registry to an empty list", () => {
+    expect(projectRows([])).toEqual([]);
+  });
+
+  test("rejects duplicate identities", () => {
+    expect(projectionErrorCode([row("a"), row("a")])).toBe("duplicate-identity");
+  });
+
+  test("rejects a child whose parent is missing", () => {
+    expect(projectionErrorCode([row("p"), row("c", { parent: "ghost" })])).toBe("missing-parent");
+  });
+
+  test("rejects a cross-provider parent edge", () => {
+    expect(
+      projectionErrorCode([row("p"), row("c", { provider: "kimi", parent: "p" })]),
+    ).toBe("cross-provider-parent");
+  });
+
+  test("rejects cycles detached from any root and terminates", () => {
+    // Self-cycle.
+    expect(projectionErrorCode([row("a", { parent: "a" })])).toBe("cycle");
+    // Two-node cycle.
+    expect(projectionErrorCode([row("a", { parent: "b" }), row("b", { parent: "a" })])).toBe(
+      "cycle",
+    );
+    // A long cycle terminates within the row-count bound instead of walking forever.
+    const longCycle = Array.from({ length: 64 }, (_, index) =>
+      row(`n${index}`, { parent: `n${(index + 1) % 64}` }),
+    );
+    expect(projectionErrorCode(longCycle)).toBe("cycle");
+    // A cycle plus a healthy tree rejects the whole projection, never partial output.
+    expect(
+      projectionErrorCode([row("ok"), row("x", { parent: "y" }), row("y", { parent: "x" })]),
+    ).toBe("cycle");
+  });
+
+  test("rejects a child row carrying a slot", () => {
+    expect(projectionErrorCode([row("p"), row("c", { parent: "p", slot: 5 })])).toBe(
+      "child-with-slot",
+    );
+  });
+
+  test("rejects top-level rows without a positive slot", () => {
+    expect(projectionErrorCode([row("a", { slot: null })])).toBe(
+      "top-level-without-positive-slot",
+    );
+    expect(projectionErrorCode([row("a", { slot: 0 })])).toBe("top-level-without-positive-slot");
+    expect(projectionErrorCode([row("a", { slot: -2 })])).toBe("top-level-without-positive-slot");
+  });
+});
+
+describe("readProjection", () => {
+  test("projects one consistent snapshot from a separately committed writer", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+
+      // The writer commits in its own transactions before the reader connects.
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "parent",
+            title: "Parent",
+            project: "proj",
+            observedAt: "2026-08-06T00:00:01.000Z",
+          },
+          {
+            kind: "SubagentStart",
+            provider: "claude",
+            sessionId: "child",
+            parentSessionId: "parent",
+            title: null,
+            project: null,
+            observedAt: "2026-08-06T00:00:02.000Z",
+          },
+          {
+            kind: "SubagentStart",
+            provider: "claude",
+            sessionId: "grandchild",
+            parentSessionId: "child",
+            title: null,
+            project: null,
+            observedAt: "2026-08-06T00:00:03.000Z",
+          },
+        ]);
+        applyRegistryEvents(writer, [
+          {
+            kind: "Activity",
+            provider: "claude",
+            sessionId: "parent",
+            observedAt: "2026-08-06T00:00:04.000Z",
+          },
+          {
+            kind: "Attention",
+            provider: "claude",
+            sessionId: "child",
+            observedAt: "2026-08-06T00:00:05.000Z",
+          },
+          {
+            kind: "StopFailure",
+            provider: "claude",
+            sessionId: "grandchild",
+            observedAt: "2026-08-06T00:00:06.000Z",
+          },
+        ]);
+      } finally {
+        writer.close();
+      }
+
+      // The daemon's read side: a strictly read-only connection.
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.schemaVersion).toBe(1);
+        expect(snapshot.health).toEqual({ status: "ok" });
+        expect(snapshot.sessions).toEqual([
+          {
+            provider: "claude",
+            sessionId: "parent",
+            status: "error",
+            title: "Parent",
+            project: "proj",
+            descendantCount: 2,
+            logicalSlot: 1,
+          },
+        ]);
+        // The snapshot satisfies the published v1 contract.
+        expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("writeSnapshotAtomically", () => {
+  const snapshotA: SessionSnapshotV1 = {
+    schemaVersion: 1,
+    health: { status: "ok" },
+    sessions: [],
+  };
+  const snapshotB: SessionSnapshotV1 = {
+    schemaVersion: 1,
+    health: { status: "ok" },
+    sessions: [
+      {
+        provider: "claude",
+        sessionId: "s1",
+        status: "waiting",
+        title: "Session",
+        project: "proj",
+        descendantCount: 2,
+        logicalSlot: 3,
+      },
+    ],
+  };
+
+  test("publishes A then B: the file parses as exactly B, mode 0600, no temp sibling", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-snapshot-"));
+    try {
+      const target = join(dir, "snapshot-v1.json");
+
+      writeSnapshotAtomically(target, snapshotA);
+      const beforeRead = readFileSync(target, "utf8");
+      // A reader before replacement sees only complete valid JSON: exactly A.
+      expect(beforeRead.endsWith("\n")).toBe(true);
+      expect(parseSessionSnapshot(JSON.parse(beforeRead))).toEqual(snapshotA);
+
+      writeSnapshotAtomically(target, snapshotB);
+      const afterRead = readFileSync(target, "utf8");
+      // A reader after replacement sees only complete valid JSON: exactly B.
+      expect(afterRead.endsWith("\n")).toBe(true);
+      expect(parseSessionSnapshot(JSON.parse(afterRead))).toEqual(snapshotB);
+
+      // Restrictive permissions on the replaced file.
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+
+      // No temporary sibling remains after either publication.
+      expect(readdirSync(dir)).toEqual(["snapshot-v1.json"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cleans the temporary sibling in finally when publication fails", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-snapshot-"));
+    try {
+      // A directory at the target path makes renameSync over it fail.
+      const target = join(dir, "snapshot-v1.json");
+      mkdirSync(target);
+
+      expect(() => writeSnapshotAtomically(target, snapshotA)).toThrow();
+
+      // The failed publication left no temporary sibling behind.
+      expect(readdirSync(dir)).toEqual(["snapshot-v1.json"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
