@@ -31,7 +31,7 @@ written to the registry, the snapshot, or the logs.
 Target file: `/Users/drewritter/.claude/settings.json` (user level, applies to
 all projects).
 
-Claude supports the full ten-event set. Because the installed path contains a
+Claude supports the full eleven-event set. Because the installed path contains a
 space, each handler uses Claude's exec form (`command` plus `args`): Claude
 spawns the executable directly with no shell, so the path needs no quoting and
 nothing is shell-interpreted. Each handler sets a one-second `timeout`.
@@ -76,6 +76,18 @@ event arrays inside it without removing any existing entries.
       }
     ],
     "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
       {
         "hooks": [
           {
@@ -180,12 +192,16 @@ Notes:
 
 - Only `Notification` takes a `matcher` (`permission_prompt`); the other events
   either have no matcher support or should fire for every tool and source.
+- `PostToolUse` is what clears a permission/question prompt: it fires the
+  moment an answered prompt unblocks the tool call, mapping the session back
+  to working. Without it a tile stays in the waiting color until the next
+  `PreToolUse` or `Stop` happens to arrive.
 - One second fits every event's budget, including the shared 1.5-second
   `SessionEnd` budget.
 
 ### 3. Validate
 
-Start a new Claude Code session and run `/hooks`. Each of the ten events
+Start a new Claude Code session and run `/hooks`. Each of the eleven events
 should list the stream-deck-agents command. The registry should show the
 session within one polling interval (see "After all three providers" below).
 
@@ -206,7 +222,7 @@ Target file: `/Users/drewritter/.kimi-code/config.toml` (current Kimi Code —
 not the legacy `/Users/drewritter/.kimi/config.toml`, which belongs to the
 older Python CLI and will not work).
 
-Kimi supports nine of the ten events (its `Notification` event signals
+Kimi supports ten of the eleven events (its `Notification` event signals
 background-task status, not approval requests, so it is deliberately omitted).
 Kimi hook commands are shell commands, so the installed path is double-quoted
 inside a TOML literal string (single quotes — no escaping needed). Each entry
@@ -214,7 +230,7 @@ sets a one-second `timeout` (valid range 1–600).
 
 **Strict-schema warning.** Kimi Code validates `[[hooks]]` strictly: an
 unknown event name, or any field beyond `event`, `matcher`, `command`, and
-`timeout`, makes the entire config file fail to load. Append exactly the nine
+`timeout`, makes the entire config file fail to load. Append exactly the ten
 entries below; do not add fields, events, or comments inside the entries.
 
 ### 1. Back up
@@ -241,6 +257,11 @@ timeout = 1
 
 [[hooks]]
 event = "PreToolUse"
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "PostToolUse"
 command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
 timeout = 1
 
@@ -294,9 +315,12 @@ Keep the backup until physical verification is complete.
 
 ## Codex Desktop
 
-Codex accepts only `SessionStart`, `UserPromptSubmit`, and `SessionEnd` for
-this setup, delivered through a small local plugin. Two locations are
-user-owned: the plugin directory and the personal marketplace file.
+Codex accepts seven of the eleven events for this setup — `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`,
+and `SessionEnd` — delivered through a small local plugin. (Codex has no
+`Notification` approval event, no `StopFailure`, and no subagent hooks wired
+here.) Two locations are user-owned: the plugin directory and the personal
+marketplace file.
 
 - Plugin directory: `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/`
 - Marketplace file: `/Users/drewritter/.agents/plugins/marketplace.json`
@@ -352,6 +376,50 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
       }
     ],
     "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Stop": [
       {
         "hooks": [
           {
@@ -445,11 +513,13 @@ codex plugin list
   are no-ops: the registry ignores activity for sessions it never registered,
   and the matching `SessionEnd` is ignored too. The session simply never
   appears; nothing is synthesized retroactively.
-- The configured subset reports session starts, submitted-message activity,
-  and session ends. V1 does not synthesize Codex idle, waiting, or error
-  transitions that this configured hook subset did not report: a Codex tile is
-  idle at start, working after a submitted message, and is removed at
-  `SessionEnd`.
+- The configured subset reports session starts, submitted-message and tool
+  activity, approval waits, turn completions, and session ends: a Codex tile
+  is idle at start, working while a turn runs, waiting while an approval is
+  pending, back to idle when the turn stops, and removed at `SessionEnd`.
+  Error transitions are not reported (Codex has no `StopFailure` event), and a
+  missed `SessionEnd` still leaves a stale row until `sessions clear` repairs
+  it.
 
 ### 6. Compare before replace, and restore
 
