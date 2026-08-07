@@ -1,5 +1,6 @@
 .superpowers/
 .worktrees/
 dist/
+node_modules/
 com.drewritter.stream-deck-agents.sdPlugin/bin/
 .verification-private/
