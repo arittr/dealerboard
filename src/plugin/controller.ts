@@ -6,8 +6,8 @@
  * page settings, polls the snapshot exactly once every 250 ms while relevant
  * keys are visible, and registers every visible context with the shared frame
  * scheduler. All side effects flow through narrow injected ports (snapshot,
- * settings, image, timers, monotonic time), so this module has no Stream Deck
- * SDK or runtime imports and is fully testable with fakes.
+ * settings, image, activation, alert, timers, monotonic time), so this module
+ * has no Stream Deck SDK or runtime imports and is fully testable with fakes.
  *
  * Exactly one connected 5-column by 3-row keypad device is supported. A
  * second device, wrong dimensions, a non-keypad or coordinate-less context, a
@@ -24,6 +24,7 @@ import {
   type LayoutSettingsV1,
   reduceLayout,
 } from "./layout";
+import type { ActivateCodexSession } from "./codex-session-activation";
 import { renderKey } from "./render";
 import { FrameScheduler, type SchedulerClock, type SendImage } from "./scheduler";
 import type { SnapshotView } from "./snapshot-reader";
@@ -46,6 +47,8 @@ export type SessionGridPorts = {
   getGlobalSettings: () => Promise<unknown>;
   setGlobalSettings: (settings: LayoutSettingsV1) => Promise<void>;
   setImage: SendImage;
+  activateCodexSession: ActivateCodexSession;
+  showAlert: (context: string) => Promise<void>;
   clock: SchedulerClock;
 };
 
@@ -158,13 +161,27 @@ export class SessionGridController {
     if (entry === undefined || this.view === null || this.layout === null) {
       return;
     }
-    // Session and blank keys are display-only; only NEXT handles input.
-    if (this.layout.keys[entry.index]?.kind !== "next") {
+    const model = this.layout.keys[entry.index];
+    if (model?.kind === "next") {
+      this.layout = advanceLayoutPage(this.view, this.storedSettings);
+      if (this.layout.dirty) {
+        await this.persist(this.layout.settings);
+      }
       return;
     }
-    this.layout = advanceLayoutPage(this.view, this.storedSettings);
-    if (this.layout.dirty) {
-      await this.persist(this.layout.settings);
+    if (model?.kind !== "session" || model.session.provider !== "codex") {
+      return;
+    }
+    const sessionId = model.session.sessionId;
+    try {
+      await this.ports.activateCodexSession(sessionId);
+    } catch {
+      try {
+        await this.ports.showAlert(context);
+      } catch {
+        // Alert feedback is best-effort; an SDK rejection must not escape the
+        // key event or retry an already-failed activation.
+      }
     }
   }
 

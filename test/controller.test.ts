@@ -152,12 +152,34 @@ class FakeImagePort {
   }
 }
 
+class FakeActivationPort {
+  readonly sessionIds: string[] = [];
+  failure: Error | null = null;
+
+  readonly activate = (sessionId: string): Promise<void> => {
+    this.sessionIds.push(sessionId);
+    return this.failure === null ? Promise.resolve() : Promise.reject(this.failure);
+  };
+}
+
+class FakeAlertPort {
+  readonly contexts: string[] = [];
+  failure: Error | null = null;
+
+  readonly show = (context: string): Promise<void> => {
+    this.contexts.push(context);
+    return this.failure === null ? Promise.resolve() : Promise.reject(this.failure);
+  };
+}
+
 type Harness = {
   controller: SessionGridController;
   clock: FakeClock;
   snapshot: FakeSnapshotPort;
   settingsPort: FakeSettingsPort;
   images: FakeImagePort;
+  activation: FakeActivationPort;
+  alerts: FakeAlertPort;
 };
 
 const makeController = (
@@ -167,6 +189,8 @@ const makeController = (
   const snapshot = new FakeSnapshotPort();
   const settingsPort = new FakeSettingsPort();
   const images = new FakeImagePort(options.autoResolve ?? true);
+  const activation = new FakeActivationPort();
+  const alerts = new FakeAlertPort();
   if (options.stored !== undefined) {
     settingsPort.stored = options.stored;
   }
@@ -179,9 +203,11 @@ const makeController = (
     getGlobalSettings: settingsPort.get,
     setGlobalSettings: settingsPort.set,
     setImage: images.send,
+    activateCodexSession: activation.activate,
+    showAlert: alerts.show,
     clock,
   });
-  return { controller, clock, snapshot, settingsPort, images };
+  return { controller, clock, snapshot, settingsPort, images, activation, alerts };
 };
 
 const appear = (
@@ -489,17 +515,66 @@ describe("SessionGridController", () => {
     expect(images.starts.length).toBe(starts);
   });
 
-  test("key down on session and blank keys is ignored", async () => {
-    const { controller, clock, settingsPort } = makeController({
-      view: healthyView(sessionsAt(1, 2, 3)),
+  test("key down activates the full Codex ID and ignores every other key model", async () => {
+    const fullSessionId = "01900000-0000-7000-8000-000000000001";
+    const { controller, activation, alerts, settingsPort } = makeController({
+      view: healthyView([
+        session(1, {
+          provider: "codex",
+          sessionId: fullSessionId,
+          title: null,
+          project: null,
+        }),
+        session(2, { provider: "claude" }),
+        session(3, { provider: "kimi" }),
+      ]),
     });
-    await controller.willAppear(appear("ctx-session", 0, 0));
-    await controller.willAppear(appear("ctx-blank", 1, 1));
+    await controller.willAppear(appear("ctx-codex", 0, 0));
+    await controller.willAppear(appear("ctx-claude", 0, 1));
+    await controller.willAppear(appear("ctx-kimi", 0, 2));
+    await controller.willAppear(appear("ctx-blank", 0, 3));
 
-    await controller.keyDown("ctx-session");
+    await controller.keyDown("ctx-codex");
+    await controller.keyDown("ctx-claude");
+    await controller.keyDown("ctx-kimi");
     await controller.keyDown("ctx-blank");
-    await clock.advance(500);
+    await controller.keyDown("missing-context");
+    controller.deviceDidConnect("device-2", { columns: 5, rows: 3 });
+    await controller.keyDown("ctx-codex");
+    controller.deviceDidDisconnect("device-2");
+    controller.willDisappear("ctx-codex");
+    await controller.keyDown("ctx-codex");
+
+    expect(activation.sessionIds).toEqual([fullSessionId]);
+    expect(alerts.contexts).toEqual([]);
     expect(settingsPort.writes).toEqual([]);
+  });
+
+  test("a degraded last-good Codex tile remains activatable", async () => {
+    const view = healthyView([
+      session(1, { provider: "codex", sessionId: "degraded-thread" }),
+    ]);
+    view.degraded = true;
+    const { controller, activation } = makeController({ view });
+    await controller.willAppear(appear("ctx-codex", 0, 0));
+
+    await controller.keyDown("ctx-codex");
+
+    expect(activation.sessionIds).toEqual(["degraded-thread"]);
+  });
+
+  test("repeated Codex presses issue repeated activation requests", async () => {
+    const { controller, activation } = makeController({
+      view: healthyView([
+        session(1, { provider: "codex", sessionId: "repeat-thread" }),
+      ]),
+    });
+    await controller.willAppear(appear("ctx-codex", 0, 0));
+
+    await controller.keyDown("ctx-codex");
+    await controller.keyDown("ctx-codex");
+
+    expect(activation.sessionIds).toEqual(["repeat-thread", "repeat-thread"]);
   });
 
   test("key down on NEXT advances the page and persists settings", async () => {
@@ -522,6 +597,59 @@ describe("SessionGridController", () => {
     expect(settingsPort.writes).toEqual([settings(true, 1), settings(true, 0)]);
     await clock.advance(250);
     expect(lastImageFor(images, "ctx-0")).toContain("Slot 1");
+  });
+
+  test("after NEXT, key down activates the Codex session on the current page", async () => {
+    const sessions = range(1, 16).map((slot) =>
+      session(slot, { provider: "codex", sessionId: `codex-${slot}` }),
+    );
+    const { controller, activation, settingsPort } = makeController({
+      stored: settings(true, 0),
+      view: healthyView(sessions),
+    });
+    await fillGrid(controller);
+
+    await controller.keyDown("ctx-14");
+    await controller.keyDown("ctx-0");
+
+    expect(settingsPort.writes).toEqual([settings(true, 1)]);
+    expect(activation.sessionIds).toEqual(["codex-15"]);
+  });
+
+  test("a reflowed key activates its current Codex owner, never its removed owner", async () => {
+    const { controller, clock, snapshot, activation } = makeController({
+      view: healthyView([
+        session(1, { provider: "codex", sessionId: "removed-thread" }),
+        session(2, { provider: "codex", sessionId: "current-thread" }),
+      ]),
+    });
+    await controller.willAppear(appear("ctx-codex", 0, 0));
+
+    snapshot.view = healthyView([
+      session(2, { provider: "codex", sessionId: "current-thread" }),
+    ]);
+    await clock.advance(POLL_MS);
+    await controller.keyDown("ctx-codex");
+
+    expect(activation.sessionIds).toEqual(["current-thread"]);
+  });
+
+  test("activation failure shows one alert and contains alert failure", async () => {
+    const { controller, activation, alerts, settingsPort } = makeController({
+      view: healthyView([
+        session(1, { provider: "codex", sessionId: "failing-thread" }),
+      ]),
+    });
+    await controller.willAppear(appear("ctx-codex", 0, 0));
+    activation.failure = new Error("launch failed");
+
+    await controller.keyDown("ctx-codex");
+    alerts.failure = new Error("alert failed");
+    await controller.keyDown("ctx-codex");
+
+    expect(activation.sessionIds).toEqual(["failing-thread", "failing-thread"]);
+    expect(alerts.contexts).toEqual(["ctx-codex", "ctx-codex"]);
+    expect(settingsPort.writes).toEqual([]);
   });
 
   test("page clamping persists settings once and ordinary refreshes never rewrite them", async () => {
