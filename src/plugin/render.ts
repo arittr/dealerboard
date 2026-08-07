@@ -30,7 +30,7 @@ const FRAME_WIDTH = 6;
 // Square corners keep the dash math an exact perimeter walk.
 const FRAME_PERIMETER = FRAME_SIZE * 4;
 const WORKING_SEGMENT_LENGTH = 80;
-const WORKING_SEGMENT_STEP = 34;
+const WORKING_SEGMENT_STEP = 17;
 
 const TITLE_LINE_CAPACITY = 14;
 const TITLE_MAX_LINES = 2;
@@ -81,13 +81,13 @@ const statusFrame = (status: SessionStatus, phase: number): string => {
       );
     }
     case "waiting": {
-      // Sixteen phases per cycle: a four-second breath at the 250 ms cadence.
-      const opacity = 0.55 + 0.35 * Math.sin((phase * Math.PI) / 8);
+      // Thirty-two phases per cycle: a four-second breath at the 125 ms cadence.
+      const opacity = 0.55 + 0.35 * Math.sin((phase * Math.PI) / 16);
       return `${frameOpen(color)} opacity="${opacity.toFixed(3)}"/>`;
     }
     case "error": {
-      // Eight phases per cycle: a two-second pulse, twice as fast as waiting.
-      const opacity = 0.55 + 0.35 * Math.sin((phase * Math.PI) / 4);
+      // Sixteen phases per cycle: a two-second pulse, twice as fast as waiting.
+      const opacity = 0.55 + 0.35 * Math.sin((phase * Math.PI) / 8);
       return `${frameOpen(color)} opacity="${opacity.toFixed(3)}"/>`;
     }
     case "idle":

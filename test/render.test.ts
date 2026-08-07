@@ -193,11 +193,11 @@ describe("status treatments", () => {
   test("error pulses faster than waiting", () => {
     const errorModel = sessionModel({ status: "error" });
     const waitingModel = sessionModel({ status: "waiting" });
-    const phases = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+    const phases = Array.from({ length: 17 }, (_, index) => index);
     const errorOpacities = phases.map((phase) => frameOpacity(errorModel, phase));
     const waitingOpacities = phases.map((phase) => frameOpacity(waitingModel, phase));
-    // Error completes a full sine cycle within eight phases; waiting needs
-    // sixteen, so only error reaches its dim minimum inside this window.
+    // Error completes a full sine cycle within sixteen phases; waiting needs
+    // thirty-two, so only error reaches its dim minimum inside this window.
     expect(Math.min(...errorOpacities)).toBeLessThan(Math.min(...waitingOpacities));
   });
 
