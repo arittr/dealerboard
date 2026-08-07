@@ -115,6 +115,7 @@ export const decodeNativeHook = (
       ];
     case "UserPromptSubmit":
     case "PreToolUse":
+    case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];
     case "PermissionRequest":
       return [statusEvent("Attention", provider, sessionId, now)];

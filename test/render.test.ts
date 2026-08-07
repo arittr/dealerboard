@@ -137,6 +137,12 @@ describe("renderKey output contract", () => {
     ]);
   });
 
+  test("colors the provider chip per harness", () => {
+    expect(decode(sessionModel({ provider: "claude" }), 0)).toContain("#D97757");
+    expect(decode(sessionModel({ provider: "codex" }), 0)).toContain("#A855F7");
+    expect(decode(sessionModel({ provider: "kimi" }), 0)).toContain("#3B82F6");
+  });
+
   test("shows a bare descendant count only when greater than zero", () => {
     const without = decode(sessionModel({ descendantCount: 0 }, "Review"), 0);
     expect(textNodesByClass(without, "badge")).toHaveLength(0);
@@ -195,14 +201,14 @@ describe("status treatments", () => {
     expect(Math.min(...errorOpacities)).toBeLessThan(Math.min(...waitingOpacities));
   });
 
-  test("idle uses one static #94A3B8 frame that ignores phase", () => {
+  test("idle uses one static #4ADE80 frame that ignores phase", () => {
     const model = sessionModel({ status: "idle" });
     const first = renderKey(model, 0);
     for (let phase = 1; phase < 8; phase++) {
       expect(renderKey(model, phase)).toBe(first);
     }
     const svg = decode(model, 0);
-    expect(svg).toContain("#94A3B8");
+    expect(svg).toContain("#4ADE80");
     expect(svg).not.toContain("#20B8FF");
     expect(svg).not.toContain("#FFB020");
     expect(svg).not.toContain("#FF4D67");

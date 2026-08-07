@@ -2,12 +2,13 @@
  * XML-safe animated SVG tile renderer for the 5x3 keypad.
  *
  * Every key is a 144x144 SVG returned as one percent-encoded data URL.
- * Session tiles carry a provider mark, up to two centered title lines, a bare
+ * Session tiles carry a provider-colored corner chip with the two-letter
+ * provider mark, up to two centered title lines, a bare
  * descendant count when greater than zero, and a status-colored frame.
  * Animation is a pure function of the key model and an integer phase owned by
  * the plugin: working shows a bright border segment offset by phase, waiting
  * and error breathe through sinusoidal frame opacity (error faster), and idle
- * is a static slate frame. Blank, NEXT, and offline treatments render no
+ * is a static green frame. Blank, NEXT, and offline treatments render no
  * session title; degraded models add a small error flag, and a degraded blank
  * renders the explicit offline treatment.
  *
@@ -38,9 +39,17 @@ const TITLE_CAPACITY = TITLE_LINE_CAPACITY * TITLE_MAX_LINES;
 const COLOR_WORKING = "#20B8FF";
 const COLOR_WAITING = "#FFB020";
 const COLOR_ERROR = "#FF4D67";
-const COLOR_IDLE = "#94A3B8";
+const COLOR_IDLE = "#4ADE80";
+// Neutral chrome (NEXT frame, page count, OFFLINE) — not a session status.
+const COLOR_NEUTRAL = "#94A3B8";
 const COLOR_BACKGROUND = "#10151C";
 const COLOR_TEXT = "#E8EEF7";
+
+const PROVIDER_COLORS: Record<Provider, string> = {
+  claude: "#D97757",
+  codex: "#A855F7",
+  kimi: "#3B82F6",
+};
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
   working: COLOR_WORKING,
@@ -107,7 +116,8 @@ const titleLines = (label: string): string => {
 };
 
 const providerMark = (provider: Provider): string =>
-  `<text class="mark" x="16" y="27" font-size="15" fill="${COLOR_IDLE}">${escapeXml(provider.slice(0, 2).toUpperCase())}</text>`;
+  `<rect class="markchip" x="12" y="13" width="38" height="26" rx="6" fill="${PROVIDER_COLORS[provider]}"/>` +
+  `<text class="mark" x="31" y="32" text-anchor="middle" font-size="20" fill="${COLOR_BACKGROUND}">${escapeXml(provider.slice(0, 2).toUpperCase())}</text>`;
 
 const descendantBadge = (descendantCount: number): string =>
   descendantCount > 0
@@ -125,13 +135,13 @@ const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, phase: numbe
 
 const blankTile = (degraded: boolean): string =>
   degraded
-    ? `<text class="offline" x="72" y="80" text-anchor="middle" font-size="14" fill="${COLOR_IDLE}">OFFLINE</text>`
+    ? `<text class="offline" x="72" y="80" text-anchor="middle" font-size="14" fill="${COLOR_NEUTRAL}">OFFLINE</text>`
     : "";
 
 const nextTile = (page: number, pageCount: number, degraded: boolean): string =>
-  `${frameOpen(COLOR_IDLE)}/>` +
+  `${frameOpen(COLOR_NEUTRAL)}/>` +
   `<text class="next" x="72" y="74" text-anchor="middle" font-size="18" fill="${COLOR_TEXT}">NEXT</text>` +
-  `<text class="page" x="72" y="98" text-anchor="middle" font-size="14" fill="${COLOR_IDLE}">${page}/${pageCount}</text>` +
+  `<text class="page" x="72" y="98" text-anchor="middle" font-size="14" fill="${COLOR_NEUTRAL}">${page}/${pageCount}</text>` +
   (degraded ? DEGRADED_FLAG : "");
 
 export const renderKey = (model: KeyModel, phase: number): string => {

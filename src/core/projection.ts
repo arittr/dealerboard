@@ -65,8 +65,12 @@ const identityKey = (provider: Provider, sessionId: string): string =>
 
 /**
  * Project stored rows to the top-level snapshot session list, ordered by
- * stored logical slot with gaps preserved. Pure; throws `ProjectionError` on
- * any invalid topology rather than emitting partial output.
+ * stored logical slot with gaps preserved. A root's effective status is the
+ * highest-priority status in its subtree, where a live descendant counts as
+ * at least "working": child rows exist only while a subagent runs, and a
+ * subagent may never emit its own Activity event. Pure; throws
+ * `ProjectionError` on any invalid topology rather than emitting partial
+ * output.
  */
 export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] => {
   // Index every row by composite identity; duplicates are corrupt.
@@ -133,8 +137,12 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       visited.add(key);
       if (key !== rootKey) {
         descendantCount += 1;
-        if (STATUS_PRIORITY[current.status] > STATUS_PRIORITY[effectiveStatus]) {
-          effectiveStatus = current.status;
+        // A descendant row exists only while its subagent runs (SubagentStop
+        // deletes the row), and a subagent may never emit its own Activity
+        // event — so a live descendant lifts the tree to at least "working".
+        const descendantStatus = current.status === "idle" ? "working" : current.status;
+        if (STATUS_PRIORITY[descendantStatus] > STATUS_PRIORITY[effectiveStatus]) {
+          effectiveStatus = descendantStatus;
         }
       }
       for (const child of childrenOf.get(key) ?? []) {

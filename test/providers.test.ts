@@ -147,11 +147,16 @@ describe("event mapping", () => {
     ]);
   });
 
-  test("maps UserPromptSubmit and PreToolUse to Activity", () => {
+  test("maps UserPromptSubmit, PreToolUse, and PostToolUse to Activity", () => {
     expect(decode(withIdentity({ hook_event_name: "UserPromptSubmit" }))).toEqual([
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
     ]);
     expect(decode(withIdentity({ hook_event_name: "PreToolUse" }))).toEqual([
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    // PostToolUse is the event that fires when an answered prompt unblocks the
+    // tool call; without it a tile stays waiting until the next mapped event.
+    expect(decode(withIdentity({ hook_event_name: "PostToolUse" }))).toEqual([
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
     ]);
   });
@@ -302,7 +307,6 @@ describe("event mapping", () => {
 
   test("returns no events for unknown hook names", () => {
     for (const name of [
-      "PostToolUse",
       "PostToolUseFailure",
       "PreCompact",
       "Interrupt",

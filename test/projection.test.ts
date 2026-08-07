@@ -78,12 +78,28 @@ describe("projectRows", () => {
     expect(sessions[0]).toEqual({
       provider: "claude",
       sessionId: "p",
-      status: "idle",
+      // Live descendants lift an idle root to working.
+      status: "working",
       title: "Parent",
       project: "proj",
       descendantCount: 3,
       logicalSlot: 2,
     });
+  });
+
+  test("lifts an idle root with live descendants to at least working", () => {
+    const effective = (rows: ProjectionRow[]): SessionStatus | undefined =>
+      projectRows(rows)[0]?.status;
+
+    // A descendant row exists only while its subagent runs, even if the child
+    // never emits an Activity event of its own.
+    expect(effective([row("p", { status: "idle" }), row("c", { parent: "p" })])).toBe("working");
+    // The floor does not lower higher-priority statuses.
+    expect(
+      effective([row("p", { status: "waiting" }), row("c", { parent: "p", status: "idle" })]),
+    ).toBe("waiting");
+    // An idle root with no descendants stays idle.
+    expect(effective([row("p", { status: "idle" })])).toBe("idle");
   });
 
   test("reduces effective status by error > waiting > working > idle across the subtree", () => {

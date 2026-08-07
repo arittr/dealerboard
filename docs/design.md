@@ -45,14 +45,14 @@ Session tiles use a thick status-colored frame around a dark interior:
 
 - Working: blue `#20B8FF`
 - Waiting for Drew: amber `#FFB020`
-- Idle: slate `#94A3B8`
+- Idle (turn finished, at prompt): green `#4ADE80`
 - Error requiring attention: red `#FF4D67`
 
 There is no visible status word or status glyph. A session whose current state is unknown must not be rendered as known-idle. Gate 0 must determine whether unknown sessions receive a distinct neutral treatment or remain hidden until state becomes known.
 
 Each tile also has:
 
-- A small provider mark in the upper-left.
+- A provider-colored chip in the upper-left with the provider's two-letter abbreviation in dark text: orange `#D97757` for Claude, purple `#A855F7` for Codex, blue `#3B82F6` for Kimi.
 - A two-line session/task title.
 - Repository or worktree name as the first fallback.
 - Provider plus shortened session identifier as the final fallback.
@@ -158,7 +158,7 @@ Effective state retains the selected priority:
 error > waiting > working > idle
 ```
 
-State and descendants aggregate across all live attachments and the complete live subtree. Idle requires positive evidence that activity is idle, attention is clear, and failure is clear everywhere in that aggregate. Unknown facts do not collapse to idle. Parent topology must reject self-parenting, cycles, illegal cross-scope links, and unbounded traversal.
+State and descendants aggregate across all live attachments and the complete live subtree. A descendant row exists only while its subagent runs, so a live descendant lifts the subtree to at least `working` even when the child never emits activity of its own. Idle requires positive evidence that activity is idle, attention is clear, and failure is clear everywhere in that aggregate. Unknown facts do not collapse to idle. Parent topology must reject self-parenting, cycles, illegal cross-scope links, and unbounded traversal.
 
 ## Candidate adapter ownership and causality
 
