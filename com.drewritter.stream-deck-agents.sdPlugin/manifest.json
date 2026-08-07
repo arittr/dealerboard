@@ -1,13 +1,13 @@
 {
 	"Name": "Stream Deck Agents",
-	"Version": "0.1.8.2",
+	"Version": "0.1.8.3",
 	"Author": "Drew Ritter",
 	"Actions": [
 		{
 			"Name": "Session Grid",
 			"UUID": "com.drewritter.stream-deck-agents.session-grid",
 			"Icon": "imgs/action-icon",
-			"Tooltip": "Shows live agent sessions; press a Codex or Kimi tile to open it.",
+			"Tooltip": "Shows live agent sessions; press Claude, Codex, or Kimi tiles to focus or open them.",
 			"Controllers": [
 				"Keypad"
 			],
@@ -21,7 +21,7 @@
 	"Category": "Stream Deck Agents",
 	"CategoryIcon": "imgs/category-icon",
 	"CodePath": "bin/plugin.js",
-	"Description": "Displays live agent sessions from the local registry on a 15-key grid. Press Codex tiles to open desktop tasks and Kimi tiles to open Web sessions.",
+	"Description": "Displays live agent sessions from the local registry on a 15-key grid. Press Claude tiles to focus their Ghostty terminals, Codex tiles to open desktop tasks, and Kimi tiles to open Web sessions.",
 	"Icon": "imgs/plugin-icon",
 	"SDKVersion": 3,
 	"Software": {

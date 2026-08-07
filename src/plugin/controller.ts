@@ -25,6 +25,7 @@ import {
   reduceLayout,
 } from "./layout";
 import type { ActivateCodexSession } from "./codex-session-activation";
+import type { ActivateClaudeSession } from "./claude-session-activation";
 import type { ActivateKimiSession } from "./kimi-session-activation";
 import { renderKey } from "./render";
 import { FrameScheduler, type SchedulerClock, type SendImage } from "./scheduler";
@@ -48,6 +49,7 @@ export type SessionGridPorts = {
   getGlobalSettings: () => Promise<unknown>;
   setGlobalSettings: (settings: LayoutSettingsV1) => Promise<void>;
   setImage: SendImage;
+  activateClaudeSession: ActivateClaudeSession;
   activateCodexSession: ActivateCodexSession;
   activateKimiSession: ActivateKimiSession;
   showAlert: (context: string) => Promise<void>;
@@ -174,25 +176,33 @@ export class SessionGridController {
     if (model?.kind !== "session") {
       return;
     }
-    const activateSession =
-      model.session.provider === "codex"
-        ? this.ports.activateCodexSession
-        : model.session.provider === "kimi"
-          ? this.ports.activateKimiSession
-          : undefined;
-    if (activateSession === undefined) {
+    let activateSession: ((target: string) => Promise<void>) | undefined;
+    let activationTarget: string | undefined;
+    switch (model.session.provider) {
+      case "claude":
+        if (model.session.ghosttyTerminalId === null) {
+          await this.showActivationAlert(context);
+          return;
+        }
+        activateSession = this.ports.activateClaudeSession;
+        activationTarget = model.session.ghosttyTerminalId;
+        break;
+      case "codex":
+        activateSession = this.ports.activateCodexSession;
+        activationTarget = model.session.sessionId;
+        break;
+      case "kimi":
+        activateSession = this.ports.activateKimiSession;
+        activationTarget = model.session.sessionId;
+        break;
+    }
+    if (activateSession === undefined || activationTarget === undefined) {
       return;
     }
-    const sessionId = model.session.sessionId;
     try {
-      await activateSession(sessionId);
+      await activateSession(activationTarget);
     } catch {
-      try {
-        await this.ports.showAlert(context);
-      } catch {
-        // Alert feedback is best-effort; an SDK rejection must not escape the
-        // key event or retry an already-failed activation.
-      }
+      await this.showActivationAlert(context);
     }
   }
 
@@ -268,6 +278,14 @@ export class SessionGridController {
       return;
     }
     this.convergeGrid();
+  }
+
+  private async showActivationAlert(context: string): Promise<void> {
+    try {
+      await this.ports.showAlert(context);
+    } catch {
+      // Native key feedback is best-effort; never retry activation.
+    }
   }
 
   /**

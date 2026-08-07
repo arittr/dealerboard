@@ -199,6 +199,14 @@ Notes:
 - One second fits every event's budget, including the shared 1.5-second
   `SessionEnd` budget.
 
+### Claude tile activation
+
+Run ordinary `claude` directly in Ghostty. Ghostty must expose its native
+terminal `pid` and `tty` properties for SessionStart discovery. tmux and other
+terminals remain display-only and unbound. If discovery fails, the session tile
+remains visible, but pressing it alerts. The hook snippets above remain
+unchanged; no wrapper is installed.
+
 ### 3. Validate
 
 Start a new Claude Code session and run `/hooks`. Each of the eleven events

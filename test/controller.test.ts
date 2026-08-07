@@ -180,6 +180,7 @@ type Harness = {
   settingsPort: FakeSettingsPort;
   images: FakeImagePort;
   activation: FakeActivationPort;
+  claudeActivation: FakeActivationPort;
   kimiActivation: FakeActivationPort;
   alerts: FakeAlertPort;
 };
@@ -192,6 +193,7 @@ const makeController = (
   const settingsPort = new FakeSettingsPort();
   const images = new FakeImagePort(options.autoResolve ?? true);
   const activation = new FakeActivationPort();
+  const claudeActivation = new FakeActivationPort();
   const kimiActivation = new FakeActivationPort();
   const alerts = new FakeAlertPort();
   if (options.stored !== undefined) {
@@ -207,6 +209,7 @@ const makeController = (
     setGlobalSettings: settingsPort.set,
     setImage: images.send,
     activateCodexSession: activation.activate,
+    activateClaudeSession: claudeActivation.activate,
     activateKimiSession: kimiActivation.activate,
     showAlert: alerts.show,
     clock,
@@ -218,6 +221,7 @@ const makeController = (
     settingsPort,
     images,
     activation,
+    claudeActivation,
     kimiActivation,
     alerts,
   };
@@ -530,8 +534,9 @@ describe("SessionGridController", () => {
 
   test("key down routes full provider IDs and ignores every other key model", async () => {
     const fullCodexSessionId = "01900000-0000-7000-8000-000000000001";
+    const stableClaudeTerminalId = "ghostty-terminal-id";
     const fullKimiSessionId = "session_360af549-9129-45c6-af08-08c74ffe25a0";
-    const { controller, activation, kimiActivation, alerts, settingsPort } = makeController({
+    const { controller, activation, claudeActivation, kimiActivation, alerts, settingsPort } = makeController({
       view: healthyView([
         session(1, {
           provider: "codex",
@@ -539,7 +544,11 @@ describe("SessionGridController", () => {
           title: null,
           project: null,
         }),
-        session(2, { provider: "claude" }),
+        session(2, {
+          provider: "claude",
+          sessionId: "claude-session-id",
+          ghosttyTerminalId: stableClaudeTerminalId,
+        }),
         session(3, { provider: "kimi", sessionId: fullKimiSessionId }),
       ]),
     });
@@ -560,9 +569,78 @@ describe("SessionGridController", () => {
     await controller.keyDown("ctx-codex");
 
     expect(activation.sessionIds).toEqual([fullCodexSessionId]);
+    expect(claudeActivation.sessionIds).toEqual([stableClaudeTerminalId]);
     expect(kimiActivation.sessionIds).toEqual([fullKimiSessionId]);
     expect(alerts.contexts).toEqual([]);
     expect(settingsPort.writes).toEqual([]);
+  });
+
+  test("a bound Claude tile activates its stable terminal ID, not its session ID", async () => {
+    const { controller, claudeActivation, alerts } = makeController({
+      view: healthyView([
+        session(1, {
+          provider: "claude",
+          sessionId: "claude-session-id",
+          ghosttyTerminalId: "ghostty-terminal-id",
+        }),
+      ]),
+    });
+    await controller.willAppear(appear("ctx-claude", 0, 0));
+
+    await controller.keyDown("ctx-claude");
+
+    expect(claudeActivation.sessionIds).toEqual(["ghostty-terminal-id"]);
+    expect(alerts.contexts).toEqual([]);
+  });
+
+  test("an unbound Claude tile alerts without invoking any activator", async () => {
+    const harness = makeController({ view: healthyView([session(1)]) });
+    await harness.controller.willAppear(appear("ctx-claude", 0, 0));
+
+    await harness.controller.keyDown("ctx-claude");
+
+    expect(harness.claudeActivation.sessionIds).toEqual([]);
+    expect(harness.activation.sessionIds).toEqual([]);
+    expect(harness.kimiActivation.sessionIds).toEqual([]);
+    expect(harness.alerts.contexts).toEqual(["ctx-claude"]);
+  });
+
+  test("a rejected Claude focus alerts once with no retry", async () => {
+    const harness = makeController({
+      view: healthyView([session(1, { ghosttyTerminalId: "stale-terminal" })]),
+    });
+    harness.claudeActivation.failure = new Error("missing terminal");
+    await harness.controller.willAppear(appear("ctx-claude", 0, 0));
+
+    await harness.controller.keyDown("ctx-claude");
+
+    expect(harness.claudeActivation.sessionIds).toEqual(["stale-terminal"]);
+    expect(harness.alerts.contexts).toEqual(["ctx-claude"]);
+  });
+
+  test("a rejected Claude focus contains an alert rejection", async () => {
+    const harness = makeController({
+      view: healthyView([session(1, { ghosttyTerminalId: "stale-terminal" })]),
+    });
+    harness.claudeActivation.failure = new Error("missing terminal");
+    harness.alerts.failure = new Error("alert failed");
+    await harness.controller.willAppear(appear("ctx-claude", 0, 0));
+
+    await harness.controller.keyDown("ctx-claude");
+
+    expect(harness.claudeActivation.sessionIds).toEqual(["stale-terminal"]);
+    expect(harness.alerts.contexts).toEqual(["ctx-claude"]);
+  });
+
+  test("a degraded bound Claude tile remains activatable", async () => {
+    const view = healthyView([session(1, { ghosttyTerminalId: "exact-terminal" })]);
+    view.degraded = true;
+    const harness = makeController({ view });
+    await harness.controller.willAppear(appear("ctx-claude", 0, 0));
+
+    await harness.controller.keyDown("ctx-claude");
+
+    expect(harness.claudeActivation.sessionIds).toEqual(["exact-terminal"]);
   });
 
   test("a degraded last-good Codex tile remains activatable", async () => {
@@ -592,6 +670,18 @@ describe("SessionGridController", () => {
     expect(activation.sessionIds).toEqual(["repeat-thread", "repeat-thread"]);
   });
 
+  test("repeated Claude presses issue repeated activation requests", async () => {
+    const { controller, claudeActivation } = makeController({
+      view: healthyView([session(1, { ghosttyTerminalId: "repeat-terminal" })]),
+    });
+    await controller.willAppear(appear("ctx-claude", 0, 0));
+
+    await controller.keyDown("ctx-claude");
+    await controller.keyDown("ctx-claude");
+
+    expect(claudeActivation.sessionIds).toEqual(["repeat-terminal", "repeat-terminal"]);
+  });
+
   test("key down on NEXT advances the page and persists settings", async () => {
     const { controller, clock, settingsPort, images } = makeController({
       stored: settings(true, 0),
@@ -614,39 +704,40 @@ describe("SessionGridController", () => {
     expect(lastImageFor(images, "ctx-0")).toContain("Slot 1");
   });
 
-  test("after NEXT, key down activates the Codex session on the current page", async () => {
+  test("after NEXT, key down activates the Claude target on the current page", async () => {
     const sessions = range(1, 16).map((slot) =>
-      session(slot, { provider: "codex", sessionId: `codex-${slot}` }),
+      session(slot, { ghosttyTerminalId: `terminal-${slot}` }),
     );
-    const { controller, activation, settingsPort } = makeController({
+    const { controller, claudeActivation, settingsPort } = makeController({
       stored: settings(true, 0),
       view: healthyView(sessions),
     });
     await fillGrid(controller);
 
+    await controller.keyDown("ctx-0");
     await controller.keyDown("ctx-14");
     await controller.keyDown("ctx-0");
 
     expect(settingsPort.writes).toEqual([settings(true, 1)]);
-    expect(activation.sessionIds).toEqual(["codex-15"]);
+    expect(claudeActivation.sessionIds).toEqual(["terminal-1", "terminal-15"]);
   });
 
-  test("a reflowed key activates its current Codex owner, never its removed owner", async () => {
-    const { controller, clock, snapshot, activation } = makeController({
+  test("a reflowed key activates its current Claude owner, never its removed owner", async () => {
+    const { controller, clock, snapshot, claudeActivation } = makeController({
       view: healthyView([
-        session(1, { provider: "codex", sessionId: "removed-thread" }),
-        session(2, { provider: "codex", sessionId: "current-thread" }),
+        session(1, { sessionId: "removed-session", ghosttyTerminalId: "removed-terminal" }),
+        session(2, { sessionId: "current-session", ghosttyTerminalId: "current-terminal" }),
       ]),
     });
-    await controller.willAppear(appear("ctx-codex", 0, 0));
+    await controller.willAppear(appear("ctx-claude", 0, 0));
 
     snapshot.view = healthyView([
-      session(2, { provider: "codex", sessionId: "current-thread" }),
+      session(2, { sessionId: "current-session", ghosttyTerminalId: "current-terminal" }),
     ]);
     await clock.advance(POLL_MS);
-    await controller.keyDown("ctx-codex");
+    await controller.keyDown("ctx-claude");
 
-    expect(activation.sessionIds).toEqual(["current-thread"]);
+    expect(claudeActivation.sessionIds).toEqual(["current-terminal"]);
   });
 
   test("activation failure shows one alert and contains alert failure", async () => {

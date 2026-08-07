@@ -9,6 +9,7 @@
 
 import streamDeck from "@elgato/streamdeck";
 import { resolveAppPaths } from "../core/paths";
+import { activateClaudeSession } from "./claude-session-activation";
 import { activateCodexSession } from "./codex-session-activation";
 import { SessionGridController } from "./controller";
 import { createKimiSessionActivator } from "./kimi-session-activation";
@@ -31,6 +32,7 @@ const controller = new SessionGridController({
   setGlobalSettings: (settings) => streamDeck.settings.setGlobalSettings(settings),
   setImage: (context, image) =>
     keyActionForContext(context)?.setImage(image) ?? Promise.resolve(),
+  activateClaudeSession,
   activateCodexSession,
   activateKimiSession,
   showAlert: (context) =>
