@@ -1,0 +1,49 @@
+{
+	"Name": "Stream Deck Agents",
+	"Version": "0.1.0.0",
+	"Author": "Drew Ritter",
+	"Actions": [
+		{
+			"Name": "Session Grid",
+			"UUID": "com.drewritter.stream-deck-agents.session-grid",
+			"Icon": "imgs/action-icon",
+			"Tooltip": "Shows live agent sessions in a read-only grid.",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/action-icon"
+				}
+			]
+		}
+	],
+	"Category": "Stream Deck Agents",
+	"CategoryIcon": "imgs/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Displays live agent sessions from the local registry on a read-only 15-key grid.",
+	"Icon": "imgs/plugin-icon",
+	"SDKVersion": 3,
+	"Software": {
+		"MinimumVersion": "7.1"
+	},
+	"OS": [
+		{
+			"Platform": "mac",
+			"MinimumVersion": "12"
+		}
+	],
+	"Nodejs": {
+		"Version": "24"
+	},
+	"Profiles": [
+		{
+			"Name": "profiles/Stream Deck Agents",
+			"DeviceType": 0,
+			"AutoInstall": true,
+			"Readonly": true,
+			"DontAutoSwitchWhenInstalled": false
+		}
+	],
+	"UUID": "com.drewritter.stream-deck-agents"
+}
