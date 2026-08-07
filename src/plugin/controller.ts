@@ -25,6 +25,7 @@ import {
   reduceLayout,
 } from "./layout";
 import type { ActivateCodexSession } from "./codex-session-activation";
+import type { ActivateKimiSession } from "./kimi-session-activation";
 import { renderKey } from "./render";
 import { FrameScheduler, type SchedulerClock, type SendImage } from "./scheduler";
 import type { SnapshotView } from "./snapshot-reader";
@@ -48,6 +49,7 @@ export type SessionGridPorts = {
   setGlobalSettings: (settings: LayoutSettingsV1) => Promise<void>;
   setImage: SendImage;
   activateCodexSession: ActivateCodexSession;
+  activateKimiSession: ActivateKimiSession;
   showAlert: (context: string) => Promise<void>;
   clock: SchedulerClock;
 };
@@ -169,12 +171,21 @@ export class SessionGridController {
       }
       return;
     }
-    if (model?.kind !== "session" || model.session.provider !== "codex") {
+    if (model?.kind !== "session") {
+      return;
+    }
+    const activateSession =
+      model.session.provider === "codex"
+        ? this.ports.activateCodexSession
+        : model.session.provider === "kimi"
+          ? this.ports.activateKimiSession
+          : undefined;
+    if (activateSession === undefined) {
       return;
     }
     const sessionId = model.session.sessionId;
     try {
-      await this.ports.activateCodexSession(sessionId);
+      await activateSession(sessionId);
     } catch {
       try {
         await this.ports.showAlert(context);

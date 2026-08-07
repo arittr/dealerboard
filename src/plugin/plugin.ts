@@ -11,10 +11,14 @@ import streamDeck from "@elgato/streamdeck";
 import { resolveAppPaths } from "../core/paths";
 import { activateCodexSession } from "./codex-session-activation";
 import { SessionGridController } from "./controller";
+import { createKimiSessionActivator } from "./kimi-session-activation";
 import { SessionGridAction } from "./session-grid-action";
 import { SnapshotCache } from "./snapshot-reader";
 
 const snapshotCache = new SnapshotCache(resolveAppPaths().snapshot);
+const activateKimiSession = createKimiSessionActivator((url) =>
+  streamDeck.system.openUrl(url),
+);
 
 const keyActionForContext = (context: string) => {
   const target = streamDeck.actions.getActionById(context);
@@ -28,6 +32,7 @@ const controller = new SessionGridController({
   setImage: (context, image) =>
     keyActionForContext(context)?.setImage(image) ?? Promise.resolve(),
   activateCodexSession,
+  activateKimiSession,
   showAlert: (context) =>
     keyActionForContext(context)?.showAlert() ?? Promise.resolve(),
   clock: {

@@ -179,6 +179,7 @@ type Harness = {
   settingsPort: FakeSettingsPort;
   images: FakeImagePort;
   activation: FakeActivationPort;
+  kimiActivation: FakeActivationPort;
   alerts: FakeAlertPort;
 };
 
@@ -190,6 +191,7 @@ const makeController = (
   const settingsPort = new FakeSettingsPort();
   const images = new FakeImagePort(options.autoResolve ?? true);
   const activation = new FakeActivationPort();
+  const kimiActivation = new FakeActivationPort();
   const alerts = new FakeAlertPort();
   if (options.stored !== undefined) {
     settingsPort.stored = options.stored;
@@ -204,10 +206,20 @@ const makeController = (
     setGlobalSettings: settingsPort.set,
     setImage: images.send,
     activateCodexSession: activation.activate,
+    activateKimiSession: kimiActivation.activate,
     showAlert: alerts.show,
     clock,
   });
-  return { controller, clock, snapshot, settingsPort, images, activation, alerts };
+  return {
+    controller,
+    clock,
+    snapshot,
+    settingsPort,
+    images,
+    activation,
+    kimiActivation,
+    alerts,
+  };
 };
 
 const appear = (
@@ -515,18 +527,19 @@ describe("SessionGridController", () => {
     expect(images.starts.length).toBe(starts);
   });
 
-  test("key down activates the full Codex ID and ignores every other key model", async () => {
-    const fullSessionId = "01900000-0000-7000-8000-000000000001";
-    const { controller, activation, alerts, settingsPort } = makeController({
+  test("key down routes full provider IDs and ignores every other key model", async () => {
+    const fullCodexSessionId = "01900000-0000-7000-8000-000000000001";
+    const fullKimiSessionId = "session_360af549-9129-45c6-af08-08c74ffe25a0";
+    const { controller, activation, kimiActivation, alerts, settingsPort } = makeController({
       view: healthyView([
         session(1, {
           provider: "codex",
-          sessionId: fullSessionId,
+          sessionId: fullCodexSessionId,
           title: null,
           project: null,
         }),
         session(2, { provider: "claude" }),
-        session(3, { provider: "kimi" }),
+        session(3, { provider: "kimi", sessionId: fullKimiSessionId }),
       ]),
     });
     await controller.willAppear(appear("ctx-codex", 0, 0));
@@ -545,7 +558,8 @@ describe("SessionGridController", () => {
     controller.willDisappear("ctx-codex");
     await controller.keyDown("ctx-codex");
 
-    expect(activation.sessionIds).toEqual([fullSessionId]);
+    expect(activation.sessionIds).toEqual([fullCodexSessionId]);
+    expect(kimiActivation.sessionIds).toEqual([fullKimiSessionId]);
     expect(alerts.contexts).toEqual([]);
     expect(settingsPort.writes).toEqual([]);
   });
