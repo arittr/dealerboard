@@ -1,13 +1,13 @@
 /**
  * One bounded animation scheduler shared by every action context.
  *
- * A single 250 ms interval drives all keys. Each context tracks the last sent
+ * A single 125 ms interval drives all keys. Each context tracks the last sent
  * image, the newest desired image, an in-flight flag, an active flag, and the
  * last start time. A tick computes the current desired frame for every active
  * context, suppresses identical frames, replaces (never queues) pending work
  * while a send is in flight, and starts at most one update per context per
- * tick, never sooner than 250 ms after that key's previous start — a
- * four-starts-per-second ceiling per key, below the SDK's ten-updates-per-
+ * tick, never sooner than 125 ms after that key's previous start — an
+ * eight-starts-per-second ceiling per key, below the SDK's ten-updates-per-
  * second guidance. The first render after registration is immediate.
  *
  * Promise completion only clears the in-flight flag; it never sends outside a
@@ -33,7 +33,7 @@ export type FrameSchedulerOptions = {
   renderFrame: RenderFrame;
 };
 
-const TICK_MS = 250;
+const TICK_MS = 125;
 
 type ContextState = {
   active: boolean;
@@ -71,7 +71,7 @@ export class FrameScheduler {
     this.contexts.set(context, state);
     this.ensureTimer();
     // The first render is immediate; later renders wait for this key's own
-    // 250 ms boundary.
+    // 125 ms boundary.
     this.start(context, state, this.renderFrame(context, this.phase));
   }
 

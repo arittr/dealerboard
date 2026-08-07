@@ -4,7 +4,8 @@ import type { LayoutSettingsV1 } from "../src/plugin/layout";
 import type { SnapshotView } from "../src/plugin/snapshot-reader";
 import type { ProjectedSession } from "../src/protocol";
 
-const TICK_MS = 250;
+const TICK_MS = 125;
+const POLL_MS = 250;
 
 const session = (
   logicalSlot: number,
@@ -227,13 +228,13 @@ describe("SessionGridController", () => {
     await controller.willAppear(appear("ctx-a", 0, 0));
     expect(snapshot.reads).toBe(1);
     // One scheduler animation clock plus exactly one snapshot poller.
-    expect(clock.intervalCalls).toEqual([TICK_MS, TICK_MS]);
+    expect(clock.intervalCalls).toEqual([TICK_MS, POLL_MS]);
     expect(clock.activeIntervalCount).toBe(2);
 
     // Later contexts share both timers; no per-context pollers appear.
     await controller.willAppear(appear("ctx-b", 0, 1));
     await controller.willAppear(appear("ctx-c", 0, 2));
-    expect(clock.intervalCalls).toEqual([TICK_MS, TICK_MS]);
+    expect(clock.intervalCalls).toEqual([TICK_MS, POLL_MS]);
 
     await clock.advance(1000);
     // One initial read plus one read per 250 ms poll tick.
