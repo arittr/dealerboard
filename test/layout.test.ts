@@ -71,7 +71,17 @@ const labelFor = (overrides: Partial<ProjectedSession>): string =>
     .label;
 
 describe("reduceLayout without overflow", () => {
-  test("maps slots 1 through 15 to key indexes 0 through 14", () => {
+  test("packs sessions densely in slot order, filling gaps", () => {
+    const result = reduceLayout(healthyView(sessionsAt(2, 5)), DEFAULT_LAYOUT_SETTINGS);
+    expect(result.keys).toHaveLength(15);
+    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(2);
+    expect(sessionKeyAt(result.keys, 1).session.logicalSlot).toBe(5);
+    for (let index = 2; index < 15; index++) {
+      expect(result.keys[index]).toEqual({ kind: "blank", degraded: false });
+    }
+  });
+
+  test("maps up to fifteen sessions onto keys in rank order", () => {
     const result = reduceLayout(
       healthyView(sessionsAt(...range(1, 15))),
       DEFAULT_LAYOUT_SETTINGS,
@@ -84,30 +94,36 @@ describe("reduceLayout without overflow", () => {
     expect(result.dirty).toBe(false);
   });
 
-  test("leaves gaps blank instead of compacting sessions", () => {
-    const result = reduceLayout(healthyView(sessionsAt(2, 5)), DEFAULT_LAYOUT_SETTINGS);
-    expect(result.keys).toHaveLength(15);
-    expect(result.keys[0]).toEqual({ kind: "blank", degraded: false });
-    expect(sessionKeyAt(result.keys, 1).session.logicalSlot).toBe(2);
-    expect(result.keys[2]).toEqual({ kind: "blank", degraded: false });
-    expect(result.keys[3]).toEqual({ kind: "blank", degraded: false });
-    expect(sessionKeyAt(result.keys, 4).session.logicalSlot).toBe(5);
-    for (let index = 5; index < 15; index++) {
-      expect(result.keys[index]).toEqual({ kind: "blank", degraded: false });
-    }
-  });
-
   test("sorts sessions by logical slot defensively", () => {
     const result = reduceLayout(
       healthyView([session(7), session(1), session(3)]),
       DEFAULT_LAYOUT_SETTINGS,
     );
     expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(1);
-    expect(sessionKeyAt(result.keys, 2).session.logicalSlot).toBe(3);
-    expect(sessionKeyAt(result.keys, 6).session.logicalSlot).toBe(7);
+    expect(sessionKeyAt(result.keys, 1).session.logicalSlot).toBe(3);
+    expect(sessionKeyAt(result.keys, 2).session.logicalSlot).toBe(7);
   });
 
-  test("does not latch overflow for a live slot 15 alone", () => {
+  test("shifts later ranks left on removal and right on insertion at a freed slot", () => {
+    // Slot 3 has ended: the slot-4 and slot-5 tiles sit one key left.
+    const afterEnd = reduceLayout(healthyView(sessionsAt(1, 2, 4, 5)), DEFAULT_LAYOUT_SETTINGS);
+    expect(sessionKeyAt(afterEnd.keys, 1).session.logicalSlot).toBe(2);
+    expect(sessionKeyAt(afterEnd.keys, 2).session.logicalSlot).toBe(4);
+    expect(sessionKeyAt(afterEnd.keys, 3).session.logicalSlot).toBe(5);
+    expect(afterEnd.keys[4]).toEqual({ kind: "blank", degraded: false });
+
+    // A new session allocated the freed slot 3 inserts at rank 2, shifting
+    // the slot-4 and slot-5 tiles one key right.
+    const afterStart = reduceLayout(
+      healthyView(sessionsAt(1, 2, 3, 4, 5)),
+      DEFAULT_LAYOUT_SETTINGS,
+    );
+    expect(sessionKeyAt(afterStart.keys, 2).session.logicalSlot).toBe(3);
+    expect(sessionKeyAt(afterStart.keys, 3).session.logicalSlot).toBe(4);
+    expect(sessionKeyAt(afterStart.keys, 4).session.logicalSlot).toBe(5);
+  });
+
+  test("does not latch overflow at fifteen live sessions", () => {
     const result = reduceLayout(
       healthyView(sessionsAt(...range(1, 15))),
       DEFAULT_LAYOUT_SETTINGS,
@@ -119,7 +135,7 @@ describe("reduceLayout without overflow", () => {
 });
 
 describe("reduceLayout overflow latch", () => {
-  test("latches overflow only when a live slot exceeds 15", () => {
+  test("latches overflow when the live count exceeds fifteen", () => {
     const result = reduceLayout(
       healthyView(sessionsAt(...range(1, 16))),
       DEFAULT_LAYOUT_SETTINGS,
@@ -133,48 +149,55 @@ describe("reduceLayout overflow latch", () => {
     expect(result.dirty).toBe(true);
   });
 
-  test("shows slots 15 through 28 on the second page", () => {
-    const result = reduceLayout(healthyView(sessionsAt(...range(1, 16))), settings(true, 1));
-    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(15);
-    expect(sessionKeyAt(result.keys, 1).session.logicalSlot).toBe(16);
-    for (let index = 2; index < 14; index++) {
-      expect(result.keys[index]).toEqual({ kind: "blank", degraded: false });
+  test("latches on count, not slot numbers: sparse high slots pack densely", () => {
+    // Sixteen live sessions at sparse slots 1..8 and 20..27: page one shows
+    // the fourteen lowest ranks with no holes.
+    const sparse = sessionsAt(...range(1, 8), ...range(20, 27));
+    const result = reduceLayout(healthyView(sparse), DEFAULT_LAYOUT_SETTINGS);
+    expect(result.settings).toEqual(settings(true, 0));
+    expect(result.dirty).toBe(true);
+    for (let index = 0; index < 8; index++) {
+      expect(sessionKeyAt(result.keys, index).session.logicalSlot).toBe(index + 1);
     }
-    expect(result.keys[14]).toEqual({ kind: "next", page: 2, pageCount: 2, degraded: false });
-    expect(result.settings).toEqual(settings(true, 1));
-    expect(result.dirty).toBe(false);
+    for (let index = 8; index < 14; index++) {
+      expect(sessionKeyAt(result.keys, index).session.logicalSlot).toBe(index + 12);
+    }
+    expect(result.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 2, degraded: false });
+
+    // A single high-slot session never latches and packs to the first key.
+    const alone = reduceLayout(healthyView(sessionsAt(20)), DEFAULT_LAYOUT_SETTINGS);
+    expect(alone.settings).toEqual(settings(false, 0));
+    expect(sessionKeyAt(alone.keys, 0).session.logicalSlot).toBe(20);
+    for (let index = 1; index < 15; index++) {
+      expect(alone.keys[index]).toEqual({ kind: "blank", degraded: false });
+    }
   });
 
-  test("keeps the latch while any slot at least 15 is live, including slot 15 alone", () => {
-    // Overflow latches on slot 16, then the slot-16 session disappears while
-    // slot 15 (moved to page two) remains live: the latch must hold.
+  test("holds the latch at fifteen live sessions", () => {
     const latched = reduceLayout(
       healthyView(sessionsAt(...range(1, 16))),
       DEFAULT_LAYOUT_SETTINGS,
     ).settings;
-    const after = reduceLayout(healthyView(sessionsAt(...range(1, 15))), latched);
-    expect(after.settings).toEqual(settings(true, 0));
-    expect(after.dirty).toBe(false);
-    expect(sessionKeyAt(after.keys, 13).session.logicalSlot).toBe(14);
-    expect(after.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 2, degraded: false });
+    const fifteen = sessionsAt(...range(1, 15));
+    const held = reduceLayout(healthyView(fifteen), latched);
+    expect(held.settings).toEqual(settings(true, 0));
+    expect(held.dirty).toBe(false);
+    expect(held.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 2, degraded: false });
 
-    const secondPage = reduceLayout(healthyView(sessionsAt(...range(1, 15))), settings(true, 1));
+    // The fifteenth rank sits alone on the second page.
+    const secondPage = reduceLayout(healthyView(fifteen), settings(true, 1));
     expect(sessionKeyAt(secondPage.keys, 0).session.logicalSlot).toBe(15);
+    for (let index = 1; index < 14; index++) {
+      expect(secondPage.keys[index]).toEqual({ kind: "blank", degraded: false });
+    }
+    expect(secondPage.keys[14]).toEqual({ kind: "next", page: 2, pageCount: 2, degraded: false });
     expect(secondPage.dirty).toBe(false);
-
-    // Slot 15 as the only live session still holds the latch.
-    const onlyFifteen = reduceLayout(healthyView(sessionsAt(15)), settings(true, 1));
-    expect(onlyFifteen.settings).toEqual(settings(true, 1));
-    expect(onlyFifteen.dirty).toBe(false);
-    expect(sessionKeyAt(onlyFifteen.keys, 0).session.logicalSlot).toBe(15);
-    expect(onlyFifteen.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 1, degraded: false });
   });
 
-  test("ends the latch when no live slot remains at 15 or above", () => {
+  test("releases the latch at fourteen live sessions", () => {
     const result = reduceLayout(healthyView(sessionsAt(...range(1, 14))), settings(true, 0));
     expect(result.settings).toEqual(settings(false, 0));
     expect(result.dirty).toBe(true);
-    expect(result.keys).toHaveLength(15);
     for (let index = 0; index < 14; index++) {
       expect(sessionKeyAt(result.keys, index).session.logicalSlot).toBe(index + 1);
     }
@@ -183,58 +206,60 @@ describe("reduceLayout overflow latch", () => {
 });
 
 describe("paging", () => {
-  // Slots 1..14 fill page one; slot 29 sits alone on the third page, leaving
-  // the slots-15..28 page wholly empty so NEXT must skip it.
-  const gappedView = healthyView([...sessionsAt(...range(1, 14)), session(29)]);
+  // Thirty live sessions make three dense pages: ranks 0..13, 14..27, and
+  // the two remaining ranks 28..29.
+  const fullView = healthyView(sessionsAt(...range(1, 30)));
 
-  test("NEXT advances in blocks of 14, skips wholly empty pages, and wraps", () => {
-    const first = reduceLayout(gappedView, settings(true, 0));
-    expect(first.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 2, degraded: false });
+  test("NEXT advances through dense fourteen-rank pages and wraps", () => {
+    const first = reduceLayout(fullView, settings(true, 0));
+    expect(sessionKeyAt(first.keys, 0).session.logicalSlot).toBe(1);
+    expect(sessionKeyAt(first.keys, 13).session.logicalSlot).toBe(14);
+    expect(first.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 3, degraded: false });
 
-    const advanced = advanceLayoutPage(gappedView, settings(true, 0));
-    expect(advanced.settings).toEqual(settings(true, 2));
-    expect(advanced.dirty).toBe(true);
-    expect(sessionKeyAt(advanced.keys, 0).session.logicalSlot).toBe(29);
-    for (let index = 1; index < 14; index++) {
-      expect(advanced.keys[index]).toEqual({ kind: "blank", degraded: false });
+    const second = advanceLayoutPage(fullView, settings(true, 0));
+    expect(second.settings).toEqual(settings(true, 1));
+    expect(second.dirty).toBe(true);
+    expect(sessionKeyAt(second.keys, 0).session.logicalSlot).toBe(15);
+    expect(sessionKeyAt(second.keys, 13).session.logicalSlot).toBe(28);
+    expect(second.keys[14]).toEqual({ kind: "next", page: 2, pageCount: 3, degraded: false });
+
+    const third = advanceLayoutPage(fullView, settings(true, 1));
+    expect(third.settings).toEqual(settings(true, 2));
+    expect(sessionKeyAt(third.keys, 0).session.logicalSlot).toBe(29);
+    expect(sessionKeyAt(third.keys, 1).session.logicalSlot).toBe(30);
+    for (let index = 2; index < 14; index++) {
+      expect(third.keys[index]).toEqual({ kind: "blank", degraded: false });
     }
-    expect(advanced.keys[14]).toEqual({ kind: "next", page: 2, pageCount: 2, degraded: false });
+    expect(third.keys[14]).toEqual({ kind: "next", page: 3, pageCount: 3, degraded: false });
 
-    const wrapped = advanceLayoutPage(gappedView, settings(true, 2));
+    const wrapped = advanceLayoutPage(fullView, settings(true, 2));
     expect(wrapped.settings).toEqual(settings(true, 0));
     expect(wrapped.dirty).toBe(true);
     expect(sessionKeyAt(wrapped.keys, 0).session.logicalSlot).toBe(1);
-    expect(wrapped.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 2, degraded: false });
+    expect(wrapped.keys[14]).toEqual({ kind: "next", page: 1, pageCount: 3, degraded: false });
   });
 
-  test("NEXT leaves settings clean when only one page is non-empty", () => {
-    const result = advanceLayoutPage(healthyView(sessionsAt(16)), settings(true, 1));
-    expect(result.settings).toEqual(settings(true, 1));
-    expect(result.dirty).toBe(false);
-  });
-
-  test("clamps an empty current page to the nearest earlier non-empty page", () => {
-    // Pages: 0 has slots 1..14, 1 has slot 15, 2 (29..42) is empty, 3 has 43.
-    const view = healthyView([...sessionsAt(...range(1, 15)), session(43)]);
-    const clamped = reduceLayout(view, settings(true, 2));
+  test("clamps an out-of-range current page to the last page", () => {
+    const view = healthyView(sessionsAt(...range(1, 16)));
+    const clamped = reduceLayout(view, settings(true, 9));
     expect(clamped.settings).toEqual(settings(true, 1));
     expect(clamped.dirty).toBe(true);
     expect(sessionKeyAt(clamped.keys, 0).session.logicalSlot).toBe(15);
-    expect(clamped.keys[14]).toEqual({ kind: "next", page: 2, pageCount: 3, degraded: false });
-
-    const outOfRange = reduceLayout(view, settings(true, 9));
-    expect(outOfRange.settings).toEqual(settings(true, 3));
-    expect(outOfRange.dirty).toBe(true);
-    expect(sessionKeyAt(outOfRange.keys, 0).session.logicalSlot).toBe(43);
-    expect(outOfRange.keys[14]).toEqual({ kind: "next", page: 3, pageCount: 3, degraded: false });
+    expect(sessionKeyAt(clamped.keys, 1).session.logicalSlot).toBe(16);
+    expect(clamped.keys[14]).toEqual({ kind: "next", page: 2, pageCount: 2, degraded: false });
   });
 
-  test("clamps to the earliest later page when no earlier page is non-empty", () => {
-    const view = healthyView(sessionsAt(15, 43));
-    const result = reduceLayout(view, settings(true, 0));
-    expect(result.settings).toEqual(settings(true, 1));
-    expect(result.dirty).toBe(true);
-    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(15);
+  test("NEXT without the latch preserves the base reduction", () => {
+    const view = healthyView(sessionsAt(1, 2, 3));
+    const result = advanceLayoutPage(view, DEFAULT_LAYOUT_SETTINGS);
+    expect(result.settings).toEqual(settings(false, 0));
+    expect(result.dirty).toBe(false);
+    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(1);
+
+    // A stored latch that no longer qualifies releases and stays unadvanced.
+    const released = advanceLayoutPage(view, settings(true, 1));
+    expect(released.settings).toEqual(settings(false, 0));
+    expect(released.dirty).toBe(true);
   });
 });
 
@@ -286,7 +311,7 @@ describe("settings validation and dirty marking", () => {
       true,
     );
     // Clamping → dirty.
-    expect(reduceLayout(healthyView(sessionsAt(15)), settings(true, 0)).dirty).toBe(true);
+    expect(reduceLayout(full, settings(true, 9)).dirty).toBe(true);
     // Validation repair → dirty.
     expect(reduceLayout(full, "garbage").dirty).toBe(true);
     // NEXT → dirty.
@@ -313,9 +338,10 @@ describe("KeyModel structure", () => {
       descendantCount: 3,
       title: "Review",
     });
+    // A lone session packs to rank 0 regardless of its logical slot.
     const model = sessionKeyAt(
       reduceLayout(healthyView([original]), DEFAULT_LAYOUT_SETTINGS).keys,
-      3,
+      0,
     );
     expect(model.session).toEqual(original);
     expect(model.session.provider).toBe("codex");
