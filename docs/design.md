@@ -77,25 +77,22 @@ The previous proposal equated unarchived App/Web tasks with active tasks. That i
 - A new top-level session takes the lowest free logical slot.
 - State, title, badge, and capability changes never reassign it.
 - Removal releases the slot.
-- Other live sessions are not compacted into gaps.
+- The logical slot is an ordering key, not a position. The visible grid packs live sessions densely in slot order: removal shifts every later tile one key left, and a new session reusing a freed slot inserts at that rank, shifting later tiles one key right. Blank keys appear only after the last live tile.
 - Stability is guaranteed only while registry membership is uninterrupted. A lease expiry removes the assignment; a later observation allocates normally.
 
-With no overflow, logical slots 1 through 15 map to physical keys 1 through 15.
+With no overflow, the packed rank order maps to physical keys 1 through 15 in order.
 
 ### Overflow
 
-When all first 15 logical slots are occupied and another session arrives:
+When the live session count exceeds fifteen:
 
-- Physical keys 1 through 14 display sessions from the current page.
+- Physical keys 1 through 14 display the current page's fourteen sessions in rank order.
 - Physical key 15 becomes `NEXT` on every page.
-- The session in logical slot 15 becomes the first session on page two.
-- The new logical-slot-16 session becomes the second session on page two.
-- Further pages contain 14 logical slots each.
-- `NEXT` cycles through non-empty pages and wraps.
-- Vacated logical cells remain blank until reused by the lowest-free allocator.
-- If the current page empties, select the nearest earlier non-empty page; if none exists, select the earliest later page.
+- Pages are dense fourteen-tile slices of the rank order.
+- `NEXT` cycles through pages and wraps.
+- An out-of-range current page clamps to the last page.
 
-Drew chose not to compact slot 15 back automatically after overflow. Therefore overflow is an explicit persisted projection latch, not something derived solely from the current count. It ends when no live higher-page session remains, including the slot-15 session moved to page two. Moving slot 15 into overflow is the only permitted live-session movement.
+Overflow is an explicit persisted projection latch with hysteresis, not something derived solely from the instantaneous count: it engages when the live count exceeds fifteen, holds while at least fifteen sessions are live, and ends at fourteen or fewer. Live sessions reflow as membership changes; the grid never shows holes between tiles.
 
 ## Candidate architecture
 

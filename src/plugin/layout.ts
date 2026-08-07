@@ -1,14 +1,16 @@
 /**
  * Pure paging reducer for the 5x3 Stream Deck profile.
  *
- * Maps the daemon's stable logical slots onto fifteen physical keys. Without
- * overflow, slots 1..15 land on keys 0..14. Once a live slot above 15 latches
- * overflow, keys 0..13 show the current page's fourteen slots and key 14 is
- * NEXT; the second page starts at slot 15 and further pages advance in
- * blocks of fourteen. Gaps stay blank — sessions never compact. The latch
- * persists while any slot at least 15 is live (including slot 15 itself) and
- * ends when none is. An empty current page clamps to the nearest earlier
- * non-empty page, otherwise the earliest later one.
+ * Maps live sessions onto fifteen physical keys in dense slot-rank order.
+ * Sessions sort by their stable logical slot and pack onto keys by rank, so
+ * the grid never shows holes between tiles: a session ending shifts later
+ * tiles one key left, and a new session reusing a freed slot inserts at that
+ * rank, shifting later tiles one key right. Without overflow, ranks 0..14
+ * land on keys 0..14. Once the live count exceeds fifteen, the overflow
+ * latch engages: keys 0..13 show the current page's fourteen ranks and key
+ * 14 is NEXT; pages are uniform dense fourteen-rank slices. The latch holds
+ * while the live count is at least fifteen and ends at fourteen or fewer. An
+ * out-of-range current page clamps to the last page.
  *
  * All page/latch state lives in this module as validated settings; the
  * reducer performs no I/O and imports no Stream Deck SDK types.
@@ -45,17 +47,8 @@ export const DEFAULT_LAYOUT_SETTINGS: LayoutSettingsV1 = {
 
 const KEY_COUNT = 15;
 const PAGE_SESSION_KEYS = 14;
-const FIRST_OVERFLOW_SLOT = 15;
+const MAX_UNPAGED_SESSIONS = 15;
 const SHORT_SESSION_ID_LENGTH = 8;
-
-/** Page 0 covers slots 1..14; page p >= 1 covers a block of 14 from slot 15. */
-const pageStartSlot = (page: number): number =>
-  page === 0 ? 1 : FIRST_OVERFLOW_SLOT + (page - 1) * PAGE_SESSION_KEYS;
-
-const pageForSlot = (slot: number): number =>
-  slot < FIRST_OVERFLOW_SLOT
-    ? 0
-    : Math.ceil((slot - (FIRST_OVERFLOW_SLOT - 1)) / PAGE_SESSION_KEYS);
 
 const labelForSession = (session: ProjectedSession): string => {
   if (session.title !== null && session.title.length > 0) {
@@ -73,26 +66,26 @@ const sessionKey = (session: ProjectedSession | undefined, degraded: boolean): K
     : { kind: "session", session, label: labelForSession(session), degraded };
 
 const buildKeys = (
-  sessionsBySlot: ReadonlyMap<number, ProjectedSession>,
+  sessions: readonly ProjectedSession[],
   degraded: boolean,
   settings: LayoutSettingsV1,
-  nonEmptyPages: readonly number[],
+  pageCount: number,
 ): KeyModel[] => {
   const keys: KeyModel[] = [];
   if (!settings.overflowLatched) {
     for (let key = 0; key < KEY_COUNT; key++) {
-      keys.push(sessionKey(sessionsBySlot.get(key + 1), degraded));
+      keys.push(sessionKey(sessions[key], degraded));
     }
     return keys;
   }
-  const start = pageStartSlot(settings.currentPage);
+  const start = settings.currentPage * PAGE_SESSION_KEYS;
   for (let key = 0; key < PAGE_SESSION_KEYS; key++) {
-    keys.push(sessionKey(sessionsBySlot.get(start + key), degraded));
+    keys.push(sessionKey(sessions[start + key], degraded));
   }
   keys.push({
     kind: "next",
-    page: nonEmptyPages.indexOf(settings.currentPage) + 1,
-    pageCount: nonEmptyPages.length,
+    page: settings.currentPage + 1,
+    pageCount,
     degraded,
   });
   return keys;
@@ -129,39 +122,22 @@ const validateStoredSettings = (stored: unknown): ValidatedSettings => {
   return { settings: { ...DEFAULT_LAYOUT_SETTINGS }, defaulted: true };
 };
 
-const clampToNonEmptyPage = (page: number, nonEmptyPages: readonly number[]): number => {
-  // Nearest earlier non-empty page wins; otherwise the earliest later one.
-  // The overflow branch always has at least one non-empty page: the one
-  // holding the highest live slot.
-  for (let index = nonEmptyPages.length - 1; index >= 0; index--) {
-    const candidate = nonEmptyPages[index]!;
-    if (candidate < page) {
-      return candidate;
-    }
-  }
-  for (const candidate of nonEmptyPages) {
-    if (candidate > page) {
-      return candidate;
-    }
-  }
-  throw new Error("unreachable: overflow always has a non-empty page");
-};
+type InternalLayout = LayoutResult & { pageCount: number };
 
-type InternalLayout = LayoutResult & { nonEmptyPages: number[] };
+/** Sort defensively by logical slot even though the daemon already orders. */
+const sortedSessions = (view: SnapshotView): ProjectedSession[] =>
+  [...view.snapshot.sessions].sort((a, b) => a.logicalSlot - b.logicalSlot);
 
 const reduceInternal = (view: SnapshotView, storedState: unknown): InternalLayout => {
-  // Sort defensively by logical slot even though the daemon already orders.
-  const sessions = [...view.snapshot.sessions].sort((a, b) => a.logicalSlot - b.logicalSlot);
-  const maxSlot = sessions.length === 0 ? 0 : sessions[sessions.length - 1]!.logicalSlot;
+  const sessions = sortedSessions(view);
+  const count = sessions.length;
   const { settings: restored, defaulted } = validateStoredSettings(storedState);
 
-  // The latch engages only when a live slot exceeds 15; once engaged it holds
-  // while any slot at least 15 is live, including slot 15 itself.
+  // The latch engages only when the live count exceeds fifteen; once engaged
+  // it holds while at least fifteen sessions remain live.
   const overflow = restored.overflowLatched
-    ? maxSlot >= FIRST_OVERFLOW_SLOT
-    : maxSlot > FIRST_OVERFLOW_SLOT;
-
-  const sessionsBySlot = new Map(sessions.map((s) => [s.logicalSlot, s]));
+    ? count >= MAX_UNPAGED_SESSIONS
+    : count > MAX_UNPAGED_SESSIONS;
 
   if (!overflow) {
     const settings: LayoutSettingsV1 = { ...DEFAULT_LAYOUT_SETTINGS };
@@ -169,24 +145,22 @@ const reduceInternal = (view: SnapshotView, storedState: unknown): InternalLayou
     return {
       settings,
       dirty,
-      keys: buildKeys(sessionsBySlot, view.degraded, settings, [0]),
-      nonEmptyPages: [0],
+      keys: buildKeys(sessions, view.degraded, settings, 1),
+      pageCount: 1,
     };
   }
 
-  const nonEmptyPages = [...new Set(sessions.map((s) => pageForSlot(s.logicalSlot)))].sort(
-    (a, b) => a - b,
-  );
-  const currentPage = nonEmptyPages.includes(restored.currentPage)
-    ? restored.currentPage
-    : clampToNonEmptyPage(restored.currentPage, nonEmptyPages);
+  // Latched pages are dense by construction, so every page in range is
+  // non-empty and clamping reduces to bounding the page index.
+  const pageCount = Math.ceil(count / PAGE_SESSION_KEYS);
+  const currentPage = Math.min(restored.currentPage, pageCount - 1);
   const settings: LayoutSettingsV1 = { schemaVersion: 1, overflowLatched: true, currentPage };
   const dirty = defaulted || !restored.overflowLatched || restored.currentPage !== currentPage;
   return {
     settings,
     dirty,
-    keys: buildKeys(sessionsBySlot, view.degraded, settings, nonEmptyPages),
-    nonEmptyPages,
+    keys: buildKeys(sessions, view.degraded, settings, pageCount),
+    pageCount,
   };
 };
 
@@ -196,22 +170,19 @@ export const reduceLayout = (view: SnapshotView, storedState: unknown): LayoutRe
 };
 
 /**
- * Advance to the next non-empty page, wrapping. Pages with no sessions are
- * skipped. Without overflow, or with only one non-empty page, nothing moves
- * and the base reduction's dirty flag is preserved.
+ * Advance to the next page, wrapping. Without overflow, or with a single
+ * page, nothing moves and the base reduction's dirty flag is preserved.
  */
 export const advanceLayoutPage = (view: SnapshotView, storedState: unknown): LayoutResult => {
   const base = reduceInternal(view, storedState);
-  if (!base.settings.overflowLatched || base.nonEmptyPages.length <= 1) {
+  if (!base.settings.overflowLatched || base.pageCount <= 1) {
     return { settings: base.settings, dirty: base.dirty, keys: base.keys };
   }
-  const index = base.nonEmptyPages.indexOf(base.settings.currentPage);
-  const currentPage = base.nonEmptyPages[(index + 1) % base.nonEmptyPages.length]!;
+  const currentPage = (base.settings.currentPage + 1) % base.pageCount;
   const settings: LayoutSettingsV1 = { ...base.settings, currentPage };
-  const sessionsBySlot = new Map(view.snapshot.sessions.map((s) => [s.logicalSlot, s]));
   return {
     settings,
     dirty: true,
-    keys: buildKeys(sessionsBySlot, view.degraded, settings, base.nonEmptyPages),
+    keys: buildKeys(sortedSessions(view), view.degraded, settings, base.pageCount),
   };
 };
