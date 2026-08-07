@@ -109,14 +109,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 1 database and stays silent on stdout", async () => {
+  test("creates a version 2 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
     } finally {
       db.close();
     }
@@ -158,6 +158,7 @@ describe("event ingress", () => {
         title: "Title for s1",
         project: "project-x",
         logicalSlot: 1,
+        ghosttyTerminalId: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -560,14 +561,21 @@ describe("sessions commands", () => {
       sessionId: string;
       parentSessionId: string | null;
       logicalSlot: number | null;
+      ghosttyTerminalId: string | null;
     }[];
     expect(
-      listed.map((row) => [row.provider, row.sessionId, row.parentSessionId, row.logicalSlot]),
+      listed.map((row) => [
+        row.provider,
+        row.sessionId,
+        row.parentSessionId,
+        row.logicalSlot,
+        row.ghosttyTerminalId,
+      ]),
     ).toEqual([
-      ["kimi", "b", null, 1],
-      ["claude", "a", null, 2],
-      ["claude", "c1", "a", null],
-      ["claude", "c2", "a", null],
+      ["kimi", "b", null, 1, null],
+      ["claude", "a", null, 2, null],
+      ["claude", "c1", "a", null, null],
+      ["claude", "c2", "a", null, null],
     ]);
   });
 
@@ -672,7 +680,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 1");
+      restore.exec("PRAGMA user_version = 2");
     } finally {
       restore.close();
     }

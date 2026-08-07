@@ -55,6 +55,44 @@ const countSessions = (db: Database): number => {
   return row.n;
 };
 
+const createVersion1Database = (path: string): void => {
+  const legacy = new Database(path, { create: true, readwrite: true });
+  try {
+    legacy.exec(`
+      CREATE TABLE active_sessions (
+        provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'kimi')),
+        session_id TEXT NOT NULL,
+        parent_session_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('idle', 'working', 'waiting', 'error')),
+        title TEXT,
+        project TEXT,
+        logical_slot INTEGER,
+        opened_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (provider, session_id),
+        FOREIGN KEY (provider, parent_session_id)
+          REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
+        CHECK (
+          (parent_session_id IS NULL AND logical_slot IS NOT NULL AND logical_slot > 0)
+          OR
+          (parent_session_id IS NOT NULL AND logical_slot IS NULL)
+        )
+      ) WITHOUT ROWID;
+      CREATE UNIQUE INDEX active_sessions_unique_slot
+        ON active_sessions(logical_slot)
+        WHERE logical_slot IS NOT NULL;
+      PRAGMA user_version = 1;
+    `);
+    legacy.run(
+      `INSERT INTO active_sessions
+         (provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at)
+       VALUES ('claude', 'legacy', NULL, 'waiting', 'Legacy', 'project', 4, 'opened', 'updated')`,
+    );
+  } finally {
+    legacy.close();
+  }
+};
+
 describe("resolveAppPaths", () => {
   test("returns the exact canonical per-user paths under the given home", () => {
     const root = join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents");
@@ -78,7 +116,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 1 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 2 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -87,7 +125,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -135,10 +173,35 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
+    }
+  });
+
+  test("migrates v1 rows additively to v2 with null bindings", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion1Database(paths.database);
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(
+        db
+          .query("SELECT session_id, status, logical_slot, ghostty_terminal_id FROM active_sessions")
+          .get(),
+      ).toEqual({
+        session_id: "legacy",
+        status: "waiting",
+        logical_slot: 4,
+        ghostty_terminal_id: null,
+      });
+    } finally {
+      db.close();
     }
   });
 
@@ -183,6 +246,22 @@ describe("active_sessions contract", () => {
     const paths = resolveAppPaths(tempHome);
     initializeDatabase(paths);
     return openRegistryDatabase(paths.database, "readwrite");
+  };
+
+  const insertWithTarget = (
+    db: Database,
+    provider: "claude" | "codex" | "kimi",
+    sessionId: string,
+    parentSessionId: string | null,
+    logicalSlot: number | null,
+    ghosttyTerminalId: string | null,
+  ): void => {
+    db.run(
+      `INSERT INTO active_sessions
+         (provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at, ghostty_terminal_id)
+       VALUES (?, ?, ?, 'idle', NULL, NULL, ?, 'opened', 'updated', ?)`,
+      [provider, sessionId, parentSessionId, logicalSlot, ghosttyTerminalId],
+    );
   };
 
   test("enforces the parent/slot CHECK", () => {
@@ -232,6 +311,21 @@ describe("active_sessions contract", () => {
       insertSession(db, "grandchild", "child", null);
       db.run("DELETE FROM active_sessions WHERE provider = 'claude' AND session_id = 'parent'");
       expect(countSessions(db)).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("allows a bounded target only on a top-level Claude row", () => {
+    const db = openInitialized();
+    try {
+      insertWithTarget(db, "claude", "parent", null, 1, "terminal-1");
+      insertWithTarget(db, "claude", "null-target", null, 2, null);
+      expect(() => insertWithTarget(db, "claude", "empty", null, 3, "")).toThrow();
+      expect(() => insertWithTarget(db, "claude", "long", null, 3, "x".repeat(257))).toThrow();
+      expect(() => insertWithTarget(db, "codex", "codex", null, 3, "terminal-3")).toThrow();
+      expect(() => insertWithTarget(db, "kimi", "kimi", null, 3, "terminal-3")).toThrow();
+      expect(() => insertWithTarget(db, "claude", "child", "parent", null, "terminal-child")).toThrow();
     } finally {
       db.close();
     }

@@ -95,7 +95,7 @@ const main = (): void => {
   copyFileSync(join(repositoryRoot, BUILT_CORE), paths.executable);
   chmodSync(paths.executable, EXECUTABLE_MODE);
 
-  // 5. Initialize the schema through the installed executable and verify it.
+  // 5. Initialize schema version 2 through the installed executable and verify it.
   run("init", paths.executable, ["init"]);
   const db = new Database(paths.database, { readonly: true, create: false });
   try {

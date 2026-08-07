@@ -28,6 +28,7 @@ const row = (
     title?: string | null;
     project?: string | null;
     slot?: number | null;
+    ghosttyTerminalId?: string | null;
   } = {},
 ): ProjectionRow => {
   const parent = options.parent ?? null;
@@ -39,6 +40,7 @@ const row = (
     title: options.title ?? null,
     project: options.project ?? null,
     logicalSlot: options.slot === undefined ? (parent === null ? 1 : null) : options.slot,
+    ghosttyTerminalId: options.ghosttyTerminalId ?? null,
   };
 };
 
@@ -150,6 +152,13 @@ describe("projectRows", () => {
     expect(projectRows([])).toEqual([]);
   });
 
+  test("publishes the exact nullable terminal target from a Claude root", () => {
+    expect(projectRows([row("bound", { ghosttyTerminalId: "terminal-bound" })])[0]).toMatchObject({
+      ghosttyTerminalId: "terminal-bound",
+    });
+    expect(projectRows([row("unbound")])[0]).toMatchObject({ ghosttyTerminalId: null });
+  });
+
   test("rejects duplicate identities", () => {
     expect(projectionErrorCode([row("a"), row("a")])).toBe("duplicate-identity");
   });
@@ -186,6 +195,18 @@ describe("projectRows", () => {
     expect(projectionErrorCode([row("p"), row("c", { parent: "p", slot: 5 })])).toBe(
       "child-with-slot",
     );
+  });
+
+  test("rejects terminal targets on child and non-Claude rows", () => {
+    expect(
+      projectionErrorCode([
+        row("parent"),
+        row("child", { parent: "parent", ghosttyTerminalId: "terminal-child" }),
+      ]),
+    ).toBe("child-with-terminal-binding");
+    expect(
+      projectionErrorCode([row("codex", { provider: "codex", ghosttyTerminalId: "terminal-codex" })]),
+    ).toBe("non-claude-terminal-binding");
   });
 
   test("rejects top-level rows without a positive slot", () => {

@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { ensureAppDirectories, type AppPaths } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 1;
+export const LATEST_SCHEMA_VERSION = 2;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -58,12 +58,26 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
   WHERE logical_slot IS NOT NULL;
 `;
 
+const SCHEMA_VERSION_2 = `
+ALTER TABLE active_sessions
+  ADD COLUMN ghostty_terminal_id TEXT
+  CHECK (
+    ghostty_terminal_id IS NULL
+    OR (
+      provider = 'claude'
+      AND parent_session_id IS NULL
+      AND length(ghostty_terminal_id) BETWEEN 1 AND 256
+    )
+  );
+`;
+
 /**
  * Ordered migrations keyed by the schema version each one produces. All due
  * migrations run inside a single transaction in `initializeDatabase`.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
+  { version: 2, sql: SCHEMA_VERSION_2 },
 ];
 
 const readUserVersion = (db: Database): number => {

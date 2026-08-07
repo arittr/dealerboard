@@ -29,6 +29,7 @@ export type ActiveSession = {
   title: string | null;
   project: string | null;
   logicalSlot: number | null;
+  ghosttyTerminalId: string | null;
   openedAt: string;
   updatedAt: string;
 };
@@ -41,12 +42,13 @@ type SessionRow = {
   title: string | null;
   project: string | null;
   logical_slot: number | null;
+  ghostty_terminal_id: string | null;
   opened_at: string;
   updated_at: string;
 };
 
 const COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at, ghostty_terminal_id";
 
 const getRow = (db: Database, provider: Provider, sessionId: string): SessionRow | null =>
   db
@@ -61,6 +63,7 @@ const toActiveSession = (row: SessionRow): ActiveSession => ({
   title: row.title,
   project: row.project,
   logicalSlot: row.logical_slot,
+  ghosttyTerminalId: row.ghostty_terminal_id,
   openedAt: row.opened_at,
   updatedAt: row.updated_at,
 });
@@ -139,6 +142,7 @@ const applySessionStart = (
   db: Database,
   event: Extract<RegistryEvent, { kind: "SessionStart" }>,
 ): MutationResult => {
+  const ghosttyTerminalId = event.provider === "claude" ? event.ghosttyTerminalId : null;
   const existing = getRow(db, event.provider, event.sessionId);
   if (existing !== null) {
     // An identity currently stored as a child keeps its role.
@@ -148,16 +152,23 @@ const applySessionStart = (
     // Reset to idle and refresh metadata; slot and opened_at stay put.
     db.run(
       `UPDATE active_sessions
-       SET status = 'idle', title = ?, project = ?, updated_at = ?
+       SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, updated_at = ?
        WHERE provider = ? AND session_id = ?`,
-      [event.title, event.project, event.observedAt, event.provider, event.sessionId],
+      [
+        event.title,
+        event.project,
+        ghosttyTerminalId,
+        event.observedAt,
+        event.provider,
+        event.sessionId,
+      ],
     );
     return "applied";
   }
   db.run(
     `INSERT INTO active_sessions
        (${COLUMNS})
-     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?)`,
     [
       event.provider,
       event.sessionId,
@@ -166,6 +177,7 @@ const applySessionStart = (
       allocateLowestFreeSlot(db),
       event.observedAt,
       event.observedAt,
+      ghosttyTerminalId,
     ],
   );
   return "applied";
@@ -203,7 +215,7 @@ const applySubagentStart = (
   db.run(
     `INSERT INTO active_sessions
        (${COLUMNS})
-     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?)`,
+     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL)`,
     [
       event.provider,
       event.sessionId,

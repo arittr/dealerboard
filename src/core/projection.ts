@@ -28,6 +28,7 @@ export type ProjectionRow = {
   title: string | null;
   project: string | null;
   logicalSlot: number | null;
+  ghosttyTerminalId: string | null;
 };
 
 export type ProjectionErrorCode =
@@ -36,6 +37,8 @@ export type ProjectionErrorCode =
   | "missing-parent"
   | "cross-provider-parent"
   | "child-with-slot"
+  | "child-with-terminal-binding"
+  | "non-claude-terminal-binding"
   | "top-level-without-positive-slot"
   | "cycle"
   | "traversal-bound-exceeded";
@@ -88,11 +91,17 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
   const childrenOf = new Map<string, ProjectionRow[]>();
   for (const row of rows) {
     if (row.parentSessionId === null) {
+      if (row.ghosttyTerminalId !== null && row.provider !== "claude") {
+        throw new ProjectionError("non-claude-terminal-binding");
+      }
       if (row.logicalSlot === null || !Number.isInteger(row.logicalSlot) || row.logicalSlot < 1) {
         throw new ProjectionError("top-level-without-positive-slot");
       }
       roots.push({ row, slot: row.logicalSlot });
       continue;
+    }
+    if (row.ghosttyTerminalId !== null) {
+      throw new ProjectionError("child-with-terminal-binding");
     }
     if (row.logicalSlot !== null) {
       throw new ProjectionError("child-with-slot");
@@ -158,7 +167,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       project: root.project,
       descendantCount,
       logicalSlot: slot,
-      ghosttyTerminalId: null,
+      ghosttyTerminalId: root.ghosttyTerminalId,
     });
   }
 
@@ -178,6 +187,7 @@ type StoredRow = {
   title: unknown;
   project: unknown;
   logical_slot: unknown;
+  ghostty_terminal_id: unknown;
 };
 
 const isStringOrNull = (value: unknown): value is string | null =>
@@ -197,13 +207,20 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   if (
     !isStringOrNull(row.parent_session_id) ||
     !isStringOrNull(row.title) ||
-    !isStringOrNull(row.project)
+    !isStringOrNull(row.project) ||
+    !isStringOrNull(row.ghostty_terminal_id)
   ) {
     throw new ProjectionError("corrupt-row");
   }
   if (
     row.logical_slot !== null &&
     (typeof row.logical_slot !== "number" || !Number.isInteger(row.logical_slot))
+  ) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (
+    typeof row.ghostty_terminal_id === "string" &&
+    (row.ghostty_terminal_id.length === 0 || Array.from(row.ghostty_terminal_id).length > 256)
   ) {
     throw new ProjectionError("corrupt-row");
   }
@@ -215,11 +232,12 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     title: row.title,
     project: row.project,
     logicalSlot: row.logical_slot,
+    ghosttyTerminalId: row.ghostty_terminal_id,
   };
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:

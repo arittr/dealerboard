@@ -33,14 +33,20 @@ const at = (second: number): string =>
 
 const start = (
   sessionId: string,
-  options: { provider?: Provider; title?: string | null; project?: string | null; at?: string } = {},
+  options: {
+    provider?: Provider;
+    title?: string | null;
+    project?: string | null;
+    ghosttyTerminalId?: string | null;
+    at?: string;
+  } = {},
 ): RegistryEvent => ({
   kind: "SessionStart",
   provider: options.provider ?? "claude",
   sessionId,
   title: options.title ?? null,
   project: options.project ?? null,
-  ghosttyTerminalId: null,
+  ghosttyTerminalId: options.ghosttyTerminalId ?? null,
   observedAt: options.at ?? at(1),
 });
 
@@ -79,6 +85,7 @@ type Row = {
   logical_slot: number | null;
   opened_at: string;
   updated_at: string;
+  ghostty_terminal_id: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -112,6 +119,7 @@ describe("applyRegistryEvents", () => {
       logical_slot: 1,
       opened_at: at(1),
       updated_at: at(1),
+      ghostty_terminal_id: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -204,6 +212,7 @@ describe("applyRegistryEvents", () => {
       logical_slot: 1,
       opened_at: at(1),
       updated_at: at(4),
+      ghostty_terminal_id: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
@@ -244,6 +253,46 @@ describe("applyRegistryEvents", () => {
 
     expect(applyRegistryEvents(db, [simple("SessionEnd", "parent")])).toEqual(["applied"]);
     expect(countRows()).toBe(0);
+  });
+
+  test("persists a Claude terminal target until a repeated SessionStart clears it", () => {
+    applyRegistryEvents(db, [start("bound", { ghosttyTerminalId: "terminal-a" })]);
+    applyRegistryEvents(db, [simple("Activity", "bound", { at: at(2) })]);
+    expect(listSessions(db)[0]?.ghosttyTerminalId).toBe("terminal-a");
+
+    applyRegistryEvents(db, [start("bound", { ghosttyTerminalId: null, at: at(3) })]);
+    expect(listSessions(db)[0]).toMatchObject({
+      sessionId: "bound",
+      logicalSlot: 1,
+      ghosttyTerminalId: null,
+    });
+  });
+
+  test("normalizes non-Claude terminal targets to null", () => {
+    applyRegistryEvents(db, [
+      start("codex", { provider: "codex", ghosttyTerminalId: "terminal-codex" }),
+      start("kimi", { provider: "kimi", ghosttyTerminalId: "terminal-kimi" }),
+    ]);
+
+    expect(listSessions(db).map((session) => session.ghosttyTerminalId)).toEqual([null, null]);
+  });
+
+  test("preserves a root terminal target through subagent and status events", () => {
+    applyRegistryEvents(db, [start("parent", { ghosttyTerminalId: "terminal-parent" })]);
+    applyRegistryEvents(db, [subStart("child", "parent"), simple("Attention", "parent", { at: at(2) })]);
+
+    expect(getRow("parent")?.ghostty_terminal_id).toBe("terminal-parent");
+    expect(getRow("child")?.ghostty_terminal_id).toBeNull();
+  });
+
+  test("deletes a terminal target with its row through session end and repair", () => {
+    applyRegistryEvents(db, [start("ended", { ghosttyTerminalId: "terminal-ended" })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "ended")]);
+    expect(getRow("ended")).toBeNull();
+
+    applyRegistryEvents(db, [start("repaired", { ghosttyTerminalId: "terminal-repaired" })]);
+    expect(clearSession(db, "claude", "repaired")).toBe("applied");
+    expect(getRow("repaired")).toBeNull();
   });
 
   test("ignores self-parenting with no mutation at all", () => {
@@ -381,6 +430,7 @@ describe("listSessions", () => {
         title: "B",
         project: null,
         logicalSlot: 1,
+        ghosttyTerminalId: null,
         openedAt: at(1),
         updatedAt: at(1),
       },
@@ -392,6 +442,7 @@ describe("listSessions", () => {
         title: null,
         project: null,
         logicalSlot: 2,
+        ghosttyTerminalId: null,
         openedAt: at(2),
         updatedAt: at(2),
       },
@@ -403,6 +454,7 @@ describe("listSessions", () => {
         title: null,
         project: null,
         logicalSlot: null,
+        ghosttyTerminalId: null,
         openedAt: at(4),
         updatedAt: at(4),
       },
@@ -414,6 +466,7 @@ describe("listSessions", () => {
         title: null,
         project: null,
         logicalSlot: null,
+        ghosttyTerminalId: null,
         openedAt: at(3),
         updatedAt: at(3),
       },
