@@ -19,6 +19,10 @@
  */
 
 import { ProjectionDaemon } from "./daemon";
+import {
+  discoverClaudeGhosttyTerminal,
+  type DiscoverClaudeGhosttyTerminal,
+} from "./claude-ghostty-binding";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
 import { resolveAppPaths, type AppPaths } from "./paths";
 import { decodeNativeHook } from "./providers";
@@ -45,6 +49,9 @@ export type CliDependencies = {
   stderr?: (text: string) => void;
   openDatabase?: typeof openRegistryDatabase;
   applyEvents?: typeof applyRegistryEvents;
+  discoverClaudeGhosttyTerminal?: DiscoverClaudeGhosttyTerminal;
+  environment?: Readonly<Record<string, string | undefined>>;
+  parentPid?: number;
   runDaemon?: (paths: AppPaths, diagnostics: (record: DiagnosticRecord) => void) => number | Promise<number>;
 };
 
@@ -184,9 +191,27 @@ const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Pr
     }
 
     try {
+      let eventsToApply = events;
+      const start = events[0];
+      if (providerArg === "claude" && start?.kind === "SessionStart") {
+        let terminalId: string | null = null;
+        try {
+          terminalId = await deps.discoverClaudeGhosttyTerminal({
+            termProgram: deps.environment.TERM_PROGRAM,
+            tmux: deps.environment.TMUX,
+            parentPid: deps.parentPid,
+          });
+        } catch {
+          terminalId = null;
+        }
+        if (terminalId === null) {
+          report({ code: "claude_terminal_unbound", provider: providerArg, sessionId: start.sessionId });
+        }
+        eventsToApply = [{ ...start, ghosttyTerminalId: terminalId }];
+      }
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          deps.applyEvents(db, events);
+          deps.applyEvents(db, eventsToApply);
           return 0;
         } catch (error) {
           if (!isSqliteContention(error)) {
@@ -309,6 +334,9 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   stderr: (text) => process.stderr.write(text),
   openDatabase: openRegistryDatabase,
   applyEvents: applyRegistryEvents,
+  discoverClaudeGhosttyTerminal,
+  environment: process.env,
+  parentPid: process.ppid,
   runDaemon: (daemonPaths, diagnostics) => {
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics });
     daemon.start();

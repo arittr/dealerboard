@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli, MAX_STDIN_BYTES, type CliDependencies } from "../src/core/cli";
+import type { ClaudeGhosttyBindingContext } from "../src/core/claude-ghostty-binding";
 import { createFileDiagnostics, type DiagnosticRecord } from "../src/core/diagnostics";
 import { resolveAppPaths, type AppPaths } from "../src/core/paths";
 import { applyRegistryEvents, listSessions } from "../src/core/registry";
@@ -78,6 +79,7 @@ const makeHarness = (overrides: Partial<CliDependencies> = {}): Harness => {
     stderr: (text) => {
       err += text;
     },
+    discoverClaudeGhosttyTerminal: () => Promise.resolve("test-ghostty-terminal"),
     ...overrides,
   };
   return { deps, diagnostics, delays, stdout: () => out, stderr: () => err };
@@ -158,7 +160,7 @@ describe("event ingress", () => {
         title: "Title for s1",
         project: "project-x",
         logicalSlot: 1,
-        ghosttyTerminalId: null,
+        ghosttyTerminalId: "test-ghostty-terminal",
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -170,6 +172,120 @@ describe("event ingress", () => {
     const harness = makeHarness({ stdin: stdinOf(startEvent("s1"), 7) });
     expect(await runCli(["event", "kimi"], harness.deps)).toBe(0);
     expect(listRows().map((row) => [row.provider, row.sessionId])).toEqual([["kimi", "s1"]]);
+  });
+
+  test("enriches only Claude SessionStart from the trusted native discoverer", async () => {
+    initRegistry();
+    const contexts: ClaudeGhosttyBindingContext[] = [];
+    const harness = makeHarness({
+      stdin: stdinOf(startEvent("bound", { ghosttyTerminalId: "payload-selected-terminal" })),
+      environment: { TERM_PROGRAM: "ghostty" },
+      parentPid: 4242,
+      discoverClaudeGhosttyTerminal: (context) => {
+        contexts.push(context);
+        return Promise.resolve("terminal-bound");
+      },
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(contexts).toEqual([{ termProgram: "ghostty", tmux: undefined, parentPid: 4242 }]);
+    expect(listRows()[0]?.ghosttyTerminalId).toBe("terminal-bound");
+    expect(harness.diagnostics).toEqual([]);
+  });
+
+  test("does not discover targets for non-Claude-start events or trust payload targets", async () => {
+    initRegistry();
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(db, [{
+        kind: "SessionStart",
+        provider: "claude",
+        sessionId: "existing",
+        title: null,
+        project: null,
+        ghosttyTerminalId: "existing-terminal",
+        observedAt: NOW,
+      }]);
+    } finally {
+      db.close();
+    }
+    let discoveries = 0;
+    const discoverClaudeGhosttyTerminal = () => {
+      discoveries += 1;
+      return Promise.resolve("should-not-be-used");
+    };
+    const events: [string, string][] = [
+      ["codex", startEvent("codex-start", { ghosttyTerminalId: "payload-selected-terminal" })],
+      ["kimi", startEvent("kimi-start", { ghosttyTerminalId: "payload-selected-terminal" })],
+      ["claude", JSON.stringify({
+        hook_event_name: "PostToolUse",
+        session_id: "existing",
+        ghosttyTerminalId: "payload-selected-terminal",
+      })],
+      ["claude", JSON.stringify({
+        hook_event_name: "SubagentStart",
+        session_id: "existing",
+        agent_id: "child",
+        ghosttyTerminalId: "payload-selected-terminal",
+      })],
+    ];
+
+    for (const [provider, input] of events) {
+      const harness = makeHarness({
+        stdin: stdinOf(input),
+        discoverClaudeGhosttyTerminal,
+      });
+      expect(await runCli(["event", provider], harness.deps)).toBe(0);
+      expect(harness.diagnostics).toEqual([]);
+    }
+
+    expect(discoveries).toBe(0);
+    expect(listRows().map((row) => [row.provider, row.sessionId, row.ghosttyTerminalId])).toEqual([
+      ["claude", "existing", "existing-terminal"],
+      ["codex", "codex-start", null],
+      ["kimi", "kimi-start", null],
+      ["claude", "child", null],
+    ]);
+  });
+
+  test("stores a null target and reports an unbound Claude terminal when discovery returns null", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      stdin: stdinOf(startEvent("unbound")),
+      discoverClaudeGhosttyTerminal: () => Promise.resolve(null),
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(listRows()[0]?.ghosttyTerminalId).toBeNull();
+    expect(harness.diagnostics).toEqual([
+      {
+        timestamp: NOW,
+        component: "cli",
+        code: "claude_terminal_unbound",
+        provider: "claude",
+        sessionId: "unbound",
+      },
+    ]);
+  });
+
+  test("stores a null target and reports an unbound Claude terminal when discovery rejects", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      stdin: stdinOf(startEvent("unbound")),
+      discoverClaudeGhosttyTerminal: () => Promise.reject(new Error("discovery failed")),
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(listRows()[0]?.ghosttyTerminalId).toBeNull();
+    expect(harness.diagnostics).toEqual([
+      {
+        timestamp: NOW,
+        component: "cli",
+        code: "claude_terminal_unbound",
+        provider: "claude",
+        sessionId: "unbound",
+      },
+    ]);
   });
 
   test("never creates a row from UserPromptSubmit before a SessionStart", async () => {

@@ -20,6 +20,7 @@ export type DiagnosticCode =
   | "missing_database"
   | "unsupported_schema"
   | "sqlite_busy"
+  | "claude_terminal_unbound"
   | "internal_error";
 
 export type DiagnosticRecord = {
