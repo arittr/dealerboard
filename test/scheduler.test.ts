@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { FrameScheduler } from "../src/plugin/scheduler";
 
-const TICK_MS = 250;
+const TICK_MS = 125;
 
 const flushMicrotasks = async (): Promise<void> => {
   for (let index = 0; index < 5; index++) {
@@ -97,7 +97,7 @@ const startTimesFor = (port: FakeImagePort, context: string): number[] =>
   startsFor(port, context).map((start) => start.at);
 
 describe("FrameScheduler", () => {
-  test("starts at most one update per context per 250 ms tick", async () => {
+  test("starts at most one update per context per 125 ms tick", async () => {
     const clock = new FakeClock();
     const port = new FakeImagePort(clock, true);
     const scheduler = new FrameScheduler({
@@ -119,9 +119,10 @@ describe("FrameScheduler", () => {
       expect(seen.has(key)).toBe(false);
       seen.add(key);
     }
-    // Immediate start at t=0 plus ticks at 250..2000: nine starts per context.
-    expect(startsFor(port, "a")).toHaveLength(9);
-    expect(startsFor(port, "b")).toHaveLength(9);
+    // Immediate start at t=0 plus ticks at 125..2000: seventeen starts per
+    // context.
+    expect(startsFor(port, "a")).toHaveLength(17);
+    expect(startsFor(port, "b")).toHaveLength(17);
   });
 
   test("suppresses repeated identical frames", async () => {
@@ -151,14 +152,14 @@ describe("FrameScheduler", () => {
 
     // Three ticks pass while the first send stays in flight: no parallel
     // starts, and each newer desired frame replaces the pending one.
-    await clock.advance(250);
-    await clock.advance(250);
-    await clock.advance(250);
+    await clock.advance(TICK_MS);
+    await clock.advance(TICK_MS);
+    await clock.advance(TICK_MS);
     expect(port.starts).toHaveLength(1);
 
     port.resolvePending();
     await flushMicrotasks();
-    await clock.advance(250);
+    await clock.advance(TICK_MS);
 
     // Exactly one follow-up start, carrying the frame current at that tick —
     // a queue would instead flush the oldest pending frame first.
@@ -198,7 +199,7 @@ describe("FrameScheduler", () => {
     expect(port.starts[1]!.at).toBe(clock.now());
   });
 
-  test("shares one timer across 14 animated contexts, each within four starts per second", async () => {
+  test("shares one timer across 14 animated contexts, each within eight starts per second", async () => {
     const clock = new FakeClock();
     const port = new FakeImagePort(clock, true);
     const scheduler = new FrameScheduler({
@@ -217,16 +218,16 @@ describe("FrameScheduler", () => {
 
     for (const context of contexts) {
       const times = startTimesFor(port, context);
-      // Immediate start plus sixteen ticks of continuous animation.
-      expect(times).toHaveLength(17);
+      // Immediate start plus thirty-two ticks of continuous animation.
+      expect(times).toHaveLength(33);
       for (const at of times) {
         const inWindow = times.filter((time) => time >= at && time < at + 1000);
-        expect(inWindow.length).toBeLessThanOrEqual(4);
+        expect(inWindow.length).toBeLessThanOrEqual(8);
       }
     }
   });
 
-  test("renders the first frame immediately and the next at the key's own 250 ms boundary", async () => {
+  test("renders the first frame immediately and the next at the key's own 125 ms boundary", async () => {
     const clock = new FakeClock();
     const port = new FakeImagePort(clock, true);
     const scheduler = new FrameScheduler({
@@ -243,14 +244,15 @@ describe("FrameScheduler", () => {
     // The first render for b is immediate even mid-interval.
     expect(startTimesFor(port, "b")).toEqual([100]);
 
-    await clock.advance(150); // tick fires at 250
-    // a sits exactly on its boundary and starts; b is 150 ms past its last
+    await clock.advance(50); // tick fires at 125
+    // a sits exactly on its boundary and starts; b is 25 ms past its last
     // start and must wait for its own per-key boundary.
-    expect(startTimesFor(port, "a")).toEqual([0, 250]);
+    expect(startTimesFor(port, "a")).toEqual([0, 125]);
     expect(startTimesFor(port, "b")).toEqual([100]);
 
-    await clock.advance(250); // tick fires at 500
-    expect(startTimesFor(port, "b")).toEqual([100, 500]);
+    await clock.advance(125); // tick fires at 250
+    expect(startTimesFor(port, "a")).toEqual([0, 125, 250]);
+    expect(startTimesFor(port, "b")).toEqual([100, 250]);
     // The waited start carries the current frame, not the obsolete one.
     expect(startsFor(port, "b")[1]!.image).toBe("b#2");
   });
