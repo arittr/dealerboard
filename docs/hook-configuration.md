@@ -535,7 +535,16 @@ codex plugin list
 1. Install and enable with `codex plugin add stream-deck-agents-codex@drew-local`,
    or restart Codex Desktop, open the Plugins Directory, select the **Drew
    Local** source, install **Stream Deck Agents**, and enable it.
-2. **Required trust step.** Codex skips non-managed command hooks until the
+2. Codex runs the installed copy under `~/.codex/plugins/cache`, not the local
+   marketplace source directly. After changing `hooks/hooks.json`, refresh that
+   copy before looking for an approval prompt:
+
+   ```bash
+   codex plugin remove stream-deck-agents-codex@drew-local
+   codex plugin add stream-deck-agents-codex@drew-local
+   ```
+
+3. **Required trust step.** Codex skips non-managed command hooks until the
    exact hook definition is reviewed and trusted. Trust is recorded per event
    entry (a hash of each entry), not per file: adding events to
    `hooks/hooks.json` later leaves the existing entries trusted, but the new
