@@ -331,12 +331,12 @@ Keep the backup until physical verification is complete.
 
 ## Codex Desktop
 
-Codex accepts seven of the eleven events for this setup — `SessionStart`,
-`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`,
-and `SessionEnd` — delivered through a small local plugin. (Codex has no
-`Notification` approval event, no `StopFailure`, and no subagent hooks wired
-here.) Two locations are user-owned: the plugin directory and the personal
-marketplace file.
+This setup registers nine Codex lifecycle events — `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`SubagentStart`, `SubagentStop`, `Stop`, and `SessionEnd` — through a small
+local plugin. Codex has no `Notification` approval event or `StopFailure`;
+the registry does not need the compact hooks. Two locations are user-owned:
+the plugin directory and the personal marketplace file.
 
 - Plugin directory: `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/`
 - Marketplace file: `/Users/drewritter/.agents/plugins/marketplace.json`
@@ -391,6 +391,17 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -425,6 +436,17 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
       }
     ],
     "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
       {
         "hooks": [
           {
@@ -523,7 +545,7 @@ codex plugin list
    listed event. Codex prints a startup warning while review is pending.
    Without this step the untrusted events silently never fire — a tile that
    never receives `Stop` stays working forever, so the review must cover all
-   seven entries, not just the first three.
+   nine entries, not just the first three.
 
 ### 5. Behavior to expect
 
@@ -534,12 +556,15 @@ codex plugin list
   and the matching `SessionEnd` is ignored too. The session simply never
   appears; nothing is synthesized retroactively.
 - The configured subset reports session starts, submitted-message and tool
-  activity, approval waits, turn completions, and session ends: a Codex tile
-  is idle at start, working while a turn runs, waiting while an approval is
-  pending, back to idle when the turn stops, and removed at `SessionEnd`.
-  Error transitions are not reported (Codex has no `StopFailure` event), and a
-  missed `SessionEnd` still leaves a stale row until `sessions clear` repairs
-  it.
+  activity, approval waits, live subagent starts and stops, turn completions,
+  and session ends: a Codex tile is idle at start, working while a turn runs,
+  waiting while an approval is pending, back to idle when the turn stops, and
+  removed at `SessionEnd`. Every live child increments the tile's descendant
+  badge; `SubagentStop` removes that child and its active descendants. Error
+  transitions are not reported (Codex has no `StopFailure` event). A missed
+  `SubagentStop` leaves a stale badge until the parent ends or the row is
+  repaired, and a missed `SessionEnd` still leaves a stale session until
+  `sessions clear` repairs it.
 - Codex Desktop spawns hidden ambient-suggestion threads that fire the same
   start and prompt hooks as real chats; left unfiltered they would add a
   phantom tile per real chat. Their payloads carry an explicit
