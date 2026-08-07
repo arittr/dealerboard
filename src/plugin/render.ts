@@ -6,11 +6,11 @@
  * provider mark, up to two centered title lines, a bare
  * descendant count when greater than zero, and a status-colored frame.
  * Animation is a pure function of the key model and an integer phase owned by
- * the plugin: working shows a bright border segment offset by phase, waiting
- * and error breathe through sinusoidal frame opacity (error faster), and idle
- * is a static green frame. Blank, NEXT, and offline treatments render no
- * session title; degraded models add a small error flag, and a degraded blank
- * renders the explicit offline treatment.
+ * the plugin: working uses a shallow full-tile wash behind a static dim frame,
+ * waiting and error breathe through deeper sinusoidal frame opacity (error
+ * faster), and idle is a static green frame. Blank, NEXT, and offline
+ * treatments render no session title; degraded models add a small error flag,
+ * and a degraded blank renders the explicit offline treatment.
  *
  * The label is bounded by Unicode code points before line splitting, every
  * injected text value passes through the one escapeXml helper, and the module
@@ -27,10 +27,6 @@ const TILE_SIZE = 144;
 const FRAME_INSET = 4;
 const FRAME_SIZE = TILE_SIZE - FRAME_INSET * 2;
 const FRAME_WIDTH = 6;
-// Square corners keep the dash math an exact perimeter walk.
-const FRAME_PERIMETER = FRAME_SIZE * 4;
-const WORKING_SEGMENT_LENGTH = 80;
-const WORKING_SEGMENT_STEP = 17;
 
 const TITLE_LINE_CAPACITY = 12;
 const TITLE_MAX_LINES = 2;
@@ -73,11 +69,12 @@ const statusFrame = (status: SessionStatus, phase: number): string => {
   const color = STATUS_COLORS[status];
   switch (status) {
     case "working": {
-      const offset =
-        (((phase * WORKING_SEGMENT_STEP) % FRAME_PERIMETER) + FRAME_PERIMETER) % FRAME_PERIMETER;
+      // Thirty-two phases per cycle: a four-second 4%-to-14% wash behind a
+      // static 30% frame, keeping the title and provider chip crisp.
+      const opacity = 0.09 + 0.05 * Math.sin((phase * Math.PI) / 16);
       return (
-        `${frameOpen(color)} opacity="0.35"/>` +
-        `${frameOpen(color)} stroke-dasharray="${WORKING_SEGMENT_LENGTH} ${FRAME_PERIMETER - WORKING_SEGMENT_LENGTH}" stroke-dashoffset="${-offset}"/>`
+        `<rect x="0" y="0" width="${TILE_SIZE}" height="${TILE_SIZE}" fill="${color}" opacity="${opacity.toFixed(3)}"/>` +
+        `${frameOpen(color)} opacity="0.300"/>`
       );
     }
     case "waiting": {

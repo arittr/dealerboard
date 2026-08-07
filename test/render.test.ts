@@ -40,6 +40,9 @@ const textNodesByClass = (svg: string, className: string): string[] =>
     (match) => match[1]!,
   );
 
+const rectNodes = (svg: string): string[] =>
+  [...svg.matchAll(/<rect\b[^>]*\/>/g)].map((match) => match[0]!);
+
 const stripKnownEntities = (value: string): string =>
   value.replace(/&(amp|lt|gt|quot|apos);/g, "");
 
@@ -152,21 +155,47 @@ describe("renderKey output contract", () => {
 });
 
 describe("status treatments", () => {
-  test("working uses #20B8FF with a bright border segment offset by phase", () => {
+  test("working uses a tile wash behind content and a static dim blue frame", () => {
     const model = sessionModel({ status: "working" });
     const atZero = decode(model, 0);
-    const atOne = decode(model, 1);
-    expect(atZero).toContain("#20B8FF");
+    const atEight = decode(model, 8);
     expect(atZero).not.toContain("#FFB020");
     expect(atZero).not.toContain("#FF4D67");
-    expect(atZero).toContain("stroke-dasharray");
-    expect(atZero).not.toBe(atOne);
-    const segmentOffset = (svg: string): string => {
-      const match = svg.match(/stroke-dashoffset="(-?\d+)"/);
-      expect(match).not.toBeNull();
-      return match![1]!;
+    expect(atZero).not.toContain("stroke-dasharray");
+
+    const findWorkingOverlay = (svg: string): string => {
+      const overlay = rectNodes(svg).find(
+        (rect) =>
+          rect.includes('x="0"') &&
+          rect.includes('y="0"') &&
+          rect.includes('width="144"') &&
+          rect.includes('height="144"') &&
+          rect.includes('fill="#20B8FF"'),
+      );
+      expect(overlay).toBeDefined();
+      return overlay!;
     };
-    expect(segmentOffset(atZero)).not.toBe(segmentOffset(atOne));
+    const findWorkingFrame = (svg: string): string => {
+      const frame = rectNodes(svg).find((rect) => rect.includes('stroke="#20B8FF"'));
+      expect(frame).toBeDefined();
+      return frame!;
+    };
+    const overlayOpacity = (svg: string): number => {
+      const match = findWorkingOverlay(svg).match(/opacity="([\d.]+)"/);
+      expect(match).not.toBeNull();
+      return Number.parseFloat(match![1]!);
+    };
+
+    const frameAtZero = findWorkingFrame(atZero);
+    expect(frameAtZero).toContain('opacity="0.300"');
+    expect(findWorkingFrame(atEight)).toBe(frameAtZero);
+    expect(atZero.indexOf('fill="#20B8FF"')!).toBeLessThan(atZero.indexOf('class="title"'));
+
+    const opacities = Array.from({ length: 33 }, (_, phase) => overlayOpacity(decode(model, phase)));
+    expect(Math.min(...opacities)).toBeGreaterThanOrEqual(0.04);
+    expect(Math.max(...opacities)).toBeLessThanOrEqual(0.14);
+    expect(Math.max(...opacities)).toBeGreaterThan(Math.min(...opacities));
+    expect(opacities[0]).toBe(opacities[32]);
   });
 
   test("waiting uses a #FFB020 sinusoidal frame opacity", () => {

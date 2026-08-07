@@ -48,6 +48,13 @@ Session tiles use a thick status-colored frame around a dark interior:
 - Idle (turn finished, at prompt): green `#4ADE80`
 - Error requiring attention: red `#FF4D67`
 
+Working uses a shallow full-tile blue wash behind a static dim blue frame. The
+wash breathes from 4% to 14% opacity over four seconds, keeping the title and
+provider chip crisp. Waiting keeps a deeper four-second amber breath, error
+keeps a faster two-second red pulse, and idle remains static. Animated status
+treatments change opacity only; they do not move, scale, or change stroke width
+on the small panels.
+
 There is no visible status word or status glyph. A session whose current state is unknown must not be rendered as known-idle. Gate 0 must determine whether unknown sessions receive a distinct neutral treatment or remain hidden until state becomes known.
 
 Each tile also has:
