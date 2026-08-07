@@ -3,7 +3,7 @@
  *
  * Every key is a 144x144 SVG returned as one percent-encoded data URL.
  * Session tiles carry a provider-colored corner chip with the two-letter
- * provider mark, up to two centered title lines, a bare
+ * provider mark, up to two centered title lines, a prominent upper-right
  * descendant count when greater than zero, and a status-colored frame.
  * Animation is a pure function of the key model and an integer phase owned by
  * the plugin: working uses a shallow full-tile wash behind a static dim frame,
@@ -118,17 +118,18 @@ const providerMark = (provider: Provider): string =>
 
 const descendantBadge = (descendantCount: number): string =>
   descendantCount > 0
-    ? `<text class="badge" x="130" y="128" text-anchor="end" font-size="18" fill="${COLOR_TEXT}">${descendantCount}</text>`
+    ? `<text class="badge" x="130" y="38" text-anchor="end" font-size="28" fill="${COLOR_TEXT}">${descendantCount}</text>`
     : "";
 
 const DEGRADED_FLAG = `<text class="flag" x="128" y="27" text-anchor="end" font-size="16" fill="${COLOR_WAITING}">!</text>`;
+const SESSION_DEGRADED_FLAG = `<text class="flag" x="16" y="128" text-anchor="start" font-size="16" fill="${COLOR_WAITING}">!</text>`;
 
 const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, phase: number): string =>
   statusFrame(model.session.status, phase) +
   providerMark(model.session.provider) +
   titleLines(model.label) +
   descendantBadge(model.session.descendantCount) +
-  (model.degraded ? DEGRADED_FLAG : "");
+  (model.degraded ? SESSION_DEGRADED_FLAG : "");
 
 const blankTile = (degraded: boolean): string =>
   degraded

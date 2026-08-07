@@ -37,6 +37,7 @@ We retain the useful interaction ideas, but AgentDeck and Herdr are neither depe
 - Subagents never receive their own keys.
 - A bare numeric badge shows the total live descendants when that count is authoritatively known and greater than zero.
 - The badge has no `+` prefix.
+- The descendant badge is prominent in the upper-right corner so it remains legible on a small panel.
 - Unknown lineage must not be represented as a known zero; Gate 0 determines whether every target provider can support the strict badge contract.
 
 ### Status is color-only

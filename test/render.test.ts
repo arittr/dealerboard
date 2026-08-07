@@ -151,6 +151,9 @@ describe("renderKey output contract", () => {
     expect(textNodesByClass(without, "badge")).toHaveLength(0);
     const withCount = decode(sessionModel({ descendantCount: 7 }, "Review"), 0);
     expect(textNodesByClass(withCount, "badge")).toEqual(["7"]);
+    expect(withCount).toContain(
+      '<text class="badge" x="130" y="38" text-anchor="end" font-size="28"',
+    );
   });
 });
 
@@ -275,6 +278,9 @@ describe("non-session and degraded models", () => {
     const degraded = decode(sessionModel({}, "Keep me", true), 0);
     expect(textNodesByClass(clean, "flag")).toHaveLength(0);
     expect(textNodesByClass(degraded, "flag")).toEqual(["!"]);
+    expect(degraded).toContain(
+      '<text class="flag" x="16" y="128" text-anchor="start" font-size="16"',
+    );
     expect(textNodesByClass(degraded, "title")).toEqual(textNodesByClass(clean, "title"));
   });
 });
