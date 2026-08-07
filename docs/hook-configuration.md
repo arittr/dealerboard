@@ -394,7 +394,7 @@ already exists, merge only the `plugins` entry below into the existing
       "name": "stream-deck-agents-codex",
       "source": {
         "source": "local",
-        "path": "./stream-deck-agents-codex"
+        "path": "./.agents/plugins/stream-deck-agents-codex"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -406,13 +406,28 @@ already exists, merge only the `plugins` entry below into the existing
 }
 ```
 
-`source.path` is relative to the marketplace root
-(`/Users/drewritter/.agents/plugins/`), so the plugin directory sits beside
-the marketplace file.
+`source.path` is relative to the **registered marketplace root**, not to the
+marketplace file. The root is `/Users/drewritter` for the personal
+marketplace (Codex discovers the file at `<root>/.agents/plugins/marketplace.json`),
+so the path must reach down through `.agents/plugins/`.
+
+Then register the marketplace once (it is not auto-discovered):
+
+```bash
+codex plugin marketplace add /Users/drewritter
+```
+
+Verify resolution before installing — the printed path must be the real
+plugin directory:
+
+```bash
+codex plugin list
+```
 
 ### 4. Install, enable, and trust
 
-1. Restart Codex Desktop, open the Plugins Directory, select the **Drew
+1. Install and enable with `codex plugin add stream-deck-agents-codex@drew-local`,
+   or restart Codex Desktop, open the Plugins Directory, select the **Drew
    Local** source, install **Stream Deck Agents**, and enable it.
 2. **Required trust step.** Codex skips non-managed command hooks until the
    exact hook definition is reviewed and trusted; trust is recorded against a
