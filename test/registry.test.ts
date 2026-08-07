@@ -40,6 +40,7 @@ const start = (
   sessionId,
   title: options.title ?? null,
   project: options.project ?? null,
+  ghosttyTerminalId: null,
   observedAt: options.at ?? at(1),
 });
 

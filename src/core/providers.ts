@@ -122,6 +122,7 @@ export const decodeNativeHook = (
           sessionId,
           title: firstAllowlistedString(value, SAFE_FIELDS.title) ?? null,
           project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
+          ghosttyTerminalId: null,
           observedAt: now,
         },
       ];

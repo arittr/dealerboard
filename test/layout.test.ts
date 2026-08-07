@@ -17,7 +17,7 @@ import {
   reduceLayout,
 } from "../src/plugin/layout";
 import { SnapshotCache, type SnapshotView } from "../src/plugin/snapshot-reader";
-import type { ProjectedSession, SessionSnapshotV1 } from "../src/protocol";
+import type { ProjectedSession, SessionSnapshotV2 } from "../src/protocol";
 
 const session = (
   logicalSlot: number,
@@ -30,6 +30,7 @@ const session = (
   project: "stream-deck-agents",
   descendantCount: 0,
   logicalSlot,
+  ghosttyTerminalId: null,
   ...overrides,
 });
 
@@ -38,8 +39,8 @@ const range = (from: number, to: number): number[] =>
 
 const sessionsAt = (...slots: number[]): ProjectedSession[] => slots.map((slot) => session(slot));
 
-const healthySnapshot = (sessions: ProjectedSession[]): SessionSnapshotV1 => ({
-  schemaVersion: 1,
+const healthySnapshot = (sessions: ProjectedSession[]): SessionSnapshotV2 => ({
+  schemaVersion: 2,
   health: { status: "ok" },
   sessions,
 });
@@ -386,13 +387,13 @@ describe("SnapshotCache", () => {
     renameSync(tempPath, path);
   };
 
-  const publishSnapshot = (path: string, snapshot: SessionSnapshotV1): void => {
+  const publishSnapshot = (path: string, snapshot: SessionSnapshotV2): void => {
     publish(path, `${JSON.stringify(snapshot)}\n`);
   };
 
   test("returns an empty degraded view when the snapshot is missing and no last-good exists", () => {
     withTempDir((dir) => {
-      const view = new SnapshotCache(join(dir, "snapshot-v1.json")).read();
+      const view = new SnapshotCache(join(dir, "snapshot-v2.json")).read();
       expect(view.degraded).toBe(true);
       expect(view.snapshot.sessions).toEqual([]);
       expect(view.snapshot.health.status).toBe("error");
@@ -401,7 +402,7 @@ describe("SnapshotCache", () => {
 
   test("reads a healthy snapshot without the degraded flag", () => {
     withTempDir((dir) => {
-      const path = join(dir, "snapshot-v1.json");
+      const path = join(dir, "snapshot-v2.json");
       publishSnapshot(path, healthySnapshot([session(1)]));
       const view = new SnapshotCache(path).read();
       expect(view.degraded).toBe(false);
@@ -411,7 +412,7 @@ describe("SnapshotCache", () => {
 
   test("does not reread while the file identity is unchanged", () => {
     withTempDir((dir) => {
-      const path = join(dir, "snapshot-v1.json");
+      const path = join(dir, "snapshot-v2.json");
       publishSnapshot(path, healthySnapshot([session(1)]));
       const cache = new SnapshotCache(path);
       expect(cache.read().degraded).toBe(false);
@@ -426,7 +427,7 @@ describe("SnapshotCache", () => {
 
   test("rereads after the file is atomically replaced", () => {
     withTempDir((dir) => {
-      const path = join(dir, "snapshot-v1.json");
+      const path = join(dir, "snapshot-v2.json");
       const cache = new SnapshotCache(path);
       publishSnapshot(path, healthySnapshot([session(1)]));
       expect(cache.read().snapshot.sessions).toEqual([session(1)]);
@@ -439,7 +440,7 @@ describe("SnapshotCache", () => {
 
   test("returns the last-good snapshot as degraded when the file disappears", () => {
     withTempDir((dir) => {
-      const path = join(dir, "snapshot-v1.json");
+      const path = join(dir, "snapshot-v2.json");
       const cache = new SnapshotCache(path);
       publishSnapshot(path, healthySnapshot([session(1)]));
       expect(cache.read().degraded).toBe(false);
@@ -459,7 +460,7 @@ describe("SnapshotCache", () => {
       expect(malformedView.snapshot.sessions).toEqual([]);
 
       const unsupported = join(dir, "unsupported.json");
-      publishSnapshot(unsupported, { ...healthySnapshot([]), schemaVersion: 2 } as never);
+      publishSnapshot(unsupported, { ...healthySnapshot([]), schemaVersion: 1 } as never);
       const unsupportedView = new SnapshotCache(unsupported).read();
       expect(unsupportedView.degraded).toBe(true);
       expect(unsupportedView.snapshot.sessions).toEqual([]);
@@ -468,7 +469,7 @@ describe("SnapshotCache", () => {
 
   test("returns last-good degraded for malformed or unsupported replacements", () => {
     withTempDir((dir) => {
-      const path = join(dir, "snapshot-v1.json");
+      const path = join(dir, "snapshot-v2.json");
       const cache = new SnapshotCache(path);
       publishSnapshot(path, healthySnapshot([session(1)]));
       expect(cache.read().degraded).toBe(false);
@@ -478,7 +479,7 @@ describe("SnapshotCache", () => {
       expect(malformed.degraded).toBe(true);
       expect(malformed.snapshot.sessions).toEqual([session(1)]);
 
-      publishSnapshot(path, { ...healthySnapshot([session(9)]), schemaVersion: 2 } as never);
+      publishSnapshot(path, { ...healthySnapshot([session(9)]), schemaVersion: 1 } as never);
       const unsupported = cache.read();
       expect(unsupported.degraded).toBe(true);
       expect(unsupported.snapshot.sessions).toEqual([session(1)]);
@@ -487,13 +488,13 @@ describe("SnapshotCache", () => {
 
   test("returns last-good degraded for an explicitly unhealthy snapshot and never caches it", () => {
     withTempDir((dir) => {
-      const path = join(dir, "snapshot-v1.json");
+      const path = join(dir, "snapshot-v2.json");
       const cache = new SnapshotCache(path);
       publishSnapshot(path, healthySnapshot([session(1)]));
       expect(cache.read().degraded).toBe(false);
 
       publishSnapshot(path, {
-        schemaVersion: 1,
+        schemaVersion: 2,
         health: { status: "error", message: "database busy" },
         sessions: [],
       });
@@ -510,7 +511,7 @@ describe("SnapshotCache", () => {
 
   test("does not infer health from file age", () => {
     withTempDir((dir) => {
-      const path = join(dir, "snapshot-v1.json");
+      const path = join(dir, "snapshot-v2.json");
       const cache = new SnapshotCache(path);
       publishSnapshot(path, healthySnapshot([session(1)]));
       expect(cache.read().degraded).toBe(false);

@@ -4,12 +4,12 @@ import {
   type ProjectedSession,
   type Provider,
   type RegistryEvent,
-  type SessionSnapshotV1,
+  type SessionSnapshotV2,
   type SessionStatus,
 } from "../src/protocol";
 
-const valid: SessionSnapshotV1 = {
-  schemaVersion: 1,
+const valid: SessionSnapshotV2 = {
+  schemaVersion: 2,
   health: { status: "ok" },
   sessions: [
     {
@@ -20,6 +20,7 @@ const valid: SessionSnapshotV1 = {
       project: "stream-deck-agents",
       descendantCount: 2,
       logicalSlot: 1,
+      ghosttyTerminalId: "terminal-1",
     },
   ],
 };
@@ -64,7 +65,7 @@ describe("parseSessionSnapshot", () => {
   });
 
   test("rejects a wrong or coerced schemaVersion", () => {
-    expect(() => parseSessionSnapshot({ ...valid, schemaVersion: 2 })).toThrow();
+    expect(() => parseSessionSnapshot({ ...valid, schemaVersion: 1 })).toThrow();
     expect(() => parseSessionSnapshot({ ...valid, schemaVersion: 0 })).toThrow();
     expect(() => parseSessionSnapshot({ ...valid, schemaVersion: "1" })).toThrow();
   });
@@ -91,6 +92,7 @@ describe("parseSessionSnapshot", () => {
       "project",
       "descendantCount",
       "logicalSlot",
+      "ghosttyTerminalId",
     ];
     for (const key of required) {
       const session = { ...firstSession() } as Partial<ProjectedSession>;
@@ -105,6 +107,24 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot(withSession({ status: "stopped" as SessionStatus }))).toThrow();
     expect(() => parseSessionSnapshot(withSession({ status: "WAITING" as SessionStatus }))).toThrow();
     expect(() => parseSessionSnapshot({ ...valid, health: { status: "degraded" } })).toThrow();
+  });
+
+  test("requires a nullable Claude Ghostty terminal ID in schema v2", () => {
+    expect(parseSessionSnapshot(withSession({ ghosttyTerminalId: null })).sessions[0]?.ghosttyTerminalId).toBeNull();
+    expect(() => parseSessionSnapshot(withSession({ ghosttyTerminalId: "" }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ ghosttyTerminalId: "x".repeat(257) }))).toThrow();
+
+    const session = { ...firstSession() } as Partial<ProjectedSession>;
+    delete session.ghosttyTerminalId;
+    expect(() => parseSessionSnapshot({ ...valid, sessions: [session] })).toThrow();
+  });
+
+  test("rejects non-Claude activation targets and every non-v2 schema", () => {
+    expect(() => parseSessionSnapshot(withSession({ provider: "codex", ghosttyTerminalId: "terminal-1" }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ provider: "kimi", ghosttyTerminalId: "terminal-1" }))).toThrow();
+    expect(() => parseSessionSnapshot({ ...valid, schemaVersion: 1 })).toThrow();
+    expect(() => parseSessionSnapshot({ ...valid, schemaVersion: 3 })).toThrow();
+    expect(() => parseSessionSnapshot({ ...valid, schemaVersion: "2" })).toThrow();
   });
 
   test("rejects negative or non-integer descendantCount", () => {
@@ -187,7 +207,7 @@ describe("RegistryEvent", () => {
   test("the normalized union covers every event kind", () => {
     const observedAt = "2026-08-06T00:00:00.000Z";
     const events: RegistryEvent[] = [
-      { kind: "SessionStart", provider: "claude", sessionId: "s1", title: "T", project: "p", observedAt },
+      { kind: "SessionStart", provider: "claude", sessionId: "s1", title: "T", project: "p", ghosttyTerminalId: null, observedAt },
       { kind: "Activity", provider: "codex", sessionId: "s1", observedAt },
       { kind: "Attention", provider: "kimi", sessionId: "s1", observedAt },
       { kind: "Stop", provider: "claude", sessionId: "s1", observedAt },

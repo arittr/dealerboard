@@ -29,7 +29,7 @@ export const resolveAppPaths = (home: string = homedir()): AppPaths => {
     binDirectory,
     executable: join(binDirectory, "stream-deck-agents"),
     database: join(root, "registry.sqlite3"),
-    snapshot: join(root, "snapshot-v1.json"),
+    snapshot: join(root, "snapshot-v2.json"),
     logsDirectory: join(root, "logs"),
     launchAgent: join(home, "Library/LaunchAgents/com.drewritter.stream-deck-agents.plist"),
   };

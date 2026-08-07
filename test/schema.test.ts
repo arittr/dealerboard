@@ -63,7 +63,7 @@ describe("resolveAppPaths", () => {
     expect(paths.binDirectory).toBe(join(root, "bin"));
     expect(paths.executable).toBe(join(root, "bin/stream-deck-agents"));
     expect(paths.database).toBe(join(root, "registry.sqlite3"));
-    expect(paths.snapshot).toBe(join(root, "snapshot-v1.json"));
+    expect(paths.snapshot).toBe(join(root, "snapshot-v2.json"));
     expect(paths.logsDirectory).toBe(join(root, "logs"));
     expect(paths.launchAgent).toBe(
       join(tempHome, "Library/LaunchAgents/com.drewritter.stream-deck-agents.plist"),

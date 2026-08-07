@@ -13,6 +13,7 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   project: "stream-deck-agents",
   descendantCount: 0,
   logicalSlot: 1,
+  ghosttyTerminalId: null,
   ...overrides,
 });
 

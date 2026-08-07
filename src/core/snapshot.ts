@@ -22,11 +22,11 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import type { SessionSnapshotV1 } from "../protocol";
+import type { SessionSnapshotV2 } from "../protocol";
 
 const SNAPSHOT_FILE_MODE = 0o600;
 
-export const writeSnapshotAtomically = (path: string, snapshot: SessionSnapshotV1): void => {
+export const writeSnapshotAtomically = (path: string, snapshot: SessionSnapshotV2): void => {
   const tempPath = join(
     dirname(path),
     `.snapshot-${process.pid}-${randomUUID()}.tmp`,

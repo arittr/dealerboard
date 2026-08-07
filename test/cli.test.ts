@@ -513,6 +513,7 @@ describe("sessions commands", () => {
           sessionId: "b",
           title: "B",
           project: null,
+          ghosttyTerminalId: null,
           observedAt: at(1),
         },
         {
@@ -521,6 +522,7 @@ describe("sessions commands", () => {
           sessionId: "a",
           title: null,
           project: null,
+          ghosttyTerminalId: null,
           observedAt: at(2),
         },
         {
@@ -623,6 +625,7 @@ describe("sessions commands", () => {
           sessionId: "shared",
           title: null,
           project: null,
+          ghosttyTerminalId: null,
           observedAt: NOW,
         },
         {
@@ -631,6 +634,7 @@ describe("sessions commands", () => {
           sessionId: "shared",
           title: null,
           project: null,
+          ghosttyTerminalId: null,
           observedAt: NOW,
         },
       ]);

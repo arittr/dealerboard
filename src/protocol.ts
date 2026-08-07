@@ -10,7 +10,15 @@ export type Provider = "claude" | "codex" | "kimi";
 export type SessionStatus = "idle" | "working" | "waiting" | "error";
 
 export type RegistryEvent =
-  | { kind: "SessionStart"; provider: Provider; sessionId: string; title: string | null; project: string | null; observedAt: string }
+  | {
+      kind: "SessionStart";
+      provider: Provider;
+      sessionId: string;
+      title: string | null;
+      project: string | null;
+      ghosttyTerminalId: string | null;
+      observedAt: string;
+    }
   | { kind: "Activity" | "Attention" | "Stop" | "StopFailure"; provider: Provider; sessionId: string; observedAt: string }
   | { kind: "SessionEnd"; provider: Provider; sessionId: string; observedAt: string }
   | { kind: "SubagentStart"; provider: Provider; sessionId: string; parentSessionId: string; title: string | null; project: string | null; observedAt: string }
@@ -24,6 +32,7 @@ export type ProjectedSession = {
   project: string | null;
   descendantCount: number;
   logicalSlot: number;
+  ghosttyTerminalId: string | null;
 };
 
 export type SnapshotHealth = {
@@ -31,8 +40,8 @@ export type SnapshotHealth = {
   message?: string;
 };
 
-export type SessionSnapshotV1 = {
-  schemaVersion: 1;
+export type SessionSnapshotV2 = {
+  schemaVersion: 2;
   health: SnapshotHealth;
   sessions: ProjectedSession[];
 };
@@ -50,6 +59,9 @@ const isBoundedString = (value: unknown): value is string =>
 
 const isNullableBoundedString = (value: unknown): value is string | null =>
   value === null || isBoundedString(value);
+
+const isNullableNonEmptyBoundedString = (value: unknown): value is string | null =>
+  value === null || (isBoundedString(value) && Array.from(value).length > 0);
 
 const isNonNegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -103,6 +115,12 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (!isPositiveInteger(value.logicalSlot)) {
     return invalid("session.logicalSlot must be a positive integer");
   }
+  if (!isNullableNonEmptyBoundedString(value.ghosttyTerminalId)) {
+    return invalid("session.ghosttyTerminalId must be null or a non-empty bounded string");
+  }
+  if (value.ghosttyTerminalId !== null && value.provider !== "claude") {
+    return invalid("session.ghosttyTerminalId is only valid for Claude");
+  }
   return {
     provider: value.provider as Provider,
     sessionId: value.sessionId,
@@ -111,19 +129,20 @@ const parseSession = (value: unknown): ProjectedSession => {
     project: value.project,
     descendantCount: value.descendantCount,
     logicalSlot: value.logicalSlot,
+    ghosttyTerminalId: value.ghosttyTerminalId,
   };
 };
 
 /**
- * Validate an unknown value as a v1 session snapshot, returning a newly
+ * Validate an unknown value as a v2 session snapshot, returning a newly
  * constructed snapshot. Throws on any contract violation; no coercion.
  */
-export const parseSessionSnapshot = (value: unknown): SessionSnapshotV1 => {
+export const parseSessionSnapshot = (value: unknown): SessionSnapshotV2 => {
   if (!isRecord(value)) {
     return invalid("snapshot must be an object");
   }
-  if (value.schemaVersion !== 1) {
-    return invalid("schemaVersion must be 1");
+  if (value.schemaVersion !== 2) {
+    return invalid("schemaVersion must be 2");
   }
   if (!Array.isArray(value.sessions)) {
     return invalid("sessions must be an array");
@@ -137,7 +156,7 @@ export const parseSessionSnapshot = (value: unknown): SessionSnapshotV1 => {
     seenSlots.add(session.logicalSlot);
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     health: parseHealth(value.health),
     sessions,
   };

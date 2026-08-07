@@ -15,7 +15,7 @@ import type { Database } from "bun:sqlite";
 import type {
   ProjectedSession,
   Provider,
-  SessionSnapshotV1,
+  SessionSnapshotV2,
   SessionStatus,
 } from "../protocol";
 
@@ -158,6 +158,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       project: root.project,
       descendantCount,
       logicalSlot: slot,
+      ghosttyTerminalId: null,
     });
   }
 
@@ -225,15 +226,15 @@ const PROJECTION_COLUMNS =
  * `BEGIN`, select, map, project, `COMMIT`; any throw rolls back. Issues no
  * writes, so it is safe on a strictly read-only connection.
  */
-export const readProjection = (db: Database): SessionSnapshotV1 => {
+export const readProjection = (db: Database): SessionSnapshotV2 => {
   db.exec("BEGIN");
   let committed = false;
   try {
     const rows = db
       .query(`SELECT ${PROJECTION_COLUMNS} FROM active_sessions`)
       .all() as StoredRow[];
-    const snapshot: SessionSnapshotV1 = {
-      schemaVersion: 1,
+    const snapshot: SessionSnapshotV2 = {
+      schemaVersion: 2,
       health: { status: "ok" },
       sessions: projectRows(rows.map(toProjectionRow)),
     };

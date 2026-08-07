@@ -20,7 +20,7 @@ import type { AppPaths } from "./paths";
 import { readProjection } from "./projection";
 import { openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { writeSnapshotAtomically } from "./snapshot";
-import type { SessionSnapshotV1 } from "../protocol";
+import type { SessionSnapshotV2 } from "../protocol";
 
 export const DAEMON_POLL_INTERVAL_MS = 250;
 
@@ -148,7 +148,7 @@ export class ProjectionDaemon {
     ) {
       return;
     }
-    let snapshot: SessionSnapshotV1;
+    let snapshot: SessionSnapshotV2;
     try {
       snapshot = this.deps.readProjection(this.connection);
     } catch (error) {
@@ -158,7 +158,7 @@ export class ProjectionDaemon {
     this.publishHealthy(snapshot, dataVersion);
   }
 
-  private publishHealthy(snapshot: SessionSnapshotV1, dataVersion: number): void {
+  private publishHealthy(snapshot: SessionSnapshotV2, dataVersion: number): void {
     const json = JSON.stringify(snapshot);
     if (json !== this.state.lastPublishedJson) {
       this.deps.writeSnapshot(this.paths.snapshot, snapshot);
@@ -170,8 +170,8 @@ export class ProjectionDaemon {
 
   private publishUnhealthy(code: DiagnosticCode): void {
     this.state.healthy = false;
-    const snapshot: SessionSnapshotV1 = {
-      schemaVersion: 1,
+    const snapshot: SessionSnapshotV2 = {
+      schemaVersion: 2,
       health: { status: "error", message: code },
       sessions: [],
     };

@@ -28,6 +28,7 @@ try {
       sessionId,
       title: null,
       project: null,
+      ghosttyTerminalId: null,
       observedAt: new Date().toISOString(),
     },
   ]);

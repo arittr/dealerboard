@@ -24,6 +24,7 @@ describe("field extraction", () => {
         sessionId: "s1",
         title: "Fix the thing",
         project: "project-x",
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);
@@ -39,6 +40,7 @@ describe("field extraction", () => {
         sessionId: "s2",
         title: "Camel",
         project: null,
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);
@@ -68,6 +70,7 @@ describe("field extraction", () => {
         sessionId: "s1",
         title: null,
         project: null,
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);
@@ -83,6 +86,7 @@ describe("field extraction", () => {
         sessionId: "s1",
         title: null,
         project: "repo",
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);
@@ -94,6 +98,7 @@ describe("field extraction", () => {
         sessionId: "s1",
         title: null,
         project: null,
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);
@@ -142,6 +147,7 @@ describe("event mapping", () => {
         sessionId: "s1",
         title: null,
         project: null,
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);
@@ -358,6 +364,7 @@ describe("event mapping", () => {
         sessionId: "c1",
         title: null,
         project: "app",
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);
@@ -378,6 +385,7 @@ describe("event mapping", () => {
         sessionId: "c1",
         title: null,
         project: "app",
+        ghosttyTerminalId: null,
         observedAt: NOW,
       },
     ]);

@@ -15,7 +15,7 @@ import { writeSnapshotAtomically } from "../src/core/snapshot";
 import {
   parseSessionSnapshot,
   type Provider,
-  type SessionSnapshotV1,
+  type SessionSnapshotV2,
   type SessionStatus,
 } from "../src/protocol";
 
@@ -84,6 +84,7 @@ describe("projectRows", () => {
       project: "proj",
       descendantCount: 3,
       logicalSlot: 2,
+      ghosttyTerminalId: null,
     });
   });
 
@@ -213,6 +214,7 @@ describe("readProjection", () => {
             sessionId: "parent",
             title: "Parent",
             project: "proj",
+            ghosttyTerminalId: null,
             observedAt: "2026-08-06T00:00:01.000Z",
           },
           {
@@ -262,7 +264,7 @@ describe("readProjection", () => {
       const reader = openRegistryDatabase(paths.database, "readonly");
       try {
         const snapshot = readProjection(reader);
-        expect(snapshot.schemaVersion).toBe(1);
+        expect(snapshot.schemaVersion).toBe(2);
         expect(snapshot.health).toEqual({ status: "ok" });
         expect(snapshot.sessions).toEqual([
           {
@@ -273,9 +275,10 @@ describe("readProjection", () => {
             project: "proj",
             descendantCount: 2,
             logicalSlot: 1,
+            ghosttyTerminalId: null,
           },
         ]);
-        // The snapshot satisfies the published v1 contract.
+        // The snapshot satisfies the published v2 contract.
         expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);
       } finally {
         reader.close();
@@ -287,13 +290,13 @@ describe("readProjection", () => {
 });
 
 describe("writeSnapshotAtomically", () => {
-  const snapshotA: SessionSnapshotV1 = {
-    schemaVersion: 1,
+  const snapshotA: SessionSnapshotV2 = {
+    schemaVersion: 2,
     health: { status: "ok" },
     sessions: [],
   };
-  const snapshotB: SessionSnapshotV1 = {
-    schemaVersion: 1,
+  const snapshotB: SessionSnapshotV2 = {
+    schemaVersion: 2,
     health: { status: "ok" },
     sessions: [
       {
@@ -304,6 +307,7 @@ describe("writeSnapshotAtomically", () => {
         project: "proj",
         descendantCount: 2,
         logicalSlot: 3,
+        ghosttyTerminalId: null,
       },
     ],
   };
@@ -311,7 +315,7 @@ describe("writeSnapshotAtomically", () => {
   test("publishes A then B: the file parses as exactly B, mode 0600, no temp sibling", () => {
     const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-snapshot-"));
     try {
-      const target = join(dir, "snapshot-v1.json");
+      const target = join(dir, "snapshot-v2.json");
 
       writeSnapshotAtomically(target, snapshotA);
       const beforeRead = readFileSync(target, "utf8");
@@ -329,7 +333,7 @@ describe("writeSnapshotAtomically", () => {
       expect(statSync(target).mode & 0o777).toBe(0o600);
 
       // No temporary sibling remains after either publication.
-      expect(readdirSync(dir)).toEqual(["snapshot-v1.json"]);
+      expect(readdirSync(dir)).toEqual(["snapshot-v2.json"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -339,13 +343,13 @@ describe("writeSnapshotAtomically", () => {
     const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-snapshot-"));
     try {
       // A directory at the target path makes renameSync over it fail.
-      const target = join(dir, "snapshot-v1.json");
+      const target = join(dir, "snapshot-v2.json");
       mkdirSync(target);
 
       expect(() => writeSnapshotAtomically(target, snapshotA)).toThrow();
 
       // The failed publication left no temporary sibling behind.
-      expect(readdirSync(dir)).toEqual(["snapshot-v1.json"]);
+      expect(readdirSync(dir)).toEqual(["snapshot-v2.json"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

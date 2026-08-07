@@ -18,6 +18,7 @@ const session = (
   project: "stream-deck-agents",
   descendantCount: 0,
   logicalSlot,
+  ghosttyTerminalId: null,
   ...overrides,
 });
 
@@ -27,7 +28,7 @@ const range = (from: number, to: number): number[] =>
 const sessionsAt = (...slots: number[]): ProjectedSession[] => slots.map((slot) => session(slot));
 
 const healthyView = (sessions: ProjectedSession[]): SnapshotView => ({
-  snapshot: { schemaVersion: 1, health: { status: "ok" }, sessions },
+  snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions },
   degraded: false,
 });
 

@@ -16,10 +16,10 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { parseSessionSnapshot, type SessionSnapshotV1 } from "../protocol";
+import { parseSessionSnapshot, type SessionSnapshotV2 } from "../protocol";
 
 export type SnapshotView = {
-  snapshot: SessionSnapshotV1;
+  snapshot: SessionSnapshotV2;
   degraded: boolean;
 };
 
@@ -30,8 +30,8 @@ type FileIdentity = {
   mtimeNs: bigint;
 };
 
-const EMPTY_DEGRADED_SNAPSHOT: SessionSnapshotV1 = {
-  schemaVersion: 1,
+const EMPTY_DEGRADED_SNAPSHOT: SessionSnapshotV2 = {
+  schemaVersion: 2,
   health: { status: "error", message: "snapshot_unavailable" },
   sessions: [],
 };
@@ -43,7 +43,7 @@ export class SnapshotCache {
   readonly #path: string;
   #identity: FileIdentity | null = null;
   #view: SnapshotView | null = null;
-  #lastGood: SessionSnapshotV1 | null = null;
+  #lastGood: SessionSnapshotV2 | null = null;
 
   constructor(path: string) {
     this.#path = path;
@@ -79,7 +79,7 @@ export class SnapshotCache {
   }
 
   #readReplacement(): SnapshotView {
-    let snapshot: SessionSnapshotV1;
+    let snapshot: SessionSnapshotV2;
     try {
       snapshot = parseSessionSnapshot(JSON.parse(readFileSync(this.#path, "utf8")));
     } catch {

@@ -17,7 +17,7 @@ import { writeSnapshotAtomically } from "../src/core/snapshot";
 import {
   parseSessionSnapshot,
   type RegistryEvent,
-  type SessionSnapshotV1,
+  type SessionSnapshotV2,
 } from "../src/protocol";
 
 const NOW = "2026-08-06T00:00:00.000Z";
@@ -54,6 +54,7 @@ const startSession = (sessionId: string, observedAt: string = NOW): void => {
       sessionId,
       title: `Title for ${sessionId}`,
       project: null,
+      ghosttyTerminalId: null,
       observedAt,
     },
   ]);
@@ -68,7 +69,7 @@ const setUserVersion = (version: number): void => {
   }
 };
 
-const readSnapshotFile = (): SessionSnapshotV1 =>
+const readSnapshotFile = (): SessionSnapshotV2 =>
   parseSessionSnapshot(JSON.parse(readFileSync(paths.snapshot, "utf8")));
 
 type Harness = {
@@ -77,7 +78,7 @@ type Harness = {
   intervalMs: () => number | null;
   writeCountAtSchedule: () => number | null;
   isCancelled: () => boolean;
-  writes: SessionSnapshotV1[];
+  writes: SessionSnapshotV2[];
   readCount: () => number;
   diagnostics: DiagnosticRecord[];
 };
@@ -87,7 +88,7 @@ type Harness = {
  * around the real projection read and the real atomic snapshot write.
  */
 const makeHarness = (overrides: Partial<DaemonDependencies> = {}): Harness => {
-  const writes: SessionSnapshotV1[] = [];
+  const writes: SessionSnapshotV2[] = [];
   const diagnostics: DiagnosticRecord[] = [];
   let reads = 0;
   let poll: (() => void) | null = null;
@@ -130,8 +131,8 @@ const makeHarness = (overrides: Partial<DaemonDependencies> = {}): Harness => {
   };
 };
 
-const HEALTHY_S1: SessionSnapshotV1 = {
-  schemaVersion: 1,
+const HEALTHY_S1: SessionSnapshotV2 = {
+  schemaVersion: 2,
   health: { status: "ok" },
   sessions: [
     {
@@ -142,6 +143,7 @@ const HEALTHY_S1: SessionSnapshotV1 = {
       project: null,
       descendantCount: 0,
       logicalSlot: 1,
+      ghosttyTerminalId: null,
     },
   ],
 };
@@ -227,7 +229,7 @@ describe("ProjectionDaemon", () => {
     try {
       expect(unsupported.writes).toEqual([
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           health: { status: "error", message: "unsupported_schema" },
           sessions: [],
         },
@@ -259,7 +261,7 @@ describe("ProjectionDaemon", () => {
     corrupt.daemon.start();
     try {
       expect(corrupt.writes).toEqual([
-        { schemaVersion: 1, health: { status: "error", message: "internal_error" }, sessions: [] },
+        { schemaVersion: 2, health: { status: "error", message: "internal_error" }, sessions: [] },
       ]);
       expect(readSnapshotFile()).toEqual(corrupt.writes[0]!);
       expect(corrupt.diagnostics).toEqual([
@@ -284,7 +286,7 @@ describe("ProjectionDaemon", () => {
     harness.daemon.start();
     try {
       expect(harness.writes).toEqual([
-        { schemaVersion: 1, health: { status: "error", message: "internal_error" }, sessions: [] },
+        { schemaVersion: 2, health: { status: "error", message: "internal_error" }, sessions: [] },
       ]);
       // No commit happens between these polls: the retry is driven purely by
       // the previous poll having been unhealthy, and the identical unhealthy
