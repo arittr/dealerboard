@@ -2,7 +2,7 @@
 
 Date: 2026-08-07
 
-Status: Drafted from Drew's approved in-chat design; pending written-spec review.
+Status: Approved by Drew on 2026-08-07.
 
 Extends: [`2026-08-06-hook-driven-session-registry-design.md`](2026-08-06-hook-driven-session-registry-design.md). This design supersedes only that document's display-only and activation-non-goal decisions for top-level Codex session tiles. Claude and Kimi session tiles remain display-only, and `NEXT` retains its existing paging behavior.
 
