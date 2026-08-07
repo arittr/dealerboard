@@ -32,7 +32,7 @@ const FRAME_PERIMETER = FRAME_SIZE * 4;
 const WORKING_SEGMENT_LENGTH = 80;
 const WORKING_SEGMENT_STEP = 34;
 
-const TITLE_LINE_CAPACITY = 14;
+const TITLE_LINE_CAPACITY = 12;
 const TITLE_MAX_LINES = 2;
 const TITLE_CAPACITY = TITLE_LINE_CAPACITY * TITLE_MAX_LINES;
 
@@ -106,11 +106,11 @@ const splitTitleLines = (label: string): string[] => {
 
 const titleLines = (label: string): string => {
   const lines = splitTitleLines(label);
-  const firstBaseline = lines.length > 1 ? 74 : 86;
+  const firstBaseline = lines.length > 1 ? 72 : 86;
   return lines
     .map(
       (line, index) =>
-        `<text class="title" x="72" y="${firstBaseline + index * 20}" text-anchor="middle" font-size="16" fill="${COLOR_TEXT}">${escapeXml(line)}</text>`,
+        `<text class="title" x="72" y="${firstBaseline + index * 24}" text-anchor="middle" font-size="20" fill="${COLOR_TEXT}">${escapeXml(line)}</text>`,
     )
     .join("");
 };

@@ -223,10 +223,12 @@ not the legacy `/Users/drewritter/.kimi/config.toml`, which belongs to the
 older Python CLI and will not work).
 
 Kimi supports ten of the eleven events (its `Notification` event signals
-background-task status, not approval requests, so it is deliberately omitted).
-Kimi hook commands are shell commands, so the installed path is double-quoted
-inside a TOML literal string (single quotes — no escaping needed). Each entry
-sets a one-second `timeout` (valid range 1–600).
+background-task status, not approval requests, so it is deliberately omitted)
+and additionally wires `Interrupt`, which Kimi fires instead of `Stop` when a
+turn is interrupted — including when a question prompt is dismissed. Kimi hook
+commands are shell commands, so the installed path is double-quoted inside a
+TOML literal string (single quotes — no escaping needed). Each entry sets a
+one-second `timeout` (valid range 1–600).
 
 **Strict-schema warning.** Kimi Code validates `[[hooks]]` strictly: an
 unknown event name, or any field beyond `event`, `matcher`, `command`, and
@@ -241,7 +243,7 @@ cp /Users/drewritter/.kimi-code/config.toml /Users/drewritter/.kimi-code/config.
 
 ### 2. Edit
 
-Append these nine entries to the end of the file. Leave all existing content
+Append these eleven entries to the end of the file. Leave all existing content
 untouched.
 
 ```toml
@@ -276,6 +278,11 @@ command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-
 timeout = 1
 
 [[hooks]]
+event = "Interrupt"
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+timeout = 1
+
+[[hooks]]
 event = "StopFailure"
 command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
 timeout = 1
@@ -295,6 +302,15 @@ event = "SubagentStop"
 command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
 timeout = 1
 ```
+
+Notes:
+
+- A pending `AskUserQuestion` prompt needs no extra entry: `PreToolUse` carries
+  `tool_name`, and the helper maps a question call to the waiting color while
+  it blocks the turn; the answering `PostToolUse` maps back to working.
+- `Interrupt` is wired because Kimi fires it in place of `Stop` when a turn is
+  interrupted or a question dismissed — without it a dismissed prompt would
+  leave the tile stuck in the waiting color until the next event.
 
 ### 3. Validate
 
@@ -498,12 +514,16 @@ codex plugin list
    or restart Codex Desktop, open the Plugins Directory, select the **Drew
    Local** source, install **Stream Deck Agents**, and enable it.
 2. **Required trust step.** Codex skips non-managed command hooks until the
-   exact hook definition is reviewed and trusted; trust is recorded against a
-   hash of the definition. Open the Codex CLI, run `/hooks`, review the
-   stream-deck-agents-codex hooks, and approve them. Codex prints a startup
-   warning while review is pending. Without this step the hooks silently never
-   fire and the registry receives zero Codex events. Any later edit to
-   `hooks/hooks.json` changes the hash and requires re-approval.
+   exact hook definition is reviewed and trusted. Trust is recorded per event
+   entry (a hash of each entry), not per file: adding events to
+   `hooks/hooks.json` later leaves the existing entries trusted, but the new
+   entries are silently skipped until approved, and editing an existing entry
+   rehashes that entry and requires its re-approval. Open the Codex CLI, run
+   `/hooks`, review the stream-deck-agents-codex hooks, and approve every
+   listed event. Codex prints a startup warning while review is pending.
+   Without this step the untrusted events silently never fire — a tile that
+   never receives `Stop` stays working forever, so the review must cover all
+   seven entries, not just the first three.
 
 ### 5. Behavior to expect
 
@@ -520,6 +540,12 @@ codex plugin list
   Error transitions are not reported (Codex has no `StopFailure` event), and a
   missed `SessionEnd` still leaves a stale row until `sessions clear` repairs
   it.
+- Codex Desktop spawns hidden ambient-suggestion threads that fire the same
+  start and prompt hooks as real chats; left unfiltered they would add a
+  phantom tile per real chat. Their payloads carry an explicit
+  `"transcript_path": null` (they keep no transcript and are never
+  user-visible), and the decoder drops any event that declares no transcript,
+  so these threads never reach the registry.
 
 ### 6. Compare before replace, and restore
 

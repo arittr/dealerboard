@@ -167,6 +167,32 @@ describe("event mapping", () => {
     ]);
   });
 
+  test("maps PreToolUse for AskUserQuestion to Attention (a question blocks the turn)", () => {
+    expect(
+      decode(withIdentity({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion" }), "kimi"),
+    ).toEqual([{ kind: "Attention", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
+    expect(decode(withIdentity({ hook_event_name: "PreToolUse", toolName: "AskUserQuestion" }))).toEqual([
+      { kind: "Attention", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+  });
+
+  test("keeps AskUserQuestion PostToolUse and other tools' PreToolUse as Activity", () => {
+    // PostToolUse fires when the answered question completes the tool call, so
+    // it must map back to working, never to waiting.
+    expect(
+      decode(withIdentity({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion" }), "kimi"),
+    ).toEqual([{ kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
+    expect(decode(withIdentity({ hook_event_name: "PreToolUse", tool_name: "Bash" }), "kimi")).toEqual([
+      { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
+    ]);
+  });
+
+  test("maps Interrupt to Stop (Stop does not fire on interrupts)", () => {
+    expect(
+      decode(withIdentity({ hook_event_name: "Interrupt", reason: "cancelled" }), "kimi"),
+    ).toEqual([{ kind: "Stop", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
+  });
+
   test("maps Notification to Attention only for permission prompts", () => {
     expect(
       decode(withIdentity({ hook_event_name: "Notification", notification_type: "permission_prompt" })),
@@ -284,6 +310,64 @@ describe("event mapping", () => {
     expect(decode({ hook_event_name: "SubagentStop", session_id: "parent" })).toEqual([]);
   });
 
+  test("drops events from ephemeral threads that declare no transcript", () => {
+    // Codex Desktop spawns hidden ambient-suggestion threads that fire
+    // SessionStart/UserPromptSubmit with an explicit `"transcript_path": null`;
+    // real user threads always carry a rollout path. The null declares an
+    // ephemeral thread: it never reaches the registry, so it never gets a tile.
+    const ambientStart = {
+      session_id: "ambient-1",
+      transcript_path: null,
+      cwd: "/users/drew/project-x",
+      hook_event_name: "SessionStart",
+      model: "gpt-5.6-terra",
+      permission_mode: "bypassPermissions",
+      source: "startup",
+    };
+    expect(decode(ambientStart, "codex")).toEqual([]);
+    expect(
+      decode(
+        {
+          session_id: "ambient-1",
+          turn_id: "turn-1",
+          transcript_path: null,
+          cwd: "/users/drew/project-x",
+          hook_event_name: "UserPromptSubmit",
+          prompt: "Generate 0 to 3 hyperpersonalized suggestions",
+        },
+        "codex",
+      ),
+    ).toEqual([]);
+    expect(decode({ hook_event_name: "SessionEnd", session_id: "ambient-1", transcript_path: null }, "codex")).toEqual([]);
+
+    // A real transcript path keeps the event decodable.
+    expect(
+      decode(
+        {
+          hook_event_name: "SessionStart",
+          session_id: "c1",
+          cwd: "/work/app",
+          transcript_path: "/Users/drew/.codex/sessions/rollout-1.jsonl",
+        },
+        "codex",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        project: "app",
+        observedAt: NOW,
+      },
+    ]);
+
+    // Providers that never send the field (Kimi) are unaffected.
+    expect(decode({ hook_event_name: "UserPromptSubmit", session_id: "k1" }, "kimi")).toEqual([
+      { kind: "Activity", provider: "kimi", sessionId: "k1", observedAt: NOW },
+    ]);
+  });
+
   test("decodes the configured Codex subset with the same normalized meanings", () => {
     expect(
       decode({ hook_event_name: "SessionStart", session_id: "c1", cwd: "/work/app" }, "codex"),
@@ -306,13 +390,7 @@ describe("event mapping", () => {
   });
 
   test("returns no events for unknown hook names", () => {
-    for (const name of [
-      "PostToolUseFailure",
-      "PreCompact",
-      "Interrupt",
-      "SessionHeartbeat",
-      "Banana",
-    ]) {
+    for (const name of ["PostToolUseFailure", "PreCompact", "SessionHeartbeat", "Banana"]) {
       expect(decode({ hook_event_name: name, session_id: "s1" })).toEqual([]);
     }
   });
@@ -362,6 +440,24 @@ describe("privacy boundaries", () => {
     });
     expect(events).toEqual([
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("SENTINEL");
+  });
+
+  test("AskUserQuestion decodes to a bare Attention with no question content", () => {
+    const events = decode(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "s1",
+        tool_name: "AskUserQuestion",
+        tool_input: {
+          questions: [{ question: "SENTINEL_QUESTION", options: [{ label: "SENTINEL_OPTION" }] }],
+        },
+      },
+      "kimi",
+    );
+    expect(events).toEqual([
+      { kind: "Attention", provider: "kimi", sessionId: "s1", observedAt: NOW },
     ]);
     expect(JSON.stringify(events)).not.toContain("SENTINEL");
   });

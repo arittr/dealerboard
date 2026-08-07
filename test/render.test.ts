@@ -105,15 +105,15 @@ describe("renderKey output contract", () => {
   });
 
   test("bounds the label by Unicode code points before splitting into two lines", () => {
-    // 27 ascii points, then the rocket as the 28th code point. A UTF-16-unit
+    // 23 ascii points, then the rocket as the 24th code point. A UTF-16-unit
     // bound would slice the surrogate pair and break percent-encoding.
-    const label = `${"x".repeat(27)}🚀tail beyond capacity`;
+    const label = `${"x".repeat(23)}🚀tail beyond capacity`;
     const svg = decode(sessionModel({}, label), 0);
     const titles = textNodesByClass(svg, "title");
     expect(titles).toHaveLength(2);
-    expect(titles.reduce((total, line) => total + codePointCount(line), 0)).toBe(28);
+    expect(titles.reduce((total, line) => total + codePointCount(line), 0)).toBe(24);
     for (const line of titles) {
-      expect(codePointCount(line)).toBeLessThanOrEqual(14);
+      expect(codePointCount(line)).toBeLessThanOrEqual(12);
     }
     expect(titles[1]!.endsWith("🚀")).toBe(true);
     expect(hasLoneSurrogate(svg)).toBe(false);

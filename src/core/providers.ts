@@ -23,6 +23,7 @@ const SAFE_FIELDS = {
   agentType: ["agent_type", "agentType", "agent_name"],
   source: ["source"],
   notificationType: ["notification_type", "notificationType"],
+  toolName: ["tool_name", "toolName"],
   cwd: ["cwd"],
   title: ["title", "session_title", "sessionTitle"],
 } as const;
@@ -83,6 +84,14 @@ const statusEvent = (
  * Decode one parsed native hook payload into zero or more normalized events.
  * Unknown hook names and invalid payloads return an empty sequence; nothing
  * throws into the hook caller.
+ *
+ * A payload whose `transcript_path` is explicitly null declares an ephemeral
+ * thread: Codex Desktop's hidden ambient-suggestion sessions fire the same
+ * SessionStart/UserPromptSubmit hooks as user threads but keep no transcript
+ * and are never user-visible. They decode to zero events so they never reach
+ * the registry or the grid. Providers that omit the field (Kimi) or always
+ * send a real path (Claude) are unaffected. The path itself is never read or
+ * retained — only the null is inspected.
  */
 export const decodeNativeHook = (
   provider: Provider,
@@ -90,6 +99,9 @@ export const decodeNativeHook = (
   now: string,
 ): RegistryEvent[] => {
   if (!isRecord(value)) {
+    return [];
+  }
+  if ("transcript_path" in value && value.transcript_path === null) {
     return [];
   }
   const hookEventName = firstAllowlistedString(value, SAFE_FIELDS.hookEventName);
@@ -114,9 +126,23 @@ export const decodeNativeHook = (
         },
       ];
     case "UserPromptSubmit":
-    case "PreToolUse":
     case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];
+    case "PreToolUse":
+      // A pending AskUserQuestion blocks the turn on the user's answer, so its
+      // start is the attention signal; the answering PostToolUse maps back to
+      // Activity like every other tool. No provider fires PermissionRequest,
+      // Notification, or TaskStarted for a foreground question.
+      return [
+        statusEvent(
+          firstAllowlistedString(value, SAFE_FIELDS.toolName) === "AskUserQuestion"
+            ? "Attention"
+            : "Activity",
+          provider,
+          sessionId,
+          now,
+        ),
+      ];
     case "PermissionRequest":
       return [statusEvent("Attention", provider, sessionId, now)];
     case "Notification":
@@ -124,6 +150,10 @@ export const decodeNativeHook = (
         ? [statusEvent("Attention", provider, sessionId, now)]
         : [];
     case "Stop":
+      return [statusEvent("Stop", provider, sessionId, now)];
+    case "Interrupt":
+      // Stop does not fire on interrupts, so Interrupt alone carries the
+      // turn-ended signal — including a dismissed question prompt.
       return [statusEvent("Stop", provider, sessionId, now)];
     case "StopFailure":
       return [statusEvent("StopFailure", provider, sessionId, now)];
