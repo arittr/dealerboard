@@ -183,6 +183,26 @@ const applySessionStart = (
   return "applied";
 };
 
+const applySessionObserved = (
+  db: Database,
+  event: Extract<RegistryEvent, { kind: "SessionObserved" }>,
+): MutationResult => {
+  // A prompt proves missing membership, but it must not replay SessionStart's
+  // metadata refresh over a session whose lifecycle is already registered.
+  if (getRow(db, event.provider, event.sessionId) !== null) {
+    return "ignored";
+  }
+  return applySessionStart(db, {
+    kind: "SessionStart",
+    provider: event.provider,
+    sessionId: event.sessionId,
+    title: event.title,
+    project: event.project,
+    ghosttyTerminalId: null,
+    observedAt: event.observedAt,
+  });
+};
+
 const applySubagentStart = (
   db: Database,
   event: Extract<RegistryEvent, { kind: "SubagentStart" }>,
@@ -277,6 +297,8 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
   switch (event.kind) {
     case "SessionStart":
       return applySessionStart(db, event);
+    case "SessionObserved":
+      return applySessionObserved(db, event);
     case "SubagentStart":
       return applySubagentStart(db, event);
     case "Activity":

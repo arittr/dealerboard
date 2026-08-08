@@ -208,6 +208,7 @@ describe("RegistryEvent", () => {
     const observedAt = "2026-08-06T00:00:00.000Z";
     const events: RegistryEvent[] = [
       { kind: "SessionStart", provider: "claude", sessionId: "s1", title: "T", project: "p", ghosttyTerminalId: null, observedAt },
+      { kind: "SessionObserved", provider: "kimi", sessionId: "s1", title: null, project: "p", observedAt },
       { kind: "Activity", provider: "codex", sessionId: "s1", observedAt },
       { kind: "Attention", provider: "kimi", sessionId: "s1", observedAt },
       { kind: "Stop", provider: "claude", sessionId: "s1", observedAt },
@@ -218,6 +219,7 @@ describe("RegistryEvent", () => {
     ];
     expect(events.map((event) => event.kind)).toEqual([
       "SessionStart",
+      "SessionObserved",
       "Activity",
       "Attention",
       "Stop",

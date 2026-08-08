@@ -172,12 +172,11 @@ describe("event mapping", () => {
       ),
     ).toEqual([
       {
-        kind: "SessionStart",
+        kind: "SessionObserved",
         provider: "kimi",
         sessionId: "s1",
         title: null,
         project: "project-x",
-        ghosttyTerminalId: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },

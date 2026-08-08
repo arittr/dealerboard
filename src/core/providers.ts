@@ -80,6 +80,19 @@ const statusEvent = (
   now: string,
 ): RegistryEvent => ({ kind, provider, sessionId, observedAt: now });
 
+const sessionFacts = (
+  provider: Provider,
+  sessionId: string,
+  value: Record<string, unknown>,
+  now: string,
+): Omit<Extract<RegistryEvent, { kind: "SessionObserved" }>, "kind"> => ({
+  provider,
+  sessionId,
+  title: firstAllowlistedString(value, SAFE_FIELDS.title) ?? null,
+  project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
+  observedAt: now,
+});
+
 const sessionStartEvent = (
   provider: Provider,
   sessionId: string,
@@ -87,12 +100,18 @@ const sessionStartEvent = (
   now: string,
 ): Extract<RegistryEvent, { kind: "SessionStart" }> => ({
   kind: "SessionStart",
-  provider,
-  sessionId,
-  title: firstAllowlistedString(value, SAFE_FIELDS.title) ?? null,
-  project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
+  ...sessionFacts(provider, sessionId, value, now),
   ghosttyTerminalId: null,
-  observedAt: now,
+});
+
+const sessionObservedEvent = (
+  provider: Provider,
+  sessionId: string,
+  value: Record<string, unknown>,
+  now: string,
+): Extract<RegistryEvent, { kind: "SessionObserved" }> => ({
+  kind: "SessionObserved",
+  ...sessionFacts(provider, sessionId, value, now),
 });
 
 /**
@@ -136,7 +155,7 @@ export const decodeNativeHook = (
     case "UserPromptSubmit":
       return provider === "kimi"
         ? [
-            sessionStartEvent(provider, sessionId, value, now),
+            sessionObservedEvent(provider, sessionId, value, now),
             statusEvent("Activity", provider, sessionId, now),
           ]
         : [statusEvent("Activity", provider, sessionId, now)];

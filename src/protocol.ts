@@ -19,6 +19,14 @@ export type RegistryEvent =
       ghosttyTerminalId: string | null;
       observedAt: string;
     }
+  | {
+      kind: "SessionObserved";
+      provider: Provider;
+      sessionId: string;
+      title: string | null;
+      project: string | null;
+      observedAt: string;
+    }
   | { kind: "Activity" | "Attention" | "Stop" | "StopFailure"; provider: Provider; sessionId: string; observedAt: string }
   | { kind: "SessionEnd"; provider: Provider; sessionId: string; observedAt: string }
   | { kind: "SubagentStart"; provider: Provider; sessionId: string; parentSessionId: string; title: string | null; project: string | null; observedAt: string }

@@ -20,6 +20,7 @@ import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { RegistryEvent } from "../src/protocol";
 
 const NOW = "2026-08-06T00:00:00.000Z";
+const LATER = "2026-08-06T00:01:00.000Z";
 const DIAGNOSTIC_KEYS = new Set(["timestamp", "component", "code", "provider", "sessionId"]);
 
 let tempHome: string;
@@ -167,6 +168,39 @@ describe("event ingress", () => {
     ]);
   });
 
+  test("preserves resumed Kimi metadata when a prompt observes existing membership", async () => {
+    initRegistry();
+    const resumedStart = makeHarness({ stdin: stdinOf(startEvent("resumed-kimi")) });
+    expect(await runCli(["event", "kimi"], resumedStart.deps)).toBe(0);
+
+    const prompt = makeHarness({
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "resumed-kimi",
+          prompt: "SENTINEL_PROMPT_NEVER_STORED",
+        }),
+      ),
+      now: () => LATER,
+    });
+    expect(await runCli(["event", "kimi"], prompt.deps)).toBe(0);
+    expect(prompt.diagnostics).toEqual([]);
+    expect(listRows()).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "resumed-kimi",
+        parentSessionId: null,
+        status: "working",
+        title: "Title for resumed-kimi",
+        project: "project-x",
+        logicalSlot: 1,
+        ghosttyTerminalId: null,
+        openedAt: NOW,
+        updatedAt: LATER,
+      },
+    ]);
+  });
+
   test("reassembles a payload split across many stdin chunks", async () => {
     initRegistry();
     const harness = makeHarness({ stdin: stdinOf(startEvent("s1"), 7) });
@@ -214,6 +248,33 @@ describe("event ingress", () => {
         ghosttyTerminalId: null,
         openedAt: NOW,
         updatedAt: NOW,
+      },
+    ]);
+
+    const repeatedPrompt = makeHarness({
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "blank-kimi",
+          prompt: "SECOND_SENTINEL_PROMPT_NEVER_STORED",
+        }),
+      ),
+      now: () => LATER,
+    });
+    expect(await runCli(["event", "kimi"], repeatedPrompt.deps)).toBe(0);
+    expect(repeatedPrompt.diagnostics).toEqual([]);
+    expect(listRows()).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "blank-kimi",
+        parentSessionId: null,
+        status: "working",
+        title: null,
+        project: "project-x",
+        logicalSlot: 1,
+        ghosttyTerminalId: null,
+        openedAt: NOW,
+        updatedAt: LATER,
       },
     ]);
   });
