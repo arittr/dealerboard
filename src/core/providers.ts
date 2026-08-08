@@ -135,7 +135,7 @@ export const decodeNativeHook = (
   if (!isRecord(value)) {
     return [];
   }
-  if ("transcript_path" in value && value.transcript_path === null) {
+  if ("transcript_path" in value && value["transcript_path"] === null) {
     return [];
   }
   const hookEventName = firstAllowlistedString(value, SAFE_FIELDS.hookEventName);

@@ -66,11 +66,13 @@ type Start = { context: string; image: string; at: number };
 class FakeImagePort {
   readonly starts: Start[] = [];
   private readonly pendingResolutions: Array<() => void> = [];
+  private readonly clock: FakeClock;
+  private readonly autoResolve: boolean;
 
-  constructor(
-    private readonly clock: FakeClock,
-    private readonly autoResolve: boolean,
-  ) {}
+  constructor(clock: FakeClock, autoResolve: boolean) {
+    this.clock = clock;
+    this.autoResolve = autoResolve;
+  }
 
   readonly send = (context: string, image: string): Promise<void> => {
     this.starts.push({ context, image, at: this.clock.now() });

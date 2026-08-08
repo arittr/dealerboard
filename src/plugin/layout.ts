@@ -103,17 +103,17 @@ const validateStoredSettings = (stored: unknown): ValidatedSettings => {
   if (isRecord(stored)) {
     const value = stored;
     if (
-      value.schemaVersion === 1 &&
-      typeof value.overflowLatched === "boolean" &&
-      typeof value.currentPage === "number" &&
-      Number.isSafeInteger(value.currentPage) &&
-      value.currentPage >= 0
+      value["schemaVersion"] === 1 &&
+      typeof value["overflowLatched"] === "boolean" &&
+      typeof value["currentPage"] === "number" &&
+      Number.isSafeInteger(value["currentPage"]) &&
+      value["currentPage"] >= 0
     ) {
       return {
         settings: {
           schemaVersion: 1,
-          overflowLatched: value.overflowLatched,
-          currentPage: value.currentPage,
+          overflowLatched: value["overflowLatched"],
+          currentPage: value["currentPage"],
         },
         defaulted: false,
       };

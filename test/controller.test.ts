@@ -133,8 +133,11 @@ type Start = { context: string; image: string };
 class FakeImagePort {
   readonly starts: Start[] = [];
   private readonly pendingResolutions: Array<() => void> = [];
+  private readonly autoResolve: boolean;
 
-  constructor(private readonly autoResolve: boolean) {}
+  constructor(autoResolve: boolean) {
+    this.autoResolve = autoResolve;
+  }
 
   readonly send = (context: string, image: string): Promise<void> => {
     this.starts.push({ context, image });

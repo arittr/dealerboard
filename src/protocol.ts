@@ -85,15 +85,15 @@ const parseHealth = (value: unknown): SnapshotHealth => {
   if (!isRecord(value)) {
     return invalid("health must be an object");
   }
-  if (value.status !== "ok" && value.status !== "error") {
+  if (value["status"] !== "ok" && value["status"] !== "error") {
     return invalid("health.status must be ok or error");
   }
-  if ("message" in value && !isBoundedString(value.message)) {
+  if ("message" in value && !isBoundedString(value["message"])) {
     return invalid("health.message must be a bounded string");
   }
-  const health: SnapshotHealth = { status: value.status };
+  const health: SnapshotHealth = { status: value["status"] };
   if ("message" in value) {
-    health.message = value.message as string;
+    health.message = value["message"] as string;
   }
   return health;
 };
@@ -102,42 +102,42 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (!isRecord(value)) {
     return invalid("session must be an object");
   }
-  if (typeof value.provider !== "string" || !PROVIDERS.has(value.provider)) {
+  if (typeof value["provider"] !== "string" || !PROVIDERS.has(value["provider"])) {
     return invalid("session.provider is not a known provider");
   }
-  if (!isBoundedString(value.sessionId)) {
+  if (!isBoundedString(value["sessionId"])) {
     return invalid("session.sessionId must be a bounded string");
   }
-  if (typeof value.status !== "string" || !SESSION_STATUSES.has(value.status)) {
+  if (typeof value["status"] !== "string" || !SESSION_STATUSES.has(value["status"])) {
     return invalid("session.status is not a known status");
   }
-  if (!isNullableBoundedString(value.title)) {
+  if (!isNullableBoundedString(value["title"])) {
     return invalid("session.title must be null or a bounded string");
   }
-  if (!isNullableBoundedString(value.project)) {
+  if (!isNullableBoundedString(value["project"])) {
     return invalid("session.project must be null or a bounded string");
   }
-  if (!isNonNegativeInteger(value.descendantCount)) {
+  if (!isNonNegativeInteger(value["descendantCount"])) {
     return invalid("session.descendantCount must be a non-negative integer");
   }
-  if (!isPositiveInteger(value.logicalSlot)) {
+  if (!isPositiveInteger(value["logicalSlot"])) {
     return invalid("session.logicalSlot must be a positive integer");
   }
-  if (!isNullableNonEmptyBoundedString(value.ghosttyTerminalId)) {
+  if (!isNullableNonEmptyBoundedString(value["ghosttyTerminalId"])) {
     return invalid("session.ghosttyTerminalId must be null or a non-empty bounded string");
   }
-  if (value.ghosttyTerminalId !== null && value.provider !== "claude") {
+  if (value["ghosttyTerminalId"] !== null && value["provider"] !== "claude") {
     return invalid("session.ghosttyTerminalId is only valid for Claude");
   }
   return {
-    provider: value.provider as Provider,
-    sessionId: value.sessionId,
-    status: value.status as SessionStatus,
-    title: value.title,
-    project: value.project,
-    descendantCount: value.descendantCount,
-    logicalSlot: value.logicalSlot,
-    ghosttyTerminalId: value.ghosttyTerminalId,
+    provider: value["provider"] as Provider,
+    sessionId: value["sessionId"],
+    status: value["status"] as SessionStatus,
+    title: value["title"],
+    project: value["project"],
+    descendantCount: value["descendantCount"],
+    logicalSlot: value["logicalSlot"],
+    ghosttyTerminalId: value["ghosttyTerminalId"],
   };
 };
 
@@ -149,13 +149,13 @@ export const parseSessionSnapshot = (value: unknown): SessionSnapshotV2 => {
   if (!isRecord(value)) {
     return invalid("snapshot must be an object");
   }
-  if (value.schemaVersion !== 2) {
+  if (value["schemaVersion"] !== 2) {
     return invalid("schemaVersion must be 2");
   }
-  if (!Array.isArray(value.sessions)) {
+  if (!Array.isArray(value["sessions"])) {
     return invalid("sessions must be an array");
   }
-  const sessions = value.sessions.map(parseSession);
+  const sessions = value["sessions"].map(parseSession);
   const seenSlots = new Set<number>();
   for (const session of sessions) {
     if (seenSlots.has(session.logicalSlot)) {
@@ -165,7 +165,7 @@ export const parseSessionSnapshot = (value: unknown): SessionSnapshotV2 => {
   }
   return {
     schemaVersion: 2,
-    health: parseHealth(value.health),
+    health: parseHealth(value["health"]),
     sessions,
   };
 };

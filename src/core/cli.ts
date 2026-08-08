@@ -66,8 +66,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const errorCode = (error: unknown): string | undefined => {
-  if (isRecord(error) && typeof error.code === "string") {
-    return error.code;
+  if (isRecord(error) && typeof error["code"] === "string") {
+    return error["code"];
   }
   return undefined;
 };
@@ -197,8 +197,8 @@ const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Pr
         let terminalId: string | null = null;
         try {
           terminalId = await deps.discoverClaudeGhosttyTerminal({
-            termProgram: deps.environment.TERM_PROGRAM,
-            tmux: deps.environment.TMUX,
+            termProgram: deps.environment["TERM_PROGRAM"],
+            tmux: deps.environment["TMUX"],
             parentPid: deps.parentPid,
           });
         } catch {

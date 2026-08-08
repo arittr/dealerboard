@@ -54,7 +54,7 @@ const healthCode = (error: unknown): DiagnosticCode => {
   if (error instanceof UnsupportedSchemaVersion) {
     return "unsupported_schema";
   }
-  if (isRecord(error) && error.code === "SQLITE_CANTOPEN") {
+  if (isRecord(error) && error["code"] === "SQLITE_CANTOPEN") {
     return "missing_database";
   }
   return "internal_error";
@@ -75,6 +75,7 @@ const defaultSchedule: DaemonScheduler = (poll, intervalMs) => {
 
 export class ProjectionDaemon {
   private readonly deps: ResolvedDaemonDependencies;
+  private readonly paths: Pick<AppPaths, "database" | "snapshot">;
   private connection: Database | null = null;
   private cancelSchedule: (() => void) | null = null;
   private readonly state: DaemonState = {
@@ -84,9 +85,10 @@ export class ProjectionDaemon {
   };
 
   constructor(
-    private readonly paths: Pick<AppPaths, "database" | "snapshot">,
+    paths: Pick<AppPaths, "database" | "snapshot">,
     dependencies: DaemonDependencies = {},
   ) {
+    this.paths = paths;
     this.deps = {
       openDatabase: openRegistryDatabase,
       readProjection,
