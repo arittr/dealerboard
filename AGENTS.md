@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Issue tracking
+
+- NEVER create, search, read, update, or otherwise use Linear tickets for work
+  in this repository. This repository-level rule overrides any generic Linear
+  ticket lifecycle workflow.
+
 ## Build and test
 
 - `bun test` — run the test suite.
