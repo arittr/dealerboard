@@ -13,6 +13,28 @@
 - `bun run build` — typecheck, compile the core daemon (`dist/stream-deck-agents`), and bundle the plugin (`com.drewritter.stream-deck-agents.sdPlugin/bin/plugin.js` via rollup).
 - `bun run build:plugin` — plugin bundle only (sufficient for render/layout changes).
 
+## Lint, format, and hooks
+
+- `bun run lint` / `bun run lint:fix` / `bun run format` — Biome check /
+  autofix / format. `bun run check` is the full gate (`biome ci . && bun run
+  build && bun test`); run it before considering work done.
+- Biome (pinned, see devDependencies) lints and formats `src/`, `test/`,
+  `scripts/`, and root `*.json`/`*.mjs` only — the `.sdPlugin` directory is
+  deliberately excluded. Style: 2 spaces, double quotes, semicolons, 120
+  columns. Strict rules include `noExplicitAny`, `noEvolvingTypes`,
+  `noConsole`, `noProcessEnv` (env enters via `src/core/cli.ts` DI only),
+  `noDefaultExport`, `noNonNullAssertion` (relaxed in `test/**`), and
+  nursery `noFloatingPromises`; `useLiteralKeys` stays off because
+  `noPropertyAccessFromIndexSignature` requires bracket access.
+- tsconfig carries the full strictness set (`exactOptionalPropertyTypes`,
+  `noPropertyAccessFromIndexSignature`, `verbatimModuleSyntax`,
+  `erasableSyntaxOnly`, etc.) — keep new code clean under all of them.
+- Lefthook (pinned) runs pre-commit (Biome autofix on staged files +
+  typecheck) and pre-push (`bun run check`); installed via `bun run prepare`.
+  Lefthook globs are NOT standard: `*` spans `/`, and `dir/**/*.ts` matches
+  nothing — keep the `*.ts` / `*.{ts,json,mjs}` forms in `lefthook.yml`.
+
+
 ## Deploying plugin changes locally
 
 The Stream Deck app does NOT run the repo's `.sdPlugin` directory. It runs an
