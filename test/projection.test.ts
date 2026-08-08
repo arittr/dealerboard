@@ -3,21 +3,11 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
-import {
-  ProjectionError,
-  projectRows,
-  readProjection,
-  type ProjectionRow,
-} from "../src/core/projection";
+import { ProjectionError, type ProjectionRow, projectRows, readProjection } from "../src/core/projection";
 import { applyRegistryEvents } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
-import {
-  parseSessionSnapshot,
-  type Provider,
-  type SessionSnapshotV2,
-  type SessionStatus,
-} from "../src/protocol";
+import { type Provider, parseSessionSnapshot, type SessionSnapshotV2, type SessionStatus } from "../src/protocol";
 
 const row = (
   sessionId: string,
@@ -91,31 +81,23 @@ describe("projectRows", () => {
   });
 
   test("lifts an idle root with live descendants to at least working", () => {
-    const effective = (rows: ProjectionRow[]): SessionStatus | undefined =>
-      projectRows(rows)[0]?.status;
+    const effective = (rows: ProjectionRow[]): SessionStatus | undefined => projectRows(rows)[0]?.status;
 
     // A descendant row exists only while its subagent runs, even if the child
     // never emits an Activity event of its own.
     expect(effective([row("p", { status: "idle" }), row("c", { parent: "p" })])).toBe("working");
     // The floor does not lower higher-priority statuses.
-    expect(
-      effective([row("p", { status: "waiting" }), row("c", { parent: "p", status: "idle" })]),
-    ).toBe("waiting");
+    expect(effective([row("p", { status: "waiting" }), row("c", { parent: "p", status: "idle" })])).toBe("waiting");
     // An idle root with no descendants stays idle.
     expect(effective([row("p", { status: "idle" })])).toBe("idle");
   });
 
   test("reduces effective status by error > waiting > working > idle across the subtree", () => {
-    const effective = (rows: ProjectionRow[]): SessionStatus | undefined =>
-      projectRows(rows)[0]?.status;
+    const effective = (rows: ProjectionRow[]): SessionStatus | undefined => projectRows(rows)[0]?.status;
 
     expect(effective([row("p", { status: "idle" })])).toBe("idle");
-    expect(
-      effective([row("p", { status: "idle" }), row("c", { parent: "p", status: "working" })]),
-    ).toBe("working");
-    expect(
-      effective([row("p", { status: "working" }), row("c", { parent: "p", status: "waiting" })]),
-    ).toBe("waiting");
+    expect(effective([row("p", { status: "idle" }), row("c", { parent: "p", status: "working" })])).toBe("working");
+    expect(effective([row("p", { status: "working" }), row("c", { parent: "p", status: "waiting" })])).toBe("waiting");
     expect(
       effective([
         row("p", { status: "waiting" }),
@@ -168,51 +150,36 @@ describe("projectRows", () => {
   });
 
   test("rejects a cross-provider parent edge", () => {
-    expect(
-      projectionErrorCode([row("p"), row("c", { provider: "kimi", parent: "p" })]),
-    ).toBe("cross-provider-parent");
+    expect(projectionErrorCode([row("p"), row("c", { provider: "kimi", parent: "p" })])).toBe("cross-provider-parent");
   });
 
   test("rejects cycles detached from any root and terminates", () => {
     // Self-cycle.
     expect(projectionErrorCode([row("a", { parent: "a" })])).toBe("cycle");
     // Two-node cycle.
-    expect(projectionErrorCode([row("a", { parent: "b" }), row("b", { parent: "a" })])).toBe(
-      "cycle",
-    );
+    expect(projectionErrorCode([row("a", { parent: "b" }), row("b", { parent: "a" })])).toBe("cycle");
     // A long cycle terminates within the row-count bound instead of walking forever.
-    const longCycle = Array.from({ length: 64 }, (_, index) =>
-      row(`n${index}`, { parent: `n${(index + 1) % 64}` }),
-    );
+    const longCycle = Array.from({ length: 64 }, (_, index) => row(`n${index}`, { parent: `n${(index + 1) % 64}` }));
     expect(projectionErrorCode(longCycle)).toBe("cycle");
     // A cycle plus a healthy tree rejects the whole projection, never partial output.
-    expect(
-      projectionErrorCode([row("ok"), row("x", { parent: "y" }), row("y", { parent: "x" })]),
-    ).toBe("cycle");
+    expect(projectionErrorCode([row("ok"), row("x", { parent: "y" }), row("y", { parent: "x" })])).toBe("cycle");
   });
 
   test("rejects a child row carrying a slot", () => {
-    expect(projectionErrorCode([row("p"), row("c", { parent: "p", slot: 5 })])).toBe(
-      "child-with-slot",
-    );
+    expect(projectionErrorCode([row("p"), row("c", { parent: "p", slot: 5 })])).toBe("child-with-slot");
   });
 
   test("rejects terminal targets on child and non-Claude rows", () => {
     expect(
-      projectionErrorCode([
-        row("parent"),
-        row("child", { parent: "parent", ghosttyTerminalId: "terminal-child" }),
-      ]),
+      projectionErrorCode([row("parent"), row("child", { parent: "parent", ghosttyTerminalId: "terminal-child" })]),
     ).toBe("child-with-terminal-binding");
-    expect(
-      projectionErrorCode([row("codex", { provider: "codex", ghosttyTerminalId: "terminal-codex" })]),
-    ).toBe("non-claude-terminal-binding");
+    expect(projectionErrorCode([row("codex", { provider: "codex", ghosttyTerminalId: "terminal-codex" })])).toBe(
+      "non-claude-terminal-binding",
+    );
   });
 
   test("rejects top-level rows without a positive slot", () => {
-    expect(projectionErrorCode([row("a", { slot: null })])).toBe(
-      "top-level-without-positive-slot",
-    );
+    expect(projectionErrorCode([row("a", { slot: null })])).toBe("top-level-without-positive-slot");
     expect(projectionErrorCode([row("a", { slot: 0 })])).toBe("top-level-without-positive-slot");
     expect(projectionErrorCode([row("a", { slot: -2 })])).toBe("top-level-without-positive-slot");
   });

@@ -12,25 +12,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  closeSync,
-  fsyncSync,
-  openSync,
-  renameSync,
-  rmSync,
-  writeSync,
-} from "node:fs";
+import { chmodSync, closeSync, fsyncSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { SessionSnapshotV2 } from "../protocol";
 
 const SNAPSHOT_FILE_MODE = 0o600;
 
 export const writeSnapshotAtomically = (path: string, snapshot: SessionSnapshotV2): void => {
-  const tempPath = join(
-    dirname(path),
-    `.snapshot-${process.pid}-${randomUUID()}.tmp`,
-  );
+  const tempPath = join(dirname(path), `.snapshot-${process.pid}-${randomUUID()}.tmp`);
   const payload = `${JSON.stringify(snapshot)}\n`;
   let renamed = false;
   try {

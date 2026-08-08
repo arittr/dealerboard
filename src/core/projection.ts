@@ -12,12 +12,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type {
-  ProjectedSession,
-  Provider,
-  SessionSnapshotV2,
-  SessionStatus,
-} from "../protocol";
+import type { ProjectedSession, Provider, SessionSnapshotV2, SessionStatus } from "../protocol";
 
 /** One `active_sessions` row mapped to the camelCase projection input. */
 export type ProjectionRow = {
@@ -63,8 +58,7 @@ const STATUS_PRIORITY: Record<SessionStatus, number> = {
 const PROVIDERS: ReadonlySet<string> = new Set(["claude", "codex", "kimi"]);
 const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
 
-const identityKey = (provider: Provider, sessionId: string): string =>
-  `${provider}\u0000${sessionId}`;
+const identityKey = (provider: Provider, sessionId: string): string => `${provider}\u0000${sessionId}`;
 
 /**
  * Project stored rows to the top-level snapshot session list, ordered by
@@ -109,8 +103,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
     const parentKey = identityKey(row.provider, row.parentSessionId);
     if (!byIdentity.has(parentKey)) {
       const underAnotherProvider = rows.some(
-        (candidate) =>
-          candidate.provider !== row.provider && candidate.sessionId === row.parentSessionId,
+        (candidate) => candidate.provider !== row.provider && candidate.sessionId === row.parentSessionId,
       );
       throw new ProjectionError(underAnotherProvider ? "cross-provider-parent" : "missing-parent");
     }
@@ -190,8 +183,7 @@ type StoredRow = {
   ghostty_terminal_id: unknown;
 };
 
-const isStringOrNull = (value: unknown): value is string | null =>
-  typeof value === "string" || value === null;
+const isStringOrNull = (value: unknown): value is string | null => typeof value === "string" || value === null;
 
 /** Map one stored row, validating field shapes defensively. */
 const toProjectionRow = (row: StoredRow): ProjectionRow => {
@@ -212,10 +204,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   ) {
     throw new ProjectionError("corrupt-row");
   }
-  if (
-    row.logical_slot !== null &&
-    (typeof row.logical_slot !== "number" || !Number.isInteger(row.logical_slot))
-  ) {
+  if (row.logical_slot !== null && (typeof row.logical_slot !== "number" || !Number.isInteger(row.logical_slot))) {
     throw new ProjectionError("corrupt-row");
   }
   if (
@@ -248,9 +237,7 @@ export const readProjection = (db: Database): SessionSnapshotV2 => {
   db.exec("BEGIN");
   let committed = false;
   try {
-    const rows = db
-      .query(`SELECT ${PROJECTION_COLUMNS} FROM active_sessions`)
-      .all() as StoredRow[];
+    const rows = db.query(`SELECT ${PROJECTION_COLUMNS} FROM active_sessions`).all() as StoredRow[];
     const snapshot: SessionSnapshotV2 = {
       schemaVersion: 2,
       health: { status: "ok" },

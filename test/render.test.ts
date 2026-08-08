@@ -17,11 +17,12 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   ...overrides,
 });
 
-const sessionModel = (
-  overrides: Partial<ProjectedSession> = {},
-  label = "A session",
-  degraded = false,
-): KeyModel => ({ kind: "session", session: session(overrides), label, degraded });
+const sessionModel = (overrides: Partial<ProjectedSession> = {}, label = "A session", degraded = false): KeyModel => ({
+  kind: "session",
+  session: session(overrides),
+  label,
+  degraded,
+});
 
 const blankModel = (degraded = false): KeyModel => ({ kind: "blank", degraded });
 
@@ -37,15 +38,11 @@ const textNodes = (svg: string): string[] =>
   [...svg.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)].map((match) => match[1]!);
 
 const textNodesByClass = (svg: string, className: string): string[] =>
-  [...svg.matchAll(new RegExp(`<text class="${className}"[^>]*>([\\s\\S]*?)</text>`, "g"))].map(
-    (match) => match[1]!,
-  );
+  [...svg.matchAll(new RegExp(`<text class="${className}"[^>]*>([\\s\\S]*?)</text>`, "g"))].map((match) => match[1]!);
 
-const rectNodes = (svg: string): string[] =>
-  [...svg.matchAll(/<rect\b[^>]*\/>/g)].map((match) => match[0]!);
+const rectNodes = (svg: string): string[] => [...svg.matchAll(/<rect\b[^>]*\/>/g)].map((match) => match[0]!);
 
-const stripKnownEntities = (value: string): string =>
-  value.replace(/&(amp|lt|gt|quot|apos);/g, "");
+const stripKnownEntities = (value: string): string => value.replace(/&(amp|lt|gt|quot|apos);/g, "");
 
 const codePointCount = (value: string): number => Array.from(value).length;
 
@@ -130,15 +127,9 @@ describe("renderKey output contract", () => {
   });
 
   test("renders the provider mark for each provider", () => {
-    expect(textNodesByClass(decode(sessionModel({ provider: "claude" }), 0), "mark")).toEqual([
-      "CL",
-    ]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "codex" }), 0), "mark")).toEqual([
-      "CO",
-    ]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "kimi" }), 0), "mark")).toEqual([
-      "KI",
-    ]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "claude" }), 0), "mark")).toEqual(["CL"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "codex" }), 0), "mark")).toEqual(["CO"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "kimi" }), 0), "mark")).toEqual(["KI"]);
   });
 
   test("colors the provider chip per harness", () => {
@@ -152,9 +143,7 @@ describe("renderKey output contract", () => {
     expect(textNodesByClass(without, "badge")).toHaveLength(0);
     const withCount = decode(sessionModel({ descendantCount: 7 }, "Review"), 0);
     expect(textNodesByClass(withCount, "badge")).toEqual(["7"]);
-    expect(withCount).toContain(
-      '<text class="badge" x="130" y="38" text-anchor="end" font-size="28"',
-    );
+    expect(withCount).toContain('<text class="badge" x="130" y="38" text-anchor="end" font-size="28"');
   });
 });
 
@@ -279,9 +268,7 @@ describe("non-session and degraded models", () => {
     const degraded = decode(sessionModel({}, "Keep me", true), 0);
     expect(textNodesByClass(clean, "flag")).toHaveLength(0);
     expect(textNodesByClass(degraded, "flag")).toEqual(["!"]);
-    expect(degraded).toContain(
-      '<text class="flag" x="16" y="128" text-anchor="start" font-size="16"',
-    );
+    expect(degraded).toContain('<text class="flag" x="16" y="128" text-anchor="start" font-size="16"');
     expect(textNodesByClass(degraded, "title")).toEqual(textNodesByClass(clean, "title"));
   });
 });

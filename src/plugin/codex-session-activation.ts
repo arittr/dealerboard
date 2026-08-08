@@ -12,14 +12,10 @@ export type ActivateCodexSession = (sessionId: string) => Promise<void>;
 
 export type ProcessExecutor = (file: string, args: readonly string[]) => Promise<void>;
 
-export const createCodexSessionActivator = (
-  execute: ProcessExecutor,
-): ActivateCodexSession =>
+export const createCodexSessionActivator =
+  (execute: ProcessExecutor): ActivateCodexSession =>
   (sessionId) =>
-    execute("/usr/bin/open", [
-      "-u",
-      `codex://threads/${encodeURIComponent(sessionId)}`,
-    ]);
+    execute("/usr/bin/open", ["-u", `codex://threads/${encodeURIComponent(sessionId)}`]);
 
 const executeFile: ProcessExecutor = (file, args) =>
   new Promise<void>((resolve, reject) => {

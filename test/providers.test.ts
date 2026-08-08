@@ -31,9 +31,7 @@ describe("field extraction", () => {
   });
 
   test("accepts camel-case aliases", () => {
-    expect(
-      decode({ hookEventName: "SessionStart", sessionId: "s2", sessionTitle: "Camel" }),
-    ).toEqual([
+    expect(decode({ hookEventName: "SessionStart", sessionId: "s2", sessionTitle: "Camel" })).toEqual([
       {
         kind: "SessionStart",
         provider: "claude",
@@ -61,9 +59,7 @@ describe("field extraction", () => {
   });
 
   test("treats an empty title as null and an empty cwd as no project", () => {
-    expect(
-      decode({ hook_event_name: "SessionStart", session_id: "s1", session_title: "", cwd: "" }),
-    ).toEqual([
+    expect(decode({ hook_event_name: "SessionStart", session_id: "s1", session_title: "", cwd: "" })).toEqual([
       {
         kind: "SessionStart",
         provider: "claude",
@@ -77,8 +73,7 @@ describe("field extraction", () => {
   });
 
   test("derives project only as the basename of the allowlisted cwd", () => {
-    const start = (cwd: string): RegistryEvent[] =>
-      decode({ hook_event_name: "SessionStart", session_id: "s1", cwd });
+    const start = (cwd: string): RegistryEvent[] => decode({ hook_event_name: "SessionStart", session_id: "s1", cwd });
     expect(start("/users/drew/work/repo")).toEqual([
       {
         kind: "SessionStart",
@@ -154,12 +149,7 @@ describe("event mapping", () => {
   });
 
   test("defers titleless Kimi sessions until the first prompt", () => {
-    expect(
-      decode(
-        withIdentity({ hook_event_name: "SessionStart", cwd: "/users/drew/project-x" }),
-        "kimi",
-      ),
-    ).toEqual([]);
+    expect(decode(withIdentity({ hook_event_name: "SessionStart", cwd: "/users/drew/project-x" }), "kimi")).toEqual([]);
 
     expect(
       decode(
@@ -185,10 +175,7 @@ describe("event mapping", () => {
 
   test("keeps titled Kimi starts so resumed sessions appear immediately", () => {
     expect(
-      decode(
-        withIdentity({ hook_event_name: "SessionStart", session_title: "Existing session" }),
-        "kimi",
-      ),
+      decode(withIdentity({ hook_event_name: "SessionStart", session_title: "Existing session" }), "kimi"),
     ).toEqual([
       {
         kind: "SessionStart",
@@ -223,9 +210,9 @@ describe("event mapping", () => {
   });
 
   test("maps PreToolUse for AskUserQuestion to Attention (a question blocks the turn)", () => {
-    expect(
-      decode(withIdentity({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion" }), "kimi"),
-    ).toEqual([{ kind: "Attention", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
+    expect(decode(withIdentity({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion" }), "kimi")).toEqual([
+      { kind: "Attention", provider: "kimi", sessionId: "s1", observedAt: NOW },
+    ]);
     expect(decode(withIdentity({ hook_event_name: "PreToolUse", toolName: "AskUserQuestion" }))).toEqual([
       { kind: "Attention", provider: "claude", sessionId: "s1", observedAt: NOW },
     ]);
@@ -234,31 +221,29 @@ describe("event mapping", () => {
   test("keeps AskUserQuestion PostToolUse and other tools' PreToolUse as Activity", () => {
     // PostToolUse fires when the answered question completes the tool call, so
     // it must map back to working, never to waiting.
-    expect(
-      decode(withIdentity({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion" }), "kimi"),
-    ).toEqual([{ kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
+    expect(decode(withIdentity({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion" }), "kimi")).toEqual([
+      { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
+    ]);
     expect(decode(withIdentity({ hook_event_name: "PreToolUse", tool_name: "Bash" }), "kimi")).toEqual([
       { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
     ]);
   });
 
   test("maps Interrupt to Stop (Stop does not fire on interrupts)", () => {
-    expect(
-      decode(withIdentity({ hook_event_name: "Interrupt", reason: "cancelled" }), "kimi"),
-    ).toEqual([{ kind: "Stop", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
+    expect(decode(withIdentity({ hook_event_name: "Interrupt", reason: "cancelled" }), "kimi")).toEqual([
+      { kind: "Stop", provider: "kimi", sessionId: "s1", observedAt: NOW },
+    ]);
   });
 
   test("maps Notification to Attention only for permission prompts", () => {
-    expect(
-      decode(withIdentity({ hook_event_name: "Notification", notification_type: "permission_prompt" })),
-    ).toEqual([{ kind: "Attention", provider: "claude", sessionId: "s1", observedAt: NOW }]);
-    expect(
-      decode(withIdentity({ hook_event_name: "Notification", notificationType: "permission_prompt" })),
-    ).toEqual([{ kind: "Attention", provider: "claude", sessionId: "s1", observedAt: NOW }]);
+    expect(decode(withIdentity({ hook_event_name: "Notification", notification_type: "permission_prompt" }))).toEqual([
+      { kind: "Attention", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    expect(decode(withIdentity({ hook_event_name: "Notification", notificationType: "permission_prompt" }))).toEqual([
+      { kind: "Attention", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
     for (const other of ["idle_prompt", "elicitation_dialog", "agent_needs_input", ""]) {
-      expect(decode(withIdentity({ hook_event_name: "Notification", notification_type: other }))).toEqual(
-        [],
-      );
+      expect(decode(withIdentity({ hook_event_name: "Notification", notification_type: other }))).toEqual([]);
     }
     expect(decode(withIdentity({ hook_event_name: "Notification" }))).toEqual([]);
   });
@@ -298,12 +283,12 @@ describe("event mapping", () => {
   });
 
   test("maps SubagentStop to a child stop using the child identity", () => {
-    expect(
-      decode({ hook_event_name: "SubagentStop", session_id: "parent", agent_id: "child-1" }),
-    ).toEqual([{ kind: "SubagentStop", provider: "claude", sessionId: "child-1", observedAt: NOW }]);
-    expect(
-      decode({ hook_event_name: "SubagentStop", session_id: "parent", agentId: "child-2" }),
-    ).toEqual([{ kind: "SubagentStop", provider: "claude", sessionId: "child-2", observedAt: NOW }]);
+    expect(decode({ hook_event_name: "SubagentStop", session_id: "parent", agent_id: "child-1" })).toEqual([
+      { kind: "SubagentStop", provider: "claude", sessionId: "child-1", observedAt: NOW },
+    ]);
+    expect(decode({ hook_event_name: "SubagentStop", session_id: "parent", agentId: "child-2" })).toEqual([
+      { kind: "SubagentStop", provider: "claude", sessionId: "child-2", observedAt: NOW },
+    ]);
   });
 
   test("falls back to agent_name for the child identity (Kimi payloads carry no agent_id)", () => {
@@ -328,12 +313,9 @@ describe("event mapping", () => {
         observedAt: NOW,
       },
     ]);
-    expect(
-      decode(
-        { hook_event_name: "SubagentStop", session_id: "parent", agent_name: "researcher" },
-        "kimi",
-      ),
-    ).toEqual([{ kind: "SubagentStop", provider: "kimi", sessionId: "researcher", observedAt: NOW }]);
+    expect(decode({ hook_event_name: "SubagentStop", session_id: "parent", agent_name: "researcher" }, "kimi")).toEqual(
+      [{ kind: "SubagentStop", provider: "kimi", sessionId: "researcher", observedAt: NOW }],
+    );
   });
 
   test("prefers agent_id over agent_name for the child identity", () => {
@@ -359,9 +341,7 @@ describe("event mapping", () => {
 
   test("rejects subagent events without a child identity", () => {
     expect(decode({ hook_event_name: "SubagentStart", session_id: "parent" })).toEqual([]);
-    expect(decode({ hook_event_name: "SubagentStart", session_id: "parent", agent_id: "" })).toEqual(
-      [],
-    );
+    expect(decode({ hook_event_name: "SubagentStart", session_id: "parent", agent_id: "" })).toEqual([]);
     expect(decode({ hook_event_name: "SubagentStop", session_id: "parent" })).toEqual([]);
   });
 
@@ -393,7 +373,9 @@ describe("event mapping", () => {
         "codex",
       ),
     ).toEqual([]);
-    expect(decode({ hook_event_name: "SessionEnd", session_id: "ambient-1", transcript_path: null }, "codex")).toEqual([]);
+    expect(decode({ hook_event_name: "SessionEnd", session_id: "ambient-1", transcript_path: null }, "codex")).toEqual(
+      [],
+    );
 
     // A real transcript path keeps the event decodable.
     expect(
@@ -420,9 +402,7 @@ describe("event mapping", () => {
   });
 
   test("decodes the configured Codex subset with the same normalized meanings", () => {
-    expect(
-      decode({ hook_event_name: "SessionStart", session_id: "c1", cwd: "/work/app" }, "codex"),
-    ).toEqual([
+    expect(decode({ hook_event_name: "SessionStart", session_id: "c1", cwd: "/work/app" }, "codex")).toEqual([
       {
         kind: "SessionStart",
         provider: "codex",
@@ -464,9 +444,7 @@ describe("privacy boundaries", () => {
       totally_unexpected: "SENTINEL_EXTRA",
     };
     const events = decode(payload);
-    expect(events).toEqual([
-      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
-    ]);
+    expect(events).toEqual([{ kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW }]);
     expect(JSON.stringify(events)).not.toContain("SENTINEL");
   });
 
@@ -478,9 +456,7 @@ describe("privacy boundaries", () => {
       error_details: "SENTINEL_ERROR_DETAILS",
       error_message: "SENTINEL_KIMI_ERROR",
     });
-    expect(events).toEqual([
-      { kind: "StopFailure", provider: "claude", sessionId: "s1", observedAt: NOW },
-    ]);
+    expect(events).toEqual([{ kind: "StopFailure", provider: "claude", sessionId: "s1", observedAt: NOW }]);
     expect(JSON.stringify(events)).not.toContain("SENTINEL");
   });
 
@@ -490,9 +466,7 @@ describe("privacy boundaries", () => {
       session_id: "s1",
       prompt: "SENTINEL_USER_PROMPT",
     });
-    expect(events).toEqual([
-      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
-    ]);
+    expect(events).toEqual([{ kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW }]);
     expect(JSON.stringify(events)).not.toContain("SENTINEL");
   });
 
@@ -508,9 +482,7 @@ describe("privacy boundaries", () => {
       },
       "kimi",
     );
-    expect(events).toEqual([
-      { kind: "Attention", provider: "kimi", sessionId: "s1", observedAt: NOW },
-    ]);
+    expect(events).toEqual([{ kind: "Attention", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
     expect(JSON.stringify(events)).not.toContain("SENTINEL");
   });
 });

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
-  parseSessionSnapshot,
   type ProjectedSession,
   type Provider,
+  parseSessionSnapshot,
   type RegistryEvent,
   type SessionSnapshotV2,
   type SessionStatus,
@@ -57,9 +57,7 @@ describe("parseSessionSnapshot", () => {
     expect(withMessage.health).toEqual({ status: "error", message: "database busy" });
     expect(withMessage.sessions).toEqual([]);
 
-    const withNulls = parseSessionSnapshot(
-      withSession({ title: null, project: null }),
-    );
+    const withNulls = parseSessionSnapshot(withSession({ title: null, project: null }));
     expect(withNulls.sessions[0]?.title).toBeNull();
     expect(withNulls.sessions[0]?.project).toBeNull();
   });
@@ -130,18 +128,14 @@ describe("parseSessionSnapshot", () => {
   test("rejects negative or non-integer descendantCount", () => {
     expect(() => parseSessionSnapshot(withSession({ descendantCount: -1 }))).toThrow();
     expect(() => parseSessionSnapshot(withSession({ descendantCount: 1.5 }))).toThrow();
-    expect(() =>
-      parseSessionSnapshot(withSession({ descendantCount: "2" as unknown as number })),
-    ).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ descendantCount: "2" as unknown as number }))).toThrow();
   });
 
   test("rejects non-positive or non-integer logicalSlot", () => {
     expect(() => parseSessionSnapshot({ ...valid, sessions: [{ ...firstSession(), logicalSlot: 0 }] })).toThrow();
     expect(() => parseSessionSnapshot(withSession({ logicalSlot: -2 }))).toThrow();
     expect(() => parseSessionSnapshot(withSession({ logicalSlot: 1.5 }))).toThrow();
-    expect(() =>
-      parseSessionSnapshot(withSession({ logicalSlot: "1" as unknown as number })),
-    ).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ logicalSlot: "1" as unknown as number }))).toThrow();
   });
 
   test("rejects duplicate logical slots in one snapshot", () => {
@@ -175,9 +169,7 @@ describe("parseSessionSnapshot", () => {
   });
 
   test("rejects unbounded or wrongly typed health.message", () => {
-    expect(() =>
-      parseSessionSnapshot({ ...valid, health: { status: "ok", message: "m".repeat(257) } }),
-    ).toThrow();
+    expect(() => parseSessionSnapshot({ ...valid, health: { status: "ok", message: "m".repeat(257) } })).toThrow();
     expect(() =>
       parseSessionSnapshot({ ...valid, health: { status: "ok", message: 7 as unknown as string } }),
     ).toThrow();
@@ -187,18 +179,10 @@ describe("parseSessionSnapshot", () => {
   });
 
   test("does not silently coerce values", () => {
-    expect(() =>
-      parseSessionSnapshot(withSession({ sessionId: 123 as unknown as string })),
-    ).toThrow();
-    expect(() =>
-      parseSessionSnapshot(withSession({ title: undefined as unknown as null })),
-    ).toThrow();
-    expect(() =>
-      parseSessionSnapshot(withSession({ title: 0 as unknown as null })),
-    ).toThrow();
-    expect(() =>
-      parseSessionSnapshot({ ...valid, sessions: "none" as unknown as [] }),
-    ).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ sessionId: 123 as unknown as string }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ title: undefined as unknown as null }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ title: 0 as unknown as null }))).toThrow();
+    expect(() => parseSessionSnapshot({ ...valid, sessions: "none" as unknown as [] })).toThrow();
     expect(() => parseSessionSnapshot({ ...valid, health: "ok" as unknown as object })).toThrow();
   });
 });
@@ -207,14 +191,30 @@ describe("RegistryEvent", () => {
   test("the normalized union covers every event kind", () => {
     const observedAt = "2026-08-06T00:00:00.000Z";
     const events: RegistryEvent[] = [
-      { kind: "SessionStart", provider: "claude", sessionId: "s1", title: "T", project: "p", ghosttyTerminalId: null, observedAt },
+      {
+        kind: "SessionStart",
+        provider: "claude",
+        sessionId: "s1",
+        title: "T",
+        project: "p",
+        ghosttyTerminalId: null,
+        observedAt,
+      },
       { kind: "SessionObserved", provider: "kimi", sessionId: "s1", title: null, project: "p", observedAt },
       { kind: "Activity", provider: "codex", sessionId: "s1", observedAt },
       { kind: "Attention", provider: "kimi", sessionId: "s1", observedAt },
       { kind: "Stop", provider: "claude", sessionId: "s1", observedAt },
       { kind: "StopFailure", provider: "claude", sessionId: "s1", observedAt },
       { kind: "SessionEnd", provider: "claude", sessionId: "s1", observedAt },
-      { kind: "SubagentStart", provider: "claude", sessionId: "s2", parentSessionId: "s1", title: null, project: null, observedAt },
+      {
+        kind: "SubagentStart",
+        provider: "claude",
+        sessionId: "s2",
+        parentSessionId: "s1",
+        title: null,
+        project: null,
+        observedAt,
+      },
       { kind: "SubagentStop", provider: "claude", sessionId: "s2", observedAt },
     ];
     expect(events.map((event) => event.kind)).toEqual([

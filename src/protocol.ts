@@ -27,9 +27,22 @@ export type RegistryEvent =
       project: string | null;
       observedAt: string;
     }
-  | { kind: "Activity" | "Attention" | "Stop" | "StopFailure"; provider: Provider; sessionId: string; observedAt: string }
+  | {
+      kind: "Activity" | "Attention" | "Stop" | "StopFailure";
+      provider: Provider;
+      sessionId: string;
+      observedAt: string;
+    }
   | { kind: "SessionEnd"; provider: Provider; sessionId: string; observedAt: string }
-  | { kind: "SubagentStart"; provider: Provider; sessionId: string; parentSessionId: string; title: string | null; project: string | null; observedAt: string }
+  | {
+      kind: "SubagentStart";
+      provider: Provider;
+      sessionId: string;
+      parentSessionId: string;
+      title: string | null;
+      project: string | null;
+      observedAt: string;
+    }
   | { kind: "SubagentStop"; provider: Provider; sessionId: string; observedAt: string };
 
 export type ProjectedSession = {
@@ -65,8 +78,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isBoundedString = (value: unknown): value is string =>
   typeof value === "string" && Array.from(value).length <= MAX_STRING_CODE_POINTS;
 
-const isNullableBoundedString = (value: unknown): value is string | null =>
-  value === null || isBoundedString(value);
+const isNullableBoundedString = (value: unknown): value is string | null => value === null || isBoundedString(value);
 
 const isNullableNonEmptyBoundedString = (value: unknown): value is string | null =>
   value === null || (isBoundedString(value) && Array.from(value).length > 0);

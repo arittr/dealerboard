@@ -1,20 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli, MAX_STDIN_BYTES, type CliDependencies } from "../src/core/cli";
 import type { ClaudeGhosttyBindingContext } from "../src/core/claude-ghostty-binding";
+import { type CliDependencies, MAX_STDIN_BYTES, runCli } from "../src/core/cli";
 import { createFileDiagnostics, type DiagnosticRecord } from "../src/core/diagnostics";
-import { resolveAppPaths, type AppPaths } from "../src/core/paths";
+import { type AppPaths, resolveAppPaths } from "../src/core/paths";
 import { applyRegistryEvents, listSessions } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { RegistryEvent } from "../src/protocol";
@@ -302,15 +294,17 @@ describe("event ingress", () => {
     initRegistry();
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      applyRegistryEvents(db, [{
-        kind: "SessionStart",
-        provider: "claude",
-        sessionId: "existing",
-        title: null,
-        project: null,
-        ghosttyTerminalId: "existing-terminal",
-        observedAt: NOW,
-      }]);
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "existing",
+          title: null,
+          project: null,
+          ghosttyTerminalId: "existing-terminal",
+          observedAt: NOW,
+        },
+      ]);
     } finally {
       db.close();
     }
@@ -322,17 +316,23 @@ describe("event ingress", () => {
     const events: [string, string][] = [
       ["codex", startEvent("codex-start", { ghosttyTerminalId: "payload-selected-terminal" })],
       ["kimi", startEvent("kimi-start", { ghosttyTerminalId: "payload-selected-terminal" })],
-      ["claude", JSON.stringify({
-        hook_event_name: "PostToolUse",
-        session_id: "existing",
-        ghosttyTerminalId: "payload-selected-terminal",
-      })],
-      ["claude", JSON.stringify({
-        hook_event_name: "SubagentStart",
-        session_id: "existing",
-        agent_id: "child",
-        ghosttyTerminalId: "payload-selected-terminal",
-      })],
+      [
+        "claude",
+        JSON.stringify({
+          hook_event_name: "PostToolUse",
+          session_id: "existing",
+          ghosttyTerminalId: "payload-selected-terminal",
+        }),
+      ],
+      [
+        "claude",
+        JSON.stringify({
+          hook_event_name: "SubagentStart",
+          session_id: "existing",
+          agent_id: "child",
+          ghosttyTerminalId: "payload-selected-terminal",
+        }),
+      ],
     ];
 
     for (const [provider, input] of events) {
@@ -486,9 +486,7 @@ describe("event ingress", () => {
 
     const missing = makeHarness({ stdin });
     expect(await runCli(["event"], missing.deps)).toBe(0);
-    expect(missing.diagnostics).toEqual([
-      { timestamp: NOW, component: "cli", code: "unsupported_provider" },
-    ]);
+    expect(missing.diagnostics).toEqual([{ timestamp: NOW, component: "cli", code: "unsupported_provider" }]);
     expect(pulled).toBe(false);
   });
 
@@ -726,8 +724,7 @@ describe("sessions commands", () => {
     initRegistry();
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      const at = (second: number): string =>
-        `2026-08-06T00:00:${String(second).padStart(2, "0")}.000Z`;
+      const at = (second: number): string => `2026-08-06T00:00:${String(second).padStart(2, "0")}.000Z`;
       const events: RegistryEvent[] = [
         {
           kind: "SessionStart",
@@ -785,13 +782,7 @@ describe("sessions commands", () => {
       ghosttyTerminalId: string | null;
     }[];
     expect(
-      listed.map((row) => [
-        row.provider,
-        row.sessionId,
-        row.parentSessionId,
-        row.logicalSlot,
-        row.ghosttyTerminalId,
-      ]),
+      listed.map((row) => [row.provider, row.sessionId, row.parentSessionId, row.logicalSlot, row.ghosttyTerminalId]),
     ).toEqual([
       ["kimi", "b", null, 1, null],
       ["claude", "a", null, 2, null],
@@ -874,9 +865,7 @@ describe("sessions commands", () => {
     const harness = makeHarness();
     expect(await runCli(["sessions", "clear", "claude", "shared"], harness.deps)).toBe(0);
     // The kimi row with the same session ID survives, slot uncompacted.
-    expect(listRows().map((row) => [row.provider, row.sessionId, row.logicalSlot])).toEqual([
-      ["kimi", "shared", 2],
-    ]);
+    expect(listRows().map((row) => [row.provider, row.sessionId, row.logicalSlot])).toEqual([["kimi", "shared", 2]]);
   });
 
   test("sessions clear and clear-all reject an unsupported schema without mutating rows", async () => {

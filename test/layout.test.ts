@@ -1,12 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  chmodSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,10 +12,7 @@ import {
 import { SnapshotCache, type SnapshotView } from "../src/plugin/snapshot-reader";
 import type { ProjectedSession, SessionSnapshotV2 } from "../src/protocol";
 
-const session = (
-  logicalSlot: number,
-  overrides: Partial<ProjectedSession> = {},
-): ProjectedSession => ({
+const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
   provider: "claude",
   sessionId: `session-${logicalSlot}`,
   status: "idle",
@@ -34,8 +24,7 @@ const session = (
   ...overrides,
 });
 
-const range = (from: number, to: number): number[] =>
-  Array.from({ length: to - from + 1 }, (_, index) => from + index);
+const range = (from: number, to: number): number[] => Array.from({ length: to - from + 1 }, (_, index) => from + index);
 
 const sessionsAt = (...slots: number[]): ProjectedSession[] => slots.map((slot) => session(slot));
 
@@ -56,10 +45,7 @@ const settings = (overflowLatched: boolean, currentPage: number): LayoutSettings
   currentPage,
 });
 
-const sessionKeyAt = (
-  keys: KeyModel[],
-  index: number,
-): Extract<KeyModel, { kind: "session" }> => {
+const sessionKeyAt = (keys: KeyModel[], index: number): Extract<KeyModel, { kind: "session" }> => {
   const key = keys[index];
   if (key?.kind !== "session") {
     throw new Error(`expected a session model at key ${index}, got ${key?.kind ?? "nothing"}`);
@@ -68,8 +54,7 @@ const sessionKeyAt = (
 };
 
 const labelFor = (overrides: Partial<ProjectedSession>): string =>
-  sessionKeyAt(reduceLayout(healthyView([session(1, overrides)]), DEFAULT_LAYOUT_SETTINGS).keys, 0)
-    .label;
+  sessionKeyAt(reduceLayout(healthyView([session(1, overrides)]), DEFAULT_LAYOUT_SETTINGS).keys, 0).label;
 
 describe("reduceLayout without overflow", () => {
   test("packs sessions densely in slot order, filling gaps", () => {
@@ -83,10 +68,7 @@ describe("reduceLayout without overflow", () => {
   });
 
   test("maps up to fifteen sessions onto keys in rank order", () => {
-    const result = reduceLayout(
-      healthyView(sessionsAt(...range(1, 15))),
-      DEFAULT_LAYOUT_SETTINGS,
-    );
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 15))), DEFAULT_LAYOUT_SETTINGS);
     expect(result.keys).toHaveLength(15);
     for (let index = 0; index < 15; index++) {
       expect(sessionKeyAt(result.keys, index).session.logicalSlot).toBe(index + 1);
@@ -96,10 +78,7 @@ describe("reduceLayout without overflow", () => {
   });
 
   test("sorts sessions by logical slot defensively", () => {
-    const result = reduceLayout(
-      healthyView([session(7), session(1), session(3)]),
-      DEFAULT_LAYOUT_SETTINGS,
-    );
+    const result = reduceLayout(healthyView([session(7), session(1), session(3)]), DEFAULT_LAYOUT_SETTINGS);
     expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(1);
     expect(sessionKeyAt(result.keys, 1).session.logicalSlot).toBe(3);
     expect(sessionKeyAt(result.keys, 2).session.logicalSlot).toBe(7);
@@ -115,20 +94,14 @@ describe("reduceLayout without overflow", () => {
 
     // A new session allocated the freed slot 3 inserts at rank 2, shifting
     // the slot-4 and slot-5 tiles one key right.
-    const afterStart = reduceLayout(
-      healthyView(sessionsAt(1, 2, 3, 4, 5)),
-      DEFAULT_LAYOUT_SETTINGS,
-    );
+    const afterStart = reduceLayout(healthyView(sessionsAt(1, 2, 3, 4, 5)), DEFAULT_LAYOUT_SETTINGS);
     expect(sessionKeyAt(afterStart.keys, 2).session.logicalSlot).toBe(3);
     expect(sessionKeyAt(afterStart.keys, 3).session.logicalSlot).toBe(4);
     expect(sessionKeyAt(afterStart.keys, 4).session.logicalSlot).toBe(5);
   });
 
   test("does not latch overflow at fifteen live sessions", () => {
-    const result = reduceLayout(
-      healthyView(sessionsAt(...range(1, 15))),
-      DEFAULT_LAYOUT_SETTINGS,
-    );
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 15))), DEFAULT_LAYOUT_SETTINGS);
     expect(sessionKeyAt(result.keys, 14).session.logicalSlot).toBe(15);
     expect(result.settings).toEqual(settings(false, 0));
     expect(result.dirty).toBe(false);
@@ -137,10 +110,7 @@ describe("reduceLayout without overflow", () => {
 
 describe("reduceLayout overflow latch", () => {
   test("latches overflow when the live count exceeds fifteen", () => {
-    const result = reduceLayout(
-      healthyView(sessionsAt(...range(1, 16))),
-      DEFAULT_LAYOUT_SETTINGS,
-    );
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 16))), DEFAULT_LAYOUT_SETTINGS);
     expect(result.keys).toHaveLength(15);
     for (let index = 0; index < 14; index++) {
       expect(sessionKeyAt(result.keys, index).session.logicalSlot).toBe(index + 1);
@@ -175,10 +145,7 @@ describe("reduceLayout overflow latch", () => {
   });
 
   test("holds the latch at fifteen live sessions", () => {
-    const latched = reduceLayout(
-      healthyView(sessionsAt(...range(1, 16))),
-      DEFAULT_LAYOUT_SETTINGS,
-    ).settings;
+    const latched = reduceLayout(healthyView(sessionsAt(...range(1, 16))), DEFAULT_LAYOUT_SETTINGS).settings;
     const fifteen = sessionsAt(...range(1, 15));
     const held = reduceLayout(healthyView(fifteen), latched);
     expect(held.settings).toEqual(settings(true, 0));
@@ -308,9 +275,7 @@ describe("settings validation and dirty marking", () => {
     expect(reduceLayout(healthyView([]), DEFAULT_LAYOUT_SETTINGS).dirty).toBe(false);
     // Latch engage and release → dirty.
     expect(reduceLayout(full, DEFAULT_LAYOUT_SETTINGS).dirty).toBe(true);
-    expect(reduceLayout(healthyView(sessionsAt(...range(1, 14))), settings(true, 0)).dirty).toBe(
-      true,
-    );
+    expect(reduceLayout(healthyView(sessionsAt(...range(1, 14))), settings(true, 0)).dirty).toBe(true);
     // Clamping → dirty.
     expect(reduceLayout(full, settings(true, 9)).dirty).toBe(true);
     // Validation repair → dirty.
@@ -325,11 +290,10 @@ describe("KeyModel structure", () => {
     expect(labelFor({ title: "Fix the bug", project: "proj" })).toBe("Fix the bug");
     expect(labelFor({ title: null, project: "proj" })).toBe("proj");
     expect(labelFor({ title: "", project: "proj" })).toBe("proj");
-    expect(
-      labelFor({ title: null, project: null, provider: "kimi", sessionId: "abcdef1234567890" }),
-    ).toBe("kimi abcdef12");
-    expect(labelFor({ title: null, project: "", provider: "codex", sessionId: "12345678abcd" }))
-      .toBe("codex 12345678");
+    expect(labelFor({ title: null, project: null, provider: "kimi", sessionId: "abcdef1234567890" })).toBe(
+      "kimi abcdef12",
+    );
+    expect(labelFor({ title: null, project: "", provider: "codex", sessionId: "12345678abcd" })).toBe("codex 12345678");
   });
 
   test("keeps provider, status, descendant count, and logical slot on the session model", () => {
@@ -340,10 +304,7 @@ describe("KeyModel structure", () => {
       title: "Review",
     });
     // A lone session packs to rank 0 regardless of its logical slot.
-    const model = sessionKeyAt(
-      reduceLayout(healthyView([original]), DEFAULT_LAYOUT_SETTINGS).keys,
-      0,
-    );
+    const model = sessionKeyAt(reduceLayout(healthyView([original]), DEFAULT_LAYOUT_SETTINGS).keys, 0);
     expect(model.session).toEqual(original);
     expect(model.session.provider).toBe("codex");
     expect(model.session.status).toBe("waiting");
@@ -354,10 +315,7 @@ describe("KeyModel structure", () => {
   });
 
   test("propagates the degraded flag to every key kind", () => {
-    const overflow = reduceLayout(
-      healthyView(sessionsAt(...range(1, 16)), true),
-      DEFAULT_LAYOUT_SETTINGS,
-    );
+    const overflow = reduceLayout(healthyView(sessionsAt(...range(1, 16)), true), DEFAULT_LAYOUT_SETTINGS);
     expect(overflow.keys).toHaveLength(15);
     for (const key of overflow.keys) {
       expect(key.degraded).toBe(true);

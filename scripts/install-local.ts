@@ -21,18 +21,11 @@
  * command strings — and every tool path is absolute.
  */
 
+import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Database } from "bun:sqlite";
 import { ensureAppDirectories, resolveAppPaths } from "../src/core/paths";
 import { LATEST_SCHEMA_VERSION } from "../src/core/schema";
 
@@ -101,10 +94,7 @@ const main = (): void => {
   try {
     const row = db.query("PRAGMA user_version").get() as { user_version: number } | null;
     if (row === null || row.user_version !== LATEST_SCHEMA_VERSION) {
-      fail(
-        "init",
-        `schema user_version is ${String(row?.user_version)}, expected ${String(LATEST_SCHEMA_VERSION)}`,
-      );
+      fail("init", `schema user_version is ${String(row?.user_version)}, expected ${String(LATEST_SCHEMA_VERSION)}`);
     }
   } finally {
     db.close();
@@ -115,11 +105,7 @@ const main = (): void => {
   if (!template.includes(EXECUTABLE_TOKEN) || !template.includes(LOGS_TOKEN)) {
     fail("launchagent", "plist template is missing an expected token");
   }
-  const rendered = template
-    .split(EXECUTABLE_TOKEN)
-    .join(paths.executable)
-    .split(LOGS_TOKEN)
-    .join(paths.logsDirectory);
+  const rendered = template.split(EXECUTABLE_TOKEN).join(paths.executable).split(LOGS_TOKEN).join(paths.logsDirectory);
   if (rendered.includes(TOKEN_MARKER)) {
     fail("launchagent", "an unreplaced token remains in the rendered plist");
   }
@@ -148,16 +134,11 @@ const main = (): void => {
   // .streamDeckPlugin document to the Stream Deck app, which installs it. If
   // the app presents an install confirmation, accept it and re-run this
   // installer — every step is idempotent and converges.
-  const packages = readdirSync(join(repositoryRoot, "dist")).filter((name) =>
-    name.endsWith(PACKAGE_SUFFIX),
-  );
+  const packages = readdirSync(join(repositoryRoot, "dist")).filter((name) => name.endsWith(PACKAGE_SUFFIX));
   const packageName =
     packages.length === 1 && packages[0] !== undefined
       ? packages[0]
-      : fail(
-          "install-plugin",
-          `expected exactly one ${PACKAGE_SUFFIX} package in dist, found ${packages.length}`,
-        );
+      : fail("install-plugin", `expected exactly one ${PACKAGE_SUFFIX} package in dist, found ${packages.length}`);
   const packagePath = join(repositoryRoot, "dist", packageName);
   run("install-plugin", OPEN, [packagePath]);
   run("install-plugin", process.execPath, [STREAMDECK_CLI, "restart", LABEL]);

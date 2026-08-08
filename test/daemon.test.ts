@@ -1,24 +1,16 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DAEMON_POLL_INTERVAL_MS,
-  ProjectionDaemon,
-  type DaemonDependencies,
-} from "../src/core/daemon";
+import { DAEMON_POLL_INTERVAL_MS, type DaemonDependencies, ProjectionDaemon } from "../src/core/daemon";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
-import { resolveAppPaths, type AppPaths } from "../src/core/paths";
+import { type AppPaths, resolveAppPaths } from "../src/core/paths";
 import { ProjectionError, readProjection } from "../src/core/projection";
 import { applyRegistryEvents } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
-import {
-  parseSessionSnapshot,
-  type RegistryEvent,
-  type SessionSnapshotV2,
-} from "../src/protocol";
+import { parseSessionSnapshot, type RegistryEvent, type SessionSnapshotV2 } from "../src/protocol";
 
 const NOW = "2026-08-06T00:00:00.000Z";
 const LATER = "2026-08-06T00:00:01.000Z";
@@ -235,9 +227,7 @@ describe("ProjectionDaemon", () => {
         },
       ]);
       expect(readSnapshotFile()).toEqual(unsupported.writes[0]!);
-      expect(unsupported.diagnostics).toEqual([
-        { timestamp: NOW, component: "daemon", code: "unsupported_schema" },
-      ]);
+      expect(unsupported.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "unsupported_schema" }]);
     } finally {
       unsupported.daemon.stop();
     }
@@ -264,9 +254,7 @@ describe("ProjectionDaemon", () => {
         { schemaVersion: 2, health: { status: "error", message: "internal_error" }, sessions: [] },
       ]);
       expect(readSnapshotFile()).toEqual(corrupt.writes[0]!);
-      expect(corrupt.diagnostics).toEqual([
-        { timestamp: NOW, component: "daemon", code: "internal_error" },
-      ]);
+      expect(corrupt.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "internal_error" }]);
     } finally {
       corrupt.daemon.stop();
     }
@@ -346,8 +334,7 @@ describe("ProjectionDaemon", () => {
       // only pragma it ever runs is data_version. The allowed
       // `PRAGMA foreign_keys = ON` happens inside openRegistryDatabase on the
       // raw handle, before this recording wrapper sees the connection.
-      const forbidden =
-        /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b/i;
+      const forbidden = /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b/i;
       for (const sql of statements) {
         expect(forbidden.test(sql)).toBe(false);
       }

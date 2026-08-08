@@ -87,9 +87,7 @@ const inWriteTransaction = <T>(db: Database, body: () => T): T => {
 /** First hole in the sorted non-null slot list; no allocator table. */
 const allocateLowestFreeSlot = (db: Database): number => {
   const rows = db
-    .query(
-      "SELECT logical_slot FROM active_sessions WHERE logical_slot IS NOT NULL ORDER BY logical_slot ASC",
-    )
+    .query("SELECT logical_slot FROM active_sessions WHERE logical_slot IS NOT NULL ORDER BY logical_slot ASC")
     .all() as { logical_slot: number }[];
   let slot = 1;
   for (const row of rows) {
@@ -138,10 +136,7 @@ const isValidProspectiveParent = (
   return true;
 };
 
-const applySessionStart = (
-  db: Database,
-  event: Extract<RegistryEvent, { kind: "SessionStart" }>,
-): MutationResult => {
+const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "SessionStart" }>): MutationResult => {
   const ghosttyTerminalId = event.provider === "claude" ? event.ghosttyTerminalId : null;
   const existing = getRow(db, event.provider, event.sessionId);
   if (existing !== null) {
@@ -154,14 +149,7 @@ const applySessionStart = (
       `UPDATE active_sessions
        SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, updated_at = ?
        WHERE provider = ? AND session_id = ?`,
-      [
-        event.title,
-        event.project,
-        ghosttyTerminalId,
-        event.observedAt,
-        event.provider,
-        event.sessionId,
-      ],
+      [event.title, event.project, ghosttyTerminalId, event.observedAt, event.provider, event.sessionId],
     );
     return "applied";
   }
@@ -203,10 +191,7 @@ const applySessionObserved = (
   });
 };
 
-const applySubagentStart = (
-  db: Database,
-  event: Extract<RegistryEvent, { kind: "SubagentStart" }>,
-): MutationResult => {
+const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: "SubagentStart" }>): MutationResult => {
   if (!isValidProspectiveParent(db, event.provider, event.sessionId, event.parentSessionId)) {
     return "ignored";
   }
@@ -221,14 +206,7 @@ const applySubagentStart = (
       `UPDATE active_sessions
        SET parent_session_id = ?, status = 'idle', title = ?, project = ?, updated_at = ?
        WHERE provider = ? AND session_id = ?`,
-      [
-        event.parentSessionId,
-        event.title,
-        event.project,
-        event.observedAt,
-        event.provider,
-        event.sessionId,
-      ],
+      [event.parentSessionId, event.title, event.project, event.observedAt, event.provider, event.sessionId],
     );
     return "applied";
   }
@@ -254,42 +232,32 @@ const applyStatusUpdate = (
   event: Extract<RegistryEvent, { kind: "Activity" | "Attention" | "Stop" | "StopFailure" }>,
   status: SessionStatus,
 ): MutationResult => {
-  const result = db.run(
-    "UPDATE active_sessions SET status = ?, updated_at = ? WHERE provider = ? AND session_id = ?",
-    [status, event.observedAt, event.provider, event.sessionId],
-  );
+  const result = db.run("UPDATE active_sessions SET status = ?, updated_at = ? WHERE provider = ? AND session_id = ?", [
+    status,
+    event.observedAt,
+    event.provider,
+    event.sessionId,
+  ]);
   return result.changes > 0 ? "applied" : "ignored";
 };
 
-const applySessionEnd = (
-  db: Database,
-  event: Extract<RegistryEvent, { kind: "SessionEnd" }>,
-): MutationResult => {
+const applySessionEnd = (db: Database, event: Extract<RegistryEvent, { kind: "SessionEnd" }>): MutationResult => {
   const existing = getRow(db, event.provider, event.sessionId);
   // Only an existing top-level row ends; children stop via SubagentStop.
   if (existing === null || existing.parent_session_id !== null) {
     return "ignored";
   }
-  db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [
-    event.provider,
-    event.sessionId,
-  ]);
+  db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
   return "applied";
 };
 
-const applySubagentStop = (
-  db: Database,
-  event: Extract<RegistryEvent, { kind: "SubagentStop" }>,
-): MutationResult => {
+const applySubagentStop = (db: Database, event: Extract<RegistryEvent, { kind: "SubagentStop" }>): MutationResult => {
   const existing = getRow(db, event.provider, event.sessionId);
   // Only an existing child row stops; top-level rows end via SessionEnd.
   if (existing === null || existing.parent_session_id === null) {
     return "ignored";
   }
-  db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [
-    event.provider,
-    event.sessionId,
-  ]);
+  db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
   return "applied";
 };
 
@@ -322,10 +290,8 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
  * Ignored events leave no mutation; an unexpected SQLite failure rolls the
  * whole sequence back and propagates to the caller.
  */
-export const applyRegistryEvents = (
-  db: Database,
-  events: readonly RegistryEvent[],
-): MutationResult[] => inWriteTransaction(db, () => events.map((event) => applyEvent(db, event)));
+export const applyRegistryEvents = (db: Database, events: readonly RegistryEvent[]): MutationResult[] =>
+  inWriteTransaction(db, () => events.map((event) => applyEvent(db, event)));
 
 /**
  * Diagnostic listing of every active row: top-level sessions ordered by their
@@ -346,19 +312,12 @@ export const listSessions = (db: Database): ActiveSession[] => {
  * then delete that composite identity — cascading to its descendants — inside
  * one write transaction. Never touches schema or recreates the database.
  */
-export const clearSession = (
-  db: Database,
-  provider: Provider,
-  sessionId: string,
-): MutationResult =>
+export const clearSession = (db: Database, provider: Provider, sessionId: string): MutationResult =>
   inWriteTransaction(db, () => {
     if (getRow(db, provider, sessionId) === null) {
       return "ignored";
     }
-    db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [
-      provider,
-      sessionId,
-    ]);
+    db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [provider, sessionId]);
     return "applied";
   });
 

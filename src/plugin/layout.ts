@@ -135,9 +135,7 @@ const reduceInternal = (view: SnapshotView, storedState: unknown): InternalLayou
 
   // The latch engages only when the live count exceeds fifteen; once engaged
   // it holds while at least fifteen sessions remain live.
-  const overflow = restored.overflowLatched
-    ? count >= MAX_UNPAGED_SESSIONS
-    : count > MAX_UNPAGED_SESSIONS;
+  const overflow = restored.overflowLatched ? count >= MAX_UNPAGED_SESSIONS : count > MAX_UNPAGED_SESSIONS;
 
   if (!overflow) {
     const settings: LayoutSettingsV1 = { ...DEFAULT_LAYOUT_SETTINGS };

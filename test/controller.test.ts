@@ -7,10 +7,7 @@ import type { ProjectedSession } from "../src/protocol";
 const TICK_MS = 125;
 const POLL_MS = 250;
 
-const session = (
-  logicalSlot: number,
-  overrides: Partial<ProjectedSession> = {},
-): ProjectedSession => ({
+const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
   provider: "claude",
   sessionId: `session-${logicalSlot}`,
   status: "idle",
@@ -22,8 +19,7 @@ const session = (
   ...overrides,
 });
 
-const range = (from: number, to: number): number[] =>
-  Array.from({ length: to - from + 1 }, (_, index) => from + index);
+const range = (from: number, to: number): number[] => Array.from({ length: to - from + 1 }, (_, index) => from + index);
 
 const sessionsAt = (...slots: number[]): ProjectedSession[] => slots.map((slot) => session(slot));
 
@@ -230,12 +226,7 @@ const makeController = (
   };
 };
 
-const appear = (
-  context: string,
-  row: number,
-  column: number,
-  overrides: Partial<AppearInfo> = {},
-): AppearInfo => ({
+const appear = (context: string, row: number, column: number, overrides: Partial<AppearInfo> = {}): AppearInfo => ({
   context,
   deviceId: "device-1",
   device: { columns: 5, rows: 3 },
@@ -647,9 +638,7 @@ describe("SessionGridController", () => {
   });
 
   test("a degraded last-good Codex tile remains activatable", async () => {
-    const view = healthyView([
-      session(1, { provider: "codex", sessionId: "degraded-thread" }),
-    ]);
+    const view = healthyView([session(1, { provider: "codex", sessionId: "degraded-thread" })]);
     view.degraded = true;
     const { controller, activation } = makeController({ view });
     await controller.willAppear(appear("ctx-codex", 0, 0));
@@ -661,9 +650,7 @@ describe("SessionGridController", () => {
 
   test("repeated Codex presses issue repeated activation requests", async () => {
     const { controller, activation } = makeController({
-      view: healthyView([
-        session(1, { provider: "codex", sessionId: "repeat-thread" }),
-      ]),
+      view: healthyView([session(1, { provider: "codex", sessionId: "repeat-thread" })]),
     });
     await controller.willAppear(appear("ctx-codex", 0, 0));
 
@@ -708,9 +695,7 @@ describe("SessionGridController", () => {
   });
 
   test("after NEXT, key down activates the Claude target on the current page", async () => {
-    const sessions = range(1, 16).map((slot) =>
-      session(slot, { ghosttyTerminalId: `terminal-${slot}` }),
-    );
+    const sessions = range(1, 16).map((slot) => session(slot, { ghosttyTerminalId: `terminal-${slot}` }));
     const { controller, claudeActivation, settingsPort } = makeController({
       stored: settings(true, 0),
       view: healthyView(sessions),
@@ -734,9 +719,7 @@ describe("SessionGridController", () => {
     });
     await controller.willAppear(appear("ctx-claude", 0, 0));
 
-    snapshot.view = healthyView([
-      session(2, { sessionId: "current-session", ghosttyTerminalId: "current-terminal" }),
-    ]);
+    snapshot.view = healthyView([session(2, { sessionId: "current-session", ghosttyTerminalId: "current-terminal" })]);
     await clock.advance(POLL_MS);
     await controller.keyDown("ctx-claude");
 
@@ -745,9 +728,7 @@ describe("SessionGridController", () => {
 
   test("activation failure shows one alert and contains alert failure", async () => {
     const { controller, activation, alerts, settingsPort } = makeController({
-      view: healthyView([
-        session(1, { provider: "codex", sessionId: "failing-thread" }),
-      ]),
+      view: healthyView([session(1, { provider: "codex", sessionId: "failing-thread" })]),
     });
     await controller.willAppear(appear("ctx-codex", 0, 0));
     activation.failure = new Error("launch failed");

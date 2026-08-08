@@ -1,14 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
-import {
-  initializeDatabase,
-  openRegistryDatabase,
-  UnsupportedSchemaVersion,
-} from "../src/core/schema";
+import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "../src/core/schema";
 
 let tempHome: string;
 
@@ -103,9 +99,7 @@ describe("resolveAppPaths", () => {
     expect(paths.database).toBe(join(root, "registry.sqlite3"));
     expect(paths.snapshot).toBe(join(root, "snapshot-v2.json"));
     expect(paths.logsDirectory).toBe(join(root, "logs"));
-    expect(paths.launchAgent).toBe(
-      join(tempHome, "Library/LaunchAgents/com.drewritter.stream-deck-agents.plist"),
-    );
+    expect(paths.launchAgent).toBe(join(tempHome, "Library/LaunchAgents/com.drewritter.stream-deck-agents.plist"));
   });
 
   test("defaults to the current user's home directory", () => {
@@ -191,9 +185,7 @@ describe("initializeDatabase", () => {
     try {
       expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
       expect(
-        db
-          .query("SELECT session_id, status, logical_slot, ghostty_terminal_id FROM active_sessions")
-          .get(),
+        db.query("SELECT session_id, status, logical_slot, ghostty_terminal_id FROM active_sessions").get(),
       ).toEqual({
         session_id: "legacy",
         status: "waiting",

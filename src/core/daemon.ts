@@ -15,12 +15,12 @@
  */
 
 import type { Database } from "bun:sqlite";
+import type { SessionSnapshotV2 } from "../protocol";
 import type { DiagnosticCode, DiagnosticRecord } from "./diagnostics";
 import type { AppPaths } from "./paths";
 import { readProjection } from "./projection";
 import { openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { writeSnapshotAtomically } from "./snapshot";
-import type { SessionSnapshotV2 } from "../protocol";
 
 export const DAEMON_POLL_INTERVAL_MS = 250;
 
@@ -84,10 +84,7 @@ export class ProjectionDaemon {
     healthy: false,
   };
 
-  constructor(
-    paths: Pick<AppPaths, "database" | "snapshot">,
-    dependencies: DaemonDependencies = {},
-  ) {
+  constructor(paths: Pick<AppPaths, "database" | "snapshot">, dependencies: DaemonDependencies = {}) {
     this.paths = paths;
     this.deps = {
       openDatabase: openRegistryDatabase,
@@ -143,11 +140,7 @@ export class ProjectionDaemon {
       this.publishUnhealthy(healthCode(error));
       return;
     }
-    if (
-      this.state.healthy &&
-      this.state.lastDataVersion !== null &&
-      dataVersion === this.state.lastDataVersion
-    ) {
+    if (this.state.healthy && this.state.lastDataVersion !== null && dataVersion === this.state.lastDataVersion) {
       return;
     }
     let snapshot: SessionSnapshotV2;

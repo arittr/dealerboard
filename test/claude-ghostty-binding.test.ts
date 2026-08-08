@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
-  createClaudeGhosttyTerminalDiscoverer,
   type ClaudeGhosttyBindingContext,
+  createClaudeGhosttyTerminalDiscoverer,
 } from "../src/core/claude-ghostty-binding";
 
 type ProcessCall = {
@@ -78,9 +78,7 @@ test("rejects malformed native output", async () => {
 });
 
 test("returns null when native discovery rejects, including timeout failures", async () => {
-  const timeout = createClaudeGhosttyTerminalDiscoverer(() =>
-    Promise.reject(new Error("native discovery timeout")),
-  );
+  const timeout = createClaudeGhosttyTerminalDiscoverer(() => Promise.reject(new Error("native discovery timeout")));
 
   await expect(timeout(eligible)).resolves.toBeNull();
 });

@@ -11,7 +11,7 @@
 
 import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
-import { ensureAppDirectories, type AppPaths } from "./paths";
+import { type AppPaths, ensureAppDirectories } from "./paths";
 
 export const LATEST_SCHEMA_VERSION = 2;
 

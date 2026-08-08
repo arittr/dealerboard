@@ -33,10 +33,7 @@ const SAFE_FIELDS = {
  * carry only `agent_name` (official docs name no `agent_id`), so the first
  * non-empty allowlisted value among all three identifies the child.
  */
-const CHILD_IDENTITY_FIELDS = [
-  ...SAFE_FIELDS.agentId,
-  "agent_name",
-] as const;
+const CHILD_IDENTITY_FIELDS = [...SAFE_FIELDS.agentId, "agent_name"] as const;
 
 const MAX_STRING_CODE_POINTS = 256;
 
@@ -44,17 +41,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Unicode-safe cap: count code points, never UTF-16 code units. */
-const boundString = (value: string): string =>
-  Array.from(value).slice(0, MAX_STRING_CODE_POINTS).join("");
+const boundString = (value: string): string => Array.from(value).slice(0, MAX_STRING_CODE_POINTS).join("");
 
 /**
  * First non-empty string among the allowlisted aliases, bounded. Non-string
  * and empty values count as absent.
  */
-const firstAllowlistedString = (
-  record: Record<string, unknown>,
-  aliases: readonly string[],
-): string | undefined => {
+const firstAllowlistedString = (record: Record<string, unknown>, aliases: readonly string[]): string | undefined => {
   for (const alias of aliases) {
     const value = record[alias];
     if (typeof value === "string" && value.length > 0) {
@@ -127,11 +120,7 @@ const sessionObservedEvent = (
  * send a real path (Claude) are unaffected. The path itself is never read or
  * retained — only the null is inspected.
  */
-export const decodeNativeHook = (
-  provider: Provider,
-  value: unknown,
-  now: string,
-): RegistryEvent[] => {
+export const decodeNativeHook = (provider: Provider, value: unknown, now: string): RegistryEvent[] => {
   if (!isRecord(value)) {
     return [];
   }
@@ -154,10 +143,7 @@ export const decodeNativeHook = (
     }
     case "UserPromptSubmit":
       return provider === "kimi"
-        ? [
-            sessionObservedEvent(provider, sessionId, value, now),
-            statusEvent("Activity", provider, sessionId, now),
-          ]
+        ? [sessionObservedEvent(provider, sessionId, value, now), statusEvent("Activity", provider, sessionId, now)]
         : [statusEvent("Activity", provider, sessionId, now)];
     case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];
@@ -168,9 +154,7 @@ export const decodeNativeHook = (
       // Notification, or TaskStarted for a foreground question.
       return [
         statusEvent(
-          firstAllowlistedString(value, SAFE_FIELDS.toolName) === "AskUserQuestion"
-            ? "Attention"
-            : "Activity",
+          firstAllowlistedString(value, SAFE_FIELDS.toolName) === "AskUserQuestion" ? "Attention" : "Activity",
           provider,
           sessionId,
           now,

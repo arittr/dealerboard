@@ -18,22 +18,14 @@
  * errors on stderr and return nonzero.
  */
 
-import { ProjectionDaemon } from "./daemon";
-import {
-  discoverClaudeGhosttyTerminal,
-  type DiscoverClaudeGhosttyTerminal,
-} from "./claude-ghostty-binding";
-import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
-import { resolveAppPaths, type AppPaths } from "./paths";
-import { decodeNativeHook } from "./providers";
-import {
-  applyRegistryEvents,
-  clearAllSessions,
-  clearSession,
-  listSessions,
-} from "./registry";
-import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import type { Provider } from "../protocol";
+import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
+import { ProjectionDaemon } from "./daemon";
+import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
+import { type AppPaths, resolveAppPaths } from "./paths";
+import { decodeNativeHook } from "./providers";
+import { applyRegistryEvents, clearAllSessions, clearSession, listSessions } from "./registry";
+import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 
 export const MAX_STDIN_BYTES = 65_536;
 const RETRY_DELAY_MS = 25;
@@ -90,10 +82,7 @@ const isMissingDatabase = (error: unknown): boolean => errorCode(error) === "SQL
  * Returns null when the input exceeds the cap; trailing chunks are never
  * pulled.
  */
-const readBoundedStdin = async (
-  stdin: AsyncIterable<Uint8Array>,
-  limit: number,
-): Promise<Uint8Array | null> => {
+const readBoundedStdin = async (stdin: AsyncIterable<Uint8Array>, limit: number): Promise<Uint8Array | null> => {
   const chunks: Uint8Array[] = [];
   let total = 0;
   for await (const chunk of stdin) {
@@ -123,8 +112,7 @@ commands:
   sessions clear-all
 `;
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : "unknown error";
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : "unknown error");
 
 const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Promise<number> => {
   const providerArg = args[0];
@@ -179,11 +167,12 @@ const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Pr
       db = deps.openDatabase(deps.paths.database, "readwrite");
     } catch (error) {
       report({
-        code: error instanceof UnsupportedSchemaVersion
-          ? "unsupported_schema"
-          : isMissingDatabase(error)
-            ? "missing_database"
-            : "internal_error",
+        code:
+          error instanceof UnsupportedSchemaVersion
+            ? "unsupported_schema"
+            : isMissingDatabase(error)
+              ? "missing_database"
+              : "internal_error",
         provider: providerArg,
         ...(sessionId !== undefined ? { sessionId } : {}),
       });
@@ -347,10 +336,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   ...dependencies,
 });
 
-export const runCli = async (
-  args: readonly string[],
-  dependencies: CliDependencies,
-): Promise<number> => {
+export const runCli = async (args: readonly string[], dependencies: CliDependencies): Promise<number> => {
   const deps = resolveDependencies(dependencies);
   const [command, ...rest] = args;
   switch (command) {

@@ -39,9 +39,7 @@ const LOGS_DIRECTORY_MODE = 0o700;
  * directory is created on demand so event-path failures before `init` still
  * record. All filesystem errors are swallowed.
  */
-export const createFileDiagnostics = (
-  logsDirectory: string,
-): ((record: DiagnosticRecord) => void) => {
+export const createFileDiagnostics = (logsDirectory: string): ((record: DiagnosticRecord) => void) => {
   return (record) => {
     try {
       mkdirSync(logsDirectory, { recursive: true, mode: LOGS_DIRECTORY_MODE });

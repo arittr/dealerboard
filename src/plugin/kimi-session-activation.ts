@@ -12,8 +12,7 @@ export type OpenUrl = (url: string) => Promise<void>;
 
 const KIMI_WEB_SESSIONS_URL = "http://127.0.0.1:58627/sessions/";
 
-export const createKimiSessionActivator = (
-  openUrl: OpenUrl,
-): ActivateKimiSession =>
+export const createKimiSessionActivator =
+  (openUrl: OpenUrl): ActivateKimiSession =>
   (sessionId) =>
     openUrl(`${KIMI_WEB_SESSIONS_URL}${encodeURIComponent(sessionId)}`);

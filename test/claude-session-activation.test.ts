@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createClaudeSessionActivator,
-  type ProcessExecutor,
-} from "../src/plugin/claude-session-activation";
+import { createClaudeSessionActivator, type ProcessExecutor } from "../src/plugin/claude-session-activation";
 
 describe("Claude Ghostty session activation", () => {
   test("passes one stable terminal ID to fixed no-shell osascript", async () => {

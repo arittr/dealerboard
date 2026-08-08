@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createCodexSessionActivator,
-  type ProcessExecutor,
-} from "../src/plugin/codex-session-activation";
+import { createCodexSessionActivator, type ProcessExecutor } from "../src/plugin/codex-session-activation";
 
 type ProcessCall = {
   file: string;
@@ -23,10 +20,7 @@ describe("Codex session activation", () => {
     expect(calls).toEqual([
       {
         file: "/usr/bin/open",
-        args: [
-          "-u",
-          "codex://threads/thread%2Fone%3Ftwo%20space%3B%C3%BC%24HOME%26%60",
-        ],
+        args: ["-u", "codex://threads/thread%2Fone%3Ftwo%20space%3B%C3%BC%24HOME%26%60"],
       },
     ]);
   });

@@ -28,19 +28,12 @@ export type ClaudeGhosttyBindingContext = {
   parentPid: number;
 };
 
-export type TextProcessExecutor = (
-  file: string,
-  args: readonly string[],
-  timeoutMs: number,
-) => Promise<string>;
+export type TextProcessExecutor = (file: string, args: readonly string[], timeoutMs: number) => Promise<string>;
 
-export type DiscoverClaudeGhosttyTerminal = (
-  context: ClaudeGhosttyBindingContext,
-) => Promise<string | null>;
+export type DiscoverClaudeGhosttyTerminal = (context: ClaudeGhosttyBindingContext) => Promise<string | null>;
 
-export const createClaudeGhosttyTerminalDiscoverer = (
-  execute: TextProcessExecutor,
-): DiscoverClaudeGhosttyTerminal =>
+export const createClaudeGhosttyTerminalDiscoverer =
+  (execute: TextProcessExecutor): DiscoverClaudeGhosttyTerminal =>
   async (context) => {
     if (
       context.termProgram !== "ghostty" ||
@@ -97,5 +90,4 @@ const executeFileText: TextProcessExecutor = (file, args, timeoutMs) =>
     );
   });
 
-export const discoverClaudeGhosttyTerminal =
-  createClaudeGhosttyTerminalDiscoverer(executeFileText);
+export const discoverClaudeGhosttyTerminal = createClaudeGhosttyTerminalDiscoverer(executeFileText);

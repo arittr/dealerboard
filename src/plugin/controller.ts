@@ -17,16 +17,10 @@
  * disappears.
  */
 
-import {
-  advanceLayoutPage,
-  type KeyModel,
-  type LayoutResult,
-  type LayoutSettingsV1,
-  reduceLayout,
-} from "./layout";
-import type { ActivateCodexSession } from "./codex-session-activation";
 import type { ActivateClaudeSession } from "./claude-session-activation";
+import type { ActivateCodexSession } from "./codex-session-activation";
 import type { ActivateKimiSession } from "./kimi-session-activation";
+import { advanceLayoutPage, type KeyModel, type LayoutResult, type LayoutSettingsV1, reduceLayout } from "./layout";
 import { renderKey } from "./render";
 import { FrameScheduler, type SchedulerClock, type SendImage } from "./scheduler";
 import type { SnapshotView } from "./snapshot-reader";
@@ -115,10 +109,7 @@ export class SessionGridController {
       deviceId: info.deviceId,
       controller: info.controller,
       coordinates: info.coordinates,
-      index:
-        info.coordinates === undefined
-          ? -1
-          : info.coordinates.row * KEYPAD_COLUMNS + info.coordinates.column,
+      index: info.coordinates === undefined ? -1 : info.coordinates.row * KEYPAD_COLUMNS + info.coordinates.column,
     });
     this.unsupportedReason = this.computeUnsupportedReason();
     if (this.unsupportedReason !== null) {

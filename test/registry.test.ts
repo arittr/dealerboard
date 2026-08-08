@@ -1,15 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
-import {
-  applyRegistryEvents,
-  clearAllSessions,
-  clearSession,
-  listSessions,
-} from "../src/core/registry";
+import { applyRegistryEvents, clearAllSessions, clearSession, listSessions } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { Provider, RegistryEvent } from "../src/protocol";
 
@@ -28,8 +23,7 @@ afterEach(() => {
   rmSync(tempHome, { recursive: true, force: true });
 });
 
-const at = (second: number): string =>
-  `2026-08-06T00:00:${String(second).padStart(2, "0")}.000Z`;
+const at = (second: number): string => `2026-08-06T00:00:${String(second).padStart(2, "0")}.000Z`;
 
 const start = (
   sessionId: string,
@@ -93,8 +87,7 @@ const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
     .query("SELECT * FROM active_sessions WHERE provider = ? AND session_id = ?")
     .get(provider, sessionId) as Row | null;
 
-const allRows = (): Row[] =>
-  db.query("SELECT * FROM active_sessions ORDER BY provider, session_id").all() as Row[];
+const allRows = (): Row[] => db.query("SELECT * FROM active_sessions ORDER BY provider, session_id").all() as Row[];
 
 const countRows = (): number => {
   const row = db.query("SELECT COUNT(*) AS n FROM active_sessions").get() as { n: number } | null;
@@ -106,9 +99,7 @@ const countRows = (): number => {
 
 describe("applyRegistryEvents", () => {
   test("drives one session through idle, working, waiting, idle, error, and absent", () => {
-    expect(
-      applyRegistryEvents(db, [start("s1", { title: "First", project: "proj", at: at(1) })]),
-    ).toEqual(["applied"]);
+    expect(applyRegistryEvents(db, [start("s1", { title: "First", project: "proj", at: at(1) })])).toEqual(["applied"]);
     expect(getRow("s1")).toEqual({
       provider: "claude",
       session_id: "s1",
@@ -136,14 +127,10 @@ describe("applyRegistryEvents", () => {
     expect(applyRegistryEvents(db, [simple("Stop", "s1", { at: at(4) })])).toEqual(["applied"]);
     expect(getRow("s1")).toMatchObject({ status: "idle", logical_slot: 1, updated_at: at(4) });
 
-    expect(applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(5) })])).toEqual([
-      "applied",
-    ]);
+    expect(applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(5) })])).toEqual(["applied"]);
     expect(getRow("s1")).toMatchObject({ status: "error", logical_slot: 1, updated_at: at(5) });
 
-    expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(6) })])).toEqual([
-      "applied",
-    ]);
+    expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(6) })])).toEqual(["applied"]);
     expect(getRow("s1")).toBeNull();
     expect(countRows()).toBe(0);
   });
@@ -152,14 +139,7 @@ describe("applyRegistryEvents", () => {
     applyRegistryEvents(db, [start("s1")]);
     applyRegistryEvents(db, [simple("SessionEnd", "s1")]);
 
-    for (const kind of [
-      "Activity",
-      "Attention",
-      "Stop",
-      "StopFailure",
-      "SessionEnd",
-      "SubagentStop",
-    ] as const) {
+    for (const kind of ["Activity", "Attention", "Stop", "StopFailure", "SessionEnd", "SubagentStop"] as const) {
       expect(applyRegistryEvents(db, [simple(kind, "s1", { at: at(2) })])).toEqual(["ignored"]);
     }
     expect(getRow("s1")).toBeNull();
@@ -167,11 +147,7 @@ describe("applyRegistryEvents", () => {
   });
 
   test("allocates the lowest free slot and never moves existing slots", () => {
-    expect(applyRegistryEvents(db, [start("s1"), start("s2"), start("s3")])).toEqual([
-      "applied",
-      "applied",
-      "applied",
-    ]);
+    expect(applyRegistryEvents(db, [start("s1"), start("s2"), start("s3")])).toEqual(["applied", "applied", "applied"]);
     expect(getRow("s1")?.logical_slot).toBe(1);
     expect(getRow("s2")?.logical_slot).toBe(2);
     expect(getRow("s3")?.logical_slot).toBe(3);
@@ -193,15 +169,10 @@ describe("applyRegistryEvents", () => {
   });
 
   test("repeating SessionStart preserves the slot and opened_at while resetting to idle", () => {
-    applyRegistryEvents(db, [
-      start("s1", { title: "original", project: "a", at: at(1) }),
-      start("s2", { at: at(2) }),
-    ]);
+    applyRegistryEvents(db, [start("s1", { title: "original", project: "a", at: at(1) }), start("s2", { at: at(2) })]);
     applyRegistryEvents(db, [simple("Activity", "s1", { at: at(3) })]);
 
-    expect(
-      applyRegistryEvents(db, [start("s1", { title: "renamed", project: "b", at: at(4) })]),
-    ).toEqual(["applied"]);
+    expect(applyRegistryEvents(db, [start("s1", { title: "renamed", project: "b", at: at(4) })])).toEqual(["applied"]);
     expect(getRow("s1")).toEqual({
       provider: "claude",
       session_id: "s1",
@@ -220,9 +191,7 @@ describe("applyRegistryEvents", () => {
   test("children receive a null slot and parent deletion cascades through nested descendants", () => {
     applyRegistryEvents(db, [start("parent")]);
 
-    expect(applyRegistryEvents(db, [subStart("child", "parent", { title: "c" })])).toEqual([
-      "applied",
-    ]);
+    expect(applyRegistryEvents(db, [subStart("child", "parent", { title: "c" })])).toEqual(["applied"]);
     expect(getRow("child")).toMatchObject({
       parent_session_id: "parent",
       logical_slot: null,
@@ -232,9 +201,7 @@ describe("applyRegistryEvents", () => {
 
     // A repeated SubagentStart resets the existing child to idle in place.
     applyRegistryEvents(db, [simple("Activity", "child", { at: at(2) })]);
-    expect(
-      applyRegistryEvents(db, [subStart("child", "parent", { title: "c2", at: at(3) })]),
-    ).toEqual(["applied"]);
+    expect(applyRegistryEvents(db, [subStart("child", "parent", { title: "c2", at: at(3) })])).toEqual(["applied"]);
     expect(getRow("child")).toMatchObject({
       parent_session_id: "parent",
       logical_slot: null,
@@ -310,9 +277,7 @@ describe("applyRegistryEvents", () => {
   test("ignores cross-provider parentage", () => {
     applyRegistryEvents(db, [start("p", { provider: "claude" })]);
     const before = allRows();
-    expect(applyRegistryEvents(db, [subStart("c", "p", { provider: "kimi" })])).toEqual([
-      "ignored",
-    ]);
+    expect(applyRegistryEvents(db, [subStart("c", "p", { provider: "kimi" })])).toEqual(["ignored"]);
     expect(allRows()).toEqual(before);
   });
 
@@ -335,9 +300,7 @@ describe("applyRegistryEvents", () => {
     applyRegistryEvents(db, [simple("Activity", "c", { at: at(2) })]);
     const before = allRows();
 
-    expect(applyRegistryEvents(db, [start("c", { title: "nope", at: at(3) })])).toEqual([
-      "ignored",
-    ]);
+    expect(applyRegistryEvents(db, [start("c", { title: "nope", at: at(3) })])).toEqual(["ignored"]);
     expect(allRows()).toEqual(before);
     expect(getRow("c")).toMatchObject({
       parent_session_id: "p",
@@ -357,10 +320,7 @@ describe("applyRegistryEvents", () => {
   });
 
   test("commits valid sibling events in one transaction while ignoring the invalid one", () => {
-    expect(applyRegistryEvents(db, [start("ok"), subStart("bad", "ghost")])).toEqual([
-      "applied",
-      "ignored",
-    ]);
+    expect(applyRegistryEvents(db, [start("ok"), subStart("bad", "ghost")])).toEqual(["applied", "ignored"]);
     expect(getRow("ok")?.logical_slot).toBe(1);
     expect(getRow("bad")).toBeNull();
   });
