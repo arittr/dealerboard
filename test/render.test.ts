@@ -85,7 +85,7 @@ describe("renderKey output contract", () => {
   });
 
   test("escapes XML metacharacters in every text node", () => {
-    const label = `<&>"'🚀é` + "Z".repeat(40); // e + combining acute (U+0301)
+    const label = `<&>"'🚀é${"Z".repeat(40)}`; // e + combining acute (U+0301)
     const svg = decode(sessionModel({}, label), 3);
     // Escaped forms of every injected metacharacter are present.
     expect(svg).toContain("&lt;");

@@ -17,26 +17,22 @@ import { SessionGridAction } from "./session-grid-action";
 import { SnapshotCache } from "./snapshot-reader";
 
 const snapshotCache = new SnapshotCache(resolveAppPaths().snapshot);
-const activateKimiSession = createKimiSessionActivator((url) =>
-  streamDeck.system.openUrl(url),
-);
+const activateKimiSession = createKimiSessionActivator((url) => streamDeck.system.openUrl(url));
 
 const keyActionForContext = (context: string) => {
   const target = streamDeck.actions.getActionById(context);
-  return target !== undefined && target.isKey() ? target : undefined;
+  return target?.isKey() ? target : undefined;
 };
 
 const controller = new SessionGridController({
   readSnapshot: () => snapshotCache.read(),
   getGlobalSettings: () => streamDeck.settings.getGlobalSettings(),
   setGlobalSettings: (settings) => streamDeck.settings.setGlobalSettings(settings),
-  setImage: (context, image) =>
-    keyActionForContext(context)?.setImage(image) ?? Promise.resolve(),
+  setImage: (context, image) => keyActionForContext(context)?.setImage(image) ?? Promise.resolve(),
   activateClaudeSession,
   activateCodexSession,
   activateKimiSession,
-  showAlert: (context) =>
-    keyActionForContext(context)?.showAlert() ?? Promise.resolve(),
+  showAlert: (context) => keyActionForContext(context)?.showAlert() ?? Promise.resolve(),
   clock: {
     setInterval: (handler, intervalMs) => setInterval(handler, intervalMs),
     clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
@@ -45,4 +41,4 @@ const controller = new SessionGridController({
 });
 
 streamDeck.actions.registerAction(new SessionGridAction(controller));
-streamDeck.connect();
+void streamDeck.connect();
