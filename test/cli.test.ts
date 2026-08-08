@@ -174,6 +174,50 @@ describe("event ingress", () => {
     expect(listRows().map((row) => [row.provider, row.sessionId])).toEqual([["kimi", "s1"]]);
   });
 
+  test("keeps a blank Kimi page absent until its first prompt", async () => {
+    initRegistry();
+    const blankStart = makeHarness({
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "SessionStart",
+          session_id: "blank-kimi",
+          cwd: "/users/drew/project-x",
+          source: "startup",
+        }),
+      ),
+    });
+    expect(await runCli(["event", "kimi"], blankStart.deps)).toBe(0);
+    expect(blankStart.diagnostics).toEqual([]);
+    expect(listRows()).toEqual([]);
+
+    const firstPrompt = makeHarness({
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "blank-kimi",
+          cwd: "/users/drew/project-x",
+          prompt: "SENTINEL_PROMPT_NEVER_STORED",
+        }),
+      ),
+    });
+    expect(await runCli(["event", "kimi"], firstPrompt.deps)).toBe(0);
+    expect(firstPrompt.diagnostics).toEqual([]);
+    expect(listRows()).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "blank-kimi",
+        parentSessionId: null,
+        status: "working",
+        title: null,
+        project: "project-x",
+        logicalSlot: 1,
+        ghosttyTerminalId: null,
+        openedAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+  });
+
   test("enriches only Claude SessionStart from the trusted native discoverer", async () => {
     initRegistry();
     const contexts: ClaudeGhosttyBindingContext[] = [];

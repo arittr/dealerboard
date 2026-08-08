@@ -76,6 +76,13 @@ The product should show sessions that are currently attached, loaded, running, o
 - Closed, done, and stale are not visible tile states.
 - There is no manual dismissal or retained closed-session history.
 
+Kimi Web eagerly creates a titleless session when a blank page opens, but may
+never emit an end event when that unused page is abandoned. A titleless Kimi
+`SessionStart` is therefore insufficient evidence for grid membership. The
+first `UserPromptSubmit` establishes membership and working state; a titled
+`SessionStart` still establishes membership immediately when an existing
+session is resumed.
+
 Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. Gate 0 measures the relevant polling, heartbeat, exit, and sleep/wake behavior; there is no universal lease duration.
 
 The previous proposal equated unarchived App/Web tasks with active tasks. That is rejected: on 2026-08-05 this host had 288 unarchived top-level Codex threads, which would turn the deck into a historical inbox.

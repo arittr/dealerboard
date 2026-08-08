@@ -80,6 +80,21 @@ const statusEvent = (
   now: string,
 ): RegistryEvent => ({ kind, provider, sessionId, observedAt: now });
 
+const sessionStartEvent = (
+  provider: Provider,
+  sessionId: string,
+  value: Record<string, unknown>,
+  now: string,
+): Extract<RegistryEvent, { kind: "SessionStart" }> => ({
+  kind: "SessionStart",
+  provider,
+  sessionId,
+  title: firstAllowlistedString(value, SAFE_FIELDS.title) ?? null,
+  project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
+  ghosttyTerminalId: null,
+  observedAt: now,
+});
+
 /**
  * Decode one parsed native hook payload into zero or more normalized events.
  * Unknown hook names and invalid payloads return an empty sequence; nothing
@@ -114,19 +129,17 @@ export const decodeNativeHook = (
   }
 
   switch (hookEventName) {
-    case "SessionStart":
-      return [
-        {
-          kind: "SessionStart",
-          provider,
-          sessionId,
-          title: firstAllowlistedString(value, SAFE_FIELDS.title) ?? null,
-          project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
-          ghosttyTerminalId: null,
-          observedAt: now,
-        },
-      ];
+    case "SessionStart": {
+      const event = sessionStartEvent(provider, sessionId, value, now);
+      return provider === "kimi" && event.title === null ? [] : [event];
+    }
     case "UserPromptSubmit":
+      return provider === "kimi"
+        ? [
+            sessionStartEvent(provider, sessionId, value, now),
+            statusEvent("Activity", provider, sessionId, now),
+          ]
+        : [statusEvent("Activity", provider, sessionId, now)];
     case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];
     case "PreToolUse":

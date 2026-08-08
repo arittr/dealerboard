@@ -240,7 +240,7 @@ one-second `timeout` (valid range 1–600).
 
 **Strict-schema warning.** Kimi Code validates `[[hooks]]` strictly: an
 unknown event name, or any field beyond `event`, `matcher`, `command`, and
-`timeout`, makes the entire config file fail to load. Append exactly the ten
+`timeout`, makes the entire config file fail to load. Append exactly the eleven
 entries below; do not add fields, events, or comments inside the entries.
 
 ### 1. Back up
@@ -313,6 +313,10 @@ timeout = 1
 
 Notes:
 
+- Kimi Web emits a titleless `SessionStart` as soon as a blank page opens and
+  may never close that unused session. The helper ignores that start. The first
+  `UserPromptSubmit` creates the registry session and marks it working; a
+  titled `SessionStart` still restores an existing session immediately.
 - A pending `AskUserQuestion` prompt needs no extra entry: `PreToolUse` carries
   `tool_name`, and the helper maps a question call to the waiting color while
   it blocks the turn; the answering `PostToolUse` maps back to working.
@@ -324,7 +328,8 @@ Notes:
 
 Start a new Kimi Code session. The config must load without an error; a
 strict-schema failure is reported at startup and disables all configuration,
-so a clean start is the check.
+so a clean start is the check. In Kimi Web, opening and abandoning a blank page
+must not add a tile; submitting its first prompt must add one.
 
 ### 4. Compare before replace, and restore
 

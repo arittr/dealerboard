@@ -153,6 +153,56 @@ describe("event mapping", () => {
     ]);
   });
 
+  test("defers titleless Kimi sessions until the first prompt", () => {
+    expect(
+      decode(
+        withIdentity({ hook_event_name: "SessionStart", cwd: "/users/drew/project-x" }),
+        "kimi",
+      ),
+    ).toEqual([]);
+
+    expect(
+      decode(
+        withIdentity({
+          hook_event_name: "UserPromptSubmit",
+          cwd: "/users/drew/project-x",
+          prompt: "SENTINEL_PROMPT_NEVER_STORED",
+        }),
+        "kimi",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "kimi",
+        sessionId: "s1",
+        title: null,
+        project: "project-x",
+        ghosttyTerminalId: null,
+        observedAt: NOW,
+      },
+      { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
+    ]);
+  });
+
+  test("keeps titled Kimi starts so resumed sessions appear immediately", () => {
+    expect(
+      decode(
+        withIdentity({ hook_event_name: "SessionStart", session_title: "Existing session" }),
+        "kimi",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "kimi",
+        sessionId: "s1",
+        title: "Existing session",
+        project: null,
+        ghosttyTerminalId: null,
+        observedAt: NOW,
+      },
+    ]);
+  });
+
   test("maps UserPromptSubmit, PreToolUse, and PostToolUse to Activity", () => {
     expect(decode(withIdentity({ hook_event_name: "UserPromptSubmit" }))).toEqual([
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
@@ -367,11 +417,6 @@ describe("event mapping", () => {
         ghosttyTerminalId: null,
         observedAt: NOW,
       },
-    ]);
-
-    // Providers that never send the field (Kimi) are unaffected.
-    expect(decode({ hook_event_name: "UserPromptSubmit", session_id: "k1" }, "kimi")).toEqual([
-      { kind: "Activity", provider: "kimi", sessionId: "k1", observedAt: NOW },
     ]);
   });
 
