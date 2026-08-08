@@ -8,7 +8,7 @@
  *      explicit working directory.
  *   3. Create or correct the application directories to mode 0700.
  *   4. Copy the compiled core to the canonical executable, chmod 0700.
- *   5. Run the installed executable's init; verify schema user_version is 1.
+ *   5. Run the installed executable's init; verify the latest schema version.
  *   6. Replace the exact executable/log tokens in the plist template, write
  *      the canonical plist at mode 0600, and validate with plutil -lint.
  *   7. Boot out the exact existing service only if present, then bootstrap
