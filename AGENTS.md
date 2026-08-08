@@ -76,10 +76,13 @@ Notes:
   chrome only (NEXT frame, page count, OFFLINE text). Provider corner chips:
   Claude `#D97757`, Codex `#A855F7`, Kimi `#3B82F6` (`PROVIDER_COLORS`).
 - Session status model: `idle` = turn finished (set by the Stop hook),
-  `working` = Activity, `waiting` = Attention, `error` = StopFailure. A tile's
-  effective status is the max (`error > waiting > working > idle`) over its
-  whole subtree, and any live subagent row lifts it to at least `working`
-  (`src/core/projection.ts`).
+  `working` = Activity, `waiting` = Attention, `error` = StopFailure. For
+  Claude sessions, a Bash `run_in_background` PreToolUse arms the per-session
+  `background_outstanding` flag (schema v3) and Stop then maps to `working`
+  instead of `idle`; a `<task-notification>` prompt or a TaskStop PreToolUse
+  disarms it. A tile's effective status is the max (`error > waiting > working
+  > idle`) over its whole subtree, and any live subagent row lifts it to at
+  least `working` (`src/core/projection.ts`).
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.

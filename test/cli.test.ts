@@ -104,14 +104,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 2 database and stays silent on stdout", async () => {
+  test("creates a version 3 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     } finally {
       db.close();
     }
@@ -154,10 +154,46 @@ describe("event ingress", () => {
         project: "project-x",
         logicalSlot: 1,
         ghosttyTerminalId: "test-ghostty-terminal",
+        backgroundOutstanding: 0,
         openedAt: NOW,
         updatedAt: NOW,
       },
     ]);
+  });
+
+  test("keeps a Claude session working across Stop while a background shell is outstanding", async () => {
+    initRegistry();
+    const send = async (payload: Record<string, unknown>): Promise<void> => {
+      const harness = makeHarness({ stdin: stdinOf(JSON.stringify({ session_id: "s1", ...payload })) });
+      expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+      expect(harness.diagnostics).toEqual([]);
+    };
+
+    await send({ hook_event_name: "SessionStart" });
+    await send({
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "SENTINEL_BG_COMMAND", run_in_background: true },
+    });
+    expect(listRows()[0]).toMatchObject({ status: "working", backgroundOutstanding: 1 });
+
+    // The launching turn ends: the live shell keeps the tile at working.
+    await send({ hook_event_name: "Stop" });
+    expect(listRows()[0]).toMatchObject({ status: "working", backgroundOutstanding: 1 });
+
+    // A typed prompt turn that starts nothing new keeps working as well.
+    await send({ hook_event_name: "UserPromptSubmit", prompt: "how we lookin" });
+    await send({ hook_event_name: "Stop" });
+    expect(listRows()[0]).toMatchObject({ status: "working", backgroundOutstanding: 1 });
+
+    // The completion notification clears the flag; the wake turn's Stop idles.
+    await send({ hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>b1</task-id>" });
+    expect(listRows()[0]).toMatchObject({ status: "working", backgroundOutstanding: 0 });
+    await send({ hook_event_name: "Stop" });
+    expect(listRows()[0]).toMatchObject({ status: "idle", backgroundOutstanding: 0 });
+
+    // Neither the command text nor the notification body reaches the registry.
+    expect(JSON.stringify(listRows())).not.toContain("SENTINEL");
   });
 
   test("preserves resumed Kimi metadata when a prompt observes existing membership", async () => {
@@ -187,6 +223,7 @@ describe("event ingress", () => {
         project: "project-x",
         logicalSlot: 1,
         ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -238,6 +275,7 @@ describe("event ingress", () => {
         project: "project-x",
         logicalSlot: 1,
         ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -265,6 +303,7 @@ describe("event ingress", () => {
         project: "project-x",
         logicalSlot: 1,
         ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -890,7 +929,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 2");
+      restore.exec("PRAGMA user_version = 3");
     } finally {
       restore.close();
     }

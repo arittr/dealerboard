@@ -21,8 +21,11 @@ and no standard-output output.
 and tool-call details. The helper decodes only the fields needed to place a
 session on the grid — event name, session and subagent identifiers, status
 hints, title, and the working directory's basename — and discards everything
-else in memory. No prompt text, transcript content, or tool payload is ever
-written to the registry, the snapshot, or the logs.
+else in memory. Two Claude-only signals are classified in place, never stored:
+the `run_in_background` boolean of a Bash tool input and the constant
+`<task-notification>` prefix that opens a background task's completion prompt.
+No prompt text, transcript content, or tool payload is ever written to the
+registry, the snapshot, or the logs.
 
 ---
 
@@ -196,6 +199,15 @@ Notes:
   moment an answered prompt unblocks the tool call, mapping the session back
   to working. Without it a tile stays in the waiting color until the next
   `PreToolUse` or `Stop` happens to arrive.
+- Background shells keep the tile in the working color: a Bash
+  `run_in_background` `PreToolUse` arms a per-session flag, and `Stop` then
+  maps to working instead of idle while the shell lives. A finished shell's
+  completion arrives as a `UserPromptSubmit` whose prompt opens with
+  `<task-notification>` and disarms the flag; a `TaskStop` `PreToolUse`
+  disarms it directly. The flag is per session, not per shell, so overlapping
+  background shells can idle the tile once the first completion lands. No
+  extra hook entries are needed — the existing `PreToolUse`,
+  `UserPromptSubmit`, and `Stop` handlers carry both signals.
 - One second fits every event's budget, including the shared 1.5-second
   `SessionEnd` budget.
 

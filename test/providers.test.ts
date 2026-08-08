@@ -428,6 +428,119 @@ describe("event mapping", () => {
   });
 });
 
+describe("background shell tracking (Claude only)", () => {
+  const withIdentity = (fields: Record<string, unknown>): Record<string, unknown> => ({
+    session_id: "s1",
+    ...fields,
+  });
+
+  test("marks a Claude Bash run_in_background PreToolUse as BackgroundWorkStarted", () => {
+    const events = decode(
+      withIdentity({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "SENTINEL_BG_COMMAND", run_in_background: true },
+      }),
+    );
+    expect(events).toEqual([
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+      { kind: "BackgroundWorkStarted", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("SENTINEL");
+  });
+
+  test("accepts the camelCase toolInput alias and ignores non-true run_in_background values", () => {
+    expect(
+      decode(
+        withIdentity({ hook_event_name: "PreToolUse", tool_name: "Bash", toolInput: { run_in_background: true } }),
+      ),
+    ).toEqual([
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+      { kind: "BackgroundWorkStarted", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    for (const toolInput of [
+      { run_in_background: false },
+      { run_in_background: "true" },
+      { run_in_background: 1 },
+      {},
+      null,
+      "run_in_background",
+    ]) {
+      expect(decode(withIdentity({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: toolInput }))).toEqual(
+        [{ kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW }],
+      );
+    }
+  });
+
+  test("marks a Claude TaskStop PreToolUse as BackgroundWorkCleared", () => {
+    expect(
+      decode(withIdentity({ hook_event_name: "PreToolUse", tool_name: "TaskStop", tool_input: { task_id: "b1" } })),
+    ).toEqual([
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+      { kind: "BackgroundWorkCleared", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+  });
+
+  test("keeps an AskUserQuestion PreToolUse as bare Attention even with a background flag present", () => {
+    expect(
+      decode(
+        withIdentity({
+          hook_event_name: "PreToolUse",
+          tool_name: "AskUserQuestion",
+          tool_input: { run_in_background: true, questions: [] },
+        }),
+      ),
+    ).toEqual([{ kind: "Attention", provider: "claude", sessionId: "s1", observedAt: NOW }]);
+  });
+
+  test("marks a Claude task-notification UserPromptSubmit as BackgroundWorkCleared without reading the text", () => {
+    const events = decode(
+      withIdentity({
+        hook_event_name: "UserPromptSubmit",
+        prompt: "<task-notification>\n<task-id>SENTINEL_TASK_ID</task-id>\n<output-file>/tmp/x</output-file>",
+      }),
+    );
+    expect(events).toEqual([
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+      { kind: "BackgroundWorkCleared", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("SENTINEL");
+  });
+
+  test("keeps ordinary Claude prompts and other providers free of background events", () => {
+    expect(decode(withIdentity({ hook_event_name: "UserPromptSubmit", prompt: "how we lookin" }))).toEqual([
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    expect(
+      decode(
+        withIdentity({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { run_in_background: true } }),
+        "kimi",
+      ),
+    ).toEqual([{ kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
+    expect(
+      decode(
+        withIdentity({ hook_event_name: "PreToolUse", tool_name: "TaskStop", tool_input: { task_id: "b1" } }),
+        "codex",
+      ),
+    ).toEqual([{ kind: "Activity", provider: "codex", sessionId: "s1", observedAt: NOW }]);
+    expect(
+      decode(
+        withIdentity({ hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>b1</task-id>" }),
+        "codex",
+      ),
+    ).toEqual([{ kind: "Activity", provider: "codex", sessionId: "s1", observedAt: NOW }]);
+    expect(
+      decode(
+        withIdentity({ hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>b1</task-id>" }),
+        "kimi",
+      ),
+    ).toEqual([
+      { kind: "SessionObserved", provider: "kimi", sessionId: "s1", title: null, project: null, observedAt: NOW },
+      { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
+    ]);
+  });
+});
+
 describe("privacy boundaries", () => {
   test("never carries prompts, tool data, errors, or extra keys into normalized events", () => {
     const payload = {

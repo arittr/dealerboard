@@ -59,7 +59,15 @@ const subStart = (
 });
 
 const simple = (
-  kind: "Activity" | "Attention" | "Stop" | "StopFailure" | "SessionEnd" | "SubagentStop",
+  kind:
+    | "Activity"
+    | "Attention"
+    | "Stop"
+    | "StopFailure"
+    | "SessionEnd"
+    | "SubagentStop"
+    | "BackgroundWorkStarted"
+    | "BackgroundWorkCleared",
   sessionId: string,
   options: { provider?: Provider; at?: string } = {},
 ): RegistryEvent => ({
@@ -80,6 +88,7 @@ type Row = {
   opened_at: string;
   updated_at: string;
   ghostty_terminal_id: string | null;
+  background_outstanding: number;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -111,6 +120,7 @@ describe("applyRegistryEvents", () => {
       opened_at: at(1),
       updated_at: at(1),
       ghostty_terminal_id: null,
+      background_outstanding: 0,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -139,7 +149,16 @@ describe("applyRegistryEvents", () => {
     applyRegistryEvents(db, [start("s1")]);
     applyRegistryEvents(db, [simple("SessionEnd", "s1")]);
 
-    for (const kind of ["Activity", "Attention", "Stop", "StopFailure", "SessionEnd", "SubagentStop"] as const) {
+    for (const kind of [
+      "Activity",
+      "Attention",
+      "Stop",
+      "StopFailure",
+      "SessionEnd",
+      "SubagentStop",
+      "BackgroundWorkStarted",
+      "BackgroundWorkCleared",
+    ] as const) {
       expect(applyRegistryEvents(db, [simple(kind, "s1", { at: at(2) })])).toEqual(["ignored"]);
     }
     expect(getRow("s1")).toBeNull();
@@ -184,6 +203,7 @@ describe("applyRegistryEvents", () => {
       opened_at: at(1),
       updated_at: at(4),
       ghostty_terminal_id: null,
+      background_outstanding: 0,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
@@ -346,6 +366,80 @@ describe("applyRegistryEvents", () => {
   });
 });
 
+describe("background work outstanding", () => {
+  test("keeps Stop at working while background work is outstanding and returns to idle once cleared", () => {
+    applyRegistryEvents(db, [start("s1")]);
+    applyRegistryEvents(db, [simple("Activity", "s1"), simple("BackgroundWorkStarted", "s1", { at: at(2) })]);
+    expect(getRow("s1")).toMatchObject({ status: "working", background_outstanding: 1 });
+
+    // The turn that launched the background shell ends: Stop consults the flag.
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(3) })]);
+    expect(getRow("s1")).toMatchObject({ status: "working", background_outstanding: 1, updated_at: at(3) });
+
+    // A typed prompt turn that starts no new background work keeps working too.
+    applyRegistryEvents(db, [simple("Activity", "s1", { at: at(4) }), simple("Stop", "s1", { at: at(5) })]);
+    expect(getRow("s1")).toMatchObject({ status: "working", background_outstanding: 1 });
+
+    // The completion signal clears the flag; the wake turn's Stop finally idles.
+    applyRegistryEvents(db, [
+      simple("Activity", "s1", { at: at(6) }),
+      simple("BackgroundWorkCleared", "s1", { at: at(6) }),
+    ]);
+    expect(getRow("s1")).toMatchObject({ status: "working", background_outstanding: 0 });
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(7) })]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", background_outstanding: 0, updated_at: at(7) });
+  });
+
+  test("lets a re-armed watcher chain stay working across consecutive turns", () => {
+    applyRegistryEvents(db, [start("s1"), simple("BackgroundWorkStarted", "s1")]);
+
+    // Completion of the old shell, then a replacement starts within the wake
+    // turn: the flag never drops, so Stop keeps working throughout.
+    applyRegistryEvents(db, [
+      simple("Activity", "s1", { at: at(2) }),
+      simple("BackgroundWorkCleared", "s1", { at: at(2) }),
+      simple("BackgroundWorkStarted", "s1", { at: at(3) }),
+      simple("Stop", "s1", { at: at(4) }),
+    ]);
+    expect(getRow("s1")).toMatchObject({ status: "working", background_outstanding: 1, updated_at: at(4) });
+  });
+
+  test("never lets the flag alone change a waiting or error status", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Attention", "s1")]);
+    applyRegistryEvents(db, [simple("BackgroundWorkStarted", "s1", { at: at(2) })]);
+    expect(getRow("s1")).toMatchObject({ status: "waiting", background_outstanding: 1 });
+
+    applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(3) })]);
+    expect(getRow("s1")).toMatchObject({ status: "error", background_outstanding: 1 });
+  });
+
+  test("resets a stale background flag when the session starts over", () => {
+    applyRegistryEvents(db, [start("s1"), simple("BackgroundWorkStarted", "s1", { at: at(2) })]);
+    expect(getRow("s1")?.background_outstanding).toBe(1);
+
+    applyRegistryEvents(db, [start("s1", { at: at(3) })]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", background_outstanding: 0 });
+
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(4) })]);
+    expect(getRow("s1")).toMatchObject({ status: "idle" });
+  });
+
+  test("ignores background flag events for unknown sessions and exposes the flag in listSessions", () => {
+    expect(applyRegistryEvents(db, [simple("BackgroundWorkStarted", "ghost")])).toEqual(["ignored"]);
+    expect(applyRegistryEvents(db, [simple("BackgroundWorkCleared", "ghost")])).toEqual(["ignored"]);
+    expect(countRows()).toBe(0);
+
+    applyRegistryEvents(db, [start("s1"), simple("BackgroundWorkStarted", "s1", { at: at(2) })]);
+    expect(listSessions(db)).toHaveLength(1);
+    expect(listSessions(db)[0]).toMatchObject({
+      sessionId: "s1",
+      status: "idle",
+      backgroundOutstanding: 1,
+      updatedAt: at(2),
+    });
+  });
+});
+
 describe("repair commands", () => {
   test("clearSession deletes exactly one composite identity plus descendants", () => {
     applyRegistryEvents(db, [
@@ -391,6 +485,7 @@ describe("listSessions", () => {
         project: null,
         logicalSlot: 1,
         ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
         openedAt: at(1),
         updatedAt: at(1),
       },
@@ -403,6 +498,7 @@ describe("listSessions", () => {
         project: null,
         logicalSlot: 2,
         ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
         openedAt: at(2),
         updatedAt: at(2),
       },
@@ -415,6 +511,7 @@ describe("listSessions", () => {
         project: null,
         logicalSlot: null,
         ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
         openedAt: at(4),
         updatedAt: at(4),
       },
@@ -427,6 +524,7 @@ describe("listSessions", () => {
         project: null,
         logicalSlot: null,
         ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
         openedAt: at(3),
         updatedAt: at(3),
       },

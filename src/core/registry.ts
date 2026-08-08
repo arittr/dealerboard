@@ -30,6 +30,7 @@ export type ActiveSession = {
   project: string | null;
   logicalSlot: number | null;
   ghosttyTerminalId: string | null;
+  backgroundOutstanding: number;
   openedAt: string;
   updatedAt: string;
 };
@@ -43,12 +44,13 @@ type SessionRow = {
   project: string | null;
   logical_slot: number | null;
   ghostty_terminal_id: string | null;
+  background_outstanding: number;
   opened_at: string;
   updated_at: string;
 };
 
 const COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at, ghostty_terminal_id";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at, ghostty_terminal_id, background_outstanding";
 
 const getRow = (db: Database, provider: Provider, sessionId: string): SessionRow | null =>
   db
@@ -64,6 +66,7 @@ const toActiveSession = (row: SessionRow): ActiveSession => ({
   project: row.project,
   logicalSlot: row.logical_slot,
   ghosttyTerminalId: row.ghostty_terminal_id,
+  backgroundOutstanding: row.background_outstanding,
   openedAt: row.opened_at,
   updatedAt: row.updated_at,
 });
@@ -144,10 +147,12 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
     if (existing.parent_session_id !== null) {
       return "ignored";
     }
-    // Reset to idle and refresh metadata; slot and opened_at stay put.
+    // Reset to idle and refresh metadata; slot and opened_at stay put. Any
+    // stale background flag drops too: shells a previous life left running
+    // are no longer tracked, and their late completions clear a zero flag.
     db.run(
       `UPDATE active_sessions
-       SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, updated_at = ?
+       SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, background_outstanding = 0, updated_at = ?
        WHERE provider = ? AND session_id = ?`,
       [event.title, event.project, ghosttyTerminalId, event.observedAt, event.provider, event.sessionId],
     );
@@ -156,7 +161,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
   db.run(
     `INSERT INTO active_sessions
        (${COLUMNS})
-     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0)`,
     [
       event.provider,
       event.sessionId,
@@ -213,7 +218,7 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
   db.run(
     `INSERT INTO active_sessions
        (${COLUMNS})
-     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL)`,
+     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL, 0)`,
     [
       event.provider,
       event.sessionId,
@@ -227,17 +232,49 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
   return "applied";
 };
 
-const applyStatusUpdate = (
-  db: Database,
-  event: Extract<RegistryEvent, { kind: "Activity" | "Attention" | "Stop" | "StopFailure" }>,
-  status: SessionStatus,
-): MutationResult => {
+/** The single union member covering every plain per-session status/flag event. */
+type StatusEvent = Extract<
+  RegistryEvent,
+  {
+    kind: "Activity" | "Attention" | "Stop" | "StopFailure" | "BackgroundWorkStarted" | "BackgroundWorkCleared";
+  }
+>;
+
+const applyStatusUpdate = (db: Database, event: StatusEvent, status: SessionStatus): MutationResult => {
   const result = db.run("UPDATE active_sessions SET status = ?, updated_at = ? WHERE provider = ? AND session_id = ?", [
     status,
     event.observedAt,
     event.provider,
     event.sessionId,
   ]);
+  return result.changes > 0 ? "applied" : "ignored";
+};
+
+/**
+ * A turn ended. A session with a live background shell stays at working: the
+ * shell still acts on the session's behalf and its completion will wake a new
+ * turn. Only a Stop with no background work outstanding returns to idle.
+ */
+const applyStop = (db: Database, event: StatusEvent): MutationResult => {
+  const result = db.run(
+    `UPDATE active_sessions
+     SET status = CASE WHEN background_outstanding = 1 THEN 'working' ELSE 'idle' END, updated_at = ?
+     WHERE provider = ? AND session_id = ?`,
+    [event.observedAt, event.provider, event.sessionId],
+  );
+  return result.changes > 0 ? "applied" : "ignored";
+};
+
+/**
+ * Arm or disarm the background-work flag without touching status: the paired
+ * Activity event carries the status change, so a flag event alone can never
+ * lift a waiting or error state.
+ */
+const applyBackgroundWork = (db: Database, event: StatusEvent, outstanding: 0 | 1): MutationResult => {
+  const result = db.run(
+    "UPDATE active_sessions SET background_outstanding = ?, updated_at = ? WHERE provider = ? AND session_id = ?",
+    [outstanding, event.observedAt, event.provider, event.sessionId],
+  );
   return result.changes > 0 ? "applied" : "ignored";
 };
 
@@ -274,9 +311,13 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
     case "Attention":
       return applyStatusUpdate(db, event, "waiting");
     case "Stop":
-      return applyStatusUpdate(db, event, "idle");
+      return applyStop(db, event);
     case "StopFailure":
       return applyStatusUpdate(db, event, "error");
+    case "BackgroundWorkStarted":
+      return applyBackgroundWork(db, event, 1);
+    case "BackgroundWorkCleared":
+      return applyBackgroundWork(db, event, 0);
     case "SessionEnd":
       return applySessionEnd(db, event);
     case "SubagentStop":

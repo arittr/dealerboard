@@ -110,7 +110,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 2 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 3 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -119,7 +119,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -167,14 +167,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v2 with null bindings", () => {
+  test("migrates v1 rows additively to v3 with null bindings and no outstanding background work", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -183,14 +183,19 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
       expect(
-        db.query("SELECT session_id, status, logical_slot, ghostty_terminal_id FROM active_sessions").get(),
+        db
+          .query(
+            "SELECT session_id, status, logical_slot, ghostty_terminal_id, background_outstanding FROM active_sessions",
+          )
+          .get(),
       ).toEqual({
         session_id: "legacy",
         status: "waiting",
         logical_slot: 4,
         ghostty_terminal_id: null,
+        background_outstanding: 0,
       });
     } finally {
       db.close();
@@ -318,6 +323,24 @@ describe("active_sessions contract", () => {
       expect(() => insertWithTarget(db, "codex", "codex", null, 3, "terminal-3")).toThrow();
       expect(() => insertWithTarget(db, "kimi", "kimi", null, 3, "terminal-3")).toThrow();
       expect(() => insertWithTarget(db, "claude", "child", "parent", null, "terminal-child")).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  test("defaults background_outstanding to zero and confines it to a boolean flag", () => {
+    const db = openInitialized();
+    try {
+      insertSession(db, "s1", null, 1);
+      expect(db.query("SELECT background_outstanding FROM active_sessions").get()).toEqual({
+        background_outstanding: 0,
+      });
+      db.run("UPDATE active_sessions SET background_outstanding = 1");
+      expect(db.query("SELECT background_outstanding FROM active_sessions").get()).toEqual({
+        background_outstanding: 1,
+      });
+      expect(() => db.run("UPDATE active_sessions SET background_outstanding = 2")).toThrow();
+      expect(() => db.run("UPDATE active_sessions SET background_outstanding = NULL")).toThrow();
     } finally {
       db.close();
     }

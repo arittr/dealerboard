@@ -72,7 +72,7 @@ The product should show sessions that are currently attached, loaded, running, o
 - An authoritative process exit, attachment close, or archive removes a session.
 - Archive can be an authoritative negative fact, but lack of archive is not positive liveness.
 - A stale observation disappears; reconnecting observation creates it again.
-- A completed turn becomes idle rather than done.
+- A completed turn becomes idle rather than done. A Claude session with a background shell still running is the exception: the outstanding shell keeps the tile at working until the shell's completion notification (or a TaskStop) lands and the wake turn ends without re-arming.
 - Closed, done, and stale are not visible tile states.
 - There is no manual dismissal or retained closed-session history.
 

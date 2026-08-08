@@ -7,6 +7,13 @@
  * accepted string is capped at 256 Unicode code points, and the working
  * directory survives only as its basename. Payloads with missing identity,
  * unknown hook names, or non-object shapes decode to zero events.
+ *
+ * Two further Claude-only signals are classified in place, never stored: the
+ * `run_in_background` boolean of a Bash tool input (a background shell arms
+ * `BackgroundWorkStarted`, and `TaskStop` clears it) and the constant
+ * `<task-notification>` prefix of a synthetic prompt (the only completion
+ * signal a background shell produces). Command text and prompt bodies are
+ * never inspected beyond these checks.
  */
 
 import { basename } from "node:path";
@@ -67,11 +74,40 @@ const projectFromCwd = (cwd: string | undefined): string | null => {
 };
 
 const statusEvent = (
-  kind: "Activity" | "Attention" | "Stop" | "StopFailure" | "SessionEnd" | "SubagentStop",
+  kind:
+    | "Activity"
+    | "Attention"
+    | "Stop"
+    | "StopFailure"
+    | "SessionEnd"
+    | "SubagentStop"
+    | "BackgroundWorkStarted"
+    | "BackgroundWorkCleared",
   provider: Provider,
   sessionId: string,
   now: string,
 ): RegistryEvent => ({ kind, provider, sessionId, observedAt: now });
+
+const TASK_NOTIFICATION_PREFIX = "<task-notification>";
+
+/**
+ * Claude delivers a finished background task as a synthetic prompt beginning
+ * with the constant `<task-notification>` tag. Only that constant prefix is
+ * ever compared; the prompt text itself is neither read further nor retained.
+ */
+const isTaskNotificationPrompt = (value: Record<string, unknown>): boolean => {
+  const prompt = value["prompt"];
+  return typeof prompt === "string" && prompt.startsWith(TASK_NOTIFICATION_PREFIX);
+};
+
+/**
+ * Only the `run_in_background` boolean is read out of a tool input; command
+ * text and every other argument are never inspected.
+ */
+const isBackgroundToolCall = (value: Record<string, unknown>): boolean => {
+  const toolInput = value["tool_input"] ?? value["toolInput"];
+  return isRecord(toolInput) && toolInput["run_in_background"] === true;
+};
 
 const sessionFacts = (
   provider: Provider,
@@ -141,25 +177,42 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
       const event = sessionStartEvent(provider, sessionId, value, now);
       return provider === "kimi" && event.title === null ? [] : [event];
     }
-    case "UserPromptSubmit":
-      return provider === "kimi"
-        ? [sessionObservedEvent(provider, sessionId, value, now), statusEvent("Activity", provider, sessionId, now)]
-        : [statusEvent("Activity", provider, sessionId, now)];
+    case "UserPromptSubmit": {
+      const activity = statusEvent("Activity", provider, sessionId, now);
+      if (provider === "kimi") {
+        return [sessionObservedEvent(provider, sessionId, value, now), activity];
+      }
+      // A task-notification delivery is the only completion signal a Claude
+      // background shell ever produces; it clears the outstanding flag.
+      return provider === "claude" && isTaskNotificationPrompt(value)
+        ? [activity, statusEvent("BackgroundWorkCleared", provider, sessionId, now)]
+        : [activity];
+    }
     case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];
-    case "PreToolUse":
+    case "PreToolUse": {
       // A pending AskUserQuestion blocks the turn on the user's answer, so its
       // start is the attention signal; the answering PostToolUse maps back to
       // Activity like every other tool. No provider fires PermissionRequest,
       // Notification, or TaskStarted for a foreground question.
-      return [
-        statusEvent(
-          firstAllowlistedString(value, SAFE_FIELDS.toolName) === "AskUserQuestion" ? "Attention" : "Activity",
-          provider,
-          sessionId,
-          now,
-        ),
-      ];
+      const toolName = firstAllowlistedString(value, SAFE_FIELDS.toolName);
+      if (toolName === "AskUserQuestion") {
+        return [statusEvent("Attention", provider, sessionId, now)];
+      }
+      const activity = statusEvent("Activity", provider, sessionId, now);
+      // Background tracking is Claude-only: a Bash run_in_background call arms
+      // it, and TaskStop (which receives no completion notification) clears it.
+      if (provider !== "claude") {
+        return [activity];
+      }
+      if (toolName === "Bash" && isBackgroundToolCall(value)) {
+        return [activity, statusEvent("BackgroundWorkStarted", provider, sessionId, now)];
+      }
+      if (toolName === "TaskStop") {
+        return [activity, statusEvent("BackgroundWorkCleared", provider, sessionId, now)];
+      }
+      return [activity];
+    }
     case "PermissionRequest":
       return [statusEvent("Attention", provider, sessionId, now)];
     case "Notification":

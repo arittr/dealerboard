@@ -28,7 +28,7 @@ export type RegistryEvent =
       observedAt: string;
     }
   | {
-      kind: "Activity" | "Attention" | "Stop" | "StopFailure";
+      kind: "Activity" | "Attention" | "Stop" | "StopFailure" | "BackgroundWorkStarted" | "BackgroundWorkCleared";
       provider: Provider;
       sessionId: string;
       observedAt: string;

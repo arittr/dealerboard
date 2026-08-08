@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 2;
+export const LATEST_SCHEMA_VERSION = 3;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -71,6 +71,12 @@ ALTER TABLE active_sessions
   );
 `;
 
+const SCHEMA_VERSION_3 = `
+ALTER TABLE active_sessions
+  ADD COLUMN background_outstanding INTEGER NOT NULL DEFAULT 0
+  CHECK (background_outstanding IN (0, 1));
+`;
+
 /**
  * Ordered migrations keyed by the schema version each one produces. All due
  * migrations run inside a single transaction in `initializeDatabase`.
@@ -78,6 +84,7 @@ ALTER TABLE active_sessions
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
   { version: 2, sql: SCHEMA_VERSION_2 },
+  { version: 3, sql: SCHEMA_VERSION_3 },
 ];
 
 const readUserVersion = (db: Database): number => {
