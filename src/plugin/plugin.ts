@@ -8,6 +8,7 @@
  */
 
 import streamDeck from "@elgato/streamdeck";
+import { createFileDiagnostics } from "../core/diagnostics";
 import { resolveAppPaths } from "../core/paths";
 import { activateClaudeSession } from "./claude-session-activation";
 import { activateCodexSession } from "./codex-session-activation";
@@ -17,6 +18,7 @@ import { SessionGridAction } from "./session-grid-action";
 import { SnapshotCache } from "./snapshot-reader";
 
 const snapshotCache = new SnapshotCache(resolveAppPaths().snapshot);
+const diagnose = createFileDiagnostics(resolveAppPaths().logsDirectory);
 const activateKimiSession = createKimiSessionActivator((url) => streamDeck.system.openUrl(url));
 
 const keyActionForContext = (context: string) => {
@@ -24,11 +26,26 @@ const keyActionForContext = (context: string) => {
   return target?.isKey() ? target : undefined;
 };
 
+// Send failures are expected to be rare; throttle the incident log so a
+// broken connection cannot spam it faster than once a minute.
+let lastSendFailureLogAt = Number.NEGATIVE_INFINITY;
+const setImage = (context: string, image: string): Promise<void> => {
+  const send = keyActionForContext(context)?.setImage(image) ?? Promise.resolve();
+  return send.catch((error: unknown) => {
+    const now = Date.now();
+    if (now - lastSendFailureLogAt > 60_000) {
+      lastSendFailureLogAt = now;
+      diagnose({ timestamp: new Date(now).toISOString(), component: "plugin", code: "set_image_failed" });
+    }
+    throw error;
+  });
+};
+
 const controller = new SessionGridController({
   readSnapshot: () => snapshotCache.read(),
   getGlobalSettings: () => streamDeck.settings.getGlobalSettings(),
   setGlobalSettings: (settings) => streamDeck.settings.setGlobalSettings(settings),
-  setImage: (context, image) => keyActionForContext(context)?.setImage(image) ?? Promise.resolve(),
+  setImage,
   activateClaudeSession,
   activateCodexSession,
   activateKimiSession,
@@ -40,5 +57,5 @@ const controller = new SessionGridController({
   },
 });
 
-streamDeck.actions.registerAction(new SessionGridAction(controller));
+streamDeck.actions.registerAction(new SessionGridAction(controller, diagnose));
 void streamDeck.connect();

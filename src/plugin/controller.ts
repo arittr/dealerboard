@@ -213,6 +213,25 @@ export class SessionGridController {
     this.reconcileSupport();
   }
 
+  /**
+   * The device loses its key images while the system sleeps and the app does
+   * not restore them on wake. Identical frames are dedup-suppressed by the
+   * scheduler, so without an explicit re-push static tiles stay dark until
+   * the whole app restarts. Treat wake like a fresh appearance: re-read the
+   * snapshot and re-register every context, which forces an immediate render
+   * and send of the current frame for every visible key.
+   */
+  systemDidWakeUp(): void {
+    if (this.unsupportedReason === null && this.settingsReady) {
+      this.refreshSnapshot();
+    }
+    for (const context of this.contexts.keys()) {
+      this.scheduler.removeContext(context);
+      this.scheduler.addContext(context);
+    }
+    this.reconcileSupport();
+  }
+
   private computeUnsupportedReason(): string | null {
     if (this.devices.size > 1) {
       return "multiple_devices";

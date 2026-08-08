@@ -315,6 +315,38 @@ describe("SessionGridController", () => {
     expect(image).toContain("1/2");
   });
 
+  test("systemDidWakeUp re-pushes every visible tile even when frames are unchanged", async () => {
+    const { controller, clock, images, snapshot } = makeController({
+      view: healthyView(sessionsAt(1, 2, 3)),
+    });
+    const contexts = await fillGrid(controller);
+    await clock.advance(2000);
+    // Static frames are dedup-suppressed: each key saw only its first render.
+    for (const context of contexts) {
+      expect(startsFor(images, context).length).toBe(1);
+    }
+    const readsBefore = snapshot.reads;
+
+    controller.systemDidWakeUp();
+
+    // The wake re-reads the snapshot and immediately re-sends every key, so a
+    // device that lost its images while asleep converges without an app
+    // restart.
+    expect(snapshot.reads).toBe(readsBefore + 1);
+    for (const context of contexts) {
+      expect(startsFor(images, context).length).toBe(2);
+    }
+  });
+
+  test("systemDidWakeUp with no visible keys is a no-op", () => {
+    const { controller, clock, images } = makeController();
+
+    controller.systemDidWakeUp();
+
+    expect(images.starts).toEqual([]);
+    expect(clock.activeIntervalCount).toBe(0);
+  });
+
   test("a second connected device switches every key to the unsupported-layout treatment", async () => {
     const { controller, clock, snapshot, images } = makeController({
       view: healthyView(sessionsAt(1)),

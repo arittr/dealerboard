@@ -21,7 +21,9 @@ export type DiagnosticCode =
   | "unsupported_schema"
   | "sqlite_busy"
   | "claude_terminal_unbound"
-  | "internal_error";
+  | "internal_error"
+  | "wake_up"
+  | "set_image_failed";
 
 export type DiagnosticRecord = {
   timestamp: string;

@@ -16,6 +16,7 @@ import streamDeck, {
   type WillAppearEvent,
   type WillDisappearEvent,
 } from "@elgato/streamdeck";
+import type { DiagnosticRecord } from "../core/diagnostics";
 import type { SessionGridController } from "./controller";
 
 export const SESSION_GRID_ACTION_UUID = "com.drewritter.stream-deck-agents.session-grid";
@@ -24,7 +25,7 @@ export const SESSION_GRID_ACTION_UUID = "com.drewritter.stream-deck-agents.sessi
 export class SessionGridAction extends SingletonAction {
   private readonly controller: SessionGridController;
 
-  constructor(controller: SessionGridController) {
+  constructor(controller: SessionGridController, diagnose: (record: DiagnosticRecord) => void) {
     super();
     this.controller = controller;
     streamDeck.devices.onDeviceDidConnect((ev) => {
@@ -35,6 +36,10 @@ export class SessionGridAction extends SingletonAction {
     });
     streamDeck.devices.onDeviceDidDisconnect((ev) => {
       this.controller.deviceDidDisconnect(ev.device.id);
+    });
+    streamDeck.system.onSystemDidWakeUp(() => {
+      diagnose({ timestamp: new Date().toISOString(), component: "plugin", code: "wake_up" });
+      this.controller.systemDidWakeUp();
     });
   }
 
