@@ -221,6 +221,24 @@ const applySessionObserved = (
   });
 };
 
+/**
+ * A pushed title (pi `/name`, dsh `session/title`) refreshes the row's title
+ * only. `updated_at` deliberately stays put — it is the prune lease, and a
+ * title push must not extend a dead session's life, matching
+ * `updateSessionTitles`. Unknown identities are ignored: membership is
+ * proven by prompts, not titles.
+ */
+const applySessionTitleChanged = (
+  db: Database,
+  event: Extract<RegistryEvent, { kind: "SessionTitleChanged" }>,
+): MutationResult => {
+  const result = db.run(
+    "UPDATE active_sessions SET title = ? WHERE provider = ? AND session_id = ? AND title IS NOT ?",
+    [event.title, event.provider, event.sessionId, event.title],
+  );
+  return result.changes > 0 ? "applied" : "ignored";
+};
+
 const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: "SubagentStart" }>): MutationResult => {
   if (!isValidProspectiveParent(db, event.provider, event.sessionId, event.parentSessionId)) {
     return "ignored";
@@ -330,8 +348,7 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
     case "SessionObserved":
       return applySessionObserved(db, event);
     case "SessionTitleChanged":
-      // Stub until Task 3 lands the real title-change handler.
-      return "ignored";
+      return applySessionTitleChanged(db, event);
     case "SubagentStart":
       return applySubagentStart(db, event);
     case "Activity":
