@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 4;
+export const LATEST_SCHEMA_VERSION = 5;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -84,6 +84,64 @@ ALTER TABLE active_sessions
 `;
 
 /**
+ * v5 widens the provider CHECK. SQLite cannot alter a CHECK, so the table is
+ * rebuilt: the old table is renamed aside (its self-FK is rewritten to the
+ * archived name by SQLite and dropped with it), the v5 table is created
+ * under the final name with a correct self-reference, rows are copied with
+ * an explicit column list, and the partial unique index is recreated.
+ */
+const SCHEMA_VERSION_5 = `
+ALTER TABLE active_sessions RENAME TO active_sessions_v4_archived;
+
+CREATE TABLE active_sessions (
+  provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'kimi', 'pi', 'omp', 'zcode', 'deepseek')),
+  session_id TEXT NOT NULL,
+  parent_session_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('idle', 'working', 'waiting', 'error')),
+  title TEXT,
+  project TEXT,
+  logical_slot INTEGER,
+  opened_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  ghostty_terminal_id TEXT
+  CHECK (
+    ghostty_terminal_id IS NULL
+    OR (
+      provider = 'claude'
+      AND parent_session_id IS NULL
+      AND length(ghostty_terminal_id) BETWEEN 1 AND 256
+    )
+  ),
+  background_outstanding INTEGER NOT NULL DEFAULT 0
+  CHECK (background_outstanding IN (0, 1)),
+  transcript_path TEXT
+  CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256),
+  PRIMARY KEY (provider, session_id),
+  FOREIGN KEY (provider, parent_session_id)
+    REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
+  CHECK (
+    (parent_session_id IS NULL AND logical_slot IS NOT NULL AND logical_slot > 0)
+    OR
+    (parent_session_id IS NOT NULL AND logical_slot IS NULL)
+  )
+) WITHOUT ROWID;
+
+INSERT INTO active_sessions
+  (provider, session_id, parent_session_id, status, title, project, logical_slot,
+   opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path)
+SELECT
+  provider, session_id, parent_session_id, status, title, project, logical_slot,
+  opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path
+FROM active_sessions_v4_archived;
+
+DROP TABLE active_sessions_v4_archived;
+
+CREATE UNIQUE INDEX active_sessions_unique_slot
+  ON active_sessions(logical_slot)
+  WHERE logical_slot IS NOT NULL;
+`;
+
+/**
  * Ordered migrations keyed by the schema version each one produces. All due
  * migrations run inside a single transaction in `initializeDatabase`.
  */
@@ -93,6 +151,33 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 3, sql: SCHEMA_VERSION_3 },
   { version: 4, sql: SCHEMA_VERSION_4 },
 ];
+
+/**
+ * The v5 rebuild manages its own BEGIN/COMMIT: `PRAGMA foreign_keys` is a
+ * no-op inside a transaction, so enforcement is disabled before BEGIN and
+ * restored after COMMIT. `foreign_key_check` runs before committing; any
+ * violation rolls the whole rebuild back, leaving the v4 table untouched.
+ */
+const migrateToV5 = (db: Database): void => {
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+  let committed = false;
+  try {
+    db.exec(SCHEMA_VERSION_5);
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      throw new Error(`schema v5 rebuild left ${String(violations.length)} foreign key violation(s)`);
+    }
+    db.exec("PRAGMA user_version = 5");
+    db.exec("COMMIT");
+    committed = true;
+  } finally {
+    if (!committed) {
+      db.exec("ROLLBACK");
+    }
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+};
 
 const readUserVersion = (db: Database): number => {
   const row = db.query("PRAGMA user_version").get() as { user_version: number } | null;
@@ -126,6 +211,9 @@ export const initializeDatabase = (paths: AppPaths): void => {
         }
       });
       migrate();
+      if (version < 5) {
+        migrateToV5(db);
+      }
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
   } finally {

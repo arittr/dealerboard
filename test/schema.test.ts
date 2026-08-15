@@ -110,7 +110,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 4 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 5 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -119,7 +119,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -167,14 +167,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v4 with null bindings, no outstanding background work, and no transcript", () => {
+  test("migrates v1 rows additively to v5 with null bindings, no outstanding background work, and no transcript", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -183,7 +183,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
       expect(
         db
           .query(
@@ -358,6 +358,142 @@ describe("active_sessions contract", () => {
       });
       expect(() => db.run("UPDATE active_sessions SET transcript_path = ''")).toThrow();
       expect(() => db.run(`UPDATE active_sessions SET transcript_path = '${"x".repeat(257)}'`)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+});
+
+const createVersion4Database = (path: string): void => {
+  const legacy = new Database(path, { create: true, readwrite: true });
+  try {
+    legacy.exec("PRAGMA foreign_keys = OFF");
+    legacy.exec(`
+      CREATE TABLE active_sessions (
+        provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'kimi')),
+        session_id TEXT NOT NULL,
+        parent_session_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('idle', 'working', 'waiting', 'error')),
+        title TEXT,
+        project TEXT,
+        logical_slot INTEGER,
+        opened_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (provider, session_id),
+        FOREIGN KEY (provider, parent_session_id)
+          REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
+        CHECK (
+          (parent_session_id IS NULL AND logical_slot IS NOT NULL AND logical_slot > 0)
+          OR
+          (parent_session_id IS NOT NULL AND logical_slot IS NULL)
+        )
+      ) WITHOUT ROWID;
+      CREATE UNIQUE INDEX active_sessions_unique_slot
+        ON active_sessions(logical_slot)
+        WHERE logical_slot IS NOT NULL;
+      ALTER TABLE active_sessions ADD COLUMN ghostty_terminal_id TEXT
+        CHECK (
+          ghostty_terminal_id IS NULL
+          OR (provider = 'claude' AND parent_session_id IS NULL AND length(ghostty_terminal_id) BETWEEN 1 AND 256)
+        );
+      ALTER TABLE active_sessions ADD COLUMN background_outstanding INTEGER NOT NULL DEFAULT 0
+        CHECK (background_outstanding IN (0, 1));
+      ALTER TABLE active_sessions ADD COLUMN transcript_path TEXT
+        CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256);
+      PRAGMA user_version = 4;
+    `);
+    // A parent/child/grandchild chain plus a second root with a slot gap.
+    // `insertSession` is this file's helper (line 27; provider is "claude").
+    insertSession(legacy, "root", null, 1);
+    insertSession(legacy, "child", "root", null);
+    insertSession(legacy, "grandchild", "child", null);
+    insertSession(legacy, "other-root", null, 3);
+  } finally {
+    legacy.close();
+  }
+};
+
+const TS = "2026-08-06T00:00:00.000Z";
+// Full 9-value insert matching INSERT_SESSION's placeholders.
+const insertFull = (
+  db: Database,
+  provider: string,
+  sessionId: string,
+  parent: string | null,
+  slot: number | null,
+): void => {
+  db.run(INSERT_SESSION, [provider, sessionId, parent, "idle", null, null, slot, TS, TS]);
+};
+
+describe("schema v5", () => {
+  test("migrates a v4 database preserving rows, the index, and constraints", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion4Database(paths.database);
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      expect(countSessions(db)).toBe(4);
+      const index = db
+        .query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'active_sessions_unique_slot'")
+        .all();
+      expect(index).toHaveLength(1);
+      // The widened CHECK accepts the new providers.
+      insertFull(db, "zcode", "z1", null, 4);
+      expect(countSessions(db)).toBe(5);
+      // The FK is live again after the rebuild: an orphan child is rejected.
+      expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
+      expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+      const version = db.query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(5);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rolls back and leaves the v4 database intact when the FK check fails", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion4Database(paths.database);
+    // Inject an orphan with FK enforcement off (impossible under normal operation).
+    const legacy = new Database(paths.database, { readwrite: true });
+    legacy.exec("PRAGMA foreign_keys = OFF");
+    insertSession(legacy, "orphan", "missing-parent", null);
+    legacy.close();
+
+    expect(() => initializeDatabase(paths)).toThrow();
+
+    const db = new Database(paths.database, { readonly: true, create: false });
+    try {
+      const version = db.query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(4);
+      expect(countSessions(db)).toBe(5); // old table, orphan included
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fails without mutating when another connection holds the write lock", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion4Database(paths.database);
+
+    const blocker = new Database(paths.database, { readwrite: true });
+    blocker.exec("BEGIN IMMEDIATE");
+    try {
+      // The 250ms busy timeout fires; nothing is mutated.
+      expect(() => initializeDatabase(paths)).toThrow();
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+    }
+
+    const db = new Database(paths.database, { readonly: true, create: false });
+    try {
+      const version = db.query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(4);
     } finally {
       db.close();
     }
