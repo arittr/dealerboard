@@ -276,6 +276,85 @@ describe("readProjection", () => {
       rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  test("projects the widened provider set end to end (grid-blackout regression)", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "pi",
+            sessionId: "p1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:01.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "omp",
+            sessionId: "o1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:02.000Z",
+          },
+          {
+            kind: "SubagentStart",
+            provider: "omp",
+            sessionId: "o1c",
+            parentSessionId: "o1",
+            title: null,
+            project: null,
+            observedAt: "2026-08-06T00:00:03.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "zcode",
+            sessionId: "z1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:04.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "deepseek",
+            sessionId: "d1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:05.000Z",
+          },
+        ]);
+      } finally {
+        writer.close();
+      }
+
+      // The daemon's read side: a strictly read-only connection.
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions.map((session) => session.provider)).toEqual(["pi", "omp", "zcode", "deepseek"]);
+        expect(snapshot.sessions[1]?.descendantCount).toBe(1);
+        expect(snapshot.sessions[1]?.status).toBe("working"); // live child lifts the tree
+        expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("writeSnapshotAtomically", () => {

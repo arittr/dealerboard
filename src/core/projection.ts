@@ -12,7 +12,13 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { ProjectedSession, Provider, SessionSnapshotV2, SessionStatus } from "../protocol";
+import {
+  PROVIDER_KEYS,
+  type ProjectedSession,
+  type Provider,
+  type SessionSnapshotV2,
+  type SessionStatus,
+} from "../protocol";
 
 /** One `active_sessions` row mapped to the camelCase projection input. */
 export type ProjectionRow = {
@@ -55,7 +61,7 @@ const STATUS_PRIORITY: Record<SessionStatus, number> = {
   error: 3,
 };
 
-const PROVIDERS: ReadonlySet<string> = new Set(["claude", "codex", "kimi"]);
+const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
 
 const identityKey = (provider: Provider, sessionId: string): string => `${provider}\u0000${sessionId}`;
