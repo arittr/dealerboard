@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
 import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "../src/core/schema";
+import { PROVIDER_KEYS } from "../src/protocol";
 
 let tempHome: string;
 
@@ -362,6 +363,35 @@ describe("active_sessions contract", () => {
       db.close();
     }
   });
+
+  test("accepts every PROVIDER_KEYS provider and rejects any provider outside it", () => {
+    // The v5 provider CHECK is a literal SQL list, so it can silently drift
+    // from PROVIDER_KEYS when the next provider arrives. This test makes that
+    // drift (a new key without a schema bump) a red suite instead.
+    const db = openInitialized();
+    try {
+      let slot = 1;
+      for (const provider of PROVIDER_KEYS) {
+        db.run(INSERT_SESSION, [
+          provider,
+          `${provider}-session`,
+          null,
+          "idle",
+          null,
+          null,
+          slot++,
+          "opened",
+          "updated",
+        ]);
+      }
+      expect(countSessions(db)).toBe(PROVIDER_KEYS.length);
+      expect(() =>
+        db.run(INSERT_SESSION, ["vscode", "vscode-session", null, "idle", null, null, slot, "opened", "updated"]),
+      ).toThrow(/CHECK constraint failed/);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 const createVersion4Database = (path: string): void => {
@@ -403,11 +433,27 @@ const createVersion4Database = (path: string): void => {
       PRAGMA user_version = 4;
     `);
     // A parent/child/grandchild chain plus a second root with a slot gap.
-    // `insertSession` is this file's helper (line 27; provider is "claude").
-    insertSession(legacy, "root", null, 1);
-    insertSession(legacy, "child", "root", null);
-    insertSession(legacy, "grandchild", "child", null);
-    insertSession(legacy, "other-root", null, 3);
+    // Every nullable/defaultable column carries a representative NON-default
+    // value somewhere (within the CHECKs: ghostty_terminal_id only on the
+    // claude top-level root, background_outstanding = 1 on one row,
+    // transcript_path on one row), so a wrong column mapping or a dropped
+    // value in the v5 copy cannot pass the post-migration assertions as a
+    // default. The rollback test below still seeds its orphan via this file's
+    // `insertSession` helper.
+    legacy.run(
+      `INSERT INTO active_sessions
+         (provider, session_id, parent_session_id, status, title, project, logical_slot,
+          opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path)
+       VALUES
+         ('claude', 'root', NULL, 'working', 'Root session', 'proj-root', 1,
+          '2026-08-06T01:00:00.000Z', '2026-08-06T02:00:00.000Z', 'ghostty-a1', 1, NULL),
+         ('claude', 'child', 'root', 'waiting', 'Child session', 'proj-child', NULL,
+          '2026-08-06T03:00:00.000Z', '2026-08-06T04:00:00.000Z', NULL, 0, NULL),
+         ('claude', 'grandchild', 'child', 'idle', 'Grandchild session', 'proj-grand', NULL,
+          '2026-08-06T05:00:00.000Z', '2026-08-06T06:00:00.000Z', NULL, 0, NULL),
+         ('kimi', 'other-root', NULL, 'error', 'Other root session', 'proj-other', 3,
+          '2026-08-06T07:00:00.000Z', '2026-08-06T08:00:00.000Z', NULL, 0, '/transcripts/other.jsonl')`,
+    );
   } finally {
     legacy.close();
   }
@@ -436,6 +482,73 @@ describe("schema v5", () => {
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(db)).toBe(4);
+      // Every seeded NON-default value must survive the rebuild verbatim.
+      expect(
+        db
+          .query(
+            `SELECT provider, session_id, parent_session_id, status, title, project, logical_slot,
+                    opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path
+             FROM active_sessions ORDER BY session_id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          provider: "claude",
+          session_id: "child",
+          parent_session_id: "root",
+          status: "waiting",
+          title: "Child session",
+          project: "proj-child",
+          logical_slot: null,
+          opened_at: "2026-08-06T03:00:00.000Z",
+          updated_at: "2026-08-06T04:00:00.000Z",
+          ghostty_terminal_id: null,
+          background_outstanding: 0,
+          transcript_path: null,
+        },
+        {
+          provider: "claude",
+          session_id: "grandchild",
+          parent_session_id: "child",
+          status: "idle",
+          title: "Grandchild session",
+          project: "proj-grand",
+          logical_slot: null,
+          opened_at: "2026-08-06T05:00:00.000Z",
+          updated_at: "2026-08-06T06:00:00.000Z",
+          ghostty_terminal_id: null,
+          background_outstanding: 0,
+          transcript_path: null,
+        },
+        {
+          provider: "kimi",
+          session_id: "other-root",
+          parent_session_id: null,
+          status: "error",
+          title: "Other root session",
+          project: "proj-other",
+          logical_slot: 3,
+          opened_at: "2026-08-06T07:00:00.000Z",
+          updated_at: "2026-08-06T08:00:00.000Z",
+          ghostty_terminal_id: null,
+          background_outstanding: 0,
+          transcript_path: "/transcripts/other.jsonl",
+        },
+        {
+          provider: "claude",
+          session_id: "root",
+          parent_session_id: null,
+          status: "working",
+          title: "Root session",
+          project: "proj-root",
+          logical_slot: 1,
+          opened_at: "2026-08-06T01:00:00.000Z",
+          updated_at: "2026-08-06T02:00:00.000Z",
+          ghostty_terminal_id: "ghostty-a1",
+          background_outstanding: 1,
+          transcript_path: null,
+        },
+      ]);
       const index = db
         .query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'active_sessions_unique_slot'")
         .all();
