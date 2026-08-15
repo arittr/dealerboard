@@ -109,11 +109,15 @@ transaction and the partial unique index does not survive a drop):
 2. `PRAGMA foreign_keys = OFF` **before** `BEGIN` (the pragma toggles live
    outside `bun:sqlite`'s `db.transaction()` wrapper; the rebuild uses
    explicit `BEGIN`/`COMMIT` execs).
-3. `CREATE TABLE active_sessions_v5` with the full DDL: `WITHOUT ROWID`,
-   composite PK, every v2–v4 column and CHECK, and the widened provider list.
-4. `INSERT INTO … SELECT` with an explicit column list.
-5. `DROP`, `ALTER TABLE … RENAME TO active_sessions`, then explicitly
-   recreate the partial unique index `active_sessions_unique_slot`.
+3. `ALTER TABLE active_sessions RENAME TO active_sessions_v4_archived` —
+   the v4 table moves aside first (SQLite rewrites its self-FK to the
+   archived name, so it drops cleanly with it later).
+4. `CREATE TABLE active_sessions` directly under the final name with the
+   full DDL: `WITHOUT ROWID`, composite PK, every v2–v4 column and CHECK,
+   and the widened provider list.
+5. `INSERT INTO … SELECT` with an explicit column list, `DROP TABLE
+   active_sessions_v4_archived`, then explicitly recreate the partial unique
+   index `active_sessions_unique_slot`.
 6. `PRAGMA foreign_key_check`; any violation rolls back. `COMMIT`;
    `PRAGMA foreign_keys = ON`.
 
@@ -518,3 +522,8 @@ and deepseek blue chips kept as proposed (shape + letters carry the
 distinction; eyeballed in render verification); `tool_execution_start` for
 omp changed to "prefer if present" rather than required (fork parity
 unverified until implementation).
+
+Revision 3 — post-implementation reconciliation of the v5 rebuild algorithm
+wording in §Registry schema v5 (final review finding): the shipped migration
+renames the v4 table aside and creates the final table directly, rather than
+creating `active_sessions_v5` and renaming it into place.

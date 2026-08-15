@@ -64,6 +64,10 @@ Notes:
 - Only the plugin process restarts; the launchd daemon is untouched. Core
   changes under `src/core/` instead need `bun scripts/install-local.ts` (full
   reinstall: daemon, plist, packaged plugin).
+- The plugin and daemon deploy in lockstep: the plugin's snapshot parser
+  rejects unknown provider keys, so a new daemon with an old plugin degrades
+  the grid — and the manifest `Version` bump above is what makes the plugin
+  update actually stick.
 - If the deployed copy and repo should stay in sync permanently, use
   `streamdeck link` to point the app at the repo's `.sdPlugin` instead of
   copying (not currently set up).
@@ -74,7 +78,8 @@ Notes:
   no SDK imports). Status frame colors: working `#20B8FF`, waiting `#FFB020`,
   idle `#4ADE80`, error `#FF4D67`; `COLOR_NEUTRAL` `#94A3B8` is non-status
   chrome only (NEXT frame, page count, OFFLINE text). Provider corner chips:
-  Claude `#D97757`, Codex `#A855F7`, Kimi `#3B82F6` (`PROVIDER_COLORS`).
+  Claude `#D97757`, Codex `#A855F7`, Kimi `#3B82F6`, pi `#0EA514`, omp
+  `#F5F0EA`, zcode `#49A1E8`, deepseek `#426EFE` (`PROVIDER_COLORS`).
 - Session status model: `idle` = turn finished (set by the Stop hook),
   `working` = Activity, `waiting` = Attention, `error` = StopFailure. For
   Claude sessions, a Bash `run_in_background` PreToolUse arms the per-session
@@ -91,7 +96,7 @@ Notes:
   alive — reappears at its next prompt.
 - Tile labels prefer the session title over the project name. Only Kimi
   pushes titles via hooks; the daemon resolves Claude titles from the
-  transcript's `ai-title` records (path stored in schema v4's
+  transcript's `ai-title` records (path stored in schema v5's
   `transcript_path`) and Codex titles from `~/.codex/session_index.jsonl`'s
   `thread_name` (`src/core/titles.ts`), writing them back without touching
   `updated_at` (the prune's aging signal). Titles word-wrap to two

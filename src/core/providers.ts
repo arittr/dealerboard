@@ -1,5 +1,8 @@
 /**
- * Bounded decoder for native Claude, Codex, and Kimi hook payloads.
+ * Bounded decoder for hook payloads from the seven canonical providers —
+ * Claude, Codex, Kimi, pi, oh-my-pi, zcode, and the deepseek harness —
+ * native payloads for the first three and zcode, shim-normalized canonical
+ * events for pi, omp, and dsh.
  *
  * A provider hook invokes the CLI with one JSON object on stdin. This module
  * maps the supported hook events onto normalized `RegistryEvent` values while
