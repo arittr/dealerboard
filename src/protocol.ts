@@ -5,7 +5,9 @@
  * plugin bundle, so it must stay free of runtime-specific and SDK imports.
  */
 
-export type Provider = "claude" | "codex" | "kimi";
+export const PROVIDER_KEYS = ["claude", "codex", "kimi", "pi", "omp", "zcode", "deepseek"] as const;
+
+export type Provider = (typeof PROVIDER_KEYS)[number];
 
 export type SessionStatus = "idle" | "working" | "waiting" | "error";
 
@@ -27,6 +29,14 @@ export type RegistryEvent =
       title: string | null;
       project: string | null;
       transcriptPath: string | null;
+      observedAt: string;
+    }
+  | {
+      kind: "SessionTitleChanged";
+      provider: Provider;
+      sessionId: string;
+      /** Non-empty; the decoder bounds it to 256 code points like every string. */
+      title: string;
       observedAt: string;
     }
   | {
@@ -71,7 +81,7 @@ export type SessionSnapshotV2 = {
 
 const MAX_STRING_CODE_POINTS = 256;
 
-const PROVIDERS: ReadonlySet<string> = new Set(["claude", "codex", "kimi"]);
+const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

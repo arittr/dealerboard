@@ -45,6 +45,10 @@ const PROVIDER_COLORS: Record<Provider, string> = {
   claude: "#D97757",
   codex: "#A855F7",
   kimi: "#3B82F6",
+  pi: "#0EA514",
+  omp: "#F5F0EA",
+  zcode: "#49A1E8",
+  deepseek: "#426EFE",
 };
 
 const STATUS_COLORS: Record<SessionStatus, string> = {

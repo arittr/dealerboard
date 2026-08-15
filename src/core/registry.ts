@@ -329,6 +329,9 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
       return applySessionStart(db, event);
     case "SessionObserved":
       return applySessionObserved(db, event);
+    case "SessionTitleChanged":
+      // Stub until Task 3 lands the real title-change handler.
+      return "ignored";
     case "SubagentStart":
       return applySubagentStart(db, event);
     case "Activity":
