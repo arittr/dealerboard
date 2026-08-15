@@ -60,7 +60,7 @@ There is no visible status word or status glyph. A session whose current state i
 
 Each tile also has:
 
-- A provider-colored chip in the upper-left with the provider's two-letter abbreviation in dark text: orange `#D97757` for Claude, purple `#A855F7` for Codex, blue `#3B82F6` for Kimi.
+- A provider-colored chip in the upper-left with the provider's two-letter abbreviation in dark text: orange `#D97757` for Claude, purple `#A855F7` for Codex, blue `#3B82F6` for Kimi, green `#0EA514` for pi, cream `#F5F0EA` for oh-my-pi, blue `#49A1E8` for zcode, and blue `#426EFE` for deepseek.
 - A two-line session title. Kimi pushes `session_title` through its hooks; the daemon resolves Claude titles from the transcript's `ai-title` records and Codex titles from `~/.codex/session_index.jsonl`'s `thread_name`, writing them back to the registry. Title text is word-wrapped into two twelve-code-point lines; a word longer than a line hard-splits, and text that outlives the second line ends in an ellipsis.
 - Repository or worktree name as the first fallback while no title is known.
 - Provider plus shortened session identifier as the final fallback.

@@ -18,6 +18,8 @@
 - Gate after every task: `bun test` for the touched test file; gate at plan end: `bun run check`.
 - Do NOT run `bun scripts/install-local.ts` except in the final verification step, which requires the user's explicit go-ahead (it restarts the live daemon and plugin).
 
+**Execution order (controller amendment):** Tasks run 1 → 8 → 2 → 3 → 4 → 5 → 6 → 7 → 9 → 10. Task 8 (schema v5) precedes Task 2 because Task 2's regression test must insert new-provider rows through the real database — the v4 CHECK rejects them. (Found at Task 2's RED step: the original `projectRows`-based test could never fail — provider validation lives only in `toProjectionRow`, reached solely via `readProjection`, and `projectRows` consumes the already-typed `ProjectionRow`.)
+
 ---
 
 ### Task 1: Shared provider keys and the `SessionTitleChanged` event type
@@ -105,6 +107,11 @@ git add src/protocol.ts test/protocol.test.ts
 git commit -m "feat(protocol): add pi/omp/zcode/deepseek keys and SessionTitleChanged event"
 ```
 
+**Controller amendment (executed):** widening `Provider` breaks compile in two later-task files, and lefthook's pre-commit typecheck blocks a red commit, so Task 1 also carries two compile-unblocking stubs, staged in the same commit:
+
+- `src/core/registry.ts`: a `case "SessionTitleChanged": return "ignored";` stub in `applyEvent`'s switch (Task 3 replaces it with the real handler + tests).
+- `src/plugin/render.ts`: the four `PROVIDER_COLORS` entries with Task 7's exact values (Task 7's tests become regression guards).
+
 ---
 
 ### Task 2: Projection derives its provider set from `PROVIDER_KEYS`
@@ -114,35 +121,98 @@ git commit -m "feat(protocol): add pi/omp/zcode/deepseek keys and SessionTitleCh
 - Test: `test/projection.test.ts`
 
 **Interfaces:**
-- Consumes: `PROVIDER_KEYS` from Task 1.
-- Produces: `projectRows`/`readProjection` accept all seven providers (grid-blackout regression guard from review finding: an unwidened `projection.ts` set makes the daemon publish degraded health forever).
+- Consumes: `PROVIDER_KEYS` from Task 1; the v5 schema from Task 8 (its widened CHECK lets the test insert new-provider rows).
+- Produces: `readProjection` accepts all seven providers end to end (grid-blackout regression guard from review finding: an unwidened `projection.ts` set makes the daemon publish degraded health forever).
 
 - [ ] **Step 1: Write the failing test**
 
-Append a new describe block to `test/projection.test.ts` (reuse the `row` helper at the top of that file):
+Append inside the existing `describe("readProjection", ...)` block in `test/projection.test.ts`, mirroring its writer/reader pattern (all helpers already imported at the top of that file):
 
 ```ts
-describe("new providers", () => {
-  test("projects pi, omp, zcode, and deepseek rows including a child", () => {
-    const sessions = projectRows([
-      row("p1", { provider: "pi", slot: 1 }),
-      row("o1", { provider: "omp", slot: 2 }),
-      row("o1c", { provider: "omp", parent: "o1" }),
-      row("z1", { provider: "zcode", slot: 3 }),
-      row("d1", { provider: "deepseek", slot: 4 }),
-    ]);
+  test("projects the widened provider set end to end (grid-blackout regression)", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
 
-    expect(sessions.map((session) => session.provider)).toEqual(["pi", "omp", "zcode", "deepseek"]);
-    expect(sessions[1]?.descendantCount).toBe(1);
-    expect(sessions[1]?.status).toBe("working"); // live child lifts the tree
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "pi",
+            sessionId: "p1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:01.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "omp",
+            sessionId: "o1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:02.000Z",
+          },
+          {
+            kind: "SubagentStart",
+            provider: "omp",
+            sessionId: "o1c",
+            parentSessionId: "o1",
+            title: null,
+            project: null,
+            observedAt: "2026-08-06T00:00:03.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "zcode",
+            sessionId: "z1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:04.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "deepseek",
+            sessionId: "d1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            observedAt: "2026-08-06T00:00:05.000Z",
+          },
+        ]);
+      } finally {
+        writer.close();
+      }
+
+      // The daemon's read side: a strictly read-only connection.
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions.map((session) => session.provider)).toEqual(["pi", "omp", "zcode", "deepseek"]);
+        expect(snapshot.sessions[1]?.descendantCount).toBe(1);
+        expect(snapshot.sessions[1]?.status).toBe("working"); // live child lifts the tree
+        expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
   });
-});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `bun test test/projection.test.ts`
-Expected: FAIL with `ProjectionError` code `corrupt-row`.
+Expected: FAIL — `readProjection` throws `ProjectionError` code `corrupt-row` at the first new-provider row (the literal set at `projection.ts:58` still rejects it).
 
 - [ ] **Step 3: Replace the literal set**
 
@@ -624,6 +694,8 @@ git commit -m "feat(plugin): alert on new-provider tile press"
 
 **Interfaces:**
 - Produces: `PROVIDER_COLORS` entries pi `#0EA514`, omp `#F5F0EA`, zcode `#49A1E8`, deepseek `#426EFE` (brand-matched per spec §Rendering); marks are the existing first-two-letters rule (PI, OM, ZC, DE).
+
+**Controller amendment (post-Task 1):** Task 1 already landed the four `PROVIDER_COLORS` values as a compile-unblocking stub (widening `Provider` breaks the `Record<Provider, string>` otherwise). This task is therefore tests-only: the new assertions pass immediately and stand as regression guards. Step 2's RED expectation and Step 3's implementation are vacuous — verify the values are present, keep the tests.
 
 - [ ] **Step 1: Write the failing tests**
 

@@ -660,3 +660,35 @@ describe("listSessions", () => {
     ]);
   });
 });
+
+describe("SessionTitleChanged", () => {
+  const titleChanged = (sessionId: string, title: string, second = 5): RegistryEvent => ({
+    kind: "SessionTitleChanged",
+    provider: "pi",
+    sessionId,
+    title,
+    observedAt: at(second),
+  });
+
+  test("retitles an existing row without touching status or updated_at", () => {
+    applyRegistryEvents(db, [start("s1", { provider: "pi", title: "Old", at: at(1) })]);
+    applyRegistryEvents(db, [{ kind: "Activity", provider: "pi", sessionId: "s1", observedAt: at(2) }]);
+
+    expect(applyRegistryEvents(db, [titleChanged("s1", "New title")])).toEqual(["applied"]);
+
+    const row = listSessions(db)[0];
+    expect(row?.title).toBe("New title");
+    expect(row?.status).toBe("working");
+    expect(row?.updatedAt).toBe(at(2));
+  });
+
+  test("is ignored for an unknown identity and never creates a row", () => {
+    expect(applyRegistryEvents(db, [titleChanged("ghost", "Nope")])).toEqual(["ignored"]);
+    expect(listSessions(db)).toEqual([]);
+  });
+
+  test("is ignored when the stored title already matches", () => {
+    applyRegistryEvents(db, [start("s1", { provider: "pi", title: "Same", at: at(1) })]);
+    expect(applyRegistryEvents(db, [titleChanged("s1", "Same")])).toEqual(["ignored"]);
+  });
+});

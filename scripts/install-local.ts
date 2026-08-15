@@ -8,14 +8,15 @@
  *      explicit working directory.
  *   3. Create or correct the application directories to mode 0700.
  *   4. Copy the compiled core to the canonical executable, chmod 0700.
- *   5. Run the installed executable's init; verify the latest schema version.
- *   6. Replace the exact executable/log tokens in the plist template, write
+ *   5. Boot out the exact existing service only if present, so the schema
+ *      migration never contends with a live daemon.
+ *   6. Run the installed executable's init; verify the latest schema version.
+ *   7. Replace the exact executable/log tokens in the plist template, write
  *      the canonical plist at mode 0600, and validate with plutil -lint.
- *   7. Boot out the exact existing service only if present, then bootstrap
- *      and kickstart the exact label.
- *   8. Install the single packaged plugin from dist and restart it through
+ *   8. Bootstrap and kickstart the exact label.
+ *   9. Install the single packaged plugin from dist and restart it through
  *      the official Stream Deck CLI.
- *   9. Print the canonical paths; provider hooks remain uninstalled.
+ *   10. Print the canonical paths; provider hooks remain uninstalled.
  *
  * Every subprocess runs through spawnSync with an argument array — no shell
  * command strings — and every tool path is absolute.
@@ -88,7 +89,19 @@ const main = (): void => {
   copyFileSync(join(repositoryRoot, BUILT_CORE), paths.executable);
   chmodSync(paths.executable, EXECUTABLE_MODE);
 
-  // 5. Initialize schema version 2 through the installed executable and verify it.
+  // 5. Stop the live daemon before init runs the schema migration; the rebuild
+  // must not contend with the daemon's write cadence on a 250ms busy timeout.
+  const uid =
+    typeof process.getuid === "function"
+      ? process.getuid()
+      : fail("launchagent", "process.getuid is unavailable on this platform");
+  const serviceTarget = `gui/${uid}/${LABEL}`;
+  const probe = spawnSync(LAUNCHCTL, ["print", serviceTarget], { stdio: "ignore" });
+  if (probe.status === 0) {
+    run("launchagent", LAUNCHCTL, ["bootout", serviceTarget]);
+  }
+
+  // 6. Initialize the latest schema version through the installed executable and verify it.
   run("init", paths.executable, ["init"]);
   const db = new Database(paths.database, { readonly: true, create: false });
   try {
@@ -100,7 +113,7 @@ const main = (): void => {
     db.close();
   }
 
-  // 6. Render the plist template and install the LaunchAgent definition.
+  // 7. Render the plist template and install the LaunchAgent definition.
   const template = readFileSync(join(repositoryRoot, PLIST_TEMPLATE), "utf8");
   if (!template.includes(EXECUTABLE_TOKEN) || !template.includes(LOGS_TOKEN)) {
     fail("launchagent", "plist template is missing an expected token");
@@ -115,20 +128,11 @@ const main = (): void => {
   chmodSync(paths.launchAgent, PLIST_MODE);
   run("launchagent", PLUTIL, ["-lint", paths.launchAgent]);
 
-  // 7. Load the daemon under the exact label.
-  const uid =
-    typeof process.getuid === "function"
-      ? process.getuid()
-      : fail("launchagent", "process.getuid is unavailable on this platform");
-  const serviceTarget = `gui/${uid}/${LABEL}`;
-  const probe = spawnSync(LAUNCHCTL, ["print", serviceTarget], { stdio: "ignore" });
-  if (probe.status === 0) {
-    run("launchagent", LAUNCHCTL, ["bootout", serviceTarget]);
-  }
+  // 8. Load the daemon under the exact label.
   run("launchagent", LAUNCHCTL, ["bootstrap", `gui/${uid}`, paths.launchAgent]);
   run("launchagent", LAUNCHCTL, ["kickstart", "-k", serviceTarget]);
 
-  // 8. Install the single packaged plugin and start it through the official
+  // 9. Install the single packaged plugin and start it through the official
   // Stream Deck CLI. @elgato/cli (1.7.4, the latest) ships no install verb,
   // so the package is opened: LaunchServices hands the registered
   // .streamDeckPlugin document to the Stream Deck app, which installs it. If
@@ -143,7 +147,7 @@ const main = (): void => {
   run("install-plugin", OPEN, [packagePath]);
   run("install-plugin", process.execPath, [STREAMDECK_CLI, "restart", LABEL]);
 
-  // 9. Report canonical paths; provider hooks remain a manual final step.
+  // 10. Report canonical paths; provider hooks remain a manual final step.
   process.stdout.write(
     [
       "install-local: complete",

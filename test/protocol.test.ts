@@ -38,6 +38,15 @@ const withSession = (mutation: Partial<ProjectedSession>): unknown => ({
   sessions: [{ ...firstSession(), ...mutation }],
 });
 
+const titleEvent: RegistryEvent = {
+  kind: "SessionTitleChanged",
+  provider: "pi",
+  sessionId: "s1",
+  title: "Renamed session",
+  observedAt: "2026-08-06T00:00:00.000Z",
+};
+void titleEvent;
+
 describe("parseSessionSnapshot", () => {
   test("accepts a minimal valid snapshot and returns an equal, newly constructed value", () => {
     const result = parseSessionSnapshot(valid);
@@ -184,6 +193,17 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot(withSession({ title: 0 as unknown as null }))).toThrow();
     expect(() => parseSessionSnapshot({ ...valid, sessions: "none" as unknown as [] })).toThrow();
     expect(() => parseSessionSnapshot({ ...valid, health: "ok" as unknown as object })).toThrow();
+  });
+
+  test.each(["pi", "omp", "zcode", "deepseek"] as const)("accepts provider %s", (provider) => {
+    const result = parseSessionSnapshot(withSession({ provider, ghosttyTerminalId: null }));
+    expect(result.sessions[0]?.provider).toBe(provider);
+  });
+
+  test("still rejects an unknown provider", () => {
+    expect(() => parseSessionSnapshot(withSession({ provider: "vscode" as never }))).toThrow(
+      "session.provider is not a known provider",
+    );
   });
 });
 

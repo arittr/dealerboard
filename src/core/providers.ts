@@ -1,5 +1,8 @@
 /**
- * Bounded decoder for native Claude, Codex, and Kimi hook payloads.
+ * Bounded decoder for hook payloads from the seven canonical providers —
+ * Claude, Codex, Kimi, pi, oh-my-pi, zcode, and the deepseek harness —
+ * native payloads for the first three and zcode, shim-normalized canonical
+ * events for pi, omp, and dsh.
  *
  * A provider hook invokes the CLI with one JSON object on stdin. This module
  * maps the supported hook events onto normalized `RegistryEvent` values while
@@ -36,6 +39,7 @@ const SAFE_FIELDS = {
   cwd: ["cwd"],
   title: ["title", "session_title", "sessionTitle"],
   transcriptPath: ["transcript_path", "transcriptPath"],
+  isInterrupt: ["is_interrupt", "isInterrupt"],
 } as const;
 
 /**
@@ -62,6 +66,17 @@ const firstAllowlistedString = (record: Record<string, unknown>, aliases: readon
     const value = record[alias];
     if (typeof value === "string" && value.length > 0) {
       return boundString(value);
+    }
+  }
+  return undefined;
+};
+
+/** First actual boolean among the allowlisted aliases. Non-boolean values count as absent. */
+const firstAllowlistedBoolean = (record: Record<string, unknown>, aliases: readonly string[]): boolean | undefined => {
+  for (const alias of aliases) {
+    const value = record[alias];
+    if (typeof value === "boolean") {
+      return value;
     }
   }
   return undefined;
@@ -122,7 +137,10 @@ const sessionFacts = (
   sessionId,
   title: firstAllowlistedString(value, SAFE_FIELDS.title) ?? null,
   project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
-  transcriptPath: firstAllowlistedString(value, SAFE_FIELDS.transcriptPath) ?? null,
+  // zcode's transcript_path is a temp file deleted when the hook returns;
+  // storing it would only mislead the titles resolver (zcode titles come
+  // from its SQLite database instead).
+  transcriptPath: provider === "zcode" ? null : (firstAllowlistedString(value, SAFE_FIELDS.transcriptPath) ?? null),
   observedAt: now,
 });
 
@@ -164,7 +182,10 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
   if (!isRecord(value)) {
     return [];
   }
-  if ("transcript_path" in value && value["transcript_path"] === null) {
+  // Codex Desktop's hidden ambient-suggestion threads declare no transcript;
+  // the drop is codex's contract. Other providers never send an explicit
+  // null (shims omit absent fields), so they are unaffected.
+  if (provider === "codex" && "transcript_path" in value && value["transcript_path"] === null) {
     return [];
   }
   const hookEventName = firstAllowlistedString(value, SAFE_FIELDS.hookEventName);
@@ -181,6 +202,15 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
       const event = sessionStartEvent(provider, sessionId, value, now);
       return provider === "kimi" && event.title === null ? [] : [event];
     }
+    case "SessionTitleChanged": {
+      // Shim-pushed title (pi session_info_changed, dsh session/title). The
+      // registry decides whether the row exists and the title differs.
+      const title = firstAllowlistedString(value, SAFE_FIELDS.title);
+      if (title === undefined) {
+        return [];
+      }
+      return [{ kind: "SessionTitleChanged", provider, sessionId, title, observedAt: now }];
+    }
     case "UserPromptSubmit": {
       // Every provider late-joins on a prompt: SessionObserved resurrects a
       // session whose SessionStart was missed or whose row was pruned while
@@ -195,6 +225,13 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
     }
     case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];
+    case "PostToolUseFailure":
+      // zcode has no interrupt event; a tool failure carrying is_interrupt is
+      // the only signal. Tool-level failures without it are not turn events.
+      // The `error` payload field is never read (privacy contract).
+      return provider === "zcode" && firstAllowlistedBoolean(value, SAFE_FIELDS.isInterrupt) === true
+        ? [statusEvent("Stop", provider, sessionId, now)]
+        : [];
     case "PreToolUse": {
       // A pending AskUserQuestion blocks the turn on the user's answer, so its
       // start is the attention signal; the answering PostToolUse maps back to

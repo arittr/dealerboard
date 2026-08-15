@@ -169,6 +169,16 @@ export class SessionGridController {
     }
     let activateSession: ((target: string) => Promise<void>) | undefined;
     let activationTarget: string | undefined;
+    const runActivation = async (): Promise<void> => {
+      if (activateSession === undefined || activationTarget === undefined) {
+        return;
+      }
+      try {
+        await activateSession(activationTarget);
+      } catch {
+        await this.showActivationAlert(context);
+      }
+    };
     switch (model.session.provider) {
       case "claude":
         if (model.session.ghosttyTerminalId === null) {
@@ -177,24 +187,29 @@ export class SessionGridController {
         }
         activateSession = this.ports.activateClaudeSession;
         activationTarget = model.session.ghosttyTerminalId;
-        break;
+        return runActivation();
       case "codex":
         activateSession = this.ports.activateCodexSession;
         activationTarget = model.session.sessionId;
-        break;
+        return runActivation();
       case "kimi":
         activateSession = this.ports.activateKimiSession;
         activationTarget = model.session.sessionId;
-        break;
+        return runActivation();
+      case "pi":
+      case "omp":
+      case "zcode":
+      case "deepseek":
+        // No activation binding exists for these providers yet; match the
+        // unbound-Claude behavior instead of silently doing nothing.
+        await this.showActivationAlert(context);
+        return;
     }
-    if (activateSession === undefined || activationTarget === undefined) {
-      return;
-    }
-    try {
-      await activateSession(activationTarget);
-    } catch {
-      await this.showActivationAlert(context);
-    }
+    // Exhaustiveness proof: every case above returns, so this line is
+    // reachable only when a Provider has no case — adding one without a
+    // case fails typecheck here instead of silently doing nothing.
+    const uncoveredProvider: never = model.session.provider;
+    void uncoveredProvider;
   }
 
   deviceDidConnect(deviceId: string, info: GridDeviceInfo): void {

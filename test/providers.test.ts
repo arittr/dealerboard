@@ -4,8 +4,10 @@ import type { RegistryEvent } from "../src/protocol";
 
 const NOW = "2026-08-06T00:00:00.000Z";
 
-const decode = (value: unknown, provider: "claude" | "codex" | "kimi" = "claude"): RegistryEvent[] =>
-  decodeNativeHook(provider, value, NOW);
+const decode = (
+  value: unknown,
+  provider: "claude" | "codex" | "kimi" | "pi" | "omp" | "zcode" | "deepseek" = "claude",
+): RegistryEvent[] => decodeNativeHook(provider, value, NOW);
 
 describe("field extraction", () => {
   test("accepts underscore aliases", () => {
@@ -718,5 +720,87 @@ describe("privacy boundaries", () => {
     );
     expect(events).toEqual([{ kind: "Attention", provider: "kimi", sessionId: "s1", observedAt: NOW }]);
     expect(JSON.stringify(events)).not.toContain("SENTINEL");
+  });
+});
+
+describe("SessionTitleChanged", () => {
+  test("decodes a non-empty title", () => {
+    expect(decode({ hook_event_name: "SessionTitleChanged", session_id: "s1", title: "Fresh name" }, "pi")).toEqual([
+      {
+        kind: "SessionTitleChanged",
+        provider: "pi",
+        sessionId: "s1",
+        title: "Fresh name",
+        observedAt: NOW,
+      },
+    ]);
+  });
+
+  test("decodes to zero events when the title is missing or empty", () => {
+    expect(decode({ hook_event_name: "SessionTitleChanged", session_id: "s1" }, "pi")).toEqual([]);
+    expect(decode({ hook_event_name: "SessionTitleChanged", session_id: "s1", title: "" }, "pi")).toEqual([]);
+  });
+});
+
+describe("zcode PostToolUseFailure", () => {
+  const failure = { hook_event_name: "PostToolUseFailure", session_id: "z1", is_interrupt: true };
+
+  test("maps an interrupt to Stop for zcode only", () => {
+    expect(decode(failure, "zcode")).toEqual([{ kind: "Stop", provider: "zcode", sessionId: "z1", observedAt: NOW }]);
+    expect(decode(failure, "claude")).toEqual([]);
+    expect(decode(failure, "kimi")).toEqual([]);
+  });
+
+  test("ignores non-interrupt failures and string-typed is_interrupt", () => {
+    expect(decode({ ...failure, is_interrupt: false }, "zcode")).toEqual([]);
+    expect(decode({ ...failure, is_interrupt: "true" }, "zcode")).toEqual([]);
+    expect(decode({ hook_event_name: "PostToolUseFailure", session_id: "z1" }, "zcode")).toEqual([]);
+  });
+});
+
+describe("zcode transcript suppression", () => {
+  test("stores null instead of the deleted temp path", () => {
+    expect(
+      decode(
+        {
+          hook_event_name: "SessionStart",
+          session_id: "z1",
+          cwd: "/users/drew/proj",
+          transcript_path: "/tmp/zcode-hook-123.jsonl",
+        },
+        "zcode",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "zcode",
+        sessionId: "z1",
+        title: null,
+        project: "proj",
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        observedAt: NOW,
+      },
+    ]);
+  });
+
+  test("other providers keep transcript_path", () => {
+    const events = decode(
+      { hook_event_name: "SessionStart", session_id: "s1", transcript_path: "/real/transcript.jsonl" },
+      "claude",
+    );
+    expect(events[0]).toMatchObject({ transcriptPath: "/real/transcript.jsonl" });
+  });
+});
+
+describe("ephemeral transcript_path filter scope", () => {
+  test("explicit null drops the event for codex", () => {
+    expect(decode({ hook_event_name: "SessionStart", session_id: "c1", transcript_path: null }, "codex")).toEqual([]);
+  });
+
+  test("explicit null does not drop the event for other providers", () => {
+    expect(decode({ hook_event_name: "Stop", session_id: "k1", transcript_path: null }, "kimi")).toEqual([
+      { kind: "Stop", provider: "kimi", sessionId: "k1", observedAt: NOW },
+    ]);
   });
 });

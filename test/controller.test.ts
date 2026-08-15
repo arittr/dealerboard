@@ -654,6 +654,21 @@ describe("SessionGridController", () => {
     expect(harness.alerts.contexts).toEqual(["ctx-claude"]);
   });
 
+  test.each(["pi", "omp", "zcode", "deepseek"] as const)(
+    "a %s tile press alerts without invoking any activator",
+    async (provider) => {
+      const harness = makeController({ view: healthyView([session(1, { provider })]) });
+      await harness.controller.willAppear(appear("ctx-new", 0, 0));
+
+      await harness.controller.keyDown("ctx-new");
+
+      expect(harness.claudeActivation.sessionIds).toEqual([]);
+      expect(harness.activation.sessionIds).toEqual([]);
+      expect(harness.kimiActivation.sessionIds).toEqual([]);
+      expect(harness.alerts.contexts).toEqual(["ctx-new"]);
+    },
+  );
+
   test("a rejected Claude focus alerts once with no retry", async () => {
     const harness = makeController({
       view: healthyView([session(1, { ghosttyTerminalId: "stale-terminal" })]),
