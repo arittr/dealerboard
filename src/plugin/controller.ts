@@ -186,6 +186,14 @@ export class SessionGridController {
         activateSession = this.ports.activateKimiSession;
         activationTarget = model.session.sessionId;
         break;
+      case "pi":
+      case "omp":
+      case "zcode":
+      case "deepseek":
+        // No activation binding exists for these providers yet; match the
+        // unbound-Claude behavior instead of silently doing nothing.
+        await this.showActivationAlert(context);
+        return;
     }
     if (activateSession === undefined || activationTarget === undefined) {
       return;
