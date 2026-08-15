@@ -3,7 +3,7 @@
  *
  * Grammar (exact):
  *   stream-deck-agents init
- *   stream-deck-agents event <claude|codex|kimi>
+ *   stream-deck-agents event <claude|codex|kimi|pi|omp|zcode|deepseek>
  *   stream-deck-agents daemon
  *   stream-deck-agents sessions list
  *   stream-deck-agents sessions clear <provider> <session-id>
@@ -20,7 +20,7 @@
  */
 
 import { join } from "node:path";
-import type { Provider } from "../protocol";
+import { PROVIDER_KEYS, type Provider } from "../protocol";
 import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
 import { ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
@@ -53,7 +53,7 @@ export type CliDependencies = {
 type ResolvedDependencies = Required<CliDependencies>;
 
 const isProvider = (value: string | undefined): value is Provider =>
-  value === "claude" || value === "codex" || value === "kimi";
+  value !== undefined && (PROVIDER_KEYS as readonly string[]).includes(value);
 
 const boundString = (value: string): string => Array.from(value).slice(0, 256).join("");
 
@@ -108,7 +108,7 @@ const USAGE = `usage: stream-deck-agents <command>
 
 commands:
   init
-  event <claude|codex|kimi>
+  event <${PROVIDER_KEYS.join("|")}>
   daemon
   sessions list
   sessions clear <provider> <session-id>
