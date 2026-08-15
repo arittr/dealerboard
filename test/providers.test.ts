@@ -25,6 +25,7 @@ describe("field extraction", () => {
         title: "Fix the thing",
         project: "project-x",
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
     ]);
@@ -39,6 +40,7 @@ describe("field extraction", () => {
         title: "Camel",
         project: null,
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
     ]);
@@ -67,6 +69,7 @@ describe("field extraction", () => {
         title: null,
         project: null,
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
     ]);
@@ -82,6 +85,7 @@ describe("field extraction", () => {
         title: null,
         project: "repo",
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
     ]);
@@ -94,8 +98,50 @@ describe("field extraction", () => {
         title: null,
         project: null,
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
+    ]);
+  });
+
+  test("carries a real transcript path onto SessionStart and SessionObserved", () => {
+    expect(
+      decode({
+        hook_event_name: "SessionStart",
+        session_id: "s1",
+        cwd: "/users/drew/repo",
+        transcript_path: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+      }),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: "repo",
+        ghosttyTerminalId: null,
+        transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        observedAt: NOW,
+      },
+    ]);
+    expect(
+      decode({
+        hook_event_name: "UserPromptSubmit",
+        session_id: "s1",
+        cwd: "/users/drew/repo",
+        transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+      }),
+    ).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: "repo",
+        transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        observedAt: NOW,
+      },
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
     ]);
   });
 
@@ -143,6 +189,7 @@ describe("event mapping", () => {
         title: null,
         project: null,
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
     ]);
@@ -167,6 +214,7 @@ describe("event mapping", () => {
         sessionId: "s1",
         title: null,
         project: "project-x",
+        transcriptPath: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
@@ -184,13 +232,25 @@ describe("event mapping", () => {
         title: "Existing session",
         project: null,
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
     ]);
   });
 
   test("maps UserPromptSubmit, PreToolUse, and PostToolUse to Activity", () => {
+    // A prompt also emits SessionObserved first: it late-joins sessions whose
+    // SessionStart was missed or whose row was pruned, and no-ops otherwise.
     expect(decode(withIdentity({ hook_event_name: "UserPromptSubmit" }))).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        observedAt: NOW,
+      },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
     ]);
     expect(decode(withIdentity({ hook_event_name: "PreToolUse" }))).toEqual([
@@ -377,7 +437,7 @@ describe("event mapping", () => {
       [],
     );
 
-    // A real transcript path keeps the event decodable.
+    // A real transcript path keeps the event decodable and is carried along.
     expect(
       decode(
         {
@@ -396,6 +456,7 @@ describe("event mapping", () => {
         title: null,
         project: "app",
         ghosttyTerminalId: null,
+        transcriptPath: "/Users/drew/.codex/sessions/rollout-1.jsonl",
         observedAt: NOW,
       },
     ]);
@@ -410,10 +471,20 @@ describe("event mapping", () => {
         title: null,
         project: "app",
         ghosttyTerminalId: null,
+        transcriptPath: null,
         observedAt: NOW,
       },
     ]);
     expect(decode({ hook_event_name: "UserPromptSubmit", session_id: "c1" }, "codex")).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        observedAt: NOW,
+      },
       { kind: "Activity", provider: "codex", sessionId: "c1", observedAt: NOW },
     ]);
     expect(decode({ hook_event_name: "SessionEnd", session_id: "c1" }, "codex")).toEqual([
@@ -501,6 +572,15 @@ describe("background shell tracking (Claude only)", () => {
       }),
     );
     expect(events).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        observedAt: NOW,
+      },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
       { kind: "BackgroundWorkCleared", provider: "claude", sessionId: "s1", observedAt: NOW },
     ]);
@@ -509,6 +589,15 @@ describe("background shell tracking (Claude only)", () => {
 
   test("keeps ordinary Claude prompts and other providers free of background events", () => {
     expect(decode(withIdentity({ hook_event_name: "UserPromptSubmit", prompt: "how we lookin" }))).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        observedAt: NOW,
+      },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
     ]);
     expect(
@@ -528,14 +617,33 @@ describe("background shell tracking (Claude only)", () => {
         withIdentity({ hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>b1</task-id>" }),
         "codex",
       ),
-    ).toEqual([{ kind: "Activity", provider: "codex", sessionId: "s1", observedAt: NOW }]);
+    ).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "codex",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        observedAt: NOW,
+      },
+      { kind: "Activity", provider: "codex", sessionId: "s1", observedAt: NOW },
+    ]);
     expect(
       decode(
         withIdentity({ hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>b1</task-id>" }),
         "kimi",
       ),
     ).toEqual([
-      { kind: "SessionObserved", provider: "kimi", sessionId: "s1", title: null, project: null, observedAt: NOW },
+      {
+        kind: "SessionObserved",
+        provider: "kimi",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        observedAt: NOW,
+      },
       { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
     ]);
   });
@@ -573,14 +681,27 @@ describe("privacy boundaries", () => {
     expect(JSON.stringify(events)).not.toContain("SENTINEL");
   });
 
-  test("UserPromptSubmit decodes to a bare Activity with no prompt content", () => {
+  test("UserPromptSubmit decodes to observed-plus-activity with no prompt content", () => {
     const events = decode({
       hook_event_name: "UserPromptSubmit",
       session_id: "s1",
       prompt: "SENTINEL_USER_PROMPT",
+      transcript_path: "/tmp/SENTINEL_TRANSCRIPT",
     });
-    expect(events).toEqual([{ kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW }]);
-    expect(JSON.stringify(events)).not.toContain("SENTINEL");
+    expect(events).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: "/tmp/SENTINEL_TRANSCRIPT",
+        observedAt: NOW,
+      },
+      { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
+    ]);
+    // The allowlisted transcript path is retained by design; the prompt is not.
+    expect(JSON.stringify(events)).not.toContain("SENTINEL_USER_PROMPT");
   });
 
   test("AskUserQuestion decodes to a bare Attention with no question content", () => {

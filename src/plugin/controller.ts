@@ -220,14 +220,23 @@ export class SessionGridController {
    * the whole app restarts. Treat wake like a fresh appearance: re-read the
    * snapshot and re-register every context, which forces an immediate render
    * and send of the current frame for every visible key.
+   *
+   * The re-push happens only when there is a converged grid to push: with
+   * settings still unloaded there is no layout, and registering contexts here
+   * would push blank tiles that then block the immediate fresh render —
+   * scheduler registration is a no-op for contexts it already holds. That
+   * case is left to the bootstrap reconcileSupport triggers, which finishes
+   * the settings load and converges on the post-wake snapshot.
    */
   systemDidWakeUp(): void {
     if (this.unsupportedReason === null && this.settingsReady) {
       this.refreshSnapshot();
     }
-    for (const context of this.contexts.keys()) {
-      this.scheduler.removeContext(context);
-      this.scheduler.addContext(context);
+    if (this.unsupportedReason !== null || this.settingsReady) {
+      for (const context of this.contexts.keys()) {
+        this.scheduler.removeContext(context);
+        this.scheduler.addContext(context);
+      }
     }
     this.reconcileSupport();
   }

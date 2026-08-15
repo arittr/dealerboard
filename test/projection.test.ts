@@ -203,6 +203,7 @@ describe("readProjection", () => {
             title: "Parent",
             project: "proj",
             ghosttyTerminalId: null,
+            transcriptPath: null,
             observedAt: "2026-08-06T00:00:01.000Z",
           },
           {

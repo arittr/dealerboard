@@ -104,14 +104,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 3 database and stays silent on stdout", async () => {
+  test("creates a version 4 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
     } finally {
       db.close();
     }
@@ -155,6 +155,7 @@ describe("event ingress", () => {
         logicalSlot: 1,
         ghosttyTerminalId: "test-ghostty-terminal",
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -224,6 +225,7 @@ describe("event ingress", () => {
         logicalSlot: 1,
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -276,6 +278,7 @@ describe("event ingress", () => {
         logicalSlot: 1,
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -304,6 +307,7 @@ describe("event ingress", () => {
         logicalSlot: 1,
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -341,6 +345,7 @@ describe("event ingress", () => {
           title: null,
           project: null,
           ghosttyTerminalId: "existing-terminal",
+          transcriptPath: null,
           observedAt: NOW,
         },
       ]);
@@ -432,20 +437,38 @@ describe("event ingress", () => {
     ]);
   });
 
-  test("never creates a row from UserPromptSubmit before a SessionStart", async () => {
+  test("late-joins a row from UserPromptSubmit when SessionStart was missed", async () => {
+    // A prompt proves membership: sessions whose start hook never fired (or
+    // whose row was pruned) reappear instead of staying invisible forever.
     initRegistry();
     const harness = makeHarness({
       stdin: stdinOf(
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "s1",
+          cwd: "/users/drew/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
     });
     expect(await runCli(["event", "codex"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
-    expect(listRows()).toEqual([]);
+    expect(listRows()).toEqual([
+      {
+        provider: "codex",
+        sessionId: "s1",
+        parentSessionId: null,
+        status: "working",
+        title: null,
+        project: "project-x",
+        logicalSlot: 1,
+        ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
+        transcriptPath: null,
+        openedAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
   });
 
   test("returns zero with an invalid_input diagnostic for malformed JSON", async () => {
@@ -772,6 +795,7 @@ describe("sessions commands", () => {
           title: "B",
           project: null,
           ghosttyTerminalId: null,
+          transcriptPath: null,
           observedAt: at(1),
         },
         {
@@ -781,6 +805,7 @@ describe("sessions commands", () => {
           title: null,
           project: null,
           ghosttyTerminalId: null,
+          transcriptPath: null,
           observedAt: at(2),
         },
         {
@@ -873,6 +898,54 @@ describe("sessions commands", () => {
     expect(listRows()).toEqual([]);
   });
 
+  test("sessions prune deletes only sessions older than the age cutoff", async () => {
+    seed();
+    // Seeds are timestamped 2026-08-06; a clock a day later ages them all out.
+    const harness = makeHarness({ now: () => "2026-08-07T00:00:00.000Z" });
+    expect(await runCli(["sessions", "prune", "1"], harness.deps)).toBe(0);
+    expect(harness.stderr()).toBe("");
+    expect(harness.stdout()).toBe("pruned 2 sessions\n");
+    expect(listRows()).toEqual([]);
+  });
+
+  test("sessions prune defaults to 24 hours and keeps fresh sessions", async () => {
+    seed();
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "prune"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("pruned 0 sessions\n");
+    expect(listRows()).toHaveLength(4);
+
+    // A row whose last hook is two days old goes; its children cascade; the
+    // fresh ones stay.
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      db.run("UPDATE active_sessions SET updated_at = ? WHERE session_id = ?", ["2026-08-04T00:00:00.000Z", "a"]);
+    } finally {
+      db.close();
+    }
+    const later = makeHarness();
+    expect(await runCli(["sessions", "prune"], later.deps)).toBe(0);
+    expect(later.stdout()).toBe("pruned 1 session\n");
+    expect(listRows().map((row) => [row.provider, row.sessionId])).toEqual([["kimi", "b"]]);
+  });
+
+  test("sessions prune zero clears everything and rejects malformed usage", async () => {
+    seed();
+    const harness = makeHarness({ now: () => "2026-08-07T00:00:00.000Z" });
+    expect(await runCli(["sessions", "prune", "0"], harness.deps)).toBe(0);
+    expect(listRows()).toEqual([]);
+
+    for (const args of [
+      ["sessions", "prune", "banana"],
+      ["sessions", "prune", "-1"],
+      ["sessions", "prune", "1", "extra"],
+    ]) {
+      const bad = makeHarness();
+      expect(await runCli(args, bad.deps)).not.toBe(0);
+      expect(bad.stderr()).not.toBe("");
+    }
+  });
+
   test("sessions clear targets only the exact provider/session composite identity", async () => {
     initRegistry();
     const db = openRegistryDatabase(paths.database, "readwrite");
@@ -885,6 +958,7 @@ describe("sessions commands", () => {
           title: null,
           project: null,
           ghosttyTerminalId: null,
+          transcriptPath: null,
           observedAt: NOW,
         },
         {
@@ -894,6 +968,7 @@ describe("sessions commands", () => {
           title: null,
           project: null,
           ghosttyTerminalId: null,
+          transcriptPath: null,
           observedAt: NOW,
         },
       ]);
@@ -929,7 +1004,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 3");
+      restore.exec("PRAGMA user_version = 4");
     } finally {
       restore.close();
     }

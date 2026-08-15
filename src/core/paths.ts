@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type AppPaths = {
+  home: string;
   root: string;
   binDirectory: string;
   executable: string;
@@ -25,6 +26,7 @@ export const resolveAppPaths = (home: string = homedir()): AppPaths => {
   const root = join(home, "Library/Application Support/com.drewritter.stream-deck-agents");
   const binDirectory = join(root, "bin");
   return {
+    home,
     root,
     binDirectory,
     executable: join(binDirectory, "stream-deck-agents"),

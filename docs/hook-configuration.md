@@ -20,12 +20,14 @@ and no standard-output output.
 **Privacy note.** Hook payloads can carry message text, session file paths,
 and tool-call details. The helper decodes only the fields needed to place a
 session on the grid — event name, session and subagent identifiers, status
-hints, title, and the working directory's basename — and discards everything
-else in memory. Two Claude-only signals are classified in place, never stored:
-the `run_in_background` boolean of a Bash tool input and the constant
-`<task-notification>` prefix that opens a background task's completion prompt.
-No prompt text, transcript content, or tool payload is ever written to the
-registry, the snapshot, or the logs.
+hints, title, the working directory's basename, and the transcript path — and
+discards everything else in memory. The transcript path is stored so the
+daemon can resolve the session's title from the transcript file; transcript
+*content* is only ever read for its title record. Two Claude-only signals are
+classified in place, never stored: the `run_in_background` boolean of a Bash
+tool input and the constant `<task-notification>` prefix that opens a
+background task's completion prompt. No prompt text, transcript content, or
+tool payload is ever written to the registry, the snapshot, or the logs.
 
 ---
 
@@ -585,10 +587,9 @@ codex plugin list
 
 - A Codex session appears on the grid when its `SessionStart` hook fires. If
   the start event is missed — for example the registry was not installed yet
-  or the daemon was down — later `UserPromptSubmit` events for that session
-  are no-ops: the registry ignores activity for sessions it never registered,
-  and the matching `SessionEnd` is ignored too. The session simply never
-  appears; nothing is synthesized retroactively.
+  or the daemon was down — the next `UserPromptSubmit` for that session
+  late-joins it: the prompt proves membership, so the session appears then
+  instead of staying invisible forever.
 - The configured subset reports session starts, submitted-message and tool
   activity, approval waits, live subagent starts and stops, turn completions,
   and session ends: a Codex tile is idle at start, working while a turn runs,
@@ -597,8 +598,12 @@ codex plugin list
   badge; `SubagentStop` removes that child and its active descendants. Error
   transitions are not reported (Codex has no `StopFailure` event). A missed
   `SubagentStop` leaves a stale badge until the parent ends or the row is
-  repaired, and a missed `SessionEnd` still leaves a stale session until
-  `sessions clear` repairs it.
+  repaired, and a missed `SessionEnd` leaves a stale session until the
+  daemon's 24-hour prune removes it — or `sessions clear` / `sessions prune`
+  repairs it first.
+- Tile titles come from `~/.codex/session_index.jsonl`: the daemon reads the
+  thread's `thread_name` and shows it instead of the project name once Codex
+  has named the thread.
 - Codex Desktop spawns hidden ambient-suggestion threads that fire the same
   start and prompt hooks as real chats; left unfiltered they would add a
   phantom tile per real chat. Their payloads carry an explicit
@@ -630,4 +635,7 @@ Start a session in each provider, then list what the registry recorded:
 
 Each active session should appear with its provider, title, and project. To
 remove every recorded session (for example after testing), run
-`... sessions clear-all` with the same binary.
+`... sessions clear-all` with the same binary. `... sessions prune
+[max-age-hours]` deletes only sessions whose last hook is older than the
+cutoff (default 24 hours); the daemon runs the same prune automatically once
+a minute.

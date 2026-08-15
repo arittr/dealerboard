@@ -23,7 +23,9 @@ export type DiagnosticCode =
   | "claude_terminal_unbound"
   | "internal_error"
   | "wake_up"
-  | "set_image_failed";
+  | "set_image_failed"
+  | "clock_jump"
+  | "maintenance_failed";
 
 export type DiagnosticRecord = {
   timestamp: string;

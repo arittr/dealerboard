@@ -4,7 +4,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
-import { applyRegistryEvents, clearAllSessions, clearSession, listSessions } from "../src/core/registry";
+import {
+  applyRegistryEvents,
+  clearAllSessions,
+  clearSession,
+  listSessions,
+  pruneStaleSessions,
+  updateSessionTitles,
+} from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { Provider, RegistryEvent } from "../src/protocol";
 
@@ -32,6 +39,7 @@ const start = (
     title?: string | null;
     project?: string | null;
     ghosttyTerminalId?: string | null;
+    transcriptPath?: string | null;
     at?: string;
   } = {},
 ): RegistryEvent => ({
@@ -41,6 +49,7 @@ const start = (
   title: options.title ?? null,
   project: options.project ?? null,
   ghosttyTerminalId: options.ghosttyTerminalId ?? null,
+  transcriptPath: options.transcriptPath ?? null,
   observedAt: options.at ?? at(1),
 });
 
@@ -89,6 +98,7 @@ type Row = {
   updated_at: string;
   ghostty_terminal_id: string | null;
   background_outstanding: number;
+  transcript_path: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -121,6 +131,7 @@ describe("applyRegistryEvents", () => {
       updated_at: at(1),
       ghostty_terminal_id: null,
       background_outstanding: 0,
+      transcript_path: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -204,6 +215,7 @@ describe("applyRegistryEvents", () => {
       updated_at: at(4),
       ghostty_terminal_id: null,
       background_outstanding: 0,
+      transcript_path: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
@@ -466,6 +478,119 @@ describe("repair commands", () => {
   });
 });
 
+describe("transcript paths", () => {
+  test("persists the transcript path on start and refreshes it on restart", () => {
+    applyRegistryEvents(db, [start("s1", { transcriptPath: "/Users/drew/.claude/projects/p/one.jsonl" })]);
+    expect(getRow("s1")?.transcript_path).toBe("/Users/drew/.claude/projects/p/one.jsonl");
+
+    applyRegistryEvents(db, [start("s1", { transcriptPath: "/Users/drew/.claude/projects/p/two.jsonl", at: at(2) })]);
+    expect(getRow("s1")?.transcript_path).toBe("/Users/drew/.claude/projects/p/two.jsonl");
+
+    // A late-join insert carries the path too.
+    applyRegistryEvents(db, [
+      {
+        kind: "SessionObserved",
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        project: "proj",
+        transcriptPath: "/Users/drew/.codex/sessions/rollout-1.jsonl",
+        observedAt: at(3),
+      },
+    ]);
+    expect(getRow("c1", "codex")?.transcript_path).toBe("/Users/drew/.codex/sessions/rollout-1.jsonl");
+
+    // An observed event backfills the path on an existing row that predates
+    // it, without touching title, project, or updated_at.
+    applyRegistryEvents(db, [start("s2", { at: at(4) })]);
+    expect(
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionObserved",
+          provider: "claude",
+          sessionId: "s2",
+          title: null,
+          project: null,
+          transcriptPath: "/Users/drew/.claude/projects/p/s2.jsonl",
+          observedAt: at(5),
+        },
+      ]),
+    ).toEqual(["applied"]);
+    expect(getRow("s2")).toMatchObject({
+      title: null,
+      project: null,
+      transcript_path: "/Users/drew/.claude/projects/p/s2.jsonl",
+      updated_at: at(4),
+    });
+
+    // Status events never disturb the stored path.
+    applyRegistryEvents(db, [simple("Activity", "s1", { at: at(6) })]);
+    expect(getRow("s1")?.transcript_path).toBe("/Users/drew/.claude/projects/p/two.jsonl");
+  });
+});
+
+describe("updateSessionTitles", () => {
+  test("writes only differing titles without touching updated_at", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), start("s2", { title: "Kept", at: at(2) })]);
+
+    expect(
+      updateSessionTitles(db, [
+        { provider: "claude", sessionId: "s1", title: "Resolved title" },
+        { provider: "claude", sessionId: "s2", title: "Kept" },
+        { provider: "claude", sessionId: "ghost", title: "Nope" },
+      ]),
+    ).toBe(1);
+
+    expect(getRow("s1")).toMatchObject({ title: "Resolved title", updated_at: at(1) });
+    expect(getRow("s2")).toMatchObject({ title: "Kept", updated_at: at(2) });
+
+    // A second identical pass changes nothing.
+    expect(updateSessionTitles(db, [{ provider: "claude", sessionId: "s1", title: "Resolved title" }])).toBe(0);
+    expect(getRow("s1")).toMatchObject({ title: "Resolved title", updated_at: at(1) });
+  });
+});
+
+describe("pruneStaleSessions", () => {
+  test("deletes top-level rows older than the cutoff and cascades to children", () => {
+    applyRegistryEvents(db, [
+      start("old", { at: "2026-08-01T00:00:00.000Z" }),
+      subStart("old-child", "old", { at: "2026-08-01T00:00:01.000Z" }),
+      start("fresh", { at: "2026-08-06T00:00:00.000Z" }),
+    ]);
+
+    expect(pruneStaleSessions(db, "2026-08-05T00:00:00.000Z")).toBe(1);
+    expect(getRow("old")).toBeNull();
+    expect(getRow("old-child")).toBeNull();
+    expect(getRow("fresh")).toMatchObject({ logical_slot: 2 });
+
+    // A second pass at the same cutoff is a no-op.
+    expect(pruneStaleSessions(db, "2026-08-05T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(1);
+  });
+
+  test("a live session pruned by mistake late-joins through SessionObserved", () => {
+    applyRegistryEvents(db, [start("s1", { at: "2026-08-01T00:00:00.000Z" })]);
+    expect(pruneStaleSessions(db, "2026-08-05T00:00:00.000Z")).toBe(1);
+    expect(countRows()).toBe(0);
+
+    expect(
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionObserved",
+          provider: "claude",
+          sessionId: "s1",
+          title: null,
+          project: "proj",
+          transcriptPath: null,
+          observedAt: at(1),
+        },
+        simple("Activity", "s1", { at: at(2) }),
+      ]),
+    ).toEqual(["applied", "applied"]);
+    expect(getRow("s1")).toMatchObject({ status: "working", logical_slot: 1 });
+  });
+});
+
 describe("listSessions", () => {
   test("returns the ActiveSession shape ordered by slot first, then identity", () => {
     applyRegistryEvents(db, [
@@ -486,6 +611,7 @@ describe("listSessions", () => {
         logicalSlot: 1,
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: at(1),
         updatedAt: at(1),
       },
@@ -499,6 +625,7 @@ describe("listSessions", () => {
         logicalSlot: 2,
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: at(2),
         updatedAt: at(2),
       },
@@ -512,6 +639,7 @@ describe("listSessions", () => {
         logicalSlot: null,
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: at(4),
         updatedAt: at(4),
       },
@@ -525,6 +653,7 @@ describe("listSessions", () => {
         logicalSlot: null,
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
+        transcriptPath: null,
         openedAt: at(3),
         updatedAt: at(3),
       },

@@ -12,10 +12,11 @@
  * treatments render no session title; degraded models add a small error flag,
  * and a degraded blank renders the explicit offline treatment.
  *
- * The label is bounded by Unicode code points before line splitting, every
- * injected text value passes through the one escapeXml helper, and the module
- * imports no SDK or runtime-specific APIs so it bundles into the Node.js
- * plugin unchanged.
+ * The label is word-wrapped by Unicode code points: lines hold twelve points,
+ * words longer than a line hard-split, and text that outlives the second line
+ * ends in an ellipsis. Every injected text value passes through the one
+ * escapeXml helper, and the module imports no SDK or runtime-specific APIs so
+ * it bundles into the Node.js plugin unchanged.
  */
 
 import type { Provider, SessionStatus } from "../protocol";
@@ -30,7 +31,6 @@ const FRAME_WIDTH = 6;
 
 const TITLE_LINE_CAPACITY = 12;
 const TITLE_MAX_LINES = 2;
-const TITLE_CAPACITY = TITLE_LINE_CAPACITY * TITLE_MAX_LINES;
 
 const COLOR_WORKING = "#20B8FF";
 const COLOR_WAITING = "#FFB020";
@@ -92,11 +92,57 @@ const statusFrame = (status: SessionStatus, phase: number): string => {
   }
 };
 
+/**
+ * Greedy word wrap: lines hold TITLE_LINE_CAPACITY code points, words longer
+ * than a line hard-split into the empty line, and text left over after the
+ * second line collapses the second line to eleven points plus an ellipsis.
+ */
 const splitTitleLines = (label: string): string[] => {
-  const points = Array.from(label).slice(0, TITLE_CAPACITY);
+  const words = label.split(" ").filter((word) => word.length > 0);
   const lines: string[] = [];
-  for (let start = 0; start < points.length; start += TITLE_LINE_CAPACITY) {
-    lines.push(points.slice(start, start + TITLE_LINE_CAPACITY).join(""));
+  let current: string[] = [];
+  let overflow = false;
+
+  const closeLine = (): boolean => {
+    lines.push(current.join(""));
+    current = [];
+    return lines.length < TITLE_MAX_LINES;
+  };
+
+  for (const word of words) {
+    let pending = Array.from(word);
+    while (pending.length > 0) {
+      if (current.length === 0 && pending.length > TITLE_LINE_CAPACITY) {
+        current.push(...pending.slice(0, TITLE_LINE_CAPACITY));
+        pending = pending.slice(TITLE_LINE_CAPACITY);
+        continue;
+      }
+      const gap = current.length > 0 ? 1 : 0;
+      if (current.length + gap + pending.length <= TITLE_LINE_CAPACITY) {
+        if (gap === 1) {
+          current.push(" ");
+        }
+        current.push(...pending);
+        pending = [];
+      } else if (!closeLine()) {
+        overflow = true;
+        break;
+      }
+    }
+    if (overflow) {
+      break;
+    }
+  }
+  if (current.length > 0) {
+    if (lines.length < TITLE_MAX_LINES) {
+      lines.push(current.join(""));
+    } else {
+      overflow = true;
+    }
+  }
+  if (overflow && lines.length === TITLE_MAX_LINES) {
+    const last = Array.from(lines[TITLE_MAX_LINES - 1] ?? "");
+    lines[TITLE_MAX_LINES - 1] = `${last.slice(0, TITLE_LINE_CAPACITY - 1).join("")}…`;
   }
   return lines;
 };

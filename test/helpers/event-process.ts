@@ -29,6 +29,7 @@ try {
       title: null,
       project: null,
       ghosttyTerminalId: null,
+      transcriptPath: null,
       observedAt: new Date().toISOString(),
     },
   ]);

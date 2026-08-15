@@ -8,24 +8,27 @@
  *   stream-deck-agents sessions list
  *   stream-deck-agents sessions clear <provider> <session-id>
  *   stream-deck-agents sessions clear-all
+ *   stream-deck-agents sessions prune [max-age-hours]
  *
  * The event path is fail-open for provider hooks: it reads at most 65,536
  * stdin bytes, parses one JSON object, applies the decoded events in one
  * transaction with a single bounded retry for SQLite contention, logs only
  * fixed diagnostic codes, prints nothing, and always exits zero. The daemon
- * subcommand starts the long-lived read-only projection loop and normally
- * runs until the process is terminated. The other subcommands report concise
- * errors on stderr and return nonzero.
+ * subcommand starts the long-lived projection and maintenance loop and
+ * normally runs until the process is terminated. The other subcommands report
+ * concise errors on stderr and return nonzero.
  */
 
+import { join } from "node:path";
 import type { Provider } from "../protocol";
 import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
 import { ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
 import { type AppPaths, resolveAppPaths } from "./paths";
 import { decodeNativeHook } from "./providers";
-import { applyRegistryEvents, clearAllSessions, clearSession, listSessions } from "./registry";
+import { applyRegistryEvents, clearAllSessions, clearSession, listSessions, pruneStaleSessions } from "./registry";
 import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
+import { createTitleResolver } from "./titles";
 
 export const MAX_STDIN_BYTES = 65_536;
 const RETRY_DELAY_MS = 25;
@@ -110,7 +113,24 @@ commands:
   sessions list
   sessions clear <provider> <session-id>
   sessions clear-all
+  sessions prune [max-age-hours]
 `;
+
+const DEFAULT_PRUNE_MAX_AGE_HOURS = 24;
+
+/** Parse the optional prune age: a positive number of hours, default 24. */
+const parsePruneMaxAgeHours = (args: readonly string[]): number | undefined => {
+  if (args.length === 0) {
+    return DEFAULT_PRUNE_MAX_AGE_HOURS;
+  }
+  if (args.length === 1) {
+    const parsed = Number(args[0]);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+};
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : "unknown error");
 
@@ -306,6 +326,27 @@ const runSessions = (args: readonly string[], deps: ResolvedDependencies): numbe
         return 1;
       }
     }
+    case "prune": {
+      const maxAgeHours = parsePruneMaxAgeHours(rest);
+      if (maxAgeHours === undefined) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      try {
+        const cutoff = new Date(Date.parse(deps.now()) - maxAgeHours * 3_600_000).toISOString();
+        const db = deps.openDatabase(deps.paths.database, "readwrite");
+        try {
+          const pruned = pruneStaleSessions(db, cutoff);
+          deps.stdout(`pruned ${pruned} session${pruned === 1 ? "" : "s"}\n`);
+        } finally {
+          db.close();
+        }
+        return 0;
+      } catch (error) {
+        deps.stderr(`sessions prune failed: ${errorMessage(error)}\n`);
+        return 1;
+      }
+    }
     default:
       deps.stderr(USAGE);
       return 1;
@@ -327,7 +368,10 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   environment: process.env,
   parentPid: process.ppid,
   runDaemon: (daemonPaths, diagnostics) => {
-    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics });
+    const resolveTitles = createTitleResolver({
+      codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
+    }).resolve;
+    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveTitles });
     daemon.start();
     return new Promise<number>(() => {
       // launchd owns the daemon lifetime; the poll timer keeps the process alive.

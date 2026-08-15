@@ -1,17 +1,28 @@
 /**
- * Read-only projection daemon — the only publisher of the session snapshot.
+ * Projection and maintenance daemon — the only publisher of the session
+ * snapshot, and the owner of time-based registry upkeep.
  *
- * The daemon holds one long-lived read-only SQLite connection, publishes one
+ * The daemon holds one long-lived read-write SQLite connection, publishes one
  * snapshot before arming its timer, then polls `PRAGMA data_version` every
- * 250 milliseconds. It recomputes the projection only when another connection
- * has committed (the data version changed) or when the previous poll was
- * unhealthy, and it replaces the snapshot file atomically only when the
- * canonical JSON actually differs. `PRAGMA user_version` is validated when
- * the connection opens; on an open, read, or projection failure the daemon
- * publishes the schema-valid unhealthy shape with a bounded fixed code —
- * never caught error text — and keeps retrying on later polls. The daemon
- * never mutates the registry: its only statements are the data-version
- * pragma and transaction-bounded selects.
+ * 250 milliseconds. It recomputes the projection when another connection has
+ * committed (the data version changed), when its own maintenance changed
+ * rows (own-connection commits never bump the data version), or when the
+ * previous poll was unhealthy, and it replaces the snapshot file atomically
+ * only when the canonical JSON actually differs. Independent of data changes,
+ * it rewrites the current snapshot every heartbeat interval so the file's
+ * mtime doubles as the daemon-liveness signal the plugin watches.
+ *
+ * Maintenance runs inside the same poll loop: a titles pass (resolve session
+ * titles from provider files, update rows that changed) every two seconds
+ * and a prune pass (delete sessions whose last hook is older than the stale
+ * TTL) every minute. A poll gap beyond the clock-jump threshold — the sleep
+ * signature of the host machine — records a diagnostic. Maintenance failures
+ * record their own diagnostic and never affect publication health.
+ *
+ * `PRAGMA user_version` is validated when the connection opens; on an open,
+ * read, or projection failure the daemon publishes the schema-valid unhealthy
+ * shape with a bounded fixed code — never caught error text — and keeps
+ * retrying on later polls.
  */
 
 import type { Database } from "bun:sqlite";
@@ -19,21 +30,40 @@ import type { SessionSnapshotV2 } from "../protocol";
 import type { DiagnosticCode, DiagnosticRecord } from "./diagnostics";
 import type { AppPaths } from "./paths";
 import { readProjection } from "./projection";
+import { listTitleTargets, pruneStaleSessions, type SessionTitleUpdate, updateSessionTitles } from "./registry";
 import { openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { writeSnapshotAtomically } from "./snapshot";
+import type { TitleTarget } from "./titles";
 
 export const DAEMON_POLL_INTERVAL_MS = 250;
+/** How often the snapshot file is rewritten even when nothing changed. */
+export const DAEMON_HEARTBEAT_MS = 5_000;
+/** How often titles are resolved from provider files. */
+export const DAEMON_TITLE_INTERVAL_MS = 2_000;
+/** How often stale sessions are pruned. */
+export const DAEMON_PRUNE_INTERVAL_MS = 60_000;
+/** A session with no hook event for this long is presumed dead and pruned. */
+export const STALE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+/** A poll gap this large means the host slept or the clock jumped. */
+export const CLOCK_JUMP_MS = 30_000;
 
 const DIAGNOSTIC_COMPONENT = "daemon";
 
 export type DaemonState = {
   lastDataVersion: number | null;
   lastPublishedJson: string | null;
+  lastSnapshot: SessionSnapshotV2 | null;
+  lastPublishAtMs: number | null;
+  lastTitlePassAtMs: number | null;
+  lastPrunePassAtMs: number | null;
+  lastTickAtMs: number | null;
   healthy: boolean;
 };
 
 /** Arms the poll loop; the returned callback disarms it. */
 export type DaemonScheduler = (poll: () => void, intervalMs: number) => () => void;
+
+export type ResolveTitles = (targets: readonly TitleTarget[]) => SessionTitleUpdate[];
 
 export type DaemonDependencies = {
   openDatabase?: typeof openRegistryDatabase;
@@ -41,6 +71,8 @@ export type DaemonDependencies = {
   writeSnapshot?: typeof writeSnapshotAtomically;
   schedule?: DaemonScheduler;
   now?: () => string;
+  nowMs?: () => number;
+  resolveTitles?: ResolveTitles;
   diagnostics?: (record: DiagnosticRecord) => void;
 };
 
@@ -81,6 +113,11 @@ export class ProjectionDaemon {
   private readonly state: DaemonState = {
     lastDataVersion: null,
     lastPublishedJson: null,
+    lastSnapshot: null,
+    lastPublishAtMs: null,
+    lastTitlePassAtMs: null,
+    lastPrunePassAtMs: null,
+    lastTickAtMs: null,
     healthy: false,
   };
 
@@ -92,6 +129,8 @@ export class ProjectionDaemon {
       writeSnapshot: writeSnapshotAtomically,
       schedule: defaultSchedule,
       now: () => new Date().toISOString(),
+      nowMs: () => Date.now(),
+      resolveTitles: () => [],
       diagnostics: () => {},
       ...dependencies,
     };
@@ -103,7 +142,7 @@ export class ProjectionDaemon {
     this.cancelSchedule = this.deps.schedule(this.tick, DAEMON_POLL_INTERVAL_MS);
   }
 
-  /** Disarm the timer and release the read-only connection. */
+  /** Disarm the timer and release the connection. */
   stop(): void {
     this.cancelSchedule?.();
     this.cancelSchedule = null;
@@ -121,14 +160,30 @@ export class ProjectionDaemon {
   };
 
   private poll(): void {
+    const nowMs = this.deps.nowMs();
+    if (this.state.lastTickAtMs !== null && nowMs - this.state.lastTickAtMs > CLOCK_JUMP_MS) {
+      this.report("clock_jump");
+    }
+    this.state.lastTickAtMs = nowMs;
+    try {
+      this.pollOnce(nowMs);
+    } finally {
+      this.maybeHeartbeat(nowMs);
+    }
+  }
+
+  private pollOnce(nowMs: number): void {
     if (this.connection === null) {
       try {
-        this.connection = this.deps.openDatabase(this.paths.database, "readonly");
+        this.connection = this.deps.openDatabase(this.paths.database, "readwrite");
       } catch (error) {
-        this.publishUnhealthy(healthCode(error));
+        this.publishUnhealthy(healthCode(error), nowMs);
         return;
       }
     }
+    // Maintenance precedes the version fast-path: commits on this connection
+    // never bump the data version it is about to be compared against.
+    const maintenanceChanged = this.maintain(nowMs);
     let dataVersion: number;
     try {
       dataVersion = readDataVersion(this.connection);
@@ -137,33 +192,91 @@ export class ProjectionDaemon {
       // next poll reopens.
       this.connection.close();
       this.connection = null;
-      this.publishUnhealthy(healthCode(error));
+      this.publishUnhealthy(healthCode(error), nowMs);
       return;
     }
-    if (this.state.healthy && this.state.lastDataVersion !== null && dataVersion === this.state.lastDataVersion) {
+    if (
+      !maintenanceChanged &&
+      this.state.healthy &&
+      this.state.lastDataVersion !== null &&
+      dataVersion === this.state.lastDataVersion
+    ) {
       return;
     }
     let snapshot: SessionSnapshotV2;
     try {
       snapshot = this.deps.readProjection(this.connection);
     } catch (error) {
-      this.publishUnhealthy(healthCode(error));
+      this.publishUnhealthy(healthCode(error), nowMs);
       return;
     }
-    this.publishHealthy(snapshot, dataVersion);
+    this.publishHealthy(snapshot, dataVersion, nowMs);
   }
 
-  private publishHealthy(snapshot: SessionSnapshotV2, dataVersion: number): void {
+  /**
+   * Time-based upkeep: titles on the fast cadence, stale pruning on the slow
+   * one. Returns true when any row changed, forcing reprojection. Failures
+   * record one diagnostic and never mark the daemon unhealthy.
+   */
+  private maintain(nowMs: number): boolean {
+    if (this.connection === null) {
+      return false;
+    }
+    let changed = false;
+    try {
+      if (this.state.lastTitlePassAtMs === null || nowMs - this.state.lastTitlePassAtMs >= DAEMON_TITLE_INTERVAL_MS) {
+        this.state.lastTitlePassAtMs = nowMs;
+        const updates = this.deps.resolveTitles(listTitleTargets(this.connection));
+        if (updates.length > 0 && updateSessionTitles(this.connection, updates) > 0) {
+          changed = true;
+        }
+      }
+      if (this.state.lastPrunePassAtMs === null || nowMs - this.state.lastPrunePassAtMs >= DAEMON_PRUNE_INTERVAL_MS) {
+        this.state.lastPrunePassAtMs = nowMs;
+        const cutoff = new Date(nowMs - STALE_SESSION_TTL_MS).toISOString();
+        if (pruneStaleSessions(this.connection, cutoff) > 0) {
+          changed = true;
+        }
+      }
+    } catch {
+      this.report("maintenance_failed");
+    }
+    return changed;
+  }
+
+  /**
+   * Rewrite the current snapshot when the file's mtime would otherwise go
+   * stale. The plugin treats an old file as a dead daemon; identical content
+   * still arrives under a new file identity thanks to the atomic rename.
+   */
+  private maybeHeartbeat(nowMs: number): void {
+    if (this.state.lastSnapshot === null || this.state.lastPublishAtMs === null) {
+      return;
+    }
+    if (nowMs - this.state.lastPublishAtMs < DAEMON_HEARTBEAT_MS) {
+      return;
+    }
+    try {
+      this.deps.writeSnapshot(this.paths.snapshot, this.state.lastSnapshot);
+      this.state.lastPublishAtMs = nowMs;
+    } catch {
+      // A heartbeat I/O failure retries on the next poll.
+    }
+  }
+
+  private publishHealthy(snapshot: SessionSnapshotV2, dataVersion: number, nowMs: number): void {
     const json = JSON.stringify(snapshot);
     if (json !== this.state.lastPublishedJson) {
       this.deps.writeSnapshot(this.paths.snapshot, snapshot);
       this.state.lastPublishedJson = json;
+      this.state.lastSnapshot = snapshot;
+      this.state.lastPublishAtMs = nowMs;
     }
     this.state.lastDataVersion = dataVersion;
     this.state.healthy = true;
   }
 
-  private publishUnhealthy(code: DiagnosticCode): void {
+  private publishUnhealthy(code: DiagnosticCode, nowMs: number): void {
     this.state.healthy = false;
     const snapshot: SessionSnapshotV2 = {
       schemaVersion: 2,
@@ -176,6 +289,8 @@ export class ProjectionDaemon {
     }
     this.deps.writeSnapshot(this.paths.snapshot, snapshot);
     this.state.lastPublishedJson = json;
+    this.state.lastSnapshot = snapshot;
+    this.state.lastPublishAtMs = nowMs;
     this.report(code);
   }
 

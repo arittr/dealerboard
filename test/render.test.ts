@@ -106,8 +106,9 @@ describe("renderKey output contract", () => {
   });
 
   test("bounds the label by Unicode code points before splitting into two lines", () => {
-    // 23 ascii points, then the rocket as the 24th code point. A UTF-16-unit
-    // bound would slice the surrogate pair and break percent-encoding.
+    // 23 ascii points, then the rocket as the 24th code point of one word. A
+    // UTF-16-unit bound would slice the surrogate pair and break percent-
+    // encoding; the overflow ends the second line in an ellipsis.
     const label = `${"x".repeat(23)}🚀tail beyond capacity`;
     const svg = decode(sessionModel({}, label), 0);
     const titles = textNodesByClass(svg, "title");
@@ -116,7 +117,27 @@ describe("renderKey output contract", () => {
     for (const line of titles) {
       expect(codePointCount(line)).toBeLessThanOrEqual(12);
     }
-    expect(titles[1]!.endsWith("🚀")).toBe(true);
+    expect(titles[1]!.endsWith("…")).toBe(true);
+    expect(hasLoneSurrogate(svg)).toBe(false);
+  });
+
+  test("word-wraps multi-word titles instead of slicing mid-word", () => {
+    // The user's example: a 24-point title fits two lines exactly.
+    expect(textNodesByClass(decode(sessionModel({}, "Test PR 2085 with Cursor"), 0), "title")).toEqual([
+      "Test PR 2085",
+      "with Cursor",
+    ]);
+    // Words pack greedily; what outlives the second line ends in an ellipsis.
+    expect(textNodesByClass(decode(sessionModel({}, "short verylongword here"), 0), "title")).toEqual([
+      "short",
+      "verylongwor…",
+    ]);
+  });
+
+  test("hard-splits a word longer than a line and ellipsizes the second line on overflow", () => {
+    const svg = decode(sessionModel({}, "supercalifragilisticexpialidocious and more"), 0);
+    const titles = textNodesByClass(svg, "title");
+    expect(titles).toEqual(["supercalifra", "gilisticexp…"]);
     expect(hasLoneSurrogate(svg)).toBe(false);
   });
 

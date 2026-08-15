@@ -83,6 +83,23 @@ Notes:
   disarms it. A tile's effective status is the max (`error > waiting > working
   > idle`) over its whole subtree, and any live subagent row lifts it to at
   least `working` (`src/core/projection.ts`).
+- Session lifecycle: rows are deleted by SessionEnd hooks, by the daemon's
+  stale prune (top-level rows with no hook for 24h, checked every minute;
+  `sessions prune [hours]` manually), or by `sessions clear`/`clear-all`.
+  Every provider late-joins on `UserPromptSubmit` (`SessionObserved`), so a
+  session whose start hook was missed — or whose row was pruned while still
+  alive — reappears at its next prompt.
+- Tile labels prefer the session title over the project name. Only Kimi
+  pushes titles via hooks; the daemon resolves Claude titles from the
+  transcript's `ai-title` records (path stored in schema v4's
+  `transcript_path`) and Codex titles from `~/.codex/session_index.jsonl`'s
+  `thread_name` (`src/core/titles.ts`), writing them back without touching
+  `updated_at` (the prune's aging signal). Titles word-wrap to two
+  12-code-point lines with an ellipsis on overflow.
+- The daemon is no longer read-only: it owns maintenance (titles every 2s,
+  prune every 60s) and rewrites the snapshot every 5s as a heartbeat. The
+  plugin treats a snapshot older than 10s as a dead daemon and renders the
+  degraded treatment (OFFLINE / "!" flags).
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.

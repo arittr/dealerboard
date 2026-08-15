@@ -110,7 +110,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 3 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 4 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -119,7 +119,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -167,14 +167,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v3 with null bindings and no outstanding background work", () => {
+  test("migrates v1 rows additively to v4 with null bindings, no outstanding background work, and no transcript", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -183,11 +183,11 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 4 });
       expect(
         db
           .query(
-            "SELECT session_id, status, logical_slot, ghostty_terminal_id, background_outstanding FROM active_sessions",
+            "SELECT session_id, status, logical_slot, ghostty_terminal_id, background_outstanding, transcript_path FROM active_sessions",
           )
           .get(),
       ).toEqual({
@@ -196,6 +196,7 @@ describe("initializeDatabase", () => {
         logical_slot: 4,
         ghostty_terminal_id: null,
         background_outstanding: 0,
+        transcript_path: null,
       });
     } finally {
       db.close();
@@ -341,6 +342,22 @@ describe("active_sessions contract", () => {
       });
       expect(() => db.run("UPDATE active_sessions SET background_outstanding = 2")).toThrow();
       expect(() => db.run("UPDATE active_sessions SET background_outstanding = NULL")).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  test("bounds transcript_path to 1-256 characters on any row", () => {
+    const db = openInitialized();
+    try {
+      insertSession(db, "s1", null, 1);
+      expect(db.query("SELECT transcript_path FROM active_sessions").get()).toEqual({ transcript_path: null });
+      db.run("UPDATE active_sessions SET transcript_path = '/tmp/t.jsonl'");
+      expect(db.query("SELECT transcript_path FROM active_sessions").get()).toEqual({
+        transcript_path: "/tmp/t.jsonl",
+      });
+      expect(() => db.run("UPDATE active_sessions SET transcript_path = ''")).toThrow();
+      expect(() => db.run(`UPDATE active_sessions SET transcript_path = '${"x".repeat(257)}'`)).toThrow();
     } finally {
       db.close();
     }

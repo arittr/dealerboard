@@ -5,8 +5,10 @@
  * maps the supported hook events onto normalized `RegistryEvent` values while
  * enforcing the privacy contract: only allowlisted fields are read, every
  * accepted string is capped at 256 Unicode code points, and the working
- * directory survives only as its basename. Payloads with missing identity,
- * unknown hook names, or non-object shapes decode to zero events.
+ * directory survives only as its basename. The transcript path is the one
+ * verbatim path kept: the daemon needs it to resolve a session's title from
+ * the transcript file later. Payloads with missing identity, unknown hook
+ * names, or non-object shapes decode to zero events.
  *
  * Two further Claude-only signals are classified in place, never stored: the
  * `run_in_background` boolean of a Bash tool input (a background shell arms
@@ -33,6 +35,7 @@ const SAFE_FIELDS = {
   toolName: ["tool_name", "toolName"],
   cwd: ["cwd"],
   title: ["title", "session_title", "sessionTitle"],
+  transcriptPath: ["transcript_path", "transcriptPath"],
 } as const;
 
 /**
@@ -119,6 +122,7 @@ const sessionFacts = (
   sessionId,
   title: firstAllowlistedString(value, SAFE_FIELDS.title) ?? null,
   project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
+  transcriptPath: firstAllowlistedString(value, SAFE_FIELDS.transcriptPath) ?? null,
   observedAt: now,
 });
 
@@ -153,8 +157,8 @@ const sessionObservedEvent = (
  * SessionStart/UserPromptSubmit hooks as user threads but keep no transcript
  * and are never user-visible. They decode to zero events so they never reach
  * the registry or the grid. Providers that omit the field (Kimi) or always
- * send a real path (Claude) are unaffected. The path itself is never read or
- * retained — only the null is inspected.
+ * send a real path (Claude) are unaffected. A real path is allowlisted and
+ * retained so the daemon can resolve titles from the transcript file.
  */
 export const decodeNativeHook = (provider: Provider, value: unknown, now: string): RegistryEvent[] => {
   if (!isRecord(value)) {
@@ -178,15 +182,16 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
       return provider === "kimi" && event.title === null ? [] : [event];
     }
     case "UserPromptSubmit": {
+      // Every provider late-joins on a prompt: SessionObserved resurrects a
+      // session whose SessionStart was missed or whose row was pruned while
+      // the session lived on, and is a no-op for rows already registered.
+      const observed = sessionObservedEvent(provider, sessionId, value, now);
       const activity = statusEvent("Activity", provider, sessionId, now);
-      if (provider === "kimi") {
-        return [sessionObservedEvent(provider, sessionId, value, now), activity];
-      }
       // A task-notification delivery is the only completion signal a Claude
       // background shell ever produces; it clears the outstanding flag.
       return provider === "claude" && isTaskNotificationPrompt(value)
-        ? [activity, statusEvent("BackgroundWorkCleared", provider, sessionId, now)]
-        : [activity];
+        ? [observed, activity, statusEvent("BackgroundWorkCleared", provider, sessionId, now)]
+        : [observed, activity];
     }
     case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];

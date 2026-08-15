@@ -47,6 +47,7 @@ const startSession = (sessionId: string, observedAt: string = NOW): void => {
       title: `Title for ${sessionId}`,
       project: null,
       ghosttyTerminalId: null,
+      transcriptPath: null,
       observedAt,
     },
   ]);
@@ -106,6 +107,9 @@ const makeHarness = (overrides: Partial<DaemonDependencies> = {}): Harness => {
       };
     },
     now: () => NOW,
+    // The fixture clock matches the fixture timestamps (2026-08-06), so the
+    // real wall clock can never make seeded rows look stale.
+    nowMs: () => Date.parse(NOW),
     diagnostics: (record) => {
       diagnostics.push(record);
     },
@@ -234,7 +238,7 @@ describe("ProjectionDaemon", () => {
 
     // Projection error: a child row with a missing parent (inserted with
     // foreign-key enforcement off) fails the defensive topology checks.
-    setUserVersion(3);
+    setUserVersion(4);
     startSession("parent");
     const raw = new Database(paths.database);
     try {
@@ -292,7 +296,7 @@ describe("ProjectionDaemon", () => {
     }
   });
 
-  test("holds one long-lived read-only connection and never issues writes or DDL", () => {
+  test("holds one long-lived read-write connection and never issues DDL", () => {
     const statements: string[] = [];
     const openModes: string[] = [];
     const connections: Database[] = [];
@@ -320,21 +324,20 @@ describe("ProjectionDaemon", () => {
       harness.tick();
       harness.tick();
 
-      // One connection, opened read-only, reused across every poll.
-      expect(openModes).toEqual(["readonly"]);
+      // One connection, opened read-write for maintenance, reused across
+      // every poll.
+      expect(openModes).toEqual(["readwrite"]);
       expect(connections).toHaveLength(1);
 
-      // The schema policy's connection-local pragma is in effect, and the
-      // connection genuinely rejects writes.
+      // The schema policy's connection-local pragma is in effect.
       const connection = connections[0]!;
       expect(connection.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-      expect(() => connection.run("DELETE FROM active_sessions")).toThrow(/readonly/i);
 
-      // Nothing issued through the daemon's handle is a write or DDL, and the
-      // only pragma it ever runs is data_version. The allowed
-      // `PRAGMA foreign_keys = ON` happens inside openRegistryDatabase on the
-      // raw handle, before this recording wrapper sees the connection.
-      const forbidden = /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b/i;
+      // Nothing issued through the daemon's handle is DDL, and the only
+      // pragma it ever runs is data_version. Writes stay inside the registry
+      // maintenance statements (title UPDATE, prune DELETE, transaction
+      // control); projection reads are plain SELECTs.
+      const forbidden = /\b(CREATE|DROP|ALTER|VACUUM|REINDEX|ATTACH|DETACH)\b/i;
       for (const sql of statements) {
         expect(forbidden.test(sql)).toBe(false);
       }
@@ -343,6 +346,160 @@ describe("ProjectionDaemon", () => {
       for (const sql of pragmas) {
         expect(sql).toMatch(/^PRAGMA data_version$/i);
       }
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+});
+
+describe("ProjectionDaemon maintenance", () => {
+  /** A controllable wall clock for heartbeat, cadence, and clock-jump tests. */
+  const fakeClock = (startMs: number): { nowMs: () => number; advance: (ms: number) => void } => {
+    let current = startMs;
+    return {
+      nowMs: () => current,
+      advance: (ms) => {
+        current += ms;
+      },
+    };
+  };
+
+  test("heartbeat rewrites an unchanged snapshot once the file went quiet", () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    const harness = makeHarness({ nowMs: clock.nowMs });
+    harness.daemon.start();
+    try {
+      expect(harness.writes).toHaveLength(1);
+      const before = statSync(paths.snapshot).ino;
+
+      // Ticks inside the heartbeat window change nothing.
+      clock.advance(1_000);
+      harness.tick();
+      expect(harness.writes).toHaveLength(1);
+      expect(statSync(paths.snapshot).ino).toBe(before);
+
+      // Past the heartbeat interval the identical snapshot is rewritten under
+      // a new file identity, refreshing the mtime the plugin watches.
+      clock.advance(5_000);
+      harness.tick();
+      expect(harness.writes).toHaveLength(2);
+      expect(harness.writes[1]).toEqual(harness.writes[0]);
+      expect(statSync(paths.snapshot).ino).not.toBe(before);
+      expect(harness.readCount()).toBe(1);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("prunes sessions whose last hook is older than the TTL and republishes", () => {
+    startSession("stale", "2026-08-01T00:00:00.000Z");
+    startSession("fresh", NOW);
+    const harness = makeHarness();
+    harness.daemon.start();
+    try {
+      // The first poll's prune pass removed the five-day-old row even though
+      // the deletion happened on the daemon's own connection.
+      expect(readSnapshotFile().sessions.map((session) => session.sessionId)).toEqual(["fresh"]);
+      const rows = (() => {
+        const db = openRegistryDatabase(paths.database, "readonly");
+        try {
+          return db.query("SELECT session_id FROM active_sessions").all() as { session_id: string }[];
+        } finally {
+          db.close();
+        }
+      })();
+      expect(rows).toEqual([{ session_id: "fresh" }]);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("resolves titles through the injected resolver and republishes with them", () => {
+    startSession("s1");
+    const targets: unknown[] = [];
+    const harness = makeHarness({
+      resolveTitles: (seen) => {
+        targets.push(...seen);
+        return [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }];
+      },
+    });
+    harness.daemon.start();
+    try {
+      expect(targets).toEqual([{ provider: "claude", sessionId: "s1", title: "Title for s1", transcriptPath: null }]);
+      expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
+      const row = (() => {
+        const db = openRegistryDatabase(paths.database, "readonly");
+        try {
+          return db.query("SELECT title, updated_at FROM active_sessions").get() as {
+            title: string;
+            updated_at: string;
+          } | null;
+        } finally {
+          db.close();
+        }
+      })();
+      // The title write leaves updated_at — the prune's aging signal — alone.
+      expect(row).toEqual({ title: "Resolved from disk", updated_at: NOW });
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("runs the titles pass on its cadence, not on every poll", () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    let resolveCalls = 0;
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      resolveTitles: () => {
+        resolveCalls += 1;
+        return [];
+      },
+    });
+    harness.daemon.start();
+    try {
+      expect(resolveCalls).toBe(1);
+      harness.tick();
+      expect(resolveCalls).toBe(1);
+      clock.advance(2_000);
+      harness.tick();
+      expect(resolveCalls).toBe(2);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("records clock_jump when the poll gap exceeds the threshold", () => {
+    const clock = fakeClock(Date.parse(NOW));
+    const harness = makeHarness({ nowMs: clock.nowMs });
+    harness.daemon.start();
+    try {
+      harness.tick();
+      expect(harness.diagnostics).toEqual([]);
+      clock.advance(31_000);
+      harness.tick();
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "clock_jump" }]);
+      // The wake itself is not an error: publication stays healthy.
+      expect(harness.writes.at(-1)?.health.status).toBe("ok");
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("a maintenance failure records one diagnostic and never harms publication", () => {
+    startSession("s1");
+    const harness = makeHarness({
+      resolveTitles: () => {
+        throw new Error("resolver exploded");
+      },
+    });
+    harness.daemon.start();
+    try {
+      expect(harness.writes).toEqual([HEALTHY_S1]);
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "maintenance_failed" }]);
+      harness.tick();
+      expect(harness.writes).toHaveLength(1);
     } finally {
       harness.daemon.stop();
     }

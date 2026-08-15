@@ -61,8 +61,8 @@ There is no visible status word or status glyph. A session whose current state i
 Each tile also has:
 
 - A provider-colored chip in the upper-left with the provider's two-letter abbreviation in dark text: orange `#D97757` for Claude, purple `#A855F7` for Codex, blue `#3B82F6` for Kimi.
-- A two-line session/task title.
-- Repository or worktree name as the first fallback.
+- A two-line session title. Kimi pushes `session_title` through its hooks; the daemon resolves Claude titles from the transcript's `ai-title` records and Codex titles from `~/.codex/session_index.jsonl`'s `thread_name`, writing them back to the registry. Title text is word-wrapped into two twelve-code-point lines; a word longer than a line hard-splits, and text that outlives the second line ends in an ellipsis.
+- Repository or worktree name as the first fallback while no title is known.
 - Provider plus shortened session identifier as the final fallback.
 
 ### Membership, not completion history
@@ -83,7 +83,7 @@ first `UserPromptSubmit` establishes membership and working state; a titled
 `SessionStart` still establishes membership immediately when an existing
 session is resumed.
 
-Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. Gate 0 measures the relevant polling, heartbeat, exit, and sleep/wake behavior; there is no universal lease duration.
+Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. As implemented, the lease is uniform: the daemon prunes any top-level session whose last hook is older than 24 hours, and a still-live session pruned by mistake reappears at its next prompt (every provider late-joins on `UserPromptSubmit`). The daemon also rewrites the snapshot every five seconds as a heartbeat; the plugin treats a file older than ten seconds as a dead daemon and degrades instead of rendering stale tiles as live.
 
 The previous proposal equated unarchived App/Web tasks with active tasks. That is rejected: on 2026-08-05 this host had 288 unarchived top-level Codex threads, which would turn the deck into a historical inbox.
 

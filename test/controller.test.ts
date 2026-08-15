@@ -347,6 +347,29 @@ describe("SessionGridController", () => {
     expect(clock.activeIntervalCount).toBe(0);
   });
 
+  test("systemDidWakeUp before settings ever loaded converges through bootstrap on fresh state", async () => {
+    // A wake can arrive while every earlier appearance failed its settings
+    // load. The refresh is skipped then, but reconcileSupport bootstraps the
+    // load and convergeGrid reads the post-wake snapshot — the tiles must not
+    // be stuck on state cached before the sleep.
+    const { controller, snapshot, images } = makeController({
+      settingsFailures: 1,
+      view: healthyView(sessionsAt(1)),
+    });
+    await controller.willAppear(appear("ctx-a", 0, 0));
+    // The settings load rejected: nothing rendered, no snapshot read yet.
+    expect(images.starts).toEqual([]);
+    expect(snapshot.reads).toBe(0);
+
+    // The world moved on while the machine slept.
+    snapshot.view = healthyView(sessionsAt(9));
+    controller.systemDidWakeUp();
+    await flushMicrotasks();
+
+    expect(snapshot.reads).toBeGreaterThan(0);
+    expect(lastImageFor(images, "ctx-a")).toContain("Slot 9");
+  });
+
   test("a second connected device switches every key to the unsupported-layout treatment", async () => {
     const { controller, clock, snapshot, images } = makeController({
       view: healthyView(sessionsAt(1)),

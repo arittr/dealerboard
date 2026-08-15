@@ -17,6 +17,7 @@ export type RegistryEvent =
       title: string | null;
       project: string | null;
       ghosttyTerminalId: string | null;
+      transcriptPath: string | null;
       observedAt: string;
     }
   | {
@@ -25,6 +26,7 @@ export type RegistryEvent =
       sessionId: string;
       title: string | null;
       project: string | null;
+      transcriptPath: string | null;
       observedAt: string;
     }
   | {

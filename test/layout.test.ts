@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -467,16 +467,46 @@ describe("SnapshotCache", () => {
     });
   });
 
-  test("does not infer health from file age", () => {
+  test("treats a snapshot older than the stale threshold as a dead daemon", () => {
     withTempDir((dir) => {
       const path = join(dir, "snapshot-v2.json");
       const cache = new SnapshotCache(path);
       publishSnapshot(path, healthySnapshot([session(1)]));
       expect(cache.read().degraded).toBe(false);
+
+      // The daemon rewrites on a heartbeat, so an untouched old file means it
+      // is hung or dead: the last-good snapshot renders degraded instead of
+      // posing as live.
       utimesSync(path, new Date(0), new Date(0));
-      const view = cache.read();
-      expect(view.degraded).toBe(false);
-      expect(view.snapshot.sessions).toEqual([session(1)]);
+      const stale = cache.read();
+      expect(stale.degraded).toBe(true);
+      expect(stale.snapshot.sessions).toEqual([session(1)]);
+
+      // A daemon that recovers republishes and the view heals.
+      publishSnapshot(path, healthySnapshot([session(2)]));
+      const recovered = cache.read();
+      expect(recovered.degraded).toBe(false);
+      expect(recovered.snapshot.sessions).toEqual([session(2)]);
+    });
+  });
+
+  test("ages against the injected clock and honors a custom stale threshold", () => {
+    withTempDir((dir) => {
+      const path = join(dir, "snapshot-v2.json");
+      publishSnapshot(path, healthySnapshot([session(1)]));
+      const mtimeMs = statSync(path).mtimeMs;
+      let now = mtimeMs + 5_000;
+      const cache = new SnapshotCache(path, { now: () => now, staleAfterMs: 10_000 });
+
+      expect(cache.read().degraded).toBe(false);
+      now += 10_001;
+      expect(cache.read().degraded).toBe(true);
+
+      // Identity is unchanged throughout, so recovery is driven purely by the
+      // file being touched again — the daemon's heartbeat rewrite.
+      utimesSync(path, new Date(now), new Date(now));
+      expect(cache.read().degraded).toBe(false);
+      expect(cache.read().snapshot.sessions).toEqual([session(1)]);
     });
   });
 });
