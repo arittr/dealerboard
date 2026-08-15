@@ -105,6 +105,11 @@ git add src/protocol.ts test/protocol.test.ts
 git commit -m "feat(protocol): add pi/omp/zcode/deepseek keys and SessionTitleChanged event"
 ```
 
+**Controller amendment (executed):** widening `Provider` breaks compile in two later-task files, and lefthook's pre-commit typecheck blocks a red commit, so Task 1 also carries two compile-unblocking stubs, staged in the same commit:
+
+- `src/core/registry.ts`: a `case "SessionTitleChanged": return "ignored";` stub in `applyEvent`'s switch (Task 3 replaces it with the real handler + tests).
+- `src/plugin/render.ts`: the four `PROVIDER_COLORS` entries with Task 7's exact values (Task 7's tests become regression guards).
+
 ---
 
 ### Task 2: Projection derives its provider set from `PROVIDER_KEYS`
@@ -624,6 +629,8 @@ git commit -m "feat(plugin): alert on new-provider tile press"
 
 **Interfaces:**
 - Produces: `PROVIDER_COLORS` entries pi `#0EA514`, omp `#F5F0EA`, zcode `#49A1E8`, deepseek `#426EFE` (brand-matched per spec §Rendering); marks are the existing first-two-letters rule (PI, OM, ZC, DE).
+
+**Controller amendment (post-Task 1):** Task 1 already landed the four `PROVIDER_COLORS` values as a compile-unblocking stub (widening `Provider` breaks the `Record<Provider, string>` otherwise). This task is therefore tests-only: the new assertions pass immediately and stand as regression guards. Step 2's RED expectation and Step 3's implementation are vacuous — verify the values are present, keep the tests.
 
 - [ ] **Step 1: Write the failing tests**
 
