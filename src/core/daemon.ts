@@ -15,7 +15,8 @@
  * Maintenance runs inside the same poll loop: a titles pass (resolve session
  * titles from provider files, update rows that changed) every two seconds
  * and a prune pass (delete sessions whose last hook is older than the stale
- * TTL) every minute. A poll gap beyond the clock-jump threshold — the sleep
+ * TTL — one hour for zcode, which has no SessionEnd hook, a day for everyone
+ * else) every minute. A poll gap beyond the clock-jump threshold — the sleep
  * signature of the host machine — records a diagnostic. Maintenance failures
  * record their own diagnostic and never affect publication health.
  *
@@ -42,8 +43,10 @@ export const DAEMON_HEARTBEAT_MS = 5_000;
 export const DAEMON_TITLE_INTERVAL_MS = 2_000;
 /** How often stale sessions are pruned. */
 export const DAEMON_PRUNE_INTERVAL_MS = 60_000;
-/** A session with no hook event for this long is presumed dead and pruned. */
+/** A non-zcode session with no hook event for this long is presumed dead and pruned. */
 export const STALE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+/** A zcode session with no hook event for this long is presumed dead (zcode has no SessionEnd hook). */
+export const ZCODE_STALE_SESSION_TTL_MS = 60 * 60 * 1000;
 /** A poll gap this large means the host slept or the clock jumped. */
 export const CLOCK_JUMP_MS = 30_000;
 
@@ -234,7 +237,8 @@ export class ProjectionDaemon {
       if (this.state.lastPrunePassAtMs === null || nowMs - this.state.lastPrunePassAtMs >= DAEMON_PRUNE_INTERVAL_MS) {
         this.state.lastPrunePassAtMs = nowMs;
         const cutoff = new Date(nowMs - STALE_SESSION_TTL_MS).toISOString();
-        if (pruneStaleSessions(this.connection, cutoff) > 0) {
+        const zcodeCutoff = new Date(nowMs - ZCODE_STALE_SESSION_TTL_MS).toISOString();
+        if (pruneStaleSessions(this.connection, cutoff, zcodeCutoff) > 0) {
           changed = true;
         }
       }
