@@ -829,12 +829,23 @@ yours, never touches it again, and it stops receiving updates.
 - `/name` retitles the tile.
 - `/new`, `/resume`, and `/fork` close the old row and open the new session's
   — pi reports the old session's shutdown whatever the reason.
+- Escape during a streaming response settles the tile to idle. Escape during
+  a tool call shows the error tile: pi records the aborted tool as an errored
+  turn (live-probed on 0.84.2 — the abort fires the same terminal event pair
+  as a real failure, with the error outcome).
 - Quitting pi removes the tile.
 
 ### Known gaps
 
 - pi has no permission or question surface, so the tile never shows waiting.
 - pi reports no subagent rows.
+- Escape during a tool call can leave the tile stuck on working (observed 2
+  of 5 live trials on 0.84.2): the tool-end and terminal events fire
+  milliseconds apart, each spawning its own detached helper, and the
+  tool-end write can land after the terminal one and overwrite it. The next
+  turn's activity (or the hourly lease) corrects the tile. Natural tool
+  turns are unaffected — the model streams text between tool end and turn
+  end, so those writes are seconds apart.
 
 ### Verify and remove
 
@@ -861,12 +872,18 @@ you delete the marker, making it yours (untouched, and no longer updated).
   activity, and idle when the turn ends.
 - Approval prompts show waiting, and omp's ask question shows waiting. The
   approval UX is unchanged: the shim observes the approval event and never
-  intercepts it.
+  intercepts it. Live caveat (17.3.4): the task tool's Change/Acceptance
+  spec dialog does not reliably raise the approval event — in most probed
+  runs the tile stayed working while that dialog was open; ordinary tool
+  approvals (e.g. bash) showed waiting every time.
 - Subagent runs show the descendant badge on the parent tile.
 - Auto-generated titles appear a few seconds after the first message: the
   daemon reads them from the title slot at the head of the session file.
 - Switching sessions mid-process keeps parentage correct — the shim follows
-  the visible session.
+  the visible session. The previous session's row is not closed by an
+  in-process switch (omp signals session end only at process exit), so it
+  lingers with its last status until the hourly lease prunes it — or until
+  that session is resumed and quit.
 - Quitting omp removes the tile.
 
 ### Known gaps
