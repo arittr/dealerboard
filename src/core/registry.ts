@@ -33,6 +33,7 @@ export type ActiveSession = {
   ghosttyTerminalId: string | null;
   backgroundOutstanding: number;
   transcriptPath: string | null;
+  model: string | null;
   openedAt: string;
   updatedAt: string;
 };
@@ -48,12 +49,13 @@ type SessionRow = {
   ghostty_terminal_id: string | null;
   background_outstanding: number;
   transcript_path: string | null;
+  model: string | null;
   opened_at: string;
   updated_at: string;
 };
 
 const COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path, model";
 
 const getRow = (db: Database, provider: Provider, sessionId: string): SessionRow | null =>
   db
@@ -71,6 +73,7 @@ const toActiveSession = (row: SessionRow): ActiveSession => ({
   ghosttyTerminalId: row.ghostty_terminal_id,
   backgroundOutstanding: row.background_outstanding,
   transcriptPath: row.transcript_path,
+  model: row.model,
   openedAt: row.opened_at,
   updatedAt: row.updated_at,
 });
@@ -154,9 +157,12 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
     // Reset to idle and refresh metadata; slot and opened_at stay put. Any
     // stale background flag drops too: shells a previous life left running
     // are no longer tracked, and their late completions clear a zero flag.
+    // A null event model never clears the stored one (COALESCE): providers
+    // that omit the field on resume must not erase what an earlier start
+    // stored.
     db.run(
       `UPDATE active_sessions
-       SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, transcript_path = ?, background_outstanding = 0, updated_at = ?
+       SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, transcript_path = ?, background_outstanding = 0, updated_at = ?, model = COALESCE(?, model)
        WHERE provider = ? AND session_id = ?`,
       [
         event.title,
@@ -164,6 +170,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
         ghosttyTerminalId,
         event.transcriptPath,
         event.observedAt,
+        event.model,
         event.provider,
         event.sessionId,
       ],
@@ -173,7 +180,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
   db.run(
     `INSERT INTO active_sessions
        (${COLUMNS})
-     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, ?)`,
+     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
     [
       event.provider,
       event.sessionId,
@@ -184,6 +191,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
       event.observedAt,
       ghosttyTerminalId,
       event.transcriptPath,
+      event.model,
     ],
   );
   return "applied";
@@ -195,16 +203,21 @@ const applySessionObserved = (
 ): MutationResult => {
   // A prompt proves missing membership, but it must not replay SessionStart's
   // metadata refresh over a session whose lifecycle is already registered.
-  // The one exception is the transcript path: backfilling it unlocks title
-  // resolution for sessions that predate the stored path.
+  // The one exception is backfilling absent facts: the transcript path
+  // unlocks title resolution and the model id (e.g. a Kimi prompt on a
+  // session whose start hook was missed) fills the tile's model label.
+  // Null event values never clear what is already stored.
   const existing = getRow(db, event.provider, event.sessionId);
   if (existing !== null) {
-    if (event.transcriptPath !== null && existing.transcript_path !== event.transcriptPath) {
-      db.run("UPDATE active_sessions SET transcript_path = ? WHERE provider = ? AND session_id = ?", [
-        event.transcriptPath,
-        event.provider,
-        event.sessionId,
-      ]);
+    const backfillModel = event.model !== null && existing.model !== event.model;
+    const backfillTranscript = event.transcriptPath !== null && existing.transcript_path !== event.transcriptPath;
+    if (backfillModel || backfillTranscript) {
+      db.run(
+        `UPDATE active_sessions
+         SET transcript_path = COALESCE(?, transcript_path), model = COALESCE(?, model)
+         WHERE provider = ? AND session_id = ?`,
+        [event.transcriptPath, event.model, event.provider, event.sessionId],
+      );
       return "applied";
     }
     return "ignored";
@@ -262,7 +275,7 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
   db.run(
     `INSERT INTO active_sessions
        (${COLUMNS})
-     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL, 0, NULL)`,
+     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL, 0, NULL, NULL)`,
     [
       event.provider,
       event.sessionId,
@@ -443,6 +456,12 @@ export type SessionTitleUpdate = {
   title: string;
 };
 
+export type SessionModelUpdate = {
+  provider: Provider;
+  sessionId: string;
+  model: string;
+};
+
 /** The registry fields the daemon's title resolver needs per top-level row. */
 export type TitleTarget = {
   provider: Provider;
@@ -465,6 +484,26 @@ export const updateSessionTitles = (db: Database, updates: readonly SessionTitle
       const result = db.run(
         "UPDATE active_sessions SET title = ? WHERE provider = ? AND session_id = ? AND title IS NOT ?",
         [update.title, update.provider, update.sessionId, update.title],
+      );
+      changed += result.changes;
+    }
+    return changed;
+  });
+
+/**
+ * Refresh resolved models in one transaction, skipping rows that already hold
+ * the value. `updated_at` deliberately stays put: it records the last hook a
+ * session produced, which is the signal the stale-session prune ages on, and a
+ * daemon-side model write must not extend a dead session's lease, matching
+ * `updateSessionTitles`. Returns the number of rows actually changed.
+ */
+export const updateSessionModels = (db: Database, updates: readonly SessionModelUpdate[]): number =>
+  inWriteTransaction(db, () => {
+    let changed = 0;
+    for (const update of updates) {
+      const result = db.run(
+        "UPDATE active_sessions SET model = ? WHERE provider = ? AND session_id = ? AND model IS NOT ?",
+        [update.model, update.provider, update.sessionId, update.model],
       );
       changed += result.changes;
     }

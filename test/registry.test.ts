@@ -10,6 +10,7 @@ import {
   clearSession,
   listSessions,
   pruneStaleSessions,
+  updateSessionModels,
   updateSessionTitles,
 } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
@@ -40,6 +41,7 @@ const start = (
     project?: string | null;
     ghosttyTerminalId?: string | null;
     transcriptPath?: string | null;
+    model?: string | null;
     at?: string;
   } = {},
 ): RegistryEvent => ({
@@ -50,7 +52,7 @@ const start = (
   project: options.project ?? null,
   ghosttyTerminalId: options.ghosttyTerminalId ?? null,
   transcriptPath: options.transcriptPath ?? null,
-  model: null,
+  model: options.model ?? null,
   observedAt: options.at ?? at(1),
 });
 
@@ -535,6 +537,53 @@ describe("transcript paths", () => {
   });
 });
 
+describe("model", () => {
+  const observed = (
+    sessionId: string,
+    options: { provider?: Provider; model?: string | null; transcriptPath?: string | null; at?: string } = {},
+  ): RegistryEvent => ({
+    kind: "SessionObserved",
+    provider: options.provider ?? "kimi",
+    sessionId,
+    title: null,
+    project: null,
+    transcriptPath: options.transcriptPath ?? null,
+    model: options.model ?? null,
+    observedAt: options.at ?? at(2),
+  });
+
+  test("SessionStart stores a reported model", () => {
+    applyRegistryEvents(db, [start("k1", { provider: "kimi", model: "k3" })]);
+    expect(getRow("k1", "kimi")?.model).toBe("k3");
+    expect(listSessions(db)[0]).toMatchObject({ sessionId: "k1", model: "k3" });
+  });
+
+  test("a SessionStart with null model does not clear a stored model", () => {
+    applyRegistryEvents(db, [start("k1", { provider: "kimi", model: "k3", at: at(1) })]);
+    expect(applyRegistryEvents(db, [start("k1", { provider: "kimi", model: null, at: at(2) })])).toEqual(["applied"]);
+    expect(getRow("k1", "kimi")?.model).toBe("k3");
+  });
+
+  test("SessionObserved backfills a null model and overwrites on difference", () => {
+    // Start with no model reported.
+    applyRegistryEvents(db, [start("k1", { provider: "kimi", model: null, at: at(1) })]);
+    expect(getRow("k1", "kimi")?.model).toBeNull();
+
+    // A non-null observed model fills the absence.
+    expect(applyRegistryEvents(db, [observed("k1", { model: "k3", at: at(2) })])).toEqual(["applied"]);
+    expect(getRow("k1", "kimi")?.model).toBe("k3");
+
+    // A non-null, different observed model overwrites (mirrors transcript_path).
+    expect(applyRegistryEvents(db, [observed("k1", { model: "other", at: at(3) })])).toEqual(["applied"]);
+    expect(getRow("k1", "kimi")?.model).toBe("other");
+
+    // A null observed model is an ignored no-op: null never clears.
+    expect(applyRegistryEvents(db, [observed("k1", { model: null, at: at(4) })])).toEqual(["ignored"]);
+    expect(getRow("k1", "kimi")?.model).toBe("other");
+    expect(getRow("k1", "kimi")?.updated_at).toBe(at(1));
+  });
+});
+
 describe("updateSessionTitles", () => {
   test("writes only differing titles without touching updated_at", () => {
     applyRegistryEvents(db, [start("s1", { at: at(1) }), start("s2", { title: "Kept", at: at(2) })]);
@@ -553,6 +602,27 @@ describe("updateSessionTitles", () => {
     // A second identical pass changes nothing.
     expect(updateSessionTitles(db, [{ provider: "claude", sessionId: "s1", title: "Resolved title" }])).toBe(0);
     expect(getRow("s1")).toMatchObject({ title: "Resolved title", updated_at: at(1) });
+  });
+});
+
+describe("updateSessionModels", () => {
+  test("writes only differing models without touching updated_at", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), start("s2", { model: "k3", at: at(2) })]);
+
+    expect(
+      updateSessionModels(db, [
+        { provider: "claude", sessionId: "s1", model: "claude-fable-5" },
+        { provider: "claude", sessionId: "s2", model: "k3" },
+        { provider: "claude", sessionId: "ghost", model: "nope" },
+      ]),
+    ).toBe(1);
+
+    expect(getRow("s1")).toMatchObject({ model: "claude-fable-5", updated_at: at(1) });
+    expect(getRow("s2")).toMatchObject({ model: "k3", updated_at: at(2) });
+
+    // A second identical pass changes nothing.
+    expect(updateSessionModels(db, [{ provider: "claude", sessionId: "s1", model: "claude-fable-5" }])).toBe(0);
+    expect(getRow("s1")).toMatchObject({ model: "claude-fable-5", updated_at: at(1) });
   });
 });
 
@@ -647,6 +717,7 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: at(1),
         updatedAt: at(1),
       },
@@ -661,6 +732,7 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: at(2),
         updatedAt: at(2),
       },
@@ -675,6 +747,7 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: at(4),
         updatedAt: at(4),
       },
@@ -689,6 +762,7 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: at(3),
         updatedAt: at(3),
       },
