@@ -30,6 +30,7 @@ export type ProjectionRow = {
   project: string | null;
   logicalSlot: number | null;
   ghosttyTerminalId: string | null;
+  model: string | null;
 };
 
 export type ProjectionErrorCode =
@@ -167,6 +168,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       descendantCount,
       logicalSlot: slot,
       ghosttyTerminalId: root.ghosttyTerminalId,
+      model: root.model,
     });
   }
 
@@ -187,6 +189,7 @@ type StoredRow = {
   project: unknown;
   logical_slot: unknown;
   ghostty_terminal_id: unknown;
+  model: unknown;
 };
 
 const isStringOrNull = (value: unknown): value is string | null => typeof value === "string" || value === null;
@@ -206,7 +209,8 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     !isStringOrNull(row.parent_session_id) ||
     !isStringOrNull(row.title) ||
     !isStringOrNull(row.project) ||
-    !isStringOrNull(row.ghostty_terminal_id)
+    !isStringOrNull(row.ghostty_terminal_id) ||
+    !isStringOrNull(row.model)
   ) {
     throw new ProjectionError("corrupt-row");
   }
@@ -219,6 +223,9 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   ) {
     throw new ProjectionError("corrupt-row");
   }
+  if (typeof row.model === "string" && (row.model.length === 0 || Array.from(row.model).length > 256)) {
+    throw new ProjectionError("corrupt-row");
+  }
   return {
     provider: row.provider as Provider,
     sessionId: row.session_id,
@@ -228,11 +235,12 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     project: row.project,
     logicalSlot: row.logical_slot,
     ghosttyTerminalId: row.ghostty_terminal_id,
+    model: row.model,
   };
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:

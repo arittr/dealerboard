@@ -14,6 +14,7 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   descendantCount: 0,
   logicalSlot: 1,
   ghosttyTerminalId: null,
+  model: null,
   ...overrides,
 });
 

@@ -217,6 +217,7 @@ const applySessionObserved = (
     project: event.project,
     ghosttyTerminalId: null,
     transcriptPath: event.transcriptPath,
+    model: event.model,
     observedAt: event.observedAt,
   });
 };

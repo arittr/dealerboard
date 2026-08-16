@@ -48,6 +48,7 @@ const startSession = (sessionId: string, observedAt: string = NOW): void => {
       project: null,
       ghosttyTerminalId: null,
       transcriptPath: null,
+      model: null,
       observedAt,
     },
   ]);
@@ -140,6 +141,7 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       descendantCount: 0,
       logicalSlot: 1,
       ghosttyTerminalId: null,
+      model: null,
     },
   ],
 };

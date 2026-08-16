@@ -50,6 +50,7 @@ const start = (
   project: options.project ?? null,
   ghosttyTerminalId: options.ghosttyTerminalId ?? null,
   transcriptPath: options.transcriptPath ?? null,
+  model: null,
   observedAt: options.at ?? at(1),
 });
 
@@ -498,6 +499,7 @@ describe("transcript paths", () => {
         title: null,
         project: "proj",
         transcriptPath: "/Users/drew/.codex/sessions/rollout-1.jsonl",
+        model: null,
         observedAt: at(3),
       },
     ]);
@@ -515,6 +517,7 @@ describe("transcript paths", () => {
           title: null,
           project: null,
           transcriptPath: "/Users/drew/.claude/projects/p/s2.jsonl",
+          model: null,
           observedAt: at(5),
         },
       ]),
@@ -585,6 +588,7 @@ describe("pruneStaleSessions", () => {
           title: null,
           project: "proj",
           transcriptPath: null,
+          model: null,
           observedAt: at(1),
         },
         simple("Activity", "s1", { at: at(2) }),

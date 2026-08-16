@@ -346,6 +346,7 @@ describe("event ingress", () => {
           project: null,
           ghosttyTerminalId: "existing-terminal",
           transcriptPath: null,
+          model: null,
           observedAt: NOW,
         },
       ]);
@@ -813,6 +814,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: at(1),
         },
         {
@@ -823,6 +825,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: at(2),
         },
         {
@@ -976,6 +979,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: NOW,
         },
         {
@@ -986,6 +990,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: NOW,
         },
       ]);
