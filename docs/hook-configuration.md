@@ -799,5 +799,7 @@ Each active session should appear with its provider, title, and project. To
 remove every recorded session (for example after testing), run
 `... sessions clear-all` with the same binary. `... sessions prune
 [max-age-hours]` deletes only sessions whose last hook is older than the
-cutoff (default 24 hours); the daemon runs the same prune automatically once
-a minute.
+cutoff (default 24 hours); that one operator cutoff applies to every
+provider alike. The daemon's automatic pass — the same prune, once a minute
+— is split by provider instead: zcode rows are pruned at 1 hour, every
+other provider at 24 hours.
