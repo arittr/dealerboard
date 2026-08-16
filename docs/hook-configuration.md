@@ -751,14 +751,19 @@ top-level keys, mirroring the enabled provider entry from that file:
 
 ### Behavior to expect
 
-- A tile appears on session start, goes working on prompt and tool activity,
-  waiting while a permission prompt is pending, and idle when the turn ends.
-- An interrupt between tool calls maps to idle via `PostToolUseFailure`
-  when zcode emits one — a failed tool call carrying `is_interrupt`, which
-  the helper treats as a Stop. An interrupt that fires no such event leaves
-  the tile working until the next event or the 1-hour lease; this is the
-  behavior the live verification pins (recorded in
-  docs/verification/2026-08-15-zcode-p1.md).
+- A tile appears at the first prompt, not at session creation: zcode
+  materializes hooks lazily, and the live probes saw no event (and no
+  registry row) from creating a session until `UserPromptSubmit` fired.
+  From there the tile goes working on prompt and tool activity, waiting
+  while a permission prompt is pending, and idle when the turn ends. (All
+  of this is registry-row evidence; the physical key face itself was not
+  part of the live observation.)
+- The helper maps a `PostToolUseFailure` carrying `is_interrupt` to a Stop
+  when one arrives, but the live probes on 0.16.3 never saw one: stopping a
+  session both mid-tool-call and between tool calls delivered no hook event
+  at all, leaving the tile working until the next event or the 1-hour
+  lease. That is the behavior to expect from an interrupt (recorded in the
+  [dated verification record](verification/2026-08-15-zcode-p1.md)).
 - In a headless `--mode plan` run, denying a permission prompt strands the
   tile at waiting until the next event or the 1-hour lease — the deny path
   delivers no event after `PermissionRequest` (observed live on 0.16.3);
