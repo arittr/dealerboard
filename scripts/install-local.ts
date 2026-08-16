@@ -2,7 +2,8 @@
  * Explicit macOS-local installer for the hook-driven session registry.
  *
  * Step order (any pre-hook failure exits nonzero immediately; this script
- * never edits provider configuration):
+ * installs its own shim files into provider extension dirs; it still never
+ * edits provider **config files**):
  *   1. Require macOS; canonical paths resolve through node:os homedir().
  *   2. Run the repository build and plugin validate/package commands with an
  *      explicit working directory.
@@ -16,7 +17,9 @@
  *   8. Bootstrap and kickstart the exact label.
  *   9. Install the single packaged plugin from dist and restart it through
  *      the official Stream Deck CLI.
- *   10. Print the canonical paths; provider hooks remain uninstalled.
+ *   10. Install the managed shims into the pi/omp agent extension dirs that
+ *       exist; never overwrite unmarked user files.
+ *   11. Print the canonical paths; provider hooks remain uninstalled.
  *
  * Every subprocess runs through spawnSync with an argument array — no shell
  * command strings — and every tool path is absolute.
@@ -24,9 +27,19 @@
 
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AppPaths } from "../src/core/paths";
 import { ensureAppDirectories, resolveAppPaths } from "../src/core/paths";
 import { LATEST_SCHEMA_VERSION } from "../src/core/schema";
 
@@ -42,6 +55,14 @@ const TOKEN_MARKER = "__STREAM_DECK_AGENTS_";
 
 const EXECUTABLE_MODE = 0o700;
 const PLIST_MODE = 0o600;
+
+const SHIM_MARKER = "// stream-deck-agents: managed shim v1";
+const SHIM_NAME = "stream-deck-agents.ts";
+const SHIM_TARGETS = [
+  { provider: "pi", homeDir: ".pi" },
+  { provider: "omp", homeDir: ".omp" },
+] as const;
+const SHIM_MODE = 0o600;
 
 const LAUNCHCTL = "/bin/launchctl";
 const PLUTIL = "/usr/bin/plutil";
@@ -67,6 +88,46 @@ const run = (step: string, command: string, args: readonly string[]): void => {
   }
   if (result.status !== 0) {
     fail(step, `${command} exited with status ${String(result.status)}`);
+  }
+};
+
+/**
+ * Install the managed shims into provider extension dirs that exist. A shim
+ * is skipped (with a printed note) when the provider dir is absent, and the
+ * installer refuses to overwrite a same-named file without the managed
+ * marker — that's user content, and losing it would be silent damage.
+ * Writes are atomic (temp + rename), mode 0600, with the executable token
+ * substituted at copy time.
+ */
+const installShims = (paths: AppPaths): void => {
+  for (const target of SHIM_TARGETS) {
+    const providerRoot = join(paths.home, target.homeDir);
+    const extensionsDir = join(providerRoot, "agent", "extensions");
+    const destination = join(extensionsDir, SHIM_NAME);
+    if (!existsSync(providerRoot)) {
+      process.stdout.write(`install-local: skipping ${target.provider} shim (${providerRoot} does not exist)\n`);
+      continue;
+    }
+    const source = readFileSync(join(repositoryRoot, "extensions", target.provider, SHIM_NAME), "utf8");
+    if (!source.startsWith(SHIM_MARKER) || !source.includes(EXECUTABLE_TOKEN)) {
+      fail("shims", `extensions/${target.provider}/${SHIM_NAME} is missing its marker or token`);
+    }
+    const rendered = source.split(EXECUTABLE_TOKEN).join(paths.executable);
+    if (existsSync(destination)) {
+      const installed = readFileSync(destination, "utf8");
+      if (!installed.startsWith(SHIM_MARKER)) {
+        process.stdout.write(`install-local: NOT overwriting ${destination} — no managed marker (user content)\n`);
+        continue;
+      }
+      if (installed === rendered) {
+        continue;
+      }
+    }
+    mkdirSync(extensionsDir, { recursive: true });
+    const temp = join(extensionsDir, `.${SHIM_NAME}.tmp-${process.pid}`);
+    writeFileSync(temp, rendered, { mode: SHIM_MODE });
+    renameSync(temp, destination);
+    process.stdout.write(`install-local: installed ${target.provider} shim → ${destination}\n`);
   }
 };
 
@@ -147,7 +208,11 @@ const main = (): void => {
   run("install-plugin", OPEN, [packagePath]);
   run("install-plugin", process.execPath, [STREAMDECK_CLI, "restart", LABEL]);
 
-  // 10. Report canonical paths; provider hooks remain a manual final step.
+  // 10. Install the managed shims last — auto-discovered shims must never
+  // activate before the compatible daemon and plugin are live.
+  installShims(paths);
+
+  // 11. Report canonical paths; provider hooks remain a manual final step.
   process.stdout.write(
     [
       "install-local: complete",
