@@ -232,7 +232,7 @@ describe("event mapping", () => {
     ]);
   });
 
-  test("keeps titled Kimi starts so resumed sessions appear immediately", () => {
+  test("keeps titled Kimi starts so resumed sessions join the registry", () => {
     expect(
       decode(withIdentity({ hook_event_name: "SessionStart", session_title: "Existing session" }), "kimi"),
     ).toEqual([

@@ -5,16 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
 import {
+  acknowledgeSession,
   applyRegistryEvents,
   clearAllSessions,
   clearSession,
   listSessions,
   pruneStaleSessions,
+  syncPaseoStates,
   updateSessionModels,
   updateSessionTitles,
 } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
-import type { Provider, RegistryEvent } from "../src/protocol";
+import type { Provider, RegistryEvent, SessionOrigin } from "../src/protocol";
 
 let tempHome: string;
 let db: Database;
@@ -43,8 +45,9 @@ const start = (
     transcriptPath?: string | null;
     model?: string | null;
     at?: string;
+    origin?: SessionOrigin | null;
   } = {},
-): RegistryEvent => ({
+): Extract<RegistryEvent, { kind: "SessionStart" }> => ({
   kind: "SessionStart",
   provider: options.provider ?? "claude",
   sessionId,
@@ -54,6 +57,7 @@ const start = (
   transcriptPath: options.transcriptPath ?? null,
   model: options.model ?? null,
   observedAt: options.at ?? at(1),
+  ...(options.origin !== undefined ? { origin: options.origin } : {}),
 });
 
 const subStart = (
@@ -103,6 +107,10 @@ type Row = {
   background_outstanding: number;
   transcript_path: string | null;
   model: string | null;
+  origin_kind: string | null;
+  origin_ref: string | null;
+  origin_subagent: number;
+  unread_since: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -137,6 +145,10 @@ describe("applyRegistryEvents", () => {
       background_outstanding: 0,
       transcript_path: null,
       model: null,
+      origin_kind: null,
+      origin_ref: null,
+      origin_subagent: 0,
+      unread_since: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -222,6 +234,10 @@ describe("applyRegistryEvents", () => {
       background_outstanding: 0,
       transcript_path: null,
       model: null,
+      origin_kind: null,
+      origin_ref: null,
+      origin_subagent: 0,
+      unread_since: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
@@ -458,6 +474,133 @@ describe("background work outstanding", () => {
   });
 });
 
+describe("unread ledger", () => {
+  test("Stop transitioning to idle marks the session unread", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1"), simple("Stop", "s1", { at: at(9) })]);
+    expect(getRow("s1")?.unread_since).toBe(at(9));
+  });
+
+  test("Stop with background work outstanding stays working and does NOT mark unread", () => {
+    applyRegistryEvents(db, [start("s1"), simple("BackgroundWorkStarted", "s1"), simple("Stop", "s1")]);
+    expect(getRow("s1")?.status).toBe("working");
+    expect(getRow("s1")?.unread_since).toBeNull();
+  });
+
+  test("StopFailure marks unread", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1"), simple("StopFailure", "s1", { at: at(9) })]);
+    expect(getRow("s1")?.unread_since).toBe(at(9));
+  });
+
+  test("UserPromptSubmit does NOT clear unread (view, not interaction, marks read)", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("Activity", "s1"),
+      simple("Stop", "s1"),
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        model: null,
+        observedAt: at(20),
+      },
+      simple("Activity", "s1", { at: at(20) }),
+    ]);
+    expect(getRow("s1")?.unread_since).not.toBeNull();
+  });
+
+  test("reused SessionStart clears unread and refreshes origin", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1")]);
+    applyRegistryEvents(db, [{ ...start("s1", { at: at(30) }), origin: { kind: "paseo", ref: "agent-1" } }]);
+    const row = getRow("s1");
+    expect(row?.unread_since).toBeNull();
+    expect(row?.origin_kind).toBe("paseo");
+    expect(row?.origin_ref).toBe("agent-1");
+  });
+
+  test("acknowledgeSession clears unread without touching updated_at", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(9) })]);
+    const before = getRow("s1")?.updated_at;
+    expect(acknowledgeSession(db, "claude", "s1")).toBe("applied");
+    const row = getRow("s1");
+    expect(row?.unread_since).toBeNull();
+    expect(row?.updated_at).toBe(before);
+    expect(acknowledgeSession(db, "claude", "s1")).toBe("ignored"); // already read
+  });
+});
+
+describe("origin", () => {
+  test("SessionStart stores origin; a null new origin keeps the existing one", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    applyRegistryEvents(db, [start("s1", { at: at(30) })]); // no origin evidence
+    expect(getRow("s1")?.origin_kind).toBe("paseo");
+  });
+
+  test("a fresh terminal origin overrides a stale paseo origin and clears the subagent bit", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1 WHERE provider = 'claude' AND session_id = 's1'");
+    applyRegistryEvents(db, [{ ...start("s1", { at: at(30) }), origin: { kind: "terminal", ref: "ghostty" } }]);
+    const row = getRow("s1");
+    expect(row?.origin_kind).toBe("terminal");
+    expect(row?.origin_subagent).toBe(0);
+  });
+
+  const observedWithOrigin = (sessionId: string, origin: SessionOrigin | null, atSecond: number): RegistryEvent => ({
+    kind: "SessionObserved",
+    provider: "claude",
+    sessionId,
+    title: null,
+    project: null,
+    transcriptPath: null,
+    model: null,
+    origin,
+    observedAt: at(atSecond),
+  });
+
+  test("SessionObserved refreshes origin on an existing row without touching updated_at", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) })]);
+    const before = getRow("s1")?.updated_at;
+
+    expect(applyRegistryEvents(db, [observedWithOrigin("s1", { kind: "terminal", ref: "ghostty" }, 2)])).toEqual([
+      "applied",
+    ]);
+    expect(getRow("s1")).toMatchObject({
+      origin_kind: "terminal",
+      origin_ref: "ghostty",
+      origin_subagent: 0,
+      updated_at: before,
+    });
+  });
+
+  test("an observed origin replaces a stale one and resets the subagent bit (SessionStart semantics)", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1 WHERE provider = 'claude' AND session_id = 's1'");
+
+    expect(applyRegistryEvents(db, [observedWithOrigin("s1", { kind: "terminal", ref: "ghostty" }, 2)])).toEqual([
+      "applied",
+    ]);
+    expect(getRow("s1")).toMatchObject({ origin_kind: "terminal", origin_ref: "ghostty", origin_subagent: 0 });
+  });
+
+  test("a same-origin observed is ignored (honest bookkeeping, no churn)", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "terminal", ref: "ghostty" } }]);
+
+    expect(applyRegistryEvents(db, [observedWithOrigin("s1", { kind: "terminal", ref: "ghostty" }, 2)])).toEqual([
+      "ignored",
+    ]);
+    expect(getRow("s1")).toMatchObject({ origin_kind: "terminal", origin_ref: "ghostty", origin_subagent: 0 });
+  });
+
+  test("an observed without origin evidence preserves the stored origin and is ignored", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "terminal", ref: "ghostty" } }]);
+
+    expect(applyRegistryEvents(db, [observedWithOrigin("s1", null, 2)])).toEqual(["ignored"]);
+    expect(getRow("s1")).toMatchObject({ origin_kind: "terminal", origin_ref: "ghostty" });
+  });
+});
+
 describe("repair commands", () => {
   test("clearSession deletes exactly one composite identity plus descendants", () => {
     applyRegistryEvents(db, [
@@ -626,6 +769,154 @@ describe("updateSessionModels", () => {
   });
 });
 
+describe("syncPaseoStates", () => {
+  const FLAG_AT = "2026-08-06T00:10:00.000Z";
+
+  const paseoState = (overrides: {
+    sessionId?: string;
+    requiresAttention?: boolean;
+    isSubagent?: boolean;
+    attentionTimestamp?: string | null;
+    updatedAt?: string | null;
+  }) => ({
+    provider: "claude" as const,
+    sessionId: overrides.sessionId ?? "s1",
+    agentId: "a1",
+    requiresAttention: overrides.requiresAttention ?? true,
+    isSubagent: overrides.isSubagent ?? false,
+    attentionTimestamp: overrides.attentionTimestamp ?? null,
+    updatedAt: overrides.updatedAt ?? null,
+  });
+
+  test("stamps origin and mirrors attention both ways under the watermark", () => {
+    applyRegistryEvents(db, [start("s1")]);
+
+    // Flagged: unread adopts the record's attention timestamp.
+    const changed = syncPaseoStates(db, [paseoState({ attentionTimestamp: FLAG_AT })]);
+    expect(changed).toBe(1);
+    expect(getRow("s1")).toMatchObject({
+      origin_kind: "paseo",
+      origin_ref: "a1",
+      origin_subagent: 0,
+      unread_since: FLAG_AT,
+    });
+
+    // Cleared with a later record write (the user viewed it in Paseo) → unread cleared here.
+    const cleared = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:12:00.000Z" }),
+    ]);
+    expect(cleared).toBe(1);
+    expect(getRow("s1")?.unread_since).toBeNull();
+  });
+
+  test("falls back to updatedAt as the flag time when attentionTimestamp is absent", () => {
+    applyRegistryEvents(db, [start("s1")]);
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: null, updatedAt: FLAG_AT })])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(FLAG_AT);
+  });
+
+  test("a stale cleared record does not clear newer local news (Stop → stale false)", () => {
+    const stopAt = at(5); // 2026-08-06T00:00:05.000Z
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: stopAt })]);
+    expect(getRow("s1")?.unread_since).toBe(stopAt);
+
+    // Stamp origin first so the cleared passes below have nothing else to write.
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: "2026-08-06T00:00:01.000Z" })])).toBe(1);
+
+    // A cleared record whose updatedAt predates the Stop is stale evidence of
+    // viewing: it must not clear the newer local result.
+    const stale = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:02.000Z" }),
+    ]);
+    expect(stale).toBe(0);
+    expect(getRow("s1")?.unread_since).toBe(stopAt);
+
+    // A cleared record written after the Stop is fresh proof of viewing.
+    const fresh = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:09.000Z" }),
+    ]);
+    expect(fresh).toBe(1);
+    expect(getRow("s1")?.unread_since).toBeNull();
+  });
+
+  test("a flagged record never overwrites an existing unread timestamp and never touches updated_at", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Stop", "s1", { at: at(5) })]);
+    const before = getRow("s1")?.updated_at;
+
+    // Flag time newer than the local Stop: local news is at least as new — keep.
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: FLAG_AT })])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(at(5));
+
+    // Flag time older than the local Stop: keep the first-news timestamp (no regress, no churn).
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: "2026-08-06T00:00:02.000Z" })])).toBe(0);
+    expect(getRow("s1")?.unread_since).toBe(at(5));
+    expect(getRow("s1")?.updated_at).toBe(before);
+  });
+
+  test("missing timestamps skip the unread write entirely but still stamp origin", () => {
+    applyRegistryEvents(db, [start("s1")]);
+
+    // Flagged with no timestamps at all: origin lands, unread stays null.
+    expect(syncPaseoStates(db, [paseoState({})])).toBe(1);
+    expect(getRow("s1")).toMatchObject({ origin_kind: "paseo", origin_ref: "a1", unread_since: null });
+
+    // Cleared with no updatedAt must not clear even a Stop-stamped unread.
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(5) })]);
+    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false })])).toBe(0);
+    expect(getRow("s1")?.unread_since).toBe(at(5));
+  });
+
+  test("an acknowledged row re-flags from a stale flagged record for one cycle (accepted residual)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(acknowledgeSession(db, "claude", "s1")).toBe("applied");
+    expect(getRow("s1")?.unread_since).toBeNull();
+
+    // A still-stale flagged record re-sets unread to its own flag time. This
+    // is the adjudicated residual: it self-heals because the tile press
+    // opened Paseo, which natively clears the attention flag, so the next
+    // record write retires the row again.
+    const staleFlag = "2026-08-06T00:00:02.000Z";
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: staleFlag })])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(staleFlag);
+
+    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:09.000Z" })])).toBe(
+      1,
+    );
+    expect(getRow("s1")?.unread_since).toBeNull();
+  });
+
+  test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {
+    applyRegistryEvents(db, [start("s1")]);
+
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: FLAG_AT })])).toBe(1);
+    // Identical state on a later pass: unread keeps its flag-time timestamp
+    // and the difference guard suppresses the update entirely.
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: FLAG_AT })])).toBe(0);
+
+    const read = paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:13:00.000Z" });
+    expect(syncPaseoStates(db, [read])).toBe(1);
+    expect(syncPaseoStates(db, [read])).toBe(0);
+    expect(getRow("s1")?.updated_at).toBe(at(1));
+  });
+
+  test("marks subagents, restricts to top-level rows, and skips unknown identities", () => {
+    applyRegistryEvents(db, [start("s1"), subStart("c1", "s1")]);
+
+    const changed = syncPaseoStates(db, [
+      paseoState({ isSubagent: true, attentionTimestamp: FLAG_AT }),
+      // A child identity is out of scope: the sync touches top-level rows only.
+      paseoState({ sessionId: "c1", attentionTimestamp: FLAG_AT }),
+      // No row is ever created for an unknown identity.
+      paseoState({ sessionId: "missing", attentionTimestamp: FLAG_AT }),
+    ]);
+    expect(changed).toBe(1);
+    expect(getRow("s1")?.origin_subagent).toBe(1);
+    expect(getRow("c1")).toMatchObject({ origin_kind: null, unread_since: null });
+    expect(getRow("missing")).toBeNull();
+    expect(countRows()).toBe(2);
+  });
+});
+
 describe("pruneStaleSessions", () => {
   test("deletes top-level rows older than the cutoff and cascades to children", () => {
     applyRegistryEvents(db, [
@@ -718,6 +1009,10 @@ describe("listSessions", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(1),
         updatedAt: at(1),
       },
@@ -733,6 +1028,10 @@ describe("listSessions", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(2),
         updatedAt: at(2),
       },
@@ -748,6 +1047,10 @@ describe("listSessions", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(4),
         updatedAt: at(4),
       },
@@ -763,6 +1066,10 @@ describe("listSessions", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(3),
         updatedAt: at(3),
       },

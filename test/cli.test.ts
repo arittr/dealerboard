@@ -73,6 +73,7 @@ const makeHarness = (overrides: Partial<CliDependencies> = {}): Harness => {
       err += text;
     },
     discoverClaudeGhosttyTerminal: () => Promise.resolve("test-ghostty-terminal"),
+    environment: {},
     ...overrides,
   };
   return { deps, diagnostics, delays, stdout: () => out, stderr: () => err };
@@ -104,14 +105,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 6 database and stays silent on stdout", async () => {
+  test("creates a version 8 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
     } finally {
       db.close();
     }
@@ -157,6 +158,10 @@ describe("event ingress", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -228,6 +233,10 @@ describe("event ingress", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -282,6 +291,10 @@ describe("event ingress", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -312,6 +325,10 @@ describe("event ingress", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -442,6 +459,104 @@ describe("event ingress", () => {
     ]);
   });
 
+  test("event stamps paseo origin from PASEO_AGENT_ID at SessionStart", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { PASEO_AGENT_ID: "agent-xyz" },
+      stdin: stdinOf(startEvent("s1")),
+    });
+
+    expect(await runCli(["event", "kimi"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([]);
+    expect(listRows()[0]).toMatchObject({ originKind: "paseo", originRef: "agent-xyz" });
+  });
+
+  test("event stamps terminal origin from TERM_PROGRAM when no Paseo marker", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { TERM_PROGRAM: "ghostty" },
+      stdin: stdinOf(startEvent("s1")),
+    });
+
+    expect(await runCli(["event", "kimi"], harness.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ originKind: "terminal", originRef: "ghostty" });
+  });
+
+  test("event stamps no origin when no markers", async () => {
+    initRegistry();
+    const harness = makeHarness({ environment: {}, stdin: stdinOf(startEvent("s1")) });
+    expect(await runCli(["event", "kimi"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([]);
+    expect(listRows()[0]).toMatchObject({ originKind: null, originRef: null });
+  });
+
+  test("event stamps the same origin on a late-joining SessionObserved row", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { PASEO_AGENT_ID: "agent-xyz" },
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "late-join",
+          cwd: "/users/drew/project-x",
+          prompt: "SENTINEL_PROMPT_NEVER_STORED",
+        }),
+      ),
+    });
+
+    expect(await runCli(["event", "kimi"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([]);
+    expect(listRows()[0]).toMatchObject({ originKind: "paseo", originRef: "agent-xyz" });
+  });
+
+  test("event refreshes origin on an existing row when an observed prompt carries markers", async () => {
+    initRegistry();
+    // A start without markers leaves the existing row origin-unknown.
+    const plainStart = makeHarness({ stdin: stdinOf(startEvent("s1")) });
+    expect(await runCli(["event", "kimi"], plainStart.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ originKind: null, originRef: null });
+
+    // A later prompt in a terminal late-joins nothing (the row exists) but
+    // its fresh origin evidence replaces the unknown one.
+    const prompt = makeHarness({
+      environment: { TERM_PROGRAM: "ghostty" },
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "s1",
+          cwd: "/users/drew/project-x",
+          prompt: "SENTINEL_PROMPT_NEVER_STORED",
+        }),
+      ),
+    });
+    expect(await runCli(["event", "kimi"], prompt.deps)).toBe(0);
+    expect(prompt.diagnostics).toEqual([]);
+
+    // The refreshed origin is visible through the read-only listing path.
+    const lister = makeHarness();
+    expect(await runCli(["sessions", "list"], lister.deps)).toBe(0);
+    expect(lister.stderr()).toBe("");
+    expect(JSON.parse(lister.stdout())).toMatchObject([
+      { provider: "kimi", sessionId: "s1", originKind: "terminal", originRef: "ghostty" },
+    ]);
+  });
+
+  test("keeps the stamped origin through the Claude ghostty terminal enrichment", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { PASEO_AGENT_ID: "agent-xyz", TERM_PROGRAM: "ghostty" },
+      stdin: stdinOf(startEvent("s1")),
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([]);
+    expect(listRows()[0]).toMatchObject({
+      originKind: "paseo",
+      originRef: "agent-xyz",
+      ghosttyTerminalId: "test-ghostty-terminal",
+    });
+  });
+
   test("late-joins a row from UserPromptSubmit when SessionStart was missed", async () => {
     // A prompt proves membership: sessions whose start hook never fired (or
     // whose row was pruned) reappear instead of staying invisible forever.
@@ -471,6 +586,10 @@ describe("event ingress", () => {
         backgroundOutstanding: 0,
         transcriptPath: null,
         model: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -971,6 +1090,43 @@ describe("sessions commands", () => {
     }
   });
 
+  test("sessions ack clears a session's unread state", async () => {
+    initRegistry();
+    const start = makeHarness({ stdin: stdinOf(startEvent("a1")) });
+    expect(await runCli(["event", "claude"], start.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ status: "idle", unreadSince: null });
+
+    // A turn finishing is the unread result the user has not viewed yet.
+    const stop = makeHarness({ stdin: stdinOf(JSON.stringify({ hook_event_name: "Stop", session_id: "a1" })) });
+    expect(await runCli(["event", "claude"], stop.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ status: "idle", unreadSince: NOW });
+
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "ack", "claude", "a1"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.stderr()).toBe("");
+    expect(listRows()[0]).toMatchObject({ status: "idle", unreadSince: null });
+
+    // Acknowledging an already-read session is a no-op that still exits zero.
+    expect(await runCli(["sessions", "ack", "claude", "a1"], harness.deps)).toBe(0);
+    expect(listRows()[0]?.unreadSince).toBeNull();
+  });
+
+  test("sessions ack validates args", async () => {
+    initRegistry();
+    for (const args of [
+      ["sessions", "ack", "bogus", "x"],
+      ["sessions", "ack", "claude"],
+      ["sessions", "ack", "claude", ""],
+      ["sessions", "ack", "claude", "s1", "extra"],
+    ]) {
+      const harness = makeHarness();
+      expect(await runCli(args, harness.deps)).toBe(1);
+      expect(harness.stderr()).toContain("sessions ack <provider> <session-id>");
+      expect(harness.stdout()).toBe("");
+    }
+  });
+
   test("sessions clear targets only the exact provider/session composite identity", async () => {
     initRegistry();
     const db = openRegistryDatabase(paths.database, "readwrite");
@@ -1031,7 +1187,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 6");
+      restore.exec("PRAGMA user_version = 8");
     } finally {
       restore.close();
     }
@@ -1047,6 +1203,8 @@ describe("sessions commands", () => {
       ["sessions", "clear", "claude"],
       ["sessions", "clear", "bogus", "s1"],
       ["sessions", "clear", "claude", "s1", "extra"],
+      ["sessions", "ack", "bogus", "s1"],
+      ["sessions", "ack", "claude", "s1", "extra"],
       ["sessions", "clear-all", "extra"],
     ]) {
       const harness = makeHarness();

@@ -111,7 +111,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 6 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 8 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -120,7 +120,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -168,14 +168,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v6 with null bindings, no outstanding background work, no transcript, and no model", () => {
+  test("migrates v1 rows additively to v8 with null bindings, no outstanding background work, no transcript, and no model", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -184,7 +184,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(
         db
           .query(
@@ -575,7 +575,7 @@ describe("schema v5", () => {
       expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(6);
+      expect(version.user_version).toBe(8);
     } finally {
       db.close();
     }
@@ -666,8 +666,8 @@ const createVersion5Database = (path: string): void => {
       PRAGMA user_version = 5;
     `);
     // Both rows carry a non-default value in every column their CHECKs allow,
-    // so a value lost on the v6 path could not pass the assertions as a
-    // default.
+    // so a value lost on the migration path could not pass the assertions as
+    // a default.
     legacy.run(
       `INSERT INTO active_sessions
          (provider, session_id, parent_session_id, status, title, project, logical_slot,
@@ -683,8 +683,8 @@ const createVersion5Database = (path: string): void => {
   }
 };
 
-describe("schema v6", () => {
-  test("migrates v5 to v6, preserving rows and adding a nullable model column", () => {
+describe("schema v7/v8", () => {
+  test("migrates v5 through v7 to v8, adding origin and unread columns without touching rows", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
@@ -693,7 +693,258 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(countSessions(db)).toBe(2);
+      expect(
+        db
+          .query(
+            "SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions ORDER BY session_id",
+          )
+          .all(),
+      ).toEqual([
+        { origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null },
+        { origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null },
+      ]);
+      // The pre-existing rows are untouched: non-default v5 values survive.
+      expect(
+        db
+          .query(
+            "SELECT session_id, status, title, background_outstanding, transcript_path FROM active_sessions WHERE session_id = 'root'",
+          )
+          .get(),
+      ).toEqual({
+        session_id: "root",
+        status: "working",
+        title: "Root session",
+        background_outstanding: 1,
+        transcript_path: "/transcripts/root.jsonl",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("migrates a v6 model-label database to v8, adding columns beside the model column", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    // Reproduce a v6 database the model-label build produced: a nullable
+    // `model` column stamped as schema version 6. Init must apply only the
+    // v7 migration and the v8 stamp, leaving the column and its data alone.
+    const modelBuild = new Database(paths.database);
+    try {
+      modelBuild.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
+      modelBuild.run("UPDATE active_sessions SET model = 'claude-sonnet-4-6' WHERE session_id = 'root'");
+      modelBuild.exec("PRAGMA user_version = 6");
+    } finally {
+      modelBuild.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(countSessions(db)).toBe(2);
+      expect(
+        db
+          .query(
+            "SELECT origin_kind, origin_subagent, unread_since, model FROM active_sessions WHERE session_id = 'root'",
+          )
+          .get(),
+      ).toEqual({
+        origin_kind: null,
+        origin_subagent: 0,
+        unread_since: null,
+        model: "claude-sonnet-4-6",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("repairs a v7 database missing the model column (pre-merge branch shape) to v8", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    // Reproduce the divergent shape pre-merge branch builds created: the v7
+    // origin/unread ALTERs applied straight onto v5 — no model column —
+    // stamped as schema version 7. Init must detect the missing column,
+    // apply the v6 model ALTER, and stamp v8 without touching the rows.
+    const branchBuild = new Database(paths.database);
+    try {
+      branchBuild.exec(`
+        ALTER TABLE active_sessions
+          ADD COLUMN origin_kind TEXT
+          CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal'));
+        ALTER TABLE active_sessions
+          ADD COLUMN origin_ref TEXT
+          CHECK (origin_ref IS NULL OR length(origin_ref) BETWEEN 1 AND 256);
+        ALTER TABLE active_sessions
+          ADD COLUMN origin_subagent INTEGER NOT NULL DEFAULT 0
+          CHECK (origin_subagent IN (0, 1));
+        ALTER TABLE active_sessions
+          ADD COLUMN unread_since TEXT;
+        PRAGMA user_version = 7;
+      `);
+      branchBuild.run("UPDATE active_sessions SET origin_kind = 'paseo', origin_ref = 'a1' WHERE session_id = 'root'");
+    } finally {
+      branchBuild.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.map((column) => column.name)).toContain("model");
+      // Existing rows are intact: seeded v5 values and the stamped origin
+      // survive, and the repaired column reads back null.
+      expect(countSessions(db)).toBe(2);
+      expect(
+        db
+          .query(
+            "SELECT status, title, transcript_path, origin_kind, origin_ref, model FROM active_sessions WHERE session_id = 'root'",
+          )
+          .get(),
+      ).toEqual({
+        status: "working",
+        title: "Root session",
+        transcript_path: "/transcripts/root.jsonl",
+        origin_kind: "paseo",
+        origin_ref: "a1",
+        model: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("stamps v8 without re-altering when the model column already exists at v7", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    // A database main's v6 lineage brought to v7 (the deployed shape):
+    // model already present, version 7. The repair must only stamp.
+    const migrated = new Database(paths.database);
+    try {
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN origin_kind TEXT");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN origin_ref TEXT");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN origin_subagent INTEGER NOT NULL DEFAULT 0");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN unread_since TEXT");
+      migrated.run("UPDATE active_sessions SET model = 'k3' WHERE session_id = 'root'");
+      migrated.exec("PRAGMA user_version = 7");
+    } finally {
+      migrated.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("SELECT model FROM active_sessions WHERE session_id = 'root'").get()).toEqual({ model: "k3" });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fresh init runs the full chain to v8 with both the model and origin/unread columns", () => {
+    const paths = resolveAppPaths(tempHome);
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      // A fresh database must not skip the v6 model migration on its way to
+      // v8: both features' columns exist on every migration path.
+      const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
+        name: string;
+      }>;
+      const names = columns.map((column) => column.name);
+      expect(names).toContain("model");
+      expect(names).toContain("origin_kind");
+      expect(names).toContain("origin_ref");
+      expect(names).toContain("origin_subagent");
+      expect(names).toContain("unread_since");
+      insertSession(db, "s1", null, 1);
+      expect(
+        db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since, model FROM active_sessions").get(),
+      ).toEqual({ origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null, model: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects CHECK violations on the new columns", () => {
+    const paths = resolveAppPaths(tempHome);
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      insertSession(db, "parent", null, 1);
+      // A valid origin row passes first, so the rejections below are about
+      // the CHECKs rather than a missing column.
+      db.run(
+        `INSERT INTO active_sessions
+           (provider, session_id, parent_session_id, status, title, project, logical_slot,
+            opened_at, updated_at, origin_kind, origin_ref, origin_subagent, unread_since)
+         VALUES ('claude', 'origin-child', 'parent', 'idle', NULL, NULL, NULL,
+                 'opened', 'updated', 'paseo', 'ws-1', 1, '2026-08-06T00:00:00.000Z')`,
+      );
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_kind)
+           VALUES ('claude', 'bad-kind', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', 'bogus')`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_subagent)
+           VALUES ('claude', 'bad-flag', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', 2)`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_ref)
+           VALUES ('claude', 'empty-ref', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', '')`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_ref)
+           VALUES ('claude', 'long-ref', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', '${"x".repeat(257)}')`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("schema v6", () => {
+  test("migrates v5 through v6, preserving rows and adding a nullable model column", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       // Every seeded pre-v6 value must survive verbatim; model is NULL on both.
       expect(
         db
@@ -743,25 +994,25 @@ describe("schema v6", () => {
     }
   });
 
-  test("re-running init on a database migrated to v6 is an idempotent no-op", () => {
+  test("re-running init on a migrated database is an idempotent no-op", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
     initializeDatabase(paths);
 
-    // A retried init must never re-attempt the v6 ALTER (duplicate column).
+    // A retried init must never re-attempt the v6/v7 ALTERs (duplicate column).
     initializeDatabase(paths);
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(countSessions(db)).toBe(2);
     } finally {
       db.close();
     }
   });
 
-  test("openRegistryDatabase accepts v6 and rejects v5", () => {
+  test("openRegistryDatabase accepts a fully migrated database and rejects v5", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);

@@ -12,12 +12,14 @@
  * it rewrites the current snapshot every heartbeat interval so the file's
  * mtime doubles as the daemon-liveness signal the plugin watches.
  *
- * Maintenance runs inside the same poll loop: a session-facts pass (resolve
- * session titles and models from provider files, update rows that changed)
- * every two seconds and a prune pass (delete sessions whose last hook is
- * older than the stale TTL — one hour for zcode, which has no SessionEnd
- * hook, a day for everyone else) every minute. A poll gap beyond the
- * clock-jump threshold — the sleep signature of the host machine — records a
+ * Maintenance runs inside the same poll loop, as three passes: a
+ * session-facts pass (resolve session titles and models from provider files,
+ * update rows that changed) every two seconds, a Paseo overlay pass (mirror
+ * Paseo's per-agent attention and origin state onto matching rows) on the
+ * same cadence, and a prune pass (delete sessions whose last hook is older
+ * than the stale TTL — one hour for zcode, which has no SessionEnd hook, a
+ * day for everyone else) every minute. A poll gap beyond the clock-jump
+ * threshold — the sleep signature of the host machine — records a
  * diagnostic. Maintenance failures record their own diagnostic and never
  * affect publication health.
  *
@@ -42,6 +44,8 @@ export const DAEMON_POLL_INTERVAL_MS = 250;
 export const DAEMON_HEARTBEAT_MS = 5_000;
 /** How often session facts (titles, models) are resolved from provider files. */
 export const DAEMON_TITLE_INTERVAL_MS = 2_000;
+/** How often Paseo's per-agent state is mirrored onto registry rows. */
+export const DAEMON_PASEO_INTERVAL_MS = 2_000;
 /** How often stale sessions are pruned. */
 export const DAEMON_PRUNE_INTERVAL_MS = 60_000;
 /** A non-zcode session with no hook event for this long is presumed dead and pruned. */
@@ -59,6 +63,7 @@ export type DaemonState = {
   lastSnapshot: SessionSnapshotV2 | null;
   lastPublishAtMs: number | null;
   lastTitlePassAtMs: number | null;
+  lastPaseoPassAtMs: number | null;
   lastPrunePassAtMs: number | null;
   lastTickAtMs: number | null;
   healthy: boolean;
@@ -77,6 +82,8 @@ export type DaemonDependencies = {
   now?: () => string;
   nowMs?: () => number;
   resolveFacts?: ResolveFacts;
+  /** Paseo overlay sync: joins Paseo agent records onto rows; returns rows changed. */
+  syncPaseo?: (db: Database) => number;
   diagnostics?: (record: DiagnosticRecord) => void;
 };
 
@@ -120,6 +127,7 @@ export class ProjectionDaemon {
     lastSnapshot: null,
     lastPublishAtMs: null,
     lastTitlePassAtMs: null,
+    lastPaseoPassAtMs: null,
     lastPrunePassAtMs: null,
     lastTickAtMs: null,
     healthy: false,
@@ -135,6 +143,7 @@ export class ProjectionDaemon {
       now: () => new Date().toISOString(),
       nowMs: () => Date.now(),
       resolveFacts: () => ({ titles: [], models: [] }),
+      syncPaseo: () => 0,
       diagnostics: () => {},
       ...dependencies,
     };
@@ -218,8 +227,8 @@ export class ProjectionDaemon {
   }
 
   /**
-   * Time-based upkeep: session facts (titles, models) on the fast cadence,
-   * stale pruning on the slow one. Returns true when any row changed,
+   * Time-based upkeep: session facts (titles, models) and the Paseo overlay
+   * on the fast cadence, stale pruning on the slow one. Returns true when any row changed,
    * forcing reprojection. Failures record one diagnostic and never mark the
    * daemon unhealthy.
    */
@@ -241,6 +250,12 @@ export class ProjectionDaemon {
           changed = true;
         }
         if (facts.models.length > 0 && updateSessionModels(this.connection, facts.models) > 0) {
+          changed = true;
+        }
+      }
+      if (this.state.lastPaseoPassAtMs === null || nowMs - this.state.lastPaseoPassAtMs >= DAEMON_PASEO_INTERVAL_MS) {
+        this.state.lastPaseoPassAtMs = nowMs;
+        if (this.deps.syncPaseo(this.connection) > 0) {
           changed = true;
         }
       }

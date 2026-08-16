@@ -4,6 +4,7 @@ import {
   type Provider,
   parseSessionSnapshot,
   type RegistryEvent,
+  type SessionOriginKind,
   type SessionSnapshotV2,
   type SessionStatus,
 } from "../src/protocol";
@@ -22,6 +23,9 @@ const valid: SessionSnapshotV2 = {
       logicalSlot: 1,
       ghosttyTerminalId: "terminal-1",
       model: null,
+      originKind: null,
+      originRef: null,
+      originSubagent: false,
     },
   ],
 };
@@ -150,6 +154,42 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot(withSession({ model: undefined as unknown as string }))).toThrow(
       "session.model must be null or a bounded string",
     );
+  });
+
+  test("parseSession defaults missing origin fields (old daemon snapshot still parses)", () => {
+    // A snapshot from a daemon predating the origin fields carries none of
+    // the three keys; parsing must default rather than reject.
+    const session = { ...firstSession() } as Partial<ProjectedSession>;
+    delete session.originKind;
+    delete session.originRef;
+    delete session.originSubagent;
+    const parsed = parseSessionSnapshot({ ...valid, sessions: [session] });
+    expect(parsed.sessions[0]).toMatchObject({
+      originKind: null,
+      originRef: null,
+      originSubagent: false,
+    });
+
+    // Present-and-valid origin evidence flows through unchanged.
+    const explicit = parseSessionSnapshot(
+      withSession({ originKind: "paseo", originRef: "agent-1", originSubagent: true }),
+    );
+    expect(explicit.sessions[0]).toMatchObject({
+      originKind: "paseo",
+      originRef: "agent-1",
+      originSubagent: true,
+    });
+  });
+
+  test("parseSession rejects an unknown originKind", () => {
+    expect(() => parseSessionSnapshot(withSession({ originKind: "bogus" as SessionOriginKind }))).toThrow(
+      "invalid session snapshot",
+    );
+    expect(() => parseSessionSnapshot(withSession({ originKind: 7 as unknown as SessionOriginKind }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ originKind: null }))).not.toThrow();
+    expect(() => parseSessionSnapshot(withSession({ originRef: 7 as unknown as string }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ originRef: "x".repeat(257) }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ originSubagent: "yes" as unknown as boolean }))).toThrow();
   });
 
   test("rejects non-Claude activation targets and every non-v2 schema", () => {

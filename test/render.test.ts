@@ -15,6 +15,9 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   logicalSlot: 1,
   ghosttyTerminalId: null,
   model: null,
+  originKind: null,
+  originRef: null,
+  originSubagent: false,
   ...overrides,
 });
 
@@ -219,6 +222,25 @@ describe("renderKey output contract", () => {
     const withCount = decode(sessionModel({ descendantCount: 7 }, "Review"), 0);
     expect(textNodesByClass(withCount, "badge")).toEqual(["7"]);
     expect(withCount).toContain('<text class="badge" x="130" y="38" text-anchor="end" font-size="28"');
+  });
+
+  test("paseo parent renders a filled origin disc, subagent a hollow ring, terminal no pip", () => {
+    const parent = decode(sessionModel({ originKind: "paseo", originRef: "agent-1" }), 0);
+    expect(parent).toContain('<circle class="originpip" cx="122" cy="122" r="9" fill="#A78BFA"/>');
+    expect(parent).not.toContain('stroke="#A78BFA"');
+
+    const subagent = decode(sessionModel({ originKind: "paseo", originRef: "agent-1", originSubagent: true }), 0);
+    expect(subagent).toContain(
+      '<circle class="originpip" cx="122" cy="122" r="9" fill="none" stroke="#A78BFA" stroke-width="3"/>',
+    );
+
+    const terminal = decode(sessionModel({ originKind: "terminal", originRef: null }), 0);
+    expect(terminal).not.toContain("originpip");
+    expect(terminal).not.toContain("#A78BFA");
+
+    // Null origin (old snapshots) behaves like terminal: no pip.
+    const nullOrigin = decode(sessionModel(), 0);
+    expect(nullOrigin).not.toContain("originpip");
   });
 });
 

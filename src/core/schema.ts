@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 6;
+export const LATEST_SCHEMA_VERSION = 8;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -153,16 +153,45 @@ ALTER TABLE active_sessions
 `;
 
 /**
- * Ordered migrations for versions 1-4, keyed by the schema version each one
- * produces; all due ones run inside a single transaction in
- * `initializeDatabase`. v5 (table rebuild, own transaction) and v6 (must
- * follow the rebuild) are applied by dedicated steps after the loop.
+ * v7 stamps sessions with their origin (a 'paseo' or 'terminal' kind, an
+ * opaque reference, and whether the row is a subagent) and tracks unread
+ * output with a timestamp. All four columns are plain additive ALTERs — no
+ * rebuild — so they apply equally whether the database is coming from v5 or
+ * from a v6 produced before this migration existed.
+ */
+const SCHEMA_VERSION_7 = `
+ALTER TABLE active_sessions
+  ADD COLUMN origin_kind TEXT
+  CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal'));
+
+ALTER TABLE active_sessions
+  ADD COLUMN origin_ref TEXT
+  CHECK (origin_ref IS NULL OR length(origin_ref) BETWEEN 1 AND 256);
+
+ALTER TABLE active_sessions
+  ADD COLUMN origin_subagent INTEGER NOT NULL DEFAULT 0
+  CHECK (origin_subagent IN (0, 1));
+
+ALTER TABLE active_sessions
+  ADD COLUMN unread_since TEXT;
+`;
+
+/**
+ * Ordered migrations keyed by the schema version each one produces. Entries
+ * below v5 alter the original table and run in one transaction before the
+ * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
+ * because it manages its own transaction. Entries above v5 (v6 model,
+ * v7 origin/unread) assume the rebuilt table and run in a second
+ * transaction after it. v8 is special-cased too (`migrateToV8`): it is
+ * shape-driven repair, not a static SQL string.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
   { version: 2, sql: SCHEMA_VERSION_2 },
   { version: 3, sql: SCHEMA_VERSION_3 },
   { version: 4, sql: SCHEMA_VERSION_4 },
+  { version: 6, sql: SCHEMA_VERSION_6 },
+  { version: 7, sql: SCHEMA_VERSION_7 },
 ];
 
 /**
@@ -192,6 +221,28 @@ const migrateToV5 = (db: Database): void => {
   }
 };
 
+/**
+ * v8 repairs a shape divergence: pre-merge branch builds stamped
+ * user_version 7 without ever running the v6 model migration, so a database
+ * can report v7 while missing the `model` column. The repair is
+ * shape-driven — the column list, not the version, decides whether the v6
+ * ALTER applies — and every path is then stamped v8, after which version
+ * and shape agree again. Databases whose v7 already includes `model`
+ * (fresh inits, main's v6 lineage) are stamped without an ALTER. One
+ * transaction, so the ALTER and the stamp commit together and a retried
+ * init never dies on a duplicate column.
+ */
+const migrateToV8 = (db: Database): void => {
+  const repair = db.transaction(() => {
+    const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "model")) {
+      db.exec(SCHEMA_VERSION_6);
+    }
+    db.exec("PRAGMA user_version = 8");
+  });
+  repair();
+};
+
 const readUserVersion = (db: Database): number => {
   const row = db.query("PRAGMA user_version").get() as { user_version: number } | null;
   if (row === null || typeof row.user_version !== "number") {
@@ -215,28 +266,35 @@ export const initializeDatabase = (paths: AppPaths): void => {
     // repeated init idempotent.
     db.exec("PRAGMA journal_mode = WAL");
     if (version < LATEST_SCHEMA_VERSION) {
-      const migrate = db.transaction(() => {
+      if (version < 5) {
+        // v1-v4 entries alter the original table and must precede the v5
+        // rebuild. The rebuild owns its transaction (see migrateToV5), so it
+        // cannot share theirs.
+        const migratePreV5 = db.transaction(() => {
+          for (const migration of MIGRATIONS) {
+            if (migration.version > version && migration.version < 5) {
+              db.exec(migration.sql);
+              db.exec(`PRAGMA user_version = ${migration.version}`);
+            }
+          }
+        });
+        migratePreV5();
+        migrateToV5(db);
+      }
+      // Entries above v5 (v6, v7) assume the rebuilt table and run after it.
+      // One transaction: an interruption between an ALTER and its version
+      // bump would otherwise leave a database that already has the column,
+      // making every retried init die on a duplicate-column error.
+      const migratePostV5 = db.transaction(() => {
         for (const migration of MIGRATIONS) {
-          if (migration.version > version && migration.version <= 4) {
+          if (migration.version > version && migration.version > 5) {
             db.exec(migration.sql);
             db.exec(`PRAGMA user_version = ${migration.version}`);
           }
         }
       });
-      migrate();
-      if (version < 5) {
-        migrateToV5(db);
-      }
-      if (readUserVersion(db) < 6) {
-        // One transaction: an interruption between the ALTER and the version
-        // bump would otherwise leave a v5 database that already has the
-        // column, making every retried init die on a duplicate-column error.
-        const migrateV6 = db.transaction(() => {
-          db.exec(SCHEMA_VERSION_6);
-          db.exec("PRAGMA user_version = 6");
-        });
-        migrateV6();
-      }
+      migratePostV5();
+      migrateToV8(db);
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
   } finally {

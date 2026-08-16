@@ -7,19 +7,28 @@
  * shared, Node-safe path resolver; no Bun-only core module is imported here.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import streamDeck from "@elgato/streamdeck";
 import { createFileDiagnostics } from "../core/diagnostics";
 import { resolveAppPaths } from "../core/paths";
 import { activateClaudeSession } from "./claude-session-activation";
-import { activateCodexSession } from "./codex-session-activation";
+import { activateCodexSession, executeFile } from "./codex-session-activation";
 import { SessionGridController } from "./controller";
 import { createKimiSessionActivator } from "./kimi-session-activation";
+import { createPaseoSessionActivator } from "./paseo-session-activation";
+import { createSessionAck } from "./session-ack";
 import { SessionGridAction } from "./session-grid-action";
 import { SnapshotCache } from "./snapshot-reader";
 
-const snapshotCache = new SnapshotCache(resolveAppPaths().snapshot);
-const diagnose = createFileDiagnostics(resolveAppPaths().logsDirectory);
+const appPaths = resolveAppPaths();
+const snapshotCache = new SnapshotCache(appPaths.snapshot);
+const diagnose = createFileDiagnostics(appPaths.logsDirectory);
 const activateKimiSession = createKimiSessionActivator((url) => streamDeck.system.openUrl(url));
+const activatePaseoSession = createPaseoSessionActivator(executeFile, () =>
+  readFileSync(join(appPaths.home, ".paseo", "server-id"), "utf8").trim(),
+);
+const ackSession = createSessionAck(executeFile, appPaths.executable);
 
 const keyActionForContext = (context: string) => {
   const target = streamDeck.actions.getActionById(context);
@@ -49,6 +58,8 @@ const controller = new SessionGridController({
   activateClaudeSession,
   activateCodexSession,
   activateKimiSession,
+  activatePaseoSession,
+  ackSession,
   showAlert: (context) => keyActionForContext(context)?.showAlert() ?? Promise.resolve(),
   clock: {
     setInterval: (handler, intervalMs) => setInterval(handler, intervalMs),

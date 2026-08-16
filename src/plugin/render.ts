@@ -5,7 +5,9 @@
  * Session tiles carry a provider-colored corner chip with the one-letter
  * provider mark and, when known, the session's model id label to its right,
  * up to two centered title lines, a prominent upper-right descendant count
- * when greater than zero, and a status-colored frame.
+ * when greater than zero, a violet bottom-right origin pip for Paseo-origin
+ * sessions (filled disc for a parent, hollow ring for a subagent), and a
+ * status-colored frame.
  * Animation is a pure function of the key model and an integer phase owned by
  * the plugin: working uses a shallow full-tile wash behind a static dim frame,
  * waiting and error breathe through deeper sinusoidal frame opacity (error
@@ -20,7 +22,7 @@
  * it bundles into the Node.js plugin unchanged.
  */
 
-import type { Provider, SessionStatus } from "../protocol";
+import type { Provider, SessionOriginKind, SessionStatus } from "../protocol";
 import type { KeyModel } from "./layout";
 
 const DATA_URL_PREFIX = "data:image/svg+xml,";
@@ -45,6 +47,8 @@ const COLOR_ERROR = "#FF4D67";
 const COLOR_IDLE = "#4ADE80";
 // Neutral chrome (NEXT frame, page count, OFFLINE) — not a session status.
 const COLOR_NEUTRAL = "#94A3B8";
+// Orchestrator mark for Paseo-origin sessions (the bottom-right origin pip).
+const COLOR_ORIGIN_PASEO = "#A78BFA";
 const COLOR_BACKGROUND = "#10151C";
 const COLOR_TEXT = "#E8EEF7";
 
@@ -217,12 +221,24 @@ const descendantBadge = (descendantCount: number): string =>
 const DEGRADED_FLAG = `<text class="flag" x="128" y="27" text-anchor="end" font-size="16" fill="${COLOR_WAITING}">!</text>`;
 const SESSION_DEGRADED_FLAG = `<text class="flag" x="16" y="128" text-anchor="start" font-size="16" fill="${COLOR_WAITING}">!</text>`;
 
+/** Orchestrator mark in the free bottom-right corner: filled disc for a Paseo
+ *  parent, hollow ring for a Paseo subagent; terminal-origin sessions get none. */
+const originMark = (originKind: SessionOriginKind | null, originSubagent: boolean): string => {
+  if (originKind !== "paseo") {
+    return "";
+  }
+  return originSubagent
+    ? `<circle class="originpip" cx="122" cy="122" r="9" fill="none" stroke="${COLOR_ORIGIN_PASEO}" stroke-width="3"/>`
+    : `<circle class="originpip" cx="122" cy="122" r="9" fill="${COLOR_ORIGIN_PASEO}"/>`;
+};
+
 const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, phase: number): string =>
   statusFrame(model.session.status, phase) +
   providerMark(model.session.provider) +
   modelMark(model.session.model, model.session.descendantCount) +
   titleLines(model.label) +
   descendantBadge(model.session.descendantCount) +
+  originMark(model.session.originKind, model.session.originSubagent) +
   (model.degraded ? SESSION_DEGRADED_FLAG : "");
 
 const blankTile = (degraded: boolean): string =>

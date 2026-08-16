@@ -5,10 +5,13 @@
  * every identity, role, slot, and parent edge up front, then walks each
  * top-level tree with a per-root visited set and a total-step bound of
  * `rows.length + 1`. Any invalid topology throws `ProjectionError` — the
- * projection never emits partial output. `readProjection` owns the read
- * transaction boundary around the SQLite select: it commits only a fully
- * mapped and projected snapshot and rolls back if mapping or projection
- * throws. The read side issues no writes.
+ * projection never emits partial output. The grid is an attention inbox:
+ * a read-and-idle root is filtered from the snapshot (its registry row
+ * persists until its lifecycle ends), while hidden roots and their subtrees
+ * still participate in every topology validation. `readProjection` owns the
+ * read transaction boundary around the SQLite select: it commits only a
+ * fully mapped and projected snapshot and rolls back if mapping or
+ * projection throws. The read side issues no writes.
  */
 
 import type { Database } from "bun:sqlite";
@@ -16,6 +19,7 @@ import {
   PROVIDER_KEYS,
   type ProjectedSession,
   type Provider,
+  type SessionOriginKind,
   type SessionSnapshotV2,
   type SessionStatus,
 } from "../protocol";
@@ -31,6 +35,10 @@ export type ProjectionRow = {
   logicalSlot: number | null;
   ghosttyTerminalId: string | null;
   model: string | null;
+  originKind: SessionOriginKind | null;
+  originRef: string | null;
+  originSubagent: number;
+  unreadSince: string | null;
 };
 
 export type ProjectionErrorCode =
@@ -64,6 +72,7 @@ const STATUS_PRIORITY: Record<SessionStatus, number> = {
 
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
+const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal"]);
 
 const identityKey = (provider: Provider, sessionId: string): string => `${provider}\u0000${sessionId}`;
 
@@ -72,9 +81,12 @@ const identityKey = (provider: Provider, sessionId: string): string => `${provid
  * stored logical slot with gaps preserved. A root's effective status is the
  * highest-priority status in its subtree, where a live descendant counts as
  * at least "working": child rows exist only while a subagent runs, and a
- * subagent may never emit its own Activity event. Pure; throws
- * `ProjectionError` on any invalid topology rather than emitting partial
- * output.
+ * subagent may never emit its own Activity event. The grid is an attention
+ * inbox, so a root is emitted iff its subtree is still active or its last
+ * result is unread (`effectiveStatus !== "idle" || unreadSince !== null`);
+ * hidden roots keep their registry rows and still traverse for validation.
+ * Pure; throws `ProjectionError` on any invalid topology rather than
+ * emitting partial output.
  */
 export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] => {
   // Index every row by composite identity; duplicates are corrupt.
@@ -159,17 +171,23 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       }
     }
     totalVisited += visited.size;
-    projected.push({
-      provider: root.provider,
-      sessionId: root.sessionId,
-      status: effectiveStatus,
-      title: root.title,
-      project: root.project,
-      descendantCount,
-      logicalSlot: slot,
-      ghosttyTerminalId: root.ghosttyTerminalId,
-      model: root.model,
-    });
+    const visible = effectiveStatus !== "idle" || root.unreadSince !== null;
+    if (visible) {
+      projected.push({
+        provider: root.provider,
+        sessionId: root.sessionId,
+        status: effectiveStatus,
+        title: root.title,
+        project: root.project,
+        descendantCount,
+        logicalSlot: slot,
+        ghosttyTerminalId: root.ghosttyTerminalId,
+        model: root.model,
+        originKind: root.originKind,
+        originRef: root.originRef,
+        originSubagent: root.originSubagent === 1,
+      });
+    }
   }
 
   // Every valid row is reachable from exactly one root; rows left over form a
@@ -189,6 +207,10 @@ type StoredRow = {
   project: unknown;
   logical_slot: unknown;
   ghostty_terminal_id: unknown;
+  origin_kind: unknown;
+  origin_ref: unknown;
+  origin_subagent: unknown;
+  unread_since: unknown;
   model: unknown;
 };
 
@@ -226,6 +248,23 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   if (typeof row.model === "string" && (row.model.length === 0 || Array.from(row.model).length > 256)) {
     throw new ProjectionError("corrupt-row");
   }
+  if (row.origin_kind !== null && (typeof row.origin_kind !== "string" || !ORIGIN_KINDS.has(row.origin_kind))) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (!isStringOrNull(row.origin_ref)) {
+    throw new ProjectionError("corrupt-row");
+  }
+  // Bounded like the terminal binding: the value flows into the published
+  // snapshot, whose parser rejects strings over 256 code points.
+  if (typeof row.origin_ref === "string" && (row.origin_ref.length === 0 || Array.from(row.origin_ref).length > 256)) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (row.origin_subagent !== 0 && row.origin_subagent !== 1) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (!isStringOrNull(row.unread_since)) {
+    throw new ProjectionError("corrupt-row");
+  }
   return {
     provider: row.provider as Provider,
     sessionId: row.session_id,
@@ -236,11 +275,15 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     logicalSlot: row.logical_slot,
     ghosttyTerminalId: row.ghostty_terminal_id,
     model: row.model,
+    originKind: row.origin_kind as SessionOriginKind | null,
+    originRef: row.origin_ref,
+    originSubagent: row.origin_subagent,
+    unreadSince: row.unread_since,
   };
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, origin_kind, origin_ref, origin_subagent, unread_since";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:
