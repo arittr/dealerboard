@@ -12,13 +12,14 @@
  * it rewrites the current snapshot every heartbeat interval so the file's
  * mtime doubles as the daemon-liveness signal the plugin watches.
  *
- * Maintenance runs inside the same poll loop: a titles pass (resolve session
- * titles from provider files, update rows that changed) every two seconds
- * and a prune pass (delete sessions whose last hook is older than the stale
- * TTL — one hour for zcode, which has no SessionEnd hook, a day for everyone
- * else) every minute. A poll gap beyond the clock-jump threshold — the sleep
- * signature of the host machine — records a diagnostic. Maintenance failures
- * record their own diagnostic and never affect publication health.
+ * Maintenance runs inside the same poll loop: a session-facts pass (resolve
+ * session titles and models from provider files, update rows that changed)
+ * every two seconds and a prune pass (delete sessions whose last hook is
+ * older than the stale TTL — one hour for zcode, which has no SessionEnd
+ * hook, a day for everyone else) every minute. A poll gap beyond the
+ * clock-jump threshold — the sleep signature of the host machine — records a
+ * diagnostic. Maintenance failures record their own diagnostic and never
+ * affect publication health.
  *
  * `PRAGMA user_version` is validated when the connection opens; on an open,
  * read, or projection failure the daemon publishes the schema-valid unhealthy
@@ -31,15 +32,15 @@ import type { SessionSnapshotV2 } from "../protocol";
 import type { DiagnosticCode, DiagnosticRecord } from "./diagnostics";
 import type { AppPaths } from "./paths";
 import { readProjection } from "./projection";
-import { listTitleTargets, pruneStaleSessions, type SessionTitleUpdate, updateSessionTitles } from "./registry";
+import { listTitleTargets, pruneStaleSessions, updateSessionModels, updateSessionTitles } from "./registry";
 import { openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { writeSnapshotAtomically } from "./snapshot";
-import type { TitleTarget } from "./titles";
+import type { SessionFactsResolver } from "./titles";
 
 export const DAEMON_POLL_INTERVAL_MS = 250;
 /** How often the snapshot file is rewritten even when nothing changed. */
 export const DAEMON_HEARTBEAT_MS = 5_000;
-/** How often titles are resolved from provider files. */
+/** How often session facts (titles, models) are resolved from provider files. */
 export const DAEMON_TITLE_INTERVAL_MS = 2_000;
 /** How often stale sessions are pruned. */
 export const DAEMON_PRUNE_INTERVAL_MS = 60_000;
@@ -66,7 +67,7 @@ export type DaemonState = {
 /** Arms the poll loop; the returned callback disarms it. */
 export type DaemonScheduler = (poll: () => void, intervalMs: number) => () => void;
 
-export type ResolveTitles = (targets: readonly TitleTarget[]) => SessionTitleUpdate[];
+export type ResolveFacts = SessionFactsResolver["resolve"];
 
 export type DaemonDependencies = {
   openDatabase?: typeof openRegistryDatabase;
@@ -75,7 +76,7 @@ export type DaemonDependencies = {
   schedule?: DaemonScheduler;
   now?: () => string;
   nowMs?: () => number;
-  resolveTitles?: ResolveTitles;
+  resolveFacts?: ResolveFacts;
   diagnostics?: (record: DiagnosticRecord) => void;
 };
 
@@ -133,7 +134,7 @@ export class ProjectionDaemon {
       schedule: defaultSchedule,
       now: () => new Date().toISOString(),
       nowMs: () => Date.now(),
-      resolveTitles: () => [],
+      resolveFacts: () => ({ titles: [], models: [] }),
       diagnostics: () => {},
       ...dependencies,
     };
@@ -217,9 +218,10 @@ export class ProjectionDaemon {
   }
 
   /**
-   * Time-based upkeep: titles on the fast cadence, stale pruning on the slow
-   * one. Returns true when any row changed, forcing reprojection. Failures
-   * record one diagnostic and never mark the daemon unhealthy.
+   * Time-based upkeep: session facts (titles, models) on the fast cadence,
+   * stale pruning on the slow one. Returns true when any row changed,
+   * forcing reprojection. Failures record one diagnostic and never mark the
+   * daemon unhealthy.
    */
   private maintain(nowMs: number): boolean {
     if (this.connection === null) {
@@ -229,8 +231,16 @@ export class ProjectionDaemon {
     try {
       if (this.state.lastTitlePassAtMs === null || nowMs - this.state.lastTitlePassAtMs >= DAEMON_TITLE_INTERVAL_MS) {
         this.state.lastTitlePassAtMs = nowMs;
-        const updates = this.deps.resolveTitles(listTitleTargets(this.connection));
-        if (updates.length > 0 && updateSessionTitles(this.connection, updates) > 0) {
+        const facts = this.deps.resolveFacts(listTitleTargets(this.connection));
+        // The flag is set eagerly per write: each update is its own
+        // transaction, so a committed change must force reprojection even
+        // if the sibling write throws (own-connection commits never bump
+        // data_version, and the fast path would otherwise suppress the
+        // republication).
+        if (facts.titles.length > 0 && updateSessionTitles(this.connection, facts.titles) > 0) {
+          changed = true;
+        }
+        if (facts.models.length > 0 && updateSessionModels(this.connection, facts.models) > 0) {
           changed = true;
         }
       }

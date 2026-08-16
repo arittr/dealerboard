@@ -30,6 +30,7 @@ try {
       project: null,
       ghosttyTerminalId: null,
       transcriptPath: null,
+      model: null,
       observedAt: new Date().toISOString(),
     },
   ]);

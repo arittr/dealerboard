@@ -48,6 +48,7 @@ const startSession = (sessionId: string, observedAt: string = NOW): void => {
       project: null,
       ghosttyTerminalId: null,
       transcriptPath: null,
+      model: null,
       observedAt,
     },
   ]);
@@ -140,6 +141,7 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       descendantCount: 0,
       logicalSlot: 1,
       ghosttyTerminalId: null,
+      model: null,
     },
   ],
 };
@@ -238,7 +240,7 @@ describe("ProjectionDaemon", () => {
 
     // Projection error: a child row with a missing parent (inserted with
     // foreign-key enforcement off) fails the defensive topology checks.
-    setUserVersion(5);
+    setUserVersion(6);
     startSession("parent");
     const raw = new Database(paths.database);
     try {
@@ -419,14 +421,16 @@ describe("ProjectionDaemon maintenance", () => {
     startSession("s1");
     const targets: unknown[] = [];
     const harness = makeHarness({
-      resolveTitles: (seen) => {
+      resolveFacts: (seen) => {
         targets.push(...seen);
-        return [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }];
+        return { titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }], models: [] };
       },
     });
     harness.daemon.start();
     try {
-      expect(targets).toEqual([{ provider: "claude", sessionId: "s1", title: "Title for s1", transcriptPath: null }]);
+      expect(targets).toEqual([
+        { provider: "claude", sessionId: "s1", title: "Title for s1", transcriptPath: null, model: null },
+      ]);
       expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
       const row = (() => {
         const db = openRegistryDatabase(paths.database, "readonly");
@@ -446,15 +450,44 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
+  test("applies resolved models through updateSessionModels and republishes with them", () => {
+    startSession("s1");
+    const harness = makeHarness({
+      resolveFacts: () => ({
+        titles: [],
+        models: [{ provider: "claude" as const, sessionId: "s1", model: "claude-fable-5" }],
+      }),
+    });
+    harness.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions[0]?.model).toBe("claude-fable-5");
+      const row = (() => {
+        const db = openRegistryDatabase(paths.database, "readonly");
+        try {
+          return db.query("SELECT model, updated_at FROM active_sessions").get() as {
+            model: string;
+            updated_at: string;
+          } | null;
+        } finally {
+          db.close();
+        }
+      })();
+      // The model write leaves updated_at — the prune's aging signal — alone.
+      expect(row).toEqual({ model: "claude-fable-5", updated_at: NOW });
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
   test("runs the titles pass on its cadence, not on every poll", () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
     let resolveCalls = 0;
     const harness = makeHarness({
       nowMs: clock.nowMs,
-      resolveTitles: () => {
+      resolveFacts: () => {
         resolveCalls += 1;
-        return [];
+        return { titles: [], models: [] };
       },
     });
     harness.daemon.start();
@@ -490,7 +523,7 @@ describe("ProjectionDaemon maintenance", () => {
   test("a maintenance failure records one diagnostic and never harms publication", () => {
     startSession("s1");
     const harness = makeHarness({
-      resolveTitles: () => {
+      resolveFacts: () => {
         throw new Error("resolver exploded");
       },
     });
@@ -500,6 +533,56 @@ describe("ProjectionDaemon maintenance", () => {
       expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "maintenance_failed" }]);
       harness.tick();
       expect(harness.writes).toHaveLength(1);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("a committed title write republishes even when the model write then fails", () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    let proposals = 0;
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      resolveFacts: () => {
+        proposals += 1;
+        if (proposals === 1) {
+          return { titles: [], models: [] };
+        }
+        return {
+          titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }],
+          // 300 code points violates the v6 CHECK (length BETWEEN 1 AND 256),
+          // so updateSessionModels throws AFTER the title write committed —
+          // the two writes are separate transactions.
+          models: [{ provider: "claude" as const, sessionId: "s1", model: "m".repeat(300) }],
+        };
+      },
+    });
+    harness.daemon.start();
+    try {
+      // First poll: clean baseline, arming the data_version fast path.
+      expect(harness.writes).toEqual([HEALTHY_S1]);
+
+      clock.advance(2_000);
+      harness.tick();
+
+      // The title write committed even though the model write threw...
+      const row = (() => {
+        const db = openRegistryDatabase(paths.database, "readonly");
+        try {
+          return db.query("SELECT title FROM active_sessions").get() as { title: string } | null;
+        } finally {
+          db.close();
+        }
+      })();
+      expect(row).toEqual({ title: "Resolved from disk" });
+      // ...and the failure was reported without harming publication health.
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "maintenance_failed" }]);
+      expect(harness.writes.at(-1)?.health.status).toBe("ok");
+      // The committed title must reach the snapshot: own-connection commits
+      // never bump data_version, so only maintain's changed flag forces the
+      // reprojection.
+      expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
     } finally {
       harness.daemon.stop();
     }

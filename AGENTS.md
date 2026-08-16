@@ -82,7 +82,12 @@ Notes:
   P, omp O, zcode Z, deepseek D) on hues picked for mutual distinctness on
   the LCD panel, not brand fidelity (`PROVIDER_COLORS`): Claude `#D97757`,
   Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp `#F5F0EA`, zcode
-  `#EAB308`, deepseek `#2DD4BF`.
+  `#EAB308`, deepseek `#2DD4BF`. Session tiles also carry the model id as
+  neutral-chrome text right of the chip (vendor prefix stripped,
+  ten-code-point cap); the registry stores the raw id (schema v6 `model`
+  column), Kimi pushes it via SessionStart, and the daemon resolves
+  Claude/Codex ids in the same maintenance pass as titles (last
+  `"model":"…"` in the tail wins). Null never clears a stored model.
 - Session status model: `idle` = turn finished (set by the Stop hook),
   `working` = Activity, `waiting` = Attention, `error` = StopFailure. For
   Claude sessions, a Bash `run_in_background` PreToolUse arms the per-session
@@ -124,16 +129,18 @@ Notes:
   from `~/.zcode/cli/db/db.sqlite` (`ZCODE_HOME` override), and omp titles
   from the fixed 256-byte title slot at the head of the session JSONL at the
   row's `transcript_path` (cached on `(mtime, size)`, safe because omp
-  rewrites the slot in place on the otherwise append-only file) via the
-  resolver in `src/core/titles.ts` — zcode's database is re-queried per pass,
-  never stat-cached (WAL means committed titles can live in `db.sqlite-wal`
-  without changing the main file's stat). All are written back without
-  touching `updated_at` (the prune's aging signal). Titles word-wrap to two
-  12-code-point lines with an ellipsis on overflow.
-- The daemon is no longer read-only: it owns maintenance (titles every 2s,
-  prune every 60s) and rewrites the snapshot every 5s as a heartbeat. The
-  plugin treats a snapshot older than 10s as a dead daemon and renders the
-  degraded treatment (OFFLINE / "!" flags).
+  rewrites the slot in place on the otherwise append-only file) via
+  `createSessionFactsResolver` in `src/core/titles.ts` — wired in `cli.ts`
+  and driven by the daemon's 2s maintenance pass, it resolves model ids
+  alongside titles. zcode's database is re-queried per pass, never
+  stat-cached (WAL means committed titles can live in `db.sqlite-wal`
+  without changing the main file's stat). Titles and models are written back
+  without touching `updated_at` (the prune's aging signal). Titles word-wrap
+  to two 12-code-point lines with an ellipsis on overflow.
+- The daemon is no longer read-only: it owns maintenance (titles and models
+  every 2s, prune every 60s) and rewrites the snapshot every 5s as a
+  heartbeat. The plugin treats a snapshot older than 10s as a dead daemon and
+  renders the degraded treatment (OFFLINE / "!" flags).
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.

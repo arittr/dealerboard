@@ -28,6 +28,7 @@ describe("field extraction", () => {
         project: "project-x",
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -43,6 +44,7 @@ describe("field extraction", () => {
         project: null,
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -72,6 +74,7 @@ describe("field extraction", () => {
         project: null,
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -88,6 +91,7 @@ describe("field extraction", () => {
         project: "repo",
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -101,6 +105,7 @@ describe("field extraction", () => {
         project: null,
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -123,6 +128,7 @@ describe("field extraction", () => {
         project: "repo",
         ghosttyTerminalId: null,
         transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -141,6 +147,7 @@ describe("field extraction", () => {
         title: null,
         project: "repo",
         transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
@@ -192,6 +199,7 @@ describe("event mapping", () => {
         project: null,
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -217,6 +225,7 @@ describe("event mapping", () => {
         title: null,
         project: "project-x",
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
@@ -235,6 +244,7 @@ describe("event mapping", () => {
         project: null,
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -251,6 +261,7 @@ describe("event mapping", () => {
         title: null,
         project: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
@@ -459,6 +470,7 @@ describe("event mapping", () => {
         project: "app",
         ghosttyTerminalId: null,
         transcriptPath: "/Users/drew/.codex/sessions/rollout-1.jsonl",
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -474,6 +486,7 @@ describe("event mapping", () => {
         project: "app",
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -485,6 +498,7 @@ describe("event mapping", () => {
         title: null,
         project: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "codex", sessionId: "c1", observedAt: NOW },
@@ -581,6 +595,7 @@ describe("background shell tracking (Claude only)", () => {
         title: null,
         project: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
@@ -598,6 +613,7 @@ describe("background shell tracking (Claude only)", () => {
         title: null,
         project: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
@@ -627,6 +643,7 @@ describe("background shell tracking (Claude only)", () => {
         title: null,
         project: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "codex", sessionId: "s1", observedAt: NOW },
@@ -644,9 +661,65 @@ describe("background shell tracking (Claude only)", () => {
         title: null,
         project: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "kimi", sessionId: "s1", observedAt: NOW },
+    ]);
+  });
+});
+
+describe("model field", () => {
+  test("decodes an allowlisted model field on SessionStart", () => {
+    expect(
+      decode(
+        {
+          hook_event_name: "SessionStart",
+          session_id: "k1",
+          session_title: "Existing session",
+          cwd: "/users/drew/project-x",
+          model: "k3",
+        },
+        "kimi",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "kimi",
+        sessionId: "k1",
+        title: "Existing session",
+        project: "project-x",
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: "k3",
+        observedAt: NOW,
+      },
+    ]);
+  });
+
+  test("a payload without a model field decodes model as null", () => {
+    expect(
+      decode(
+        {
+          hook_event_name: "SessionStart",
+          session_id: "k1",
+          session_title: "Existing session",
+          cwd: "/users/drew/project-x",
+        },
+        "kimi",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "kimi",
+        sessionId: "k1",
+        title: "Existing session",
+        project: "project-x",
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: null,
+        observedAt: NOW,
+      },
     ]);
   });
 });
@@ -698,6 +771,7 @@ describe("privacy boundaries", () => {
         title: null,
         project: null,
         transcriptPath: "/tmp/SENTINEL_TRANSCRIPT",
+        model: null,
         observedAt: NOW,
       },
       { kind: "Activity", provider: "claude", sessionId: "s1", observedAt: NOW },
@@ -779,6 +853,7 @@ describe("zcode transcript suppression", () => {
         project: "proj",
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt: NOW,
       },
     ]);

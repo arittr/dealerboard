@@ -61,6 +61,7 @@ There is no visible status word or status glyph. A session whose current state i
 Each tile also has:
 
 - A provider-colored chip in the upper-left with the provider's one-letter mark in dark text: terracotta `#D97757` C for Claude, fuchsia `#D946EF` X for Codex, blue `#3B82F6` K for Kimi, green `#0EA514` P for pi, cream `#F5F0EA` O for oh-my-pi, gold `#EAB308` Z for zcode, and teal `#2DD4BF` D for deepseek. Hues are chosen for mutual distinctness on the LCD panel, not brand fidelity.
+- The session's model id as small neutral-chrome text right of the provider chip, when known: vendor prefix stripped (`claude-fable-5` shows as `fable-5`), capped at ten code points with an ellipsis. Kimi pushes its model in SessionStart hooks; the daemon resolves Claude and Codex models from transcript/rollout tails (last occurrence wins, so mid-session model switches register). zcode has no model source; pi/omp/deepseek have no hooks yet — their tiles show the chip alone.
 - A two-line session title. Kimi pushes `session_title` through its hooks; the daemon resolves Claude titles from the transcript's `ai-title` records and Codex titles from `~/.codex/session_index.jsonl`'s `thread_name`, writing them back to the registry. Title text is word-wrapped into two twelve-code-point lines; a word longer than a line hard-splits, and text that outlives the second line ends in an ellipsis.
 - Repository or worktree name as the first fallback while no title is known.
 - Provider plus shortened session identifier as the final fallback.

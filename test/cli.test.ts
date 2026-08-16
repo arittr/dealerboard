@@ -104,14 +104,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 5 database and stays silent on stdout", async () => {
+  test("creates a version 6 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
     } finally {
       db.close();
     }
@@ -156,6 +156,7 @@ describe("event ingress", () => {
         ghosttyTerminalId: "test-ghostty-terminal",
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -226,6 +227,7 @@ describe("event ingress", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -279,6 +281,7 @@ describe("event ingress", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -308,6 +311,7 @@ describe("event ingress", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: NOW,
         updatedAt: LATER,
       },
@@ -346,6 +350,7 @@ describe("event ingress", () => {
           project: null,
           ghosttyTerminalId: "existing-terminal",
           transcriptPath: null,
+          model: null,
           observedAt: NOW,
         },
       ]);
@@ -465,6 +470,7 @@ describe("event ingress", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        model: null,
         openedAt: NOW,
         updatedAt: NOW,
       },
@@ -813,6 +819,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: at(1),
         },
         {
@@ -823,6 +830,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: at(2),
         },
         {
@@ -976,6 +984,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: NOW,
         },
         {
@@ -986,6 +995,7 @@ describe("sessions commands", () => {
           project: null,
           ghosttyTerminalId: null,
           transcriptPath: null,
+          model: null,
           observedAt: NOW,
         },
       ]);
@@ -1021,7 +1031,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 5");
+      restore.exec("PRAGMA user_version = 6");
     } finally {
       restore.close();
     }
