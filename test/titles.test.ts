@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTitleResolver, type FileStat, type TitleTarget } from "../src/core/titles";
+import { createTitleResolver, type FileStat, OMP_SLOT_BYTES, type TitleTarget } from "../src/core/titles";
 
 const CODEX_INDEX = "/home/test/.codex/session_index.jsonl";
 
@@ -11,21 +11,26 @@ type FakeFs = {
   stats: Map<string, FileStat>;
   tails: Map<string, string>;
   wholes: Map<string, string>;
+  heads: Map<string, string>;
   tailReads: () => number;
   wholeReads: () => number;
+  headReads: () => number;
 };
 
 const makeResolver = (seed?: {
   stats?: Record<string, FileStat>;
   tails?: Record<string, string>;
   wholes?: Record<string, string>;
+  heads?: Record<string, string>;
   zcodeDatabasePath?: string;
 }): { resolver: ReturnType<typeof createTitleResolver>; fs: FakeFs } => {
   const stats = new Map(Object.entries(seed?.stats ?? {}));
   const tails = new Map(Object.entries(seed?.tails ?? {}));
   const wholes = new Map(Object.entries(seed?.wholes ?? {}));
+  const heads = new Map(Object.entries(seed?.heads ?? {}));
   let tailReads = 0;
   let wholeReads = 0;
+  let headReads = 0;
   const resolver = createTitleResolver({
     codexIndexPath: CODEX_INDEX,
     zcodeDatabasePath: seed?.zcodeDatabasePath ?? "/nonexistent/zcode/db.sqlite",
@@ -38,10 +43,22 @@ const makeResolver = (seed?: {
       wholeReads += 1;
       return wholes.get(path) ?? null;
     },
+    readHead: (path) => {
+      headReads += 1;
+      return heads.get(path) ?? null;
+    },
   });
   return {
     resolver,
-    fs: { stats, tails, wholes, tailReads: () => tailReads, wholeReads: () => wholeReads },
+    fs: {
+      stats,
+      tails,
+      wholes,
+      heads,
+      tailReads: () => tailReads,
+      wholeReads: () => wholeReads,
+      headReads: () => headReads,
+    },
   };
 };
 
@@ -328,5 +345,86 @@ describe("zcode SQLite titles", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("omp session-file titles", () => {
+  const FIXTURE_PATH = join(import.meta.dir, "fixtures", "omp-session.jsonl");
+  // The title stored in the captured fixture's head slot, pinned as a literal.
+  const FIXTURE_TITLE = "Write haiku about binary search trees";
+
+  // Mirrors omp's slot writer: one JSON record whose "pad" field absorbs the
+  // slack so the line is exactly OMP_SLOT_BYTES UTF-8 bytes, newline included.
+  const slotRecord = (title: string): string => {
+    const record = (pad: string): string =>
+      `${JSON.stringify({ type: "title", v: 1, title, source: "auto", updatedAt: "2026-08-16T07:01:52.082Z", pad })}\n`;
+    return record(" ".repeat(OMP_SLOT_BYTES - Buffer.byteLength(record(""), "utf8")));
+  };
+
+  const ompTarget = (overrides: Partial<TitleTarget> = {}): TitleTarget => ({
+    provider: "omp",
+    sessionId: "o1",
+    title: null,
+    transcriptPath: "/sessions/o1.jsonl",
+    ...overrides,
+  });
+
+  test("reads the title slot from a real captured omp session file", () => {
+    // Real defaults, real fixture file — no fs fakes.
+    const resolver = createTitleResolver({
+      codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
+      zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
+    });
+    const updates = resolver.resolve([{ provider: "omp", sessionId: "o1", title: null, transcriptPath: FIXTURE_PATH }]);
+    expect(updates).toEqual([{ provider: "omp", sessionId: "o1", title: FIXTURE_TITLE }]);
+  });
+
+  test("caches per path on mtime and size", () => {
+    const { resolver, fs } = makeResolver({
+      zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
+      stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
+      heads: { "/sessions/o1.jsonl": `${slotRecord("Auto-titled session")}{"type":"session","version":3}\n` },
+    });
+    expect(resolver.resolve([ompTarget()])).toEqual([
+      { provider: "omp", sessionId: "o1", title: "Auto-titled session" },
+    ]);
+    expect(fs.headReads()).toBe(1);
+
+    expect(resolver.resolve([ompTarget({ title: "Auto-titled session" })])).toEqual([]);
+    expect(fs.headReads()).toBe(1);
+
+    fs.stats.set("/sessions/o1.jsonl", { mtimeMs: 200, size: 1200 });
+    fs.heads.set("/sessions/o1.jsonl", slotRecord("Retitled"));
+    expect(resolver.resolve([ompTarget({ title: "Auto-titled session" })])).toEqual([
+      { provider: "omp", sessionId: "o1", title: "Retitled" },
+    ]);
+    expect(fs.headReads()).toBe(2);
+  });
+
+  test("falls back to the first parseable JSONL title line after the slot", () => {
+    const { resolver } = makeResolver({
+      stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
+      heads: {
+        "/sessions/o1.jsonl": `{"type":"session","version":3,"id":"o1"}\n{"type":"message"}\n{"type":"title_change","id":"x","title":"Fallback title"}\n`,
+      },
+    });
+    expect(resolver.resolve([ompTarget()])).toEqual([{ provider: "omp", sessionId: "o1", title: "Fallback title" }]);
+  });
+
+  test("no slot and no fallback line resolves nothing; a missing file never throws", () => {
+    const { resolver } = makeResolver({
+      stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
+      heads: { "/sessions/o1.jsonl": `{"type":"session","version":3,"id":"o1"}\nnot-json\n{"type":"message"}\n` },
+    });
+    expect(resolver.resolve([ompTarget()])).toEqual([]);
+
+    const missing = makeResolver();
+    expect(missing.resolver.resolve([ompTarget()])).toEqual([]);
+  });
+
+  test("skips omp rows without a transcript path", () => {
+    const { resolver, fs } = makeResolver();
+    expect(resolver.resolve([ompTarget({ transcriptPath: null })])).toEqual([]);
+    expect(fs.headReads()).toBe(0);
   });
 });

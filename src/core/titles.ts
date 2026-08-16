@@ -14,6 +14,9 @@
  *   The whole index is reparsed only when its (mtime, size) changes.
  * - zcode: `db.sqlite` under the zcode home, re-queried per pass — WAL makes
  *   stat caching unsafe.
+ * - omp: the fixed 256-byte title slot at the head of the session JSONL at the
+ *   row's transcript_path, (mtime, size)-cached — every change to the file
+ *   (appended records or the in-place slot rewrite) bumps its stat identity.
  * - Kimi rows are never resolved here — hooks already deliver their titles.
  *
  * Resolution is additive: a found title is proposed only when it differs from
@@ -43,6 +46,7 @@ export type TitleResolverDependencies = {
   statPath?: (path: string) => FileStat | null;
   readTail?: (path: string, maxBytes: number) => string | null;
   readWhole?: (path: string) => string | null;
+  readHead?: (path: string, maxBytes: number) => string | null;
 };
 
 export type TitleResolver = {
@@ -67,6 +71,26 @@ const defaultReadTail = (path: string, maxBytes: number): string | null => {
     const buffer = Buffer.alloc(length);
     readSync(fd, buffer, 0, length, size - length);
     return buffer.toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // A close failure has no bearing on the read result.
+      }
+    }
+  }
+};
+
+const defaultReadHead = (path: string, maxBytes: number): string | null => {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(maxBytes);
+    const read = readSync(fd, buffer, 0, maxBytes, 0);
+    return buffer.toString("utf8", 0, read);
   } catch {
     return null;
   } finally {
@@ -108,6 +132,54 @@ const claudeTitleFromTail = (tail: string): string | null => {
       }
     } catch {
       // A truncated or malformed line falls through to the next older one.
+    }
+  }
+  return null;
+};
+
+/** omp's session JSONL reserves a fixed-size title slot at the head. */
+export const OMP_SLOT_BYTES = 256;
+const OMP_HEAD_BYTES = 4 * 1024;
+
+/**
+ * Parse the auto-generated title from the head of an omp session file. omp
+ * reserves a fixed slot at byte 0: one `{"type":"title","v":1,"title":...,
+ * "source":...,"updatedAt":...,"pad":...}` record whose "pad" field absorbs
+ * the slack so the line is exactly OMP_SLOT_BYTES UTF-8 bytes including its
+ * terminating newline, rewritten in place when the title changes (framing
+ * pinned by the captured fixture test/fixtures/omp-session.jsonl). Files
+ * without a slot-width first line fall back to the first parseable JSONL
+ * line after it carrying a `title` field (e.g. a title_change record).
+ */
+const ompTitleFromHead = (head: string): string | null => {
+  const lines = head.split("\n");
+  const slot = lines[0] ?? "";
+  if (Buffer.byteLength(slot, "utf8") + 1 === OMP_SLOT_BYTES) {
+    try {
+      const parsed: unknown = JSON.parse(slot);
+      if (
+        isRecord(parsed) &&
+        parsed["type"] === "title" &&
+        typeof parsed["title"] === "string" &&
+        parsed["title"].length > 0
+      ) {
+        return boundTitle(parsed["title"]);
+      }
+    } catch {
+      // Not a parseable slot record — fall through to the JSONL fallback.
+    }
+  }
+  for (const line of lines.slice(1)) {
+    if (line.length === 0) {
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (isRecord(parsed) && typeof parsed["title"] === "string" && parsed["title"].length > 0) {
+        return boundTitle(parsed["title"]);
+      }
+    } catch {
+      // Malformed line — keep scanning.
     }
   }
   return null;
@@ -183,8 +255,10 @@ export const createTitleResolver = (dependencies: TitleResolverDependencies): Ti
   const statPath = dependencies.statPath ?? defaultStatPath;
   const readTail = dependencies.readTail ?? defaultReadTail;
   const readWhole = dependencies.readWhole ?? defaultReadWhole;
+  const readHead = dependencies.readHead ?? defaultReadHead;
 
   const claudeCache = new Map<string, FileStat & { title: string | null }>();
+  const ompCache = new Map<string, FileStat & { title: string | null }>();
   let codexCache: (FileStat & { byId: Map<string, string> }) | null = null;
 
   const claudeTitle = (path: string): string | null => {
@@ -201,6 +275,24 @@ export const createTitleResolver = (dependencies: TitleResolverDependencies): Ti
     const tail = readTail(path, CLAUDE_TAIL_BYTES);
     const title = tail === null ? null : claudeTitleFromTail(tail);
     claudeCache.set(path, { ...stat, title });
+    return title;
+  };
+
+  const ompTitle = (path: string): string | null => {
+    const stat = statPath(path);
+    if (stat === null) {
+      return null;
+    }
+    const cached = ompCache.get(path);
+    if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.title;
+    }
+    // Every change to the session file — appended records or the in-place
+    // slot rewrite — bumps its stat identity, so (mtime, size) caching is
+    // sound here (unlike zcode's WAL store, which bypasses the main file).
+    const head = readHead(path, OMP_HEAD_BYTES);
+    const title = head === null ? null : ompTitleFromHead(head);
+    ompCache.set(path, { ...stat, title });
     return title;
   };
 
@@ -227,6 +319,8 @@ export const createTitleResolver = (dependencies: TitleResolverDependencies): Ti
         let resolved: string | null = null;
         if (target.provider === "claude" && target.transcriptPath !== null) {
           resolved = claudeTitle(target.transcriptPath);
+        } else if (target.provider === "omp" && target.transcriptPath !== null) {
+          resolved = ompTitle(target.transcriptPath);
         } else if (target.provider === "codex") {
           codexById ??= codexTitles();
           resolved = codexById.get(target.sessionId) ?? null;
