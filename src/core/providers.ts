@@ -8,10 +8,12 @@
  * maps the supported hook events onto normalized `RegistryEvent` values while
  * enforcing the privacy contract: only allowlisted fields are read, every
  * accepted string is capped at 256 Unicode code points, and the working
- * directory survives only as its basename. The transcript path is the one
- * verbatim path kept: the daemon needs it to resolve a session's title from
- * the transcript file later. Payloads with missing identity, unknown hook
- * names, or non-object shapes decode to zero events.
+ * directory survives only as its basename. The allowlist includes the
+ * provider-reported model id — it names a model, never user text. The
+ * transcript path is the one verbatim path kept: the daemon needs it to
+ * resolve a session's title from the transcript file later. Payloads with
+ * missing identity, unknown hook names, or non-object shapes decode to zero
+ * events.
  *
  * Two further Claude-only signals are classified in place, never stored: the
  * `run_in_background` boolean of a Bash tool input (a background shell arms
@@ -39,6 +41,7 @@ const SAFE_FIELDS = {
   cwd: ["cwd"],
   title: ["title", "session_title", "sessionTitle"],
   transcriptPath: ["transcript_path", "transcriptPath"],
+  model: ["model"],
   isInterrupt: ["is_interrupt", "isInterrupt"],
 } as const;
 
@@ -141,6 +144,7 @@ const sessionFacts = (
   // storing it would only mislead the titles resolver (zcode titles come
   // from its SQLite database instead).
   transcriptPath: provider === "zcode" ? null : (firstAllowlistedString(value, SAFE_FIELDS.transcriptPath) ?? null),
+  model: firstAllowlistedString(value, SAFE_FIELDS.model) ?? null,
   observedAt: now,
 });
 

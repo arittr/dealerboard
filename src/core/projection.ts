@@ -34,6 +34,7 @@ export type ProjectionRow = {
   project: string | null;
   logicalSlot: number | null;
   ghosttyTerminalId: string | null;
+  model: string | null;
   originKind: SessionOriginKind | null;
   originRef: string | null;
   originSubagent: number;
@@ -181,6 +182,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
         descendantCount,
         logicalSlot: slot,
         ghosttyTerminalId: root.ghosttyTerminalId,
+        model: root.model,
         originKind: root.originKind,
         originRef: root.originRef,
         originSubagent: root.originSubagent === 1,
@@ -209,6 +211,7 @@ type StoredRow = {
   origin_ref: unknown;
   origin_subagent: unknown;
   unread_since: unknown;
+  model: unknown;
 };
 
 const isStringOrNull = (value: unknown): value is string | null => typeof value === "string" || value === null;
@@ -228,7 +231,8 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     !isStringOrNull(row.parent_session_id) ||
     !isStringOrNull(row.title) ||
     !isStringOrNull(row.project) ||
-    !isStringOrNull(row.ghostty_terminal_id)
+    !isStringOrNull(row.ghostty_terminal_id) ||
+    !isStringOrNull(row.model)
   ) {
     throw new ProjectionError("corrupt-row");
   }
@@ -239,6 +243,9 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     typeof row.ghostty_terminal_id === "string" &&
     (row.ghostty_terminal_id.length === 0 || Array.from(row.ghostty_terminal_id).length > 256)
   ) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (typeof row.model === "string" && (row.model.length === 0 || Array.from(row.model).length > 256)) {
     throw new ProjectionError("corrupt-row");
   }
   if (row.origin_kind !== null && (typeof row.origin_kind !== "string" || !ORIGIN_KINDS.has(row.origin_kind))) {
@@ -267,6 +274,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     project: row.project,
     logicalSlot: row.logical_slot,
     ghosttyTerminalId: row.ghostty_terminal_id,
+    model: row.model,
     originKind: row.origin_kind as SessionOriginKind | null,
     originRef: row.origin_ref,
     originSubagent: row.origin_subagent,
@@ -275,7 +283,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, origin_kind, origin_ref, origin_subagent, unread_since";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, origin_kind, origin_ref, origin_subagent, unread_since";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:

@@ -25,6 +25,8 @@ export type RegistryEvent =
       project: string | null;
       ghosttyTerminalId: string | null;
       transcriptPath: string | null;
+      /** Raw provider-reported model id; null when the provider did not report one. */
+      model: string | null;
       /** Origin evidence at spawn; absent/null means no new evidence. */
       origin?: SessionOrigin | null;
       observedAt: string;
@@ -36,6 +38,8 @@ export type RegistryEvent =
       title: string | null;
       project: string | null;
       transcriptPath: string | null;
+      /** Raw provider-reported model id; null when the provider did not report one. */
+      model: string | null;
       /** Origin evidence carried by a late join; absent/null means no new evidence. */
       origin?: SessionOrigin | null;
       observedAt: string;
@@ -75,6 +79,7 @@ export type ProjectedSession = {
   descendantCount: number;
   logicalSlot: number;
   ghosttyTerminalId: string | null;
+  model: string | null;
   originKind: SessionOriginKind | null;
   originRef: string | null;
   originSubagent: boolean;
@@ -166,6 +171,13 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (value["ghosttyTerminalId"] !== null && value["provider"] !== "claude") {
     return invalid("session.ghosttyTerminalId is only valid for Claude");
   }
+  // A missing model key is tolerated as null: snapshots written before the
+  // field existed stay parseable. A present undefined is an invalid value,
+  // not a missing key.
+  const model = "model" in value ? value["model"] : null;
+  if (!isNullableBoundedString(model)) {
+    return invalid("session.model must be null or a bounded string");
+  }
   // Origin fields are validated when present and defaulted when absent, so
   // an older daemon's snapshot (which predates them) still parses.
   if (value["originKind"] !== undefined && value["originKind"] !== null) {
@@ -188,6 +200,7 @@ const parseSession = (value: unknown): ProjectedSession => {
     descendantCount: value["descendantCount"],
     logicalSlot: value["logicalSlot"],
     ghosttyTerminalId: value["ghosttyTerminalId"],
+    model,
     originKind: value["originKind"] === undefined ? null : (value["originKind"] as SessionOriginKind | null),
     originRef: value["originRef"] === undefined ? null : (value["originRef"] as string | null),
     originSubagent: value["originSubagent"] === undefined ? false : (value["originSubagent"] as boolean),

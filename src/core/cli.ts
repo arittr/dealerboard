@@ -40,7 +40,7 @@ import {
   syncPaseoStates,
 } from "./registry";
 import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
-import { createTitleResolver } from "./titles";
+import { createSessionFactsResolver } from "./titles";
 
 export const MAX_STDIN_BYTES = 65_536;
 const RETRY_DELAY_MS = 25;
@@ -408,7 +408,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   runDaemon: (daemonPaths, diagnostics) => {
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
-    const resolveTitles = createTitleResolver({
+    const resolveFacts = createSessionFactsResolver({
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
     }).resolve;
@@ -419,7 +419,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     // the registry sync.
     const syncPaseo = (db: Database, now: string) =>
       syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState), now);
-    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveTitles, syncPaseo });
+    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
     return new Promise<number>(() => {
       // launchd owns the daemon lifetime; the poll timer keeps the process alive.

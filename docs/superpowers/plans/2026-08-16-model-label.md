@@ -260,9 +260,9 @@ test("a SessionStart with null model does not clear a stored model", () => {
 test("SessionObserved backfills a null model but never overwrites one", () => {
   // SessionStart with model: null → row model null.
   // SessionObserved with model: "k3" → applied, row model "k3".
-  // SessionObserved with model: "other" → ignored, row model stays "k3".
-  //   (Backfill only fills absence; corrections come from the resolver or a
-  //   fresh SessionStart.)
+  // SessionObserved with model: "other" → applied, row model "other"
+  //   (mirrors the transcript_path backfill: a non-null different value
+  //   overwrites; corrections flow through the same channel).
   // SessionObserved with model: null → ignored, nothing changes.
 });
 ```

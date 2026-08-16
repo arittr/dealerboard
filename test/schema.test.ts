@@ -175,7 +175,7 @@ describe("initializeDatabase", () => {
     }
   });
 
-  test("migrates v1 rows additively to v7 with null bindings, no outstanding background work, and no transcript", () => {
+  test("migrates v1 rows additively to v7 with null bindings, no outstanding background work, no transcript, and no model", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -188,7 +188,7 @@ describe("initializeDatabase", () => {
       expect(
         db
           .query(
-            "SELECT session_id, status, logical_slot, ghostty_terminal_id, background_outstanding, transcript_path FROM active_sessions",
+            "SELECT session_id, status, logical_slot, ghostty_terminal_id, background_outstanding, transcript_path, model FROM active_sessions",
           )
           .get(),
       ).toEqual({
@@ -198,6 +198,7 @@ describe("initializeDatabase", () => {
         ghostty_terminal_id: null,
         background_outstanding: 0,
         transcript_path: null,
+        model: null,
       });
     } finally {
       db.close();
@@ -359,6 +360,20 @@ describe("active_sessions contract", () => {
       });
       expect(() => db.run("UPDATE active_sessions SET transcript_path = ''")).toThrow();
       expect(() => db.run(`UPDATE active_sessions SET transcript_path = '${"x".repeat(257)}'`)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  test("bounds model to 1-256 characters on any row", () => {
+    const db = openInitialized();
+    try {
+      insertSession(db, "s1", null, 1);
+      expect(db.query("SELECT model FROM active_sessions").get()).toEqual({ model: null });
+      db.run("UPDATE active_sessions SET model = 'claude-fable-5'");
+      expect(db.query("SELECT model FROM active_sessions").get()).toEqual({ model: "claude-fable-5" });
+      expect(() => db.run("UPDATE active_sessions SET model = ''")).toThrow();
+      expect(() => db.run(`UPDATE active_sessions SET model = '${"x".repeat(257)}'`)).toThrow();
     } finally {
       db.close();
     }
@@ -628,18 +643,14 @@ const createVersion5Database = (path: string): void => {
         opened_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         ghostty_terminal_id TEXT
-        CHECK (
-          ghostty_terminal_id IS NULL
-          OR (
-            provider = 'claude'
-            AND parent_session_id IS NULL
-            AND length(ghostty_terminal_id) BETWEEN 1 AND 256
-          )
-        ),
+          CHECK (
+            ghostty_terminal_id IS NULL
+            OR (provider = 'claude' AND parent_session_id IS NULL AND length(ghostty_terminal_id) BETWEEN 1 AND 256)
+          ),
         background_outstanding INTEGER NOT NULL DEFAULT 0
-        CHECK (background_outstanding IN (0, 1)),
+          CHECK (background_outstanding IN (0, 1)),
         transcript_path TEXT
-        CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256),
+          CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256),
         PRIMARY KEY (provider, session_id),
         FOREIGN KEY (provider, parent_session_id)
           REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
@@ -654,16 +665,18 @@ const createVersion5Database = (path: string): void => {
         WHERE logical_slot IS NOT NULL;
       PRAGMA user_version = 5;
     `);
-    // One top-level row carrying representative NON-default values, so the
-    // post-migration assertions can tell "row untouched" apart from "row
-    // reset to defaults".
+    // Both rows carry a non-default value in every column their CHECKs allow,
+    // so a value lost on the migration path could not pass the assertions as
+    // a default.
     legacy.run(
       `INSERT INTO active_sessions
          (provider, session_id, parent_session_id, status, title, project, logical_slot,
           opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path)
        VALUES
-         ('claude', 'v5-root', NULL, 'working', 'V5 root', 'proj-v5', 2,
-          '2026-08-06T01:00:00.000Z', '2026-08-06T02:00:00.000Z', NULL, 1, '/transcripts/v5.jsonl')`,
+         ('claude', 'root', NULL, 'working', 'Root session', 'proj-root', 1,
+          '2026-08-06T01:00:00.000Z', '2026-08-06T02:00:00.000Z', 'ghostty-a1', 1, '/transcripts/root.jsonl'),
+         ('claude', 'child', 'root', 'waiting', 'Child session', 'proj-child', NULL,
+          '2026-08-06T03:00:00.000Z', '2026-08-06T04:00:00.000Z', NULL, 1, '/transcripts/child.jsonl')`,
     );
   } finally {
     legacy.close();
@@ -681,21 +694,30 @@ describe("schema v7", () => {
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
       expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
-      expect(countSessions(db)).toBe(1);
-      expect(
-        db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions").get(),
-      ).toEqual({ origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null });
-      // The pre-existing row is untouched: its non-default v5 values survive.
+      expect(countSessions(db)).toBe(2);
       expect(
         db
-          .query("SELECT session_id, status, title, background_outstanding, transcript_path FROM active_sessions")
+          .query(
+            "SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions ORDER BY session_id",
+          )
+          .all(),
+      ).toEqual([
+        { origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null },
+        { origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null },
+      ]);
+      // The pre-existing rows are untouched: non-default v5 values survive.
+      expect(
+        db
+          .query(
+            "SELECT session_id, status, title, background_outstanding, transcript_path FROM active_sessions WHERE session_id = 'root'",
+          )
           .get(),
       ).toEqual({
-        session_id: "v5-root",
+        session_id: "root",
         status: "working",
-        title: "V5 root",
+        title: "Root session",
         background_outstanding: 1,
-        transcript_path: "/transcripts/v5.jsonl",
+        transcript_path: "/transcripts/root.jsonl",
       });
     } finally {
       db.close();
@@ -706,13 +728,13 @@ describe("schema v7", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
-    // Reproduce main's model-label v6: a nullable `model` column stamped as
-    // schema version 6. This build must migrate it to v7 without touching
-    // the unknown column or its data.
+    // Reproduce a v6 database the model-label build produced: a nullable
+    // `model` column stamped as schema version 6. Init must apply only the
+    // v7 migration, leaving the column and its data alone.
     const modelBuild = new Database(paths.database);
     try {
       modelBuild.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
-      modelBuild.run("UPDATE active_sessions SET model = 'claude-sonnet-4-6' WHERE session_id = 'v5-root'");
+      modelBuild.run("UPDATE active_sessions SET model = 'claude-sonnet-4-6' WHERE session_id = 'root'");
       modelBuild.exec("PRAGMA user_version = 6");
     } finally {
       modelBuild.close();
@@ -723,8 +745,14 @@ describe("schema v7", () => {
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
       expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
-      expect(countSessions(db)).toBe(1);
-      expect(db.query("SELECT origin_kind, origin_subagent, unread_since, model FROM active_sessions").get()).toEqual({
+      expect(countSessions(db)).toBe(2);
+      expect(
+        db
+          .query(
+            "SELECT origin_kind, origin_subagent, unread_since, model FROM active_sessions WHERE session_id = 'root'",
+          )
+          .get(),
+      ).toEqual({
         origin_kind: null,
         origin_subagent: 0,
         unread_since: null,
@@ -735,17 +763,28 @@ describe("schema v7", () => {
     }
   });
 
-  test("fresh init creates the v7 columns at their defaults", () => {
+  test("fresh init runs the full chain to v7 with both the model and origin/unread columns", () => {
     const paths = resolveAppPaths(tempHome);
     initializeDatabase(paths);
 
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      // A fresh database must not skip the v6 model migration on its way to
+      // v7: both features' columns exist on every migration path.
+      const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
+        name: string;
+      }>;
+      const names = columns.map((column) => column.name);
+      expect(names).toContain("model");
+      expect(names).toContain("origin_kind");
+      expect(names).toContain("origin_ref");
+      expect(names).toContain("origin_subagent");
+      expect(names).toContain("unread_since");
       insertSession(db, "s1", null, 1);
       expect(
-        db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions").get(),
-      ).toEqual({ origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null });
+        db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since, model FROM active_sessions").get(),
+      ).toEqual({ origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null, model: null });
     } finally {
       db.close();
     }
@@ -802,5 +841,98 @@ describe("schema v7", () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe("schema v6", () => {
+  test("migrates v5 through v6, preserving rows and adding a nullable model column", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      // Every seeded pre-v6 value must survive verbatim; model is NULL on both.
+      expect(
+        db
+          .query(
+            `SELECT provider, session_id, parent_session_id, status, title, project, logical_slot,
+                    opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path, model
+             FROM active_sessions ORDER BY session_id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          provider: "claude",
+          session_id: "child",
+          parent_session_id: "root",
+          status: "waiting",
+          title: "Child session",
+          project: "proj-child",
+          logical_slot: null,
+          opened_at: "2026-08-06T03:00:00.000Z",
+          updated_at: "2026-08-06T04:00:00.000Z",
+          ghostty_terminal_id: null,
+          background_outstanding: 1,
+          transcript_path: "/transcripts/child.jsonl",
+          model: null,
+        },
+        {
+          provider: "claude",
+          session_id: "root",
+          parent_session_id: null,
+          status: "working",
+          title: "Root session",
+          project: "proj-root",
+          logical_slot: 1,
+          opened_at: "2026-08-06T01:00:00.000Z",
+          updated_at: "2026-08-06T02:00:00.000Z",
+          ghostty_terminal_id: "ghostty-a1",
+          background_outstanding: 1,
+          transcript_path: "/transcripts/root.jsonl",
+          model: null,
+        },
+      ]);
+      const columns = db.query("PRAGMA table_info(active_sessions)").all() as Array<{ name: string; type: string }>;
+      const modelColumn = columns.find((column) => column.name === "model");
+      expect(modelColumn?.type).toBe("TEXT");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("re-running init on a migrated database is an idempotent no-op", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    initializeDatabase(paths);
+
+    // A retried init must never re-attempt the v6/v7 ALTERs (duplicate column).
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(countSessions(db)).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("openRegistryDatabase accepts a fully migrated database and rejects v5", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    initializeDatabase(paths);
+    const db = openRegistryDatabase(paths.database, "readonly");
+    db.close();
+
+    const stale = join(tempHome, "stale-v5.sqlite3");
+    createVersion5Database(stale);
+    expect(() => openRegistryDatabase(stale, "readonly")).toThrow(UnsupportedSchemaVersion);
+    expect(() => openRegistryDatabase(stale, "readwrite")).toThrow(UnsupportedSchemaVersion);
   });
 });

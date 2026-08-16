@@ -22,6 +22,7 @@ const valid: SessionSnapshotV2 = {
       descendantCount: 2,
       logicalSlot: 1,
       ghosttyTerminalId: "terminal-1",
+      model: null,
       originKind: null,
       originRef: null,
       originSubagent: false,
@@ -128,6 +129,31 @@ describe("parseSessionSnapshot", () => {
     const session = { ...firstSession() } as Partial<ProjectedSession>;
     delete session.ghosttyTerminalId;
     expect(() => parseSessionSnapshot({ ...valid, sessions: [session] })).toThrow();
+  });
+
+  test("defaults a missing model key to null", () => {
+    // Cross-version tolerance: snapshots written before the model field
+    // existed parse cleanly, reporting no model.
+    const session = { ...firstSession() } as Partial<ProjectedSession>;
+    delete session.model;
+    const result = parseSessionSnapshot({ ...valid, sessions: [session] });
+    expect(result.sessions[0]?.model).toBeNull();
+  });
+
+  test("accepts a bounded string model", () => {
+    expect(parseSessionSnapshot(withSession({ model: "claude-fable-5" })).sessions[0]?.model).toBe("claude-fable-5");
+    expect(parseSessionSnapshot(withSession({ model: null })).sessions[0]?.model).toBeNull();
+  });
+
+  test("rejects an invalid model", () => {
+    expect(() => parseSessionSnapshot(withSession({ model: 42 as unknown as string }))).toThrow(
+      "session.model must be null or a bounded string",
+    );
+    expect(() => parseSessionSnapshot(withSession({ model: "m".repeat(257) }))).toThrow();
+    // A present undefined is an invalid value, not a missing key.
+    expect(() => parseSessionSnapshot(withSession({ model: undefined as unknown as string }))).toThrow(
+      "session.model must be null or a bounded string",
+    );
   });
 
   test("parseSession defaults missing origin fields (old daemon snapshot still parses)", () => {
@@ -259,6 +285,7 @@ describe("RegistryEvent", () => {
         project: "p",
         ghosttyTerminalId: null,
         transcriptPath: null,
+        model: null,
         observedAt,
       },
       {
@@ -268,6 +295,7 @@ describe("RegistryEvent", () => {
         title: null,
         project: "p",
         transcriptPath: null,
+        model: null,
         observedAt,
       },
       { kind: "Activity", provider: "codex", sessionId: "s1", observedAt },

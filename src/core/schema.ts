@@ -142,13 +142,22 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
 `;
 
 /**
+ * v6 adds the nullable model column: the raw provider-reported model id
+ * (Kimi hook push, Claude/Codex resolver pull), never user text. Plain ALTER,
+ * same shape as v2-v4; no table rebuild.
+ */
+const SCHEMA_VERSION_6 = `
+ALTER TABLE active_sessions
+  ADD COLUMN model TEXT
+  CHECK (model IS NULL OR length(model) BETWEEN 1 AND 256);
+`;
+
+/**
  * v7 stamps sessions with their origin (a 'paseo' or 'terminal' kind, an
  * opaque reference, and whether the row is a subagent) and tracks unread
  * output with a timestamp. All four columns are plain additive ALTERs — no
- * rebuild — so they apply equally to a v5 table and to the v6 table main's
- * model-label migration produced: its `model` column is outside this build's
- * explicit column lists and survives untouched. (Schema version 6 is reserved
- * by that merged migration; origin/unread therefore ship as v7.)
+ * rebuild — so they apply equally whether the database is coming from v5 or
+ * from a v6 produced before this migration existed.
  */
 const SCHEMA_VERSION_7 = `
 ALTER TABLE active_sessions
@@ -171,14 +180,16 @@ ALTER TABLE active_sessions
  * Ordered migrations keyed by the schema version each one produces. Entries
  * below v5 alter the original table and run in one transaction before the
  * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
- * because it manages its own transaction. Entries above v5 assume the
- * rebuilt table and run in a second transaction after it.
+ * because it manages its own transaction. Entries above v5 (v6 model,
+ * v7 origin/unread) assume the rebuilt table and run in a second
+ * transaction after it.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
   { version: 2, sql: SCHEMA_VERSION_2 },
   { version: 3, sql: SCHEMA_VERSION_3 },
   { version: 4, sql: SCHEMA_VERSION_4 },
+  { version: 6, sql: SCHEMA_VERSION_6 },
   { version: 7, sql: SCHEMA_VERSION_7 },
 ];
 
@@ -247,7 +258,10 @@ export const initializeDatabase = (paths: AppPaths): void => {
         migratePreV5();
         migrateToV5(db);
       }
-      // Entries above v5 (v7+) assume the rebuilt table and run after it.
+      // Entries above v5 (v6, v7) assume the rebuilt table and run after it.
+      // One transaction: an interruption between an ALTER and its version
+      // bump would otherwise leave a database that already has the column,
+      // making every retried init die on a duplicate-column error.
       const migratePostV5 = db.transaction(() => {
         for (const migration of MIGRATIONS) {
           if (migration.version > version && migration.version > 5) {

@@ -41,6 +41,7 @@ const row = (
     project: options.project ?? null,
     logicalSlot: options.slot === undefined ? (parent === null ? 1 : null) : options.slot,
     ghosttyTerminalId: options.ghosttyTerminalId ?? null,
+    model: null,
     originKind: options.originKind ?? null,
     originRef: options.originRef ?? null,
     originSubagent: options.originSubagent ?? 0,
@@ -93,6 +94,7 @@ describe("projectRows", () => {
       descendantCount: 3,
       logicalSlot: 2,
       ghosttyTerminalId: null,
+      model: null,
       originKind: null,
       originRef: null,
       originSubagent: false,
@@ -264,6 +266,7 @@ describe("readProjection", () => {
             project: "proj",
             ghosttyTerminalId: null,
             transcriptPath: null,
+            model: null,
             observedAt: "2026-08-06T00:00:01.000Z",
           },
           {
@@ -325,6 +328,7 @@ describe("readProjection", () => {
             descendantCount: 2,
             logicalSlot: 1,
             ghosttyTerminalId: null,
+            model: null,
             originKind: null,
             originRef: null,
             originSubagent: false,
@@ -357,6 +361,7 @@ describe("readProjection", () => {
             project: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
+            model: null,
             observedAt: "2026-08-06T00:00:01.000Z",
           },
           {
@@ -367,6 +372,7 @@ describe("readProjection", () => {
             project: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
+            model: null,
             observedAt: "2026-08-06T00:00:02.000Z",
           },
           {
@@ -386,6 +392,7 @@ describe("readProjection", () => {
             project: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
+            model: null,
             observedAt: "2026-08-06T00:00:04.000Z",
           },
           {
@@ -396,6 +403,7 @@ describe("readProjection", () => {
             project: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
+            model: null,
             observedAt: "2026-08-06T00:00:05.000Z",
           },
           // The projection hides read-and-idle sessions, so p1/z1/d1 must
@@ -439,6 +447,74 @@ describe("readProjection", () => {
       rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  test("carries the stored model through to the snapshot", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "kimi",
+            sessionId: "with-model",
+            title: "Titled",
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-06T00:00:01.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "without-model",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-06T00:00:02.000Z",
+          },
+          // The projection hides read-and-idle sessions; a Stop lands an
+          // unread result so both stay visible.
+          {
+            kind: "Stop",
+            provider: "kimi",
+            sessionId: "with-model",
+            observedAt: "2026-08-06T00:00:03.000Z",
+          },
+          {
+            kind: "Stop",
+            provider: "claude",
+            sessionId: "without-model",
+            observedAt: "2026-08-06T00:00:04.000Z",
+          },
+        ]);
+        // Registry model storage lands in a later task; set the column directly.
+        writer.run("UPDATE active_sessions SET model = 'k3' WHERE provider = 'kimi' AND session_id = 'with-model'");
+      } finally {
+        writer.close();
+      }
+
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions.map((session) => [session.sessionId, session.model])).toEqual([
+          ["with-model", "k3"],
+          ["without-model", null],
+        ]);
+        expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("writeSnapshotAtomically", () => {
@@ -460,6 +536,7 @@ describe("writeSnapshotAtomically", () => {
         descendantCount: 2,
         logicalSlot: 3,
         ghosttyTerminalId: null,
+        model: null,
         originKind: null,
         originRef: null,
         originSubagent: false,

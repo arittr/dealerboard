@@ -61,12 +61,22 @@ them apart. Target rendering: `[ K ] k3`.
 Extend the existing title resolver pass to also resolve models (one tail read
 per transcript serves title and model):
 
-- Claude: last `"model":"..."` occurrence in the 64 KiB transcript tail wins;
-  cached per path on (mtime, size) exactly like titles. A mid-session `/model`
-  switch flips the label on the next pass after the transcript grows.
-- Codex: same tail scan against the rollout at `transcript_path`, with its
-  own (mtime, size) cache. Rows without a `transcript_path` resolve nothing.
+- Claude: the same 64 KiB transcript tail, parsed per line like the ai-title
+  scan — complete `assistant` records only, reading the authoritative
+  `message.model`; last parsed value wins, malformed or truncated lines skip.
+  An unstructured regex over the tail is NOT acceptable: tool-call inputs
+  nested inside an assistant record can carry their own `model` argument
+  (e.g. a subagent dispatch's model), and a last-occurrence regex would
+  resolve the decoy instead of the session model (final-review finding,
+  2026-08-16).
+- Codex: same per-line parse of the rollout tail at `transcript_path`,
+  reading `payload.model` from `turn_context` records only (the turn's actual
+  model). Per-path (mtime, size) cache, mirroring the Claude one. Rows without
+  a `transcript_path` resolve nothing.
 - zcode and Kimi rows are never resolved (no source / hooks push).
+
+A mid-session `/model` switch flips the label because the last authoritative
+record in the growing tail changes.
 
 Resolution is additive: a found model is proposed only when it differs from
 the stored one; a missing model never clears an existing value.
@@ -80,11 +90,15 @@ the stored one; a missing model never clears an existing value.
   1. Strip the first matching leading prefix from
      `["claude-", "gpt-", "zai/", "openai/"]`; if stripping would empty the
      string, keep the raw id.
-  2. Cap at 10 code points; overflow ends in an ellipsis.
-  Examples: `claude-fable-5` → `fable-5`, `gpt-5.6-luna` → `5.6-luna`,
-  `k3` → `k3`, `zai/glm-5.3` → `glm-5.3`.
-- The descendant badge (upper right) is untouched; a 2-digit badge plus a
-  long label can sit close together — accepted, both are small.
+  2. Cap at 10 code points when the tile shows no descendant badge, and at 6
+     code points (5 + `…`) when it does: a badge occupies x≈99–130 in the same
+     top band (baseline y=38), and a 10-code-point label starting at x=56 would
+     draw through it (measured on the 144px tile; final-review finding,
+     2026-08-16 — the earlier "sit close together" claim was wrong).
+  Examples (no badge): `claude-fable-5` → `fable-5`, `gpt-5.6-luna` →
+  `5.6-luna`, `k3` → `k3`, `zai/glm-5.3` → `glm-5.3`.
+- The descendant badge (upper right) keeps its position and precedence; the
+  model label yields width to it per the cap rule above.
 
 ## Non-goals
 
