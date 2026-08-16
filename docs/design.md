@@ -82,8 +82,11 @@ Kimi Web eagerly creates a titleless session when a blank page opens, but may
 never emit an end event when that unused page is abandoned. A titleless Kimi
 `SessionStart` is therefore insufficient evidence for grid membership. The
 first `UserPromptSubmit` establishes membership and working state; a titled
-`SessionStart` still establishes membership immediately when an existing
-session is resumed.
+`SessionStart` still establishes registry membership immediately when an
+existing session is resumed. Registry membership is not grid visibility,
+though: the projection admits only active or unread rows, so a resumed
+session whose titled `SessionStart` lands idle with no unviewed result stays
+off the grid until its next Activity or unread output.
 
 Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. As implemented, the lease is uniform: the daemon prunes any top-level session whose last hook is older than 24 hours, and a still-live session pruned by mistake reappears at its next prompt (every provider late-joins on `UserPromptSubmit`). The daemon also rewrites the snapshot every five seconds as a heartbeat; the plugin treats a file older than ten seconds as a dead daemon and degrades instead of rendering stale tiles as live.
 

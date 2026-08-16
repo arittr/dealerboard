@@ -83,7 +83,7 @@ export type DaemonDependencies = {
   nowMs?: () => number;
   resolveFacts?: ResolveFacts;
   /** Paseo overlay sync: joins Paseo agent records onto rows; returns rows changed. */
-  syncPaseo?: (db: Database, now: string) => number;
+  syncPaseo?: (db: Database) => number;
   diagnostics?: (record: DiagnosticRecord) => void;
 };
 
@@ -255,7 +255,7 @@ export class ProjectionDaemon {
       }
       if (this.state.lastPaseoPassAtMs === null || nowMs - this.state.lastPaseoPassAtMs >= DAEMON_PASEO_INTERVAL_MS) {
         this.state.lastPaseoPassAtMs = nowMs;
-        if (this.deps.syncPaseo(this.connection, this.deps.now()) > 0) {
+        if (this.deps.syncPaseo(this.connection) > 0) {
           changed = true;
         }
       }

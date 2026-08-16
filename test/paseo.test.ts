@@ -64,7 +64,58 @@ describe("createPaseoAgentStateLoader", () => {
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: agentRecord() },
     });
     expect(loader(AGENTS_DIR)).toEqual([
-      { provider: "kimi", sessionId: "session_abc", agentId: "agent-1", requiresAttention: true, isSubagent: false },
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+      },
+    ]);
+  });
+
+  test("parses attentionTimestamp and updatedAt for the registry watermark", () => {
+    const content = agentRecord({
+      attentionTimestamp: "2026-08-06T00:10:00.000Z",
+      updatedAt: "2026-08-06T00:12:00.000Z",
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: "2026-08-06T00:10:00.000Z",
+        updatedAt: "2026-08-06T00:12:00.000Z",
+      },
+    ]);
+  });
+
+  test("non-string timestamps parse as null", () => {
+    const content = agentRecord({ attentionTimestamp: 42, updatedAt: false });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+      },
     ]);
   });
 
@@ -89,6 +140,8 @@ describe("createPaseoAgentStateLoader", () => {
         agentId: "agent-2",
         requiresAttention: true,
         isSubagent: true,
+        attentionTimestamp: null,
+        updatedAt: null,
       },
     ]);
   });
@@ -101,7 +154,15 @@ describe("createPaseoAgentStateLoader", () => {
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
     expect(loader(AGENTS_DIR)).toEqual([
-      { provider: "kimi", sessionId: "session_abc", agentId: "agent-1", requiresAttention: false, isSubagent: false },
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: false,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+      },
     ]);
   });
 
@@ -143,7 +204,15 @@ describe("createPaseoAgentStateLoader", () => {
       },
     });
     expect(loader(AGENTS_DIR)).toEqual([
-      { provider: "kimi", sessionId: "session_abc", agentId: "agent-1", requiresAttention: true, isSubagent: false },
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+      },
     ]);
   });
 

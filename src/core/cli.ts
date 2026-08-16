@@ -417,8 +417,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     // The loader skips records naming unknown providers, so the predicate
     // narrows its string providers to the canonical union on the way into
     // the registry sync.
-    const syncPaseo = (db: Database, now: string) =>
-      syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState), now);
+    const syncPaseo = (db: Database) => syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState));
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
     return new Promise<number>(() => {

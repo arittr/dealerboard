@@ -9,6 +9,10 @@
  *   back to `.runtimeInfo.sessionId` — it must match the registry's provider
  *   session id verbatim (e.g. kimi `session_<uuid>`, claude UUID);
  * - `.requiresAttention`, defaulting to false when absent;
+ * - `.attentionTimestamp` and `.updatedAt`, both optional ISO-8601 strings
+ *   bounded like every other record string — the registry sync's attention
+ *   watermark compares them against `unread_since` to order Paseo-side and
+ *   local news; absent or non-string values parse as null;
  * - `.parentAgentId` (present → the agent is a subagent);
  * - `.id` and `.provider`, the latter validated against the canonical
  *   provider keys — records naming an unknown provider are skipped.
@@ -34,6 +38,8 @@ export type PaseoAgentState = {
   agentId: string;
   requiresAttention: boolean;
   isSubagent: boolean;
+  attentionTimestamp: string | null;
+  updatedAt: string | null;
 };
 
 export type PaseoFileStat = { mtimeMs: number; size: number };
@@ -57,6 +63,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const boundString = (value: string): string => Array.from(value).slice(0, MAX_STRING_CODE_POINTS).join("");
+
+/** A bounded ISO-8601 timestamp string, or null when absent or non-string. */
+const isoTimestampFrom = (value: unknown): string | null =>
+  typeof value === "string" && value.length > 0 ? boundString(value) : null;
 
 /** The provider-native session id at `container`.sessionId, or null when absent. */
 const sessionIdFrom = (value: Record<string, unknown>, container: string): string | null => {
@@ -92,6 +102,8 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
     agentId: boundString(id),
     requiresAttention: value["requiresAttention"] === true,
     isSubagent: typeof parentAgentId === "string" && parentAgentId.length > 0,
+    attentionTimestamp: isoTimestampFrom(value["attentionTimestamp"]),
+    updatedAt: isoTimestampFrom(value["updatedAt"]),
   };
 };
 

@@ -509,6 +509,38 @@ describe("event ingress", () => {
     expect(listRows()[0]).toMatchObject({ originKind: "paseo", originRef: "agent-xyz" });
   });
 
+  test("event refreshes origin on an existing row when an observed prompt carries markers", async () => {
+    initRegistry();
+    // A start without markers leaves the existing row origin-unknown.
+    const plainStart = makeHarness({ stdin: stdinOf(startEvent("s1")) });
+    expect(await runCli(["event", "kimi"], plainStart.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ originKind: null, originRef: null });
+
+    // A later prompt in a terminal late-joins nothing (the row exists) but
+    // its fresh origin evidence replaces the unknown one.
+    const prompt = makeHarness({
+      environment: { TERM_PROGRAM: "ghostty" },
+      stdin: stdinOf(
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "s1",
+          cwd: "/users/drew/project-x",
+          prompt: "SENTINEL_PROMPT_NEVER_STORED",
+        }),
+      ),
+    });
+    expect(await runCli(["event", "kimi"], prompt.deps)).toBe(0);
+    expect(prompt.diagnostics).toEqual([]);
+
+    // The refreshed origin is visible through the read-only listing path.
+    const lister = makeHarness();
+    expect(await runCli(["sessions", "list"], lister.deps)).toBe(0);
+    expect(lister.stderr()).toBe("");
+    expect(JSON.parse(lister.stdout())).toMatchObject([
+      { provider: "kimi", sessionId: "s1", originKind: "terminal", originRef: "ghostty" },
+    ]);
+  });
+
   test("keeps the stamped origin through the Claude ghostty terminal enrichment", async () => {
     initRegistry();
     const harness = makeHarness({

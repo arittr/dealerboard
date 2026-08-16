@@ -9,9 +9,11 @@
  * partial unique index remain the final backstop for genuinely unexpected
  * writes.
  *
- * The database holds active state only: end and stop events delete rows; a
- * missed end event leaves a stale row until the daemon's age-based prune or a
- * manual `clearSession`/`clearAllSessions`/`pruneStaleSessions` repairs it.
+ * The database holds active state only: SessionEnd and SubagentStop delete
+ * rows, as do the daemon's age-based prune and the manual
+ * `clearSession`/`clearAllSessions`/`pruneStaleSessions` repairs; a Stop or
+ * StopFailure retains the row — it stamps `unread_since` instead — so a
+ * missed end event leaves a stale row until one of those repairs it.
  * Slots are never compacted; a new top-level row receives the
  * lowest free positive slot found from the sorted non-null slot list.
  *
@@ -234,21 +236,38 @@ const applySessionObserved = (
 ): MutationResult => {
   // A prompt proves missing membership, but it must not replay SessionStart's
   // metadata refresh over a session whose lifecycle is already registered.
-  // The exception is transcript_path and model: a non-null event value that
-  // differs from the stored one overwrites it — the transcript path unlocks
-  // title resolution, and a provider whose prompt event carries a model fills
-  // the label on a row that started without one. Null event values never
-  // clear what is already stored.
+  // The exceptions are transcript_path, model, and origin: a non-null event
+  // value that differs from the stored one overwrites it — the transcript
+  // path unlocks title resolution, a provider whose prompt event carries a
+  // model fills the label on a row that started without one, and a fresh
+  // non-null origin replaces the stored one (resetting the subagent bit)
+  // with SessionStart's semantics, refreshing routing on a late join.
+  // Null event values never clear what is already stored, and a row whose
+  // observed event would change nothing reports "ignored".
   const existing = getRow(db, event.provider, event.sessionId);
   if (existing !== null) {
+    const origin = event.origin ?? null;
+    const refreshOrigin =
+      origin !== null &&
+      (existing.origin_kind !== origin.kind || existing.origin_ref !== origin.ref || existing.origin_subagent !== 0);
     const backfillModel = event.model !== null && existing.model !== event.model;
     const backfillTranscript = event.transcriptPath !== null && existing.transcript_path !== event.transcriptPath;
-    if (backfillModel || backfillTranscript) {
+    if (refreshOrigin || backfillModel || backfillTranscript) {
       db.run(
         `UPDATE active_sessions
-         SET transcript_path = COALESCE(?, transcript_path), model = COALESCE(?, model)
+         SET transcript_path = COALESCE(?, transcript_path), model = COALESCE(?, model),
+             origin_kind = COALESCE(?, origin_kind), origin_ref = COALESCE(?, origin_ref),
+             origin_subagent = CASE WHEN ? IS NOT NULL THEN 0 ELSE origin_subagent END
          WHERE provider = ? AND session_id = ?`,
-        [event.transcriptPath, event.model, event.provider, event.sessionId],
+        [
+          event.transcriptPath,
+          event.model,
+          origin?.kind ?? null,
+          origin?.ref ?? null,
+          origin?.kind ?? null,
+          event.provider,
+          event.sessionId,
+        ],
       );
       return "applied";
     }
@@ -557,45 +576,96 @@ export type PaseoSyncState = {
   agentId: string;
   requiresAttention: boolean;
   isSubagent: boolean;
+  /** When Paseo raised attention (ISO-8601 UTC), or null when unreported. */
+  attentionTimestamp: string | null;
+  /** When Paseo last wrote the record (ISO-8601 UTC), or null when unreported. */
+  updatedAt: string | null;
 };
 
 /**
  * Mirror Paseo's per-agent attention state onto matching top-level rows and
- * (back)fill their origin. requiresAttention=false clears unread (the user
- * viewed the session in Paseo — view marks read); true sets unread only when
- * currently null, preserving the first-news timestamp. A difference-guard in
- * the WHERE keeps unchanged rows from counting (the daemon's
+ * (back)fill their origin, under a watermark that keeps Paseo-side and local
+ * news causally ordered (both sides stamp ISO-8601 UTC, so the string
+ * comparison in the guards is chronological):
+ *
+ * - A flagged record (`requiresAttention` true) uses
+ *   `attentionTimestamp ?? updatedAt` as its flag time. With neither
+ *   timestamp the unread write is skipped entirely (origin stamping still
+ *   happens — a timestamp-less flag is not dated news). With a flag time, a
+ *   null `unread_since` adopts it and a non-null one is always kept: local
+ *   news at least as new as the flag is never regressed or churned.
+ * - A cleared or absent-flag record clears `unread_since` only when its
+ *   `updatedAt` is present and strictly newer than the stored unread stamp:
+ *   a stale or timestamp-less record is not proof of viewing, so an older
+ *   clear can never undo a newer Stop and a missing flag never clears.
+ *
+ * Origin stamping (kind/ref/subagent) stays unconditional for matched
+ * top-level rows. A difference-guard in the WHERE — its terms mirror the
+ * guarded writes exactly — keeps unchanged rows from counting (the daemon's
  * maintenance-changed signal feeds the reprojection fast-path). Never
  * creates rows and never touches updated_at.
+ *
+ * Accepted residual: after a tile-press ack, a still-stale flagged record can
+ * re-set unread for up to one sync cycle. It self-heals because the press
+ * opens Paseo, which natively clears the attention flag, so the next record
+ * write retires the row again.
  */
-export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[], now: string): number =>
+export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
   inWriteTransaction(db, () => {
     let changed = 0;
     for (const state of states) {
-      const result = db.run(
-        `UPDATE active_sessions
-         SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?,
-             unread_since = CASE WHEN ? THEN COALESCE(unread_since, ?) ELSE NULL END
-         WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
-           AND (
-             origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
-             OR (? AND unread_since IS NULL)
-             OR (? AND unread_since IS NOT NULL)
-           )`,
-        [
-          state.agentId,
-          state.isSubagent ? 1 : 0,
-          state.requiresAttention ? 1 : 0,
-          now,
-          state.provider,
-          state.sessionId,
-          state.agentId,
-          state.isSubagent ? 1 : 0,
-          state.requiresAttention ? 1 : 0,
-          state.requiresAttention ? 0 : 1,
-        ],
-      );
-      changed += result.changes;
+      if (state.requiresAttention) {
+        // Flagged: set unread only when currently null, to the flag time.
+        const flagTime = state.attentionTimestamp ?? state.updatedAt;
+        const result = db.run(
+          `UPDATE active_sessions
+           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?,
+               unread_since = CASE WHEN ? IS NOT NULL THEN COALESCE(unread_since, ?) ELSE unread_since END
+           WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+             AND (
+               origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
+               OR (? IS NOT NULL AND unread_since IS NULL)
+             )`,
+          [
+            state.agentId,
+            state.isSubagent ? 1 : 0,
+            flagTime,
+            flagTime,
+            state.provider,
+            state.sessionId,
+            state.agentId,
+            state.isSubagent ? 1 : 0,
+            flagTime,
+          ],
+        );
+        changed += result.changes;
+      } else {
+        // Cleared or absent flag: only a record written after the local news
+        // is fresh proof that the user viewed the session in Paseo.
+        const result = db.run(
+          `UPDATE active_sessions
+           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?,
+               unread_since = CASE WHEN ? IS NOT NULL AND ? > unread_since THEN NULL ELSE unread_since END
+           WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+             AND (
+               origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
+               OR (unread_since IS NOT NULL AND ? IS NOT NULL AND ? > unread_since)
+             )`,
+          [
+            state.agentId,
+            state.isSubagent ? 1 : 0,
+            state.updatedAt,
+            state.updatedAt,
+            state.provider,
+            state.sessionId,
+            state.agentId,
+            state.isSubagent ? 1 : 0,
+            state.updatedAt,
+            state.updatedAt,
+          ],
+        );
+        changed += result.changes;
+      }
     }
     return changed;
   });

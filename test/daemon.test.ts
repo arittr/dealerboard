@@ -520,13 +520,19 @@ describe("ProjectionDaemon maintenance", () => {
     let stampOrigin = false;
     const harness = makeHarness({
       nowMs: clock.nowMs,
-      syncPaseo: (db, now) =>
+      syncPaseo: (db) =>
         stampOrigin
-          ? syncPaseoStates(
-              db,
-              [{ provider: "claude", sessionId: "s1", agentId: "agent-1", requiresAttention: true, isSubagent: false }],
-              now,
-            )
+          ? syncPaseoStates(db, [
+              {
+                provider: "claude",
+                sessionId: "s1",
+                agentId: "agent-1",
+                requiresAttention: true,
+                isSubagent: false,
+                attentionTimestamp: NOW,
+                updatedAt: null,
+              },
+            ])
           : 0,
     });
     harness.daemon.start();
