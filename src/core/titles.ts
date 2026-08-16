@@ -17,8 +17,11 @@
  * - Kimi rows are never resolved here — hooks already deliver their titles.
  *
  * Resolution is additive: a found title is proposed only when it differs from
- * the stored one, and a missing title never clears an existing value. All
- * filesystem access flows through injected dependencies so tests use fakes.
+ * the stored one, and a missing title never clears an existing value.
+ * Claude and Codex filesystem access flows through injected dependencies so
+ * their tests use fakes; zcode opens its SQLite database directly (read-only,
+ * one connection per pass) and its tests deliberately use real fixture
+ * databases.
  */
 
 import { Database } from "bun:sqlite";

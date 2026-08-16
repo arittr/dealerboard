@@ -241,7 +241,7 @@ describe("zcode SQLite titles", () => {
     transcriptPath: null,
   });
 
-  test("resolves titles per live zcode row and bounds to 256 code points", () => {
+  test("resolves titles per live zcode row", () => {
     withFixtureDb(
       [
         { id: "z1", title: "Fix the widget renderer" },
@@ -254,6 +254,23 @@ describe("zcode SQLite titles", () => {
         ]);
       },
     );
+  });
+
+  test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", () => {
+    // 265 code points with astral emoji straddling the 256th: a UTF-16
+    // unit slice would split the surrogate pair there, so only code-point
+    // truncation can satisfy both the length and the content assertion.
+    const longTitle = `${"🔧".repeat(120)}${"y".repeat(125)}${"🛠".repeat(20)}`;
+    const expected = Array.from(longTitle).slice(0, 256).join("");
+    expect(Array.from(longTitle).length).toBeGreaterThan(256);
+    withFixtureDb([{ id: "z1", title: longTitle }], (dbPath) => {
+      const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
+      const updates = resolver.resolve([zcodeTarget("z1")]);
+      expect(updates).toHaveLength(1);
+      const title = updates[0]?.title ?? "";
+      expect(Array.from(title)).toHaveLength(256);
+      expect(title).toBe(expected);
+    });
   });
 
   test("proposes nothing when the stored title already matches", () => {
