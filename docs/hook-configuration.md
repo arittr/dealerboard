@@ -710,6 +710,45 @@ The command prints nothing and exits zero when the JSON is valid. Then start
 a NEW zcode session and confirm its tile appears (see "After every provider"
 below).
 
+### Headless and CLI use (optional)
+
+The hooks above are all the desktop app needs. Driving zcode headlessly —
+`--prompt` one-shots or the `app-server` protocol — additionally requires an
+explicit model provider in this same file; without one the CLI refuses to
+start (`Model config is missing`). The desktop app keeps its providers in
+`~/.zcode/v2/config.json`, which the CLI does not read. Merge two more
+top-level keys, mirroring the enabled provider entry from that file:
+
+```json
+{
+  "model": { "main": "builtin:zai-coding-plan/GLM-5.3" },
+  "provider": {
+    "builtin:zai-coding-plan": {
+      "name": "Z.ai - Coding Plan",
+      "kind": "anthropic",
+      "options": {
+        "apiKey": "<key>",
+        "baseURL": "https://api.z.ai/api/anthropic",
+        "apiKeyRequired": true
+      },
+      "enabled": true,
+      "source": "custom"
+    }
+  }
+}
+```
+
+- `model.main` is a `provider/model` string ref. The object form
+  (`{ "provider": ..., "model": ... }`) is silently ignored and the CLI
+  keeps reporting the config missing.
+- Replace `<key>` with the API key from the same entry in
+  `~/.zcode/v2/config.json` — never a literal key in documentation or
+  scripts. The file now carries a credential: keep it mode 0600
+  (`chmod 600 ~/.zcode/cli/config.json`).
+- The back-up, diff, and restore ritual in this section now handles a
+  key-bearing file — treat `config.json.bak` with the same care and delete
+  it once verification is complete.
+
 ### Behavior to expect
 
 - A tile appears on session start, goes working on prompt and tool activity,
@@ -720,6 +759,11 @@ below).
   the tile working until the next event or the 1-hour lease; this is the
   behavior the live verification pins (dated verification record
   forthcoming).
+- In a headless `--mode plan` run, denying a permission prompt strands the
+  tile at waiting until the next event or the 1-hour lease — the deny path
+  delivers no event after `PermissionRequest` (observed live on 0.16.3);
+  interactive sessions return to working and idle after the prompt is
+  answered.
 - Quitting zcode leaves the tile until the 1-hour lease prunes it — zcode
   has no `SessionEnd` hook, so the daemon presumes a zcode row with no hook
   event for an hour dead and removes it then.
