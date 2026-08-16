@@ -28,11 +28,12 @@ title record and its raw model id. Three signals are classified in place,
 never stored: the Claude-only `run_in_background` boolean
 of a Bash tool input and the constant `<task-notification>` prefix that opens
 a background task's completion prompt, and zcode's `is_interrupt` boolean on
-a `PostToolUseFailure` — whose `error` payload is never read. No prompt text,
-raw transcript lines, or tool payload is ever written to the registry, the
-snapshot, or the logs; the only transcript-derived facts that persist are the
-session title (Claude's `ai-title` record) and the bounded raw model id —
-both extracted by design, never verbatim.
+a `PostToolUseFailure` — whose `error` payload is never read. The only
+transcript-derived facts that persist are the session title (Claude's
+`ai-title` record) and the bounded raw model id, both extracted and bounded
+by design; everything else in the transcript — prompt text, message bodies,
+tool output, whole raw lines — is never written to the registry, the
+snapshot, or the logs.
 
 ---
 
