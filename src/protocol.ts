@@ -159,8 +159,9 @@ const parseSession = (value: unknown): ProjectedSession => {
     return invalid("session.ghosttyTerminalId is only valid for Claude");
   }
   // A missing model key is tolerated as null: snapshots written before the
-  // field existed stay parseable.
-  const model = value["model"] === undefined ? null : value["model"];
+  // field existed stay parseable. A present undefined is an invalid value,
+  // not a missing key.
+  const model = "model" in value ? value["model"] : null;
   if (!isNullableBoundedString(model)) {
     return invalid("session.model must be null or a bounded string");
   }

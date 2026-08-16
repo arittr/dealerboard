@@ -146,6 +146,10 @@ describe("parseSessionSnapshot", () => {
       "session.model must be null or a bounded string",
     );
     expect(() => parseSessionSnapshot(withSession({ model: "m".repeat(257) }))).toThrow();
+    // A present undefined is an invalid value, not a missing key.
+    expect(() => parseSessionSnapshot(withSession({ model: undefined as unknown as string }))).toThrow(
+      "session.model must be null or a bounded string",
+    );
   });
 
   test("rejects non-Claude activation targets and every non-v2 schema", () => {
