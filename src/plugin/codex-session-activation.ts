@@ -28,4 +28,7 @@ const executeFile: ProcessExecutor = (file, args) =>
     });
   });
 
+/** Shared process boundary for every activation and ack path; one copy, injected. */
+export { executeFile };
+
 export const activateCodexSession = createCodexSessionActivator(executeFile);

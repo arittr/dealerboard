@@ -61,6 +61,7 @@ There is no visible status word or status glyph. A session whose current state i
 Each tile also has:
 
 - A provider-colored chip in the upper-left with the provider's one-letter mark in dark text: terracotta `#D97757` C for Claude, fuchsia `#D946EF` X for Codex, blue `#3B82F6` K for Kimi, green `#0EA514` P for pi, cream `#F5F0EA` O for oh-my-pi, gold `#EAB308` Z for zcode, and teal `#2DD4BF` D for deepseek. Hues are chosen for mutual distinctness on the LCD panel, not brand fidelity.
+- An origin pip in the free bottom-right corner for Paseo-origin sessions: a filled violet `#A78BFA` disc (center 122,122, radius 9) for a Paseo parent session and a hollow violet ring (stroke width 3) for a Paseo subagent. Terminal-origin and origin-unknown sessions render no pip. Pressing a Paseo-origin tile with a known agent reference routes to the Paseo app deep link `paseo://h/<serverId>/agent/<agentId>` instead of the provider's own activation; a null reference falls back to provider routing.
 - A two-line session title. Kimi pushes `session_title` through its hooks; the daemon resolves Claude titles from the transcript's `ai-title` records and Codex titles from `~/.codex/session_index.jsonl`'s `thread_name`, writing them back to the registry. Title text is word-wrapped into two twelve-code-point lines; a word longer than a line hard-splits, and text that outlives the second line ends in an ellipsis.
 - Repository or worktree name as the first fallback while no title is known.
 - Provider plus shortened session identifier as the final fallback.

@@ -6,8 +6,9 @@
  * page settings, polls the snapshot exactly once every 250 ms while relevant
  * keys are visible, and registers every visible context with the shared frame
  * scheduler. All side effects flow through narrow injected ports (snapshot,
- * settings, image, activation, alert, timers, monotonic time), so this module
- * has no Stream Deck SDK or runtime imports and is fully testable with fakes.
+ * settings, image, activation, read-state acknowledgement, alert, timers,
+ * monotonic time), so this module has no Stream Deck SDK or runtime imports
+ * and is fully testable with fakes.
  *
  * Exactly one connected 5-column by 3-row keypad device is supported. A
  * second device, wrong dimensions, a non-keypad or coordinate-less context, a
@@ -21,8 +22,10 @@ import type { ActivateClaudeSession } from "./claude-session-activation";
 import type { ActivateCodexSession } from "./codex-session-activation";
 import type { ActivateKimiSession } from "./kimi-session-activation";
 import { advanceLayoutPage, type KeyModel, type LayoutResult, type LayoutSettingsV1, reduceLayout } from "./layout";
+import type { ActivatePaseoSession } from "./paseo-session-activation";
 import { renderKey } from "./render";
 import { FrameScheduler, type SchedulerClock, type SendImage } from "./scheduler";
+import type { AckSession } from "./session-ack";
 import type { SnapshotView } from "./snapshot-reader";
 
 export type GridDeviceInfo = {
@@ -46,6 +49,8 @@ export type SessionGridPorts = {
   activateClaudeSession: ActivateClaudeSession;
   activateCodexSession: ActivateCodexSession;
   activateKimiSession: ActivateKimiSession;
+  activatePaseoSession: ActivatePaseoSession;
+  ackSession: AckSession;
   showAlert: (context: string) => Promise<void>;
   clock: SchedulerClock;
 };
@@ -167,6 +172,7 @@ export class SessionGridController {
     if (model?.kind !== "session") {
       return;
     }
+    const session = model.session;
     let activateSession: ((target: string) => Promise<void>) | undefined;
     let activationTarget: string | undefined;
     const runActivation = async (): Promise<void> => {
@@ -179,22 +185,30 @@ export class SessionGridController {
         await this.showActivationAlert(context);
       }
     };
-    switch (model.session.provider) {
+    // Every tile press is the view gesture: ack fire-and-forget. A failed ack only
+    // means the tile stays unread until the next lifecycle event — never alert for it.
+    void this.ports.ackSession(session.provider, session.sessionId).catch(() => {});
+    if (session.originKind === "paseo" && session.originRef !== null) {
+      activateSession = this.ports.activatePaseoSession;
+      activationTarget = session.originRef;
+      return runActivation();
+    }
+    switch (session.provider) {
       case "claude":
-        if (model.session.ghosttyTerminalId === null) {
+        if (session.ghosttyTerminalId === null) {
           await this.showActivationAlert(context);
           return;
         }
         activateSession = this.ports.activateClaudeSession;
-        activationTarget = model.session.ghosttyTerminalId;
+        activationTarget = session.ghosttyTerminalId;
         return runActivation();
       case "codex":
         activateSession = this.ports.activateCodexSession;
-        activationTarget = model.session.sessionId;
+        activationTarget = session.sessionId;
         return runActivation();
       case "kimi":
         activateSession = this.ports.activateKimiSession;
-        activationTarget = model.session.sessionId;
+        activationTarget = session.sessionId;
         return runActivation();
       case "pi":
       case "omp":
@@ -208,7 +222,7 @@ export class SessionGridController {
     // Exhaustiveness proof: every case above returns, so this line is
     // reachable only when a Provider has no case — adding one without a
     // case fails typecheck here instead of silently doing nothing.
-    const uncoveredProvider: never = model.session.provider;
+    const uncoveredProvider: never = session.provider;
     void uncoveredProvider;
   }
 

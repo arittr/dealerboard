@@ -165,6 +165,18 @@ class FakeActivationPort {
   };
 }
 
+type AckCall = { provider: string; sessionId: string };
+
+class FakeAckPort {
+  readonly calls: AckCall[] = [];
+  failure: Error | null = null;
+
+  readonly ack = (provider: string, sessionId: string): Promise<void> => {
+    this.calls.push({ provider, sessionId });
+    return this.failure === null ? Promise.resolve() : Promise.reject(this.failure);
+  };
+}
+
 class FakeAlertPort {
   readonly contexts: string[] = [];
   failure: Error | null = null;
@@ -184,6 +196,8 @@ type Harness = {
   activation: FakeActivationPort;
   claudeActivation: FakeActivationPort;
   kimiActivation: FakeActivationPort;
+  paseoActivation: FakeActivationPort;
+  acks: FakeAckPort;
   alerts: FakeAlertPort;
 };
 
@@ -197,6 +211,8 @@ const makeController = (
   const activation = new FakeActivationPort();
   const claudeActivation = new FakeActivationPort();
   const kimiActivation = new FakeActivationPort();
+  const paseoActivation = new FakeActivationPort();
+  const acks = new FakeAckPort();
   const alerts = new FakeAlertPort();
   if (options.stored !== undefined) {
     settingsPort.stored = options.stored;
@@ -213,6 +229,8 @@ const makeController = (
     activateCodexSession: activation.activate,
     activateClaudeSession: claudeActivation.activate,
     activateKimiSession: kimiActivation.activate,
+    activatePaseoSession: paseoActivation.activate,
+    ackSession: acks.ack,
     showAlert: alerts.show,
     clock,
   });
@@ -225,6 +243,8 @@ const makeController = (
     activation,
     claudeActivation,
     kimiActivation,
+    paseoActivation,
+    acks,
     alerts,
   };
 };
@@ -671,6 +691,72 @@ describe("SessionGridController", () => {
       expect(harness.alerts.contexts).toEqual(["ctx-new"]);
     },
   );
+
+  test("pressing a paseo-origin tile routes to paseo activation and acks the session", async () => {
+    const harness = makeController({
+      view: healthyView([
+        session(1, {
+          provider: "kimi",
+          sessionId: "session_1",
+          originKind: "paseo",
+          originRef: "agent-1",
+        }),
+      ]),
+    });
+    await harness.controller.willAppear(appear("ctx-paseo", 0, 0));
+
+    await harness.controller.keyDown("ctx-paseo");
+
+    expect(harness.paseoActivation.sessionIds).toEqual(["agent-1"]);
+    expect(harness.acks.calls).toEqual([{ provider: "kimi", sessionId: "session_1" }]);
+    expect(harness.kimiActivation.sessionIds).toEqual([]);
+    expect(harness.alerts.contexts).toEqual([]);
+  });
+
+  test("pressing any session tile acks even when activation is unavailable", async () => {
+    const harness = makeController({ view: healthyView([session(1, { provider: "zcode", sessionId: "z-1" })]) });
+    await harness.controller.willAppear(appear("ctx-zcode", 0, 0));
+
+    await harness.controller.keyDown("ctx-zcode");
+
+    expect(harness.acks.calls).toEqual([{ provider: "zcode", sessionId: "z-1" }]);
+    expect(harness.alerts.contexts).toEqual(["ctx-zcode"]);
+  });
+
+  test("a failed ack never alerts and does not block the activation", async () => {
+    const harness = makeController({
+      view: healthyView([session(1, { provider: "codex", sessionId: "codex-1" })]),
+    });
+    harness.acks.failure = new Error("ack failed");
+    await harness.controller.willAppear(appear("ctx-codex", 0, 0));
+
+    await harness.controller.keyDown("ctx-codex");
+    await flushMicrotasks();
+
+    expect(harness.acks.calls).toEqual([{ provider: "codex", sessionId: "codex-1" }]);
+    expect(harness.activation.sessionIds).toEqual(["codex-1"]);
+    expect(harness.alerts.contexts).toEqual([]);
+  });
+
+  test("paseo origin with null ref falls back to provider routing", async () => {
+    const harness = makeController({
+      view: healthyView([
+        session(1, {
+          provider: "codex",
+          sessionId: "codex-1",
+          originKind: "paseo",
+          originRef: null,
+        }),
+      ]),
+    });
+    await harness.controller.willAppear(appear("ctx-codex", 0, 0));
+
+    await harness.controller.keyDown("ctx-codex");
+
+    expect(harness.activation.sessionIds).toEqual(["codex-1"]);
+    expect(harness.paseoActivation.sessionIds).toEqual([]);
+    expect(harness.acks.calls).toEqual([{ provider: "codex", sessionId: "codex-1" }]);
+  });
 
   test("a rejected Claude focus alerts once with no retry", async () => {
     const harness = makeController({
