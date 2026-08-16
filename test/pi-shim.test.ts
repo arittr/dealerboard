@@ -54,7 +54,9 @@ const ALL_EVENTS: Array<[string, Record<string, unknown>]> = [
   ["session_shutdown", {}],
 ];
 
-const makeHarness = (options: { sessionName?: string | undefined; port?: SpawnPort } = {}) => {
+const makeHarness = (
+  options: { sessionName?: string | undefined; port?: SpawnPort; settleTimeoutMs?: number } = {},
+) => {
   const handlers = new Map<string, Handler[]>();
   const sent: WirePayload[] = [];
   const host: PiHost = {
@@ -69,6 +71,7 @@ const makeHarness = (options: { sessionName?: string | undefined; port?: SpawnPo
       ((json) => {
         sent.push(JSON.parse(json) as WirePayload);
       }),
+    options.settleTimeoutMs,
   );
   const fire = (event: string, payload: Record<string, unknown> = {}, ctx: PiContext = TUI_CTX): void => {
     for (const handler of handlers.get(event) ?? []) {
@@ -362,6 +365,23 @@ describe("pi shim spawn ordering", () => {
     expect(written).toEqual(["PostToolUse"]);
     rejectFirst?.(new Error("helper died"));
     await drain();
+    expect(written).toEqual(["PostToolUse", "Stop"]);
+  });
+
+  test("a hung helper releases the queue at the settle timeout: later payloads still spawn, in order", async () => {
+    const written: string[] = [];
+    const port: SpawnPort = (json) => {
+      written.push((JSON.parse(json) as WirePayload)["hook_event_name"] as string);
+      // The first helper hangs forever — neither resolves nor rejects.
+      return written.length === 1 ? new Promise<void>(() => {}) : undefined;
+    };
+    const { fire } = makeHarness({ port, settleTimeoutMs: 20 });
+    fire("tool_execution_end", { toolName: "Bash" });
+    fire("agent_settled");
+    // The terminal payload waits behind the hung helper...
+    expect(written).toEqual(["PostToolUse"]);
+    // ...until the settle timeout releases the queue link.
+    await new Promise<void>((resolve) => setTimeout(resolve, 80));
     expect(written).toEqual(["PostToolUse", "Stop"]);
   });
 });

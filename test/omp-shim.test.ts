@@ -25,7 +25,7 @@ const GHOST_CTX: OmpContext = {
   },
 };
 
-const makeHarness = (port?: SpawnPort) => {
+const makeHarness = (port?: SpawnPort, settleTimeoutMs?: number) => {
   const handlers = new Map<string, ((event: unknown, ctx: OmpContext) => unknown)[]>();
   const busHandlers = new Map<string, ((payload: unknown) => void)[]>();
   const sent: WirePayload[] = [];
@@ -45,6 +45,7 @@ const makeHarness = (port?: SpawnPort) => {
       ((json) => {
         sent.push(JSON.parse(json) as WirePayload);
       }),
+    settleTimeoutMs,
   );
   const fire = (event: string, payload: unknown = {}, ctx: OmpContext = TUI_CTX): unknown[] => {
     const results: unknown[] = [];
@@ -327,6 +328,23 @@ describe("omp shim spawn ordering", () => {
     expect(written).toEqual(["PostToolUse"]);
     rejectFirst?.(new Error("helper died"));
     await drain();
+    expect(written).toEqual(["PostToolUse", "Stop"]);
+  });
+
+  test("a hung helper releases the queue at the settle timeout: later payloads still spawn, in order", async () => {
+    const written: string[] = [];
+    const port: SpawnPort = (json) => {
+      written.push((JSON.parse(json) as WirePayload)["hook_event_name"] as string);
+      // The first helper hangs forever — neither resolves nor rejects.
+      return written.length === 1 ? new Promise<void>(() => {}) : undefined;
+    };
+    const { fire } = makeHarness(port, 20);
+    fire(TOOL_EVENTS.end, { toolName: "bash" });
+    fire("session_stop");
+    // The terminal payload waits behind the hung helper...
+    expect(written).toEqual(["PostToolUse"]);
+    // ...until the settle timeout releases the queue link.
+    await new Promise<void>((resolve) => setTimeout(resolve, 80));
     expect(written).toEqual(["PostToolUse", "Stop"]);
   });
 });

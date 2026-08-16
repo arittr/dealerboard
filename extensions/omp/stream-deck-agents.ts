@@ -22,6 +22,13 @@ const HELPER = "__STREAM_DECK_AGENTS_EXECUTABLE__";
 const HELPER_ARGS = ["event", "omp"] as const;
 
 /**
+ * The queue's settlement backstop. The helper's contract is sub-second; a
+ * link that hasn't settled by this deadline is treated as hung, killed
+ * best-effort, and the queue moves on.
+ */
+export const SPAWN_SETTLE_TIMEOUT_MS = 2_000;
+
+/**
  * Tool-event pair — pinned by the implementation-time parity probe against
  * the installed omp package (verified: @oh-my-pi/pi-coding-agent 17.3.4
  * carries pi's tool_execution_start/end with the same payloads). Prefer pi's
@@ -81,11 +88,23 @@ const defaultSpawn: SpawnPort = (json) =>
   new Promise<void>((resolve) => {
     try {
       const child = spawn(HELPER, [...HELPER_ARGS], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
-      child.on("error", () => {
-        // Helper missing or unspawnable: the grid simply doesn't update.
+      const timer = setTimeout(() => {
+        // Hung helper: kill best-effort and release the queue link.
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // The kill is best-effort; the link releases regardless.
+        }
         resolve();
-      });
-      child.on("exit", () => resolve());
+      }, SPAWN_SETTLE_TIMEOUT_MS);
+      timer.unref();
+      const settle = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      // Helper missing or unspawnable ("error") and any exit both settle.
+      child.on("error", settle);
+      child.on("exit", settle);
       child.stdin?.on("error", () => {
         // EPIPE if the helper exits first — irrelevant to the host.
       });
@@ -97,24 +116,50 @@ const defaultSpawn: SpawnPort = (json) =>
     }
   });
 
-export const createExtension = (host: OmpHost, spawnPort: SpawnPort = defaultSpawn): void => {
+export const createExtension = (
+  host: OmpHost,
+  spawnPort: SpawnPort = defaultSpawn,
+  settleTimeoutMs: number = SPAWN_SETTLE_TIMEOUT_MS,
+): void => {
   // FIFO spawn queue. Helpers are independent detached processes, and two
   // spawned milliseconds apart can reach the registry out of order — live-
   // observed on pi's Escape'd tool call, where the PostToolUse write landed
   // after the terminal StopFailure and stuck the tile on working. Each link
-  // starts only after the previous helper settles; every link is fail-soft,
-  // so a dead helper never wedges the queue. Handlers stay synchronous — the
-  // queue absorbs the asynchrony, and a port that completes synchronously
-  // (returns no promise) keeps emission fully synchronous.
+  // starts only after the previous helper settles; every link is fail-soft
+  // and settle-timeout-bounded, so neither a dead helper nor a hung one
+  // wedges the queue. Handlers stay synchronous — the queue absorbs the
+  // asynchrony, and a port that completes synchronously (returns no
+  // promise) keeps emission fully synchronous. Accepted residual: a hung
+  // helper costs one timeout per event (bounded drain, never an unbounded
+  // stall), and events still queued behind a hung helper when the host
+  // exits are lost — the prune lease covers the resulting stale tile.
   let spawnTail: Promise<void> | undefined;
 
   const emit = (payload: WirePayload): void => {
     try {
       const json = JSON.stringify(payload);
+      // Every link settles: port promise resolution, rejection, a
+      // synchronous throw, and the settle timeout all release the queue.
       const link = (): Promise<void> | undefined => {
         try {
           const result: unknown = spawnPort(json);
-          return result instanceof Promise ? (result as Promise<void>) : undefined;
+          if (!(result instanceof Promise)) {
+            return undefined;
+          }
+          return new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, settleTimeoutMs);
+            timer.unref();
+            (result as Promise<void>).then(
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+            );
+          });
         } catch {
           // A broken port must never break the host session.
           return undefined;
