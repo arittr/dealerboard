@@ -3,11 +3,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DAEMON_POLL_INTERVAL_MS, type DaemonDependencies, ProjectionDaemon } from "../src/core/daemon";
+import {
+  DAEMON_PASEO_INTERVAL_MS,
+  DAEMON_POLL_INTERVAL_MS,
+  type DaemonDependencies,
+  ProjectionDaemon,
+} from "../src/core/daemon";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
 import { type AppPaths, resolveAppPaths } from "../src/core/paths";
 import { ProjectionError, readProjection } from "../src/core/projection";
-import { applyRegistryEvents } from "../src/core/registry";
+import { applyRegistryEvents, syncPaseoStates } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
 import { parseSessionSnapshot, type RegistryEvent, type SessionSnapshotV2 } from "../src/protocol";
@@ -471,6 +476,82 @@ describe("ProjectionDaemon maintenance", () => {
       clock.advance(2_000);
       harness.tick();
       expect(resolveCalls).toBe(2);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("paseo pass syncs states and republishes when rows changed", () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    let stampOrigin = false;
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      syncPaseo: (db, now) =>
+        stampOrigin
+          ? syncPaseoStates(
+              db,
+              [{ provider: "claude", sessionId: "s1", agentId: "agent-1", requiresAttention: true, isSubagent: false }],
+              now,
+            )
+          : 0,
+    });
+    harness.daemon.start();
+    try {
+      // The first poll ran the paseo pass as a no-op and published the plain
+      // snapshot; its write predates the scheduler arming.
+      expect(harness.writes).toHaveLength(1);
+      expect(readSnapshotFile().sessions[0]?.originKind).toBeNull();
+
+      // Same tick, nothing new: the data-version fast path holds.
+      harness.tick();
+      expect(harness.readCount()).toBe(1);
+      expect(harness.writes).toHaveLength(1);
+
+      // Past the paseo cadence the pass stamps origin and unread on the
+      // daemon's own connection; the maintenance-changed signal alone forces
+      // the reprojection (own commits never bump data_version).
+      clock.advance(DAEMON_PASEO_INTERVAL_MS);
+      stampOrigin = true;
+      harness.tick();
+      expect(harness.readCount()).toBe(2);
+      expect(harness.writes).toHaveLength(2);
+      expect(readSnapshotFile().sessions[0]).toMatchObject({ originKind: "paseo", originRef: "agent-1" });
+
+      // The next cadence pass finds nothing different — the difference guard
+      // keeps the fast path quiet instead of republishing every 2 seconds.
+      clock.advance(DAEMON_PASEO_INTERVAL_MS);
+      stampOrigin = false;
+      harness.tick();
+      expect(harness.readCount()).toBe(2);
+      expect(harness.writes).toHaveLength(2);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("runs the paseo pass on its cadence, not on every poll", () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    let syncCalls = 0;
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      syncPaseo: () => {
+        syncCalls += 1;
+        return 0;
+      },
+    });
+    harness.daemon.start();
+    try {
+      expect(DAEMON_PASEO_INTERVAL_MS).toBe(2_000);
+      expect(syncCalls).toBe(1);
+      harness.tick();
+      clock.advance(1_999);
+      harness.tick();
+      expect(syncCalls).toBe(1);
+      clock.advance(1);
+      harness.tick();
+      expect(syncCalls).toBe(2);
     } finally {
       harness.daemon.stop();
     }

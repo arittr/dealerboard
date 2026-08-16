@@ -525,6 +525,56 @@ export const updateSessionTitles = (db: Database, updates: readonly SessionTitle
     return changed;
   });
 
+/** The Paseo overlay's validated input: loader output narrowed to a known provider. */
+export type PaseoSyncState = {
+  provider: Provider;
+  sessionId: string;
+  agentId: string;
+  requiresAttention: boolean;
+  isSubagent: boolean;
+};
+
+/**
+ * Mirror Paseo's per-agent attention state onto matching top-level rows and
+ * (back)fill their origin. requiresAttention=false clears unread (the user
+ * viewed the session in Paseo — view marks read); true sets unread only when
+ * currently null, preserving the first-news timestamp. A difference-guard in
+ * the WHERE keeps unchanged rows from counting (the daemon's
+ * maintenance-changed signal feeds the reprojection fast-path). Never
+ * creates rows and never touches updated_at.
+ */
+export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[], now: string): number =>
+  inWriteTransaction(db, () => {
+    let changed = 0;
+    for (const state of states) {
+      const result = db.run(
+        `UPDATE active_sessions
+         SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?,
+             unread_since = CASE WHEN ? THEN COALESCE(unread_since, ?) ELSE NULL END
+         WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+           AND (
+             origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
+             OR (? AND unread_since IS NULL)
+             OR (? AND unread_since IS NOT NULL)
+           )`,
+        [
+          state.agentId,
+          state.isSubagent ? 1 : 0,
+          state.requiresAttention ? 1 : 0,
+          now,
+          state.provider,
+          state.sessionId,
+          state.agentId,
+          state.isSubagent ? 1 : 0,
+          state.requiresAttention ? 1 : 0,
+          state.requiresAttention ? 0 : 1,
+        ],
+      );
+      changed += result.changes;
+    }
+    return changed;
+  });
+
 /**
  * Remove every top-level row whose last hook predates its provider's cutoff,
  * cascading to children. zcode has no SessionEnd hook, so its rows lease out

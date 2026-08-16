@@ -20,12 +20,14 @@
  * concise errors on stderr and return nonzero.
  */
 
+import type { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { PROVIDER_KEYS, type Provider, type RegistryEvent } from "../protocol";
 import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
 import { ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
 import { detectOrigin } from "./origin";
+import { createPaseoAgentStateLoader, isKnownProviderState } from "./paseo";
 import { type AppPaths, resolveAppPaths } from "./paths";
 import { decodeNativeHook } from "./providers";
 import {
@@ -35,6 +37,7 @@ import {
   clearSession,
   listSessions,
   pruneStaleSessions,
+  syncPaseoStates,
 } from "./registry";
 import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { createTitleResolver } from "./titles";
@@ -409,7 +412,14 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
     }).resolve;
-    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveTitles });
+    const loadPaseoStates = createPaseoAgentStateLoader();
+    const paseoDir = join(daemonPaths.home, ".paseo", "agents");
+    // The loader skips records naming unknown providers, so the predicate
+    // narrows its string providers to the canonical union on the way into
+    // the registry sync.
+    const syncPaseo = (db: Database, now: string) =>
+      syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState), now);
+    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveTitles, syncPaseo });
     daemon.start();
     return new Promise<number>(() => {
       // launchd owns the daemon lifetime; the poll timer keeps the process alive.

@@ -11,6 +11,7 @@ import {
   clearSession,
   listSessions,
   pruneStaleSessions,
+  syncPaseoStates,
   updateSessionTitles,
 } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
@@ -635,6 +636,91 @@ describe("updateSessionTitles", () => {
     // A second identical pass changes nothing.
     expect(updateSessionTitles(db, [{ provider: "claude", sessionId: "s1", title: "Resolved title" }])).toBe(0);
     expect(getRow("s1")).toMatchObject({ title: "Resolved title", updated_at: at(1) });
+  });
+});
+
+describe("syncPaseoStates", () => {
+  test("stamps origin and mirrors attention both ways", () => {
+    applyRegistryEvents(db, [start("s1")]);
+
+    const changed = syncPaseoStates(
+      db,
+      [{ provider: "claude", sessionId: "s1", agentId: "a1", requiresAttention: true, isSubagent: false }],
+      "2026-08-06T00:10:00.000Z",
+    );
+    expect(changed).toBe(1);
+    expect(getRow("s1")).toMatchObject({
+      origin_kind: "paseo",
+      origin_ref: "a1",
+      origin_subagent: 0,
+      unread_since: "2026-08-06T00:10:00.000Z",
+    });
+
+    // Attention cleared in Paseo (the user viewed it there) → unread cleared here.
+    const cleared = syncPaseoStates(
+      db,
+      [{ provider: "claude", sessionId: "s1", agentId: "a1", requiresAttention: false, isSubagent: false }],
+      "2026-08-06T00:11:00.000Z",
+    );
+    expect(cleared).toBe(1);
+    expect(getRow("s1")?.unread_since).toBeNull();
+  });
+
+  test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {
+    applyRegistryEvents(db, [start("s1")]);
+    const attention = {
+      provider: "claude" as const,
+      sessionId: "s1",
+      agentId: "a1",
+      requiresAttention: true,
+      isSubagent: false,
+    };
+
+    expect(syncPaseoStates(db, [attention], "2026-08-06T00:10:00.000Z")).toBe(1);
+    // Identical state at a later time: unread keeps its first-news timestamp
+    // and the difference guard suppresses the update entirely.
+    expect(syncPaseoStates(db, [attention], "2026-08-06T00:12:00.000Z")).toBe(0);
+
+    const read = { ...attention, requiresAttention: false };
+    expect(syncPaseoStates(db, [read], "2026-08-06T00:13:00.000Z")).toBe(1);
+    expect(syncPaseoStates(db, [read], "2026-08-06T00:14:00.000Z")).toBe(0);
+    expect(getRow("s1")?.updated_at).toBe(at(1));
+  });
+
+  test("preserves an earlier unread timestamp and never touches updated_at", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Stop", "s1", { at: at(5) })]);
+    const before = getRow("s1")?.updated_at;
+
+    const changed = syncPaseoStates(
+      db,
+      [{ provider: "claude", sessionId: "s1", agentId: "a1", requiresAttention: true, isSubagent: false }],
+      "2026-08-06T00:10:00.000Z",
+    );
+    // The origin backfill counts, but the Stop-stamped unread timestamp wins.
+    expect(changed).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(at(5));
+    expect(getRow("s1")?.updated_at).toBe(before);
+  });
+
+  test("marks subagents, restricts to top-level rows, and skips unknown identities", () => {
+    applyRegistryEvents(db, [start("s1"), subStart("c1", "s1")]);
+
+    const changed = syncPaseoStates(
+      db,
+      [
+        { provider: "claude", sessionId: "s1", agentId: "a1", requiresAttention: true, isSubagent: true },
+        // A child identity is out of scope: the sync touches top-level rows only.
+        { provider: "claude", sessionId: "c1", agentId: "a2", requiresAttention: true, isSubagent: false },
+        // No row is ever created for an unknown identity.
+        { provider: "claude", sessionId: "missing", agentId: "a3", requiresAttention: true, isSubagent: false },
+      ],
+      "2026-08-06T00:10:00.000Z",
+    );
+    expect(changed).toBe(1);
+    expect(getRow("s1")?.origin_subagent).toBe(1);
+    expect(getRow("c1")).toMatchObject({ origin_kind: null, unread_since: null });
+    expect(getRow("missing")).toBeNull();
+    expect(countRows()).toBe(2);
   });
 });
 

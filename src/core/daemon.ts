@@ -12,13 +12,15 @@
  * it rewrites the current snapshot every heartbeat interval so the file's
  * mtime doubles as the daemon-liveness signal the plugin watches.
  *
- * Maintenance runs inside the same poll loop: a titles pass (resolve session
- * titles from provider files, update rows that changed) every two seconds
- * and a prune pass (delete sessions whose last hook is older than the stale
+ * Maintenance runs inside the same poll loop, as three passes: a titles pass
+ * (resolve session titles from provider files, update rows that changed)
+ * every two seconds, a Paseo overlay pass (mirror Paseo's per-agent
+ * attention and origin state onto matching rows) on the same cadence, and a
+ * prune pass (delete sessions whose last hook is older than the stale
  * TTL — one hour for zcode, which has no SessionEnd hook, a day for everyone
- * else) every minute. A poll gap beyond the clock-jump threshold — the sleep
- * signature of the host machine — records a diagnostic. Maintenance failures
- * record their own diagnostic and never affect publication health.
+ * else) every minute. A poll gap beyond the clock-jump threshold — the
+ * sleep signature of the host machine — records a diagnostic. Maintenance
+ * failures record their own diagnostic and never affect publication health.
  *
  * `PRAGMA user_version` is validated when the connection opens; on an open,
  * read, or projection failure the daemon publishes the schema-valid unhealthy
@@ -41,6 +43,8 @@ export const DAEMON_POLL_INTERVAL_MS = 250;
 export const DAEMON_HEARTBEAT_MS = 5_000;
 /** How often titles are resolved from provider files. */
 export const DAEMON_TITLE_INTERVAL_MS = 2_000;
+/** How often Paseo's per-agent state is mirrored onto registry rows. */
+export const DAEMON_PASEO_INTERVAL_MS = 2_000;
 /** How often stale sessions are pruned. */
 export const DAEMON_PRUNE_INTERVAL_MS = 60_000;
 /** A non-zcode session with no hook event for this long is presumed dead and pruned. */
@@ -58,6 +62,7 @@ export type DaemonState = {
   lastSnapshot: SessionSnapshotV2 | null;
   lastPublishAtMs: number | null;
   lastTitlePassAtMs: number | null;
+  lastPaseoPassAtMs: number | null;
   lastPrunePassAtMs: number | null;
   lastTickAtMs: number | null;
   healthy: boolean;
@@ -76,6 +81,8 @@ export type DaemonDependencies = {
   now?: () => string;
   nowMs?: () => number;
   resolveTitles?: ResolveTitles;
+  /** Paseo overlay sync: joins Paseo agent records onto rows; returns rows changed. */
+  syncPaseo?: (db: Database, now: string) => number;
   diagnostics?: (record: DiagnosticRecord) => void;
 };
 
@@ -119,6 +126,7 @@ export class ProjectionDaemon {
     lastSnapshot: null,
     lastPublishAtMs: null,
     lastTitlePassAtMs: null,
+    lastPaseoPassAtMs: null,
     lastPrunePassAtMs: null,
     lastTickAtMs: null,
     healthy: false,
@@ -134,6 +142,7 @@ export class ProjectionDaemon {
       now: () => new Date().toISOString(),
       nowMs: () => Date.now(),
       resolveTitles: () => [],
+      syncPaseo: () => 0,
       diagnostics: () => {},
       ...dependencies,
     };
@@ -217,9 +226,10 @@ export class ProjectionDaemon {
   }
 
   /**
-   * Time-based upkeep: titles on the fast cadence, stale pruning on the slow
-   * one. Returns true when any row changed, forcing reprojection. Failures
-   * record one diagnostic and never mark the daemon unhealthy.
+   * Time-based upkeep: titles and the Paseo overlay on the fast cadence,
+   * stale pruning on the slow one. Returns true when any row changed,
+   * forcing reprojection. Failures record one diagnostic and never mark the
+   * daemon unhealthy.
    */
   private maintain(nowMs: number): boolean {
     if (this.connection === null) {
@@ -231,6 +241,12 @@ export class ProjectionDaemon {
         this.state.lastTitlePassAtMs = nowMs;
         const updates = this.deps.resolveTitles(listTitleTargets(this.connection));
         if (updates.length > 0 && updateSessionTitles(this.connection, updates) > 0) {
+          changed = true;
+        }
+      }
+      if (this.state.lastPaseoPassAtMs === null || nowMs - this.state.lastPaseoPassAtMs >= DAEMON_PASEO_INTERVAL_MS) {
+        this.state.lastPaseoPassAtMs = nowMs;
+        if (this.deps.syncPaseo(this.connection, this.deps.now()) > 0) {
           changed = true;
         }
       }
