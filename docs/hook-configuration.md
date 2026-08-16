@@ -20,11 +20,12 @@ and no standard-output output.
 **Privacy note.** Hook payloads can carry message text, session file paths,
 and tool-call details. The helper decodes only the fields needed to place a
 session on the grid — event name, session and subagent identifiers, status
-hints, title, the working directory's basename, and the transcript path — and
-discards everything else in memory. The transcript path is stored so the
-daemon can resolve the session's title from the transcript file; transcript
-*content* is only ever read for its title record. Three signals are
-classified in place, never stored: the Claude-only `run_in_background` boolean
+hints, title, the model id, the working directory's basename, and the
+transcript path — and discards everything else in memory. The transcript
+path is stored so the daemon can resolve the session's title and model id
+from the transcript file; transcript *content* is only ever read for its
+title record and its raw model id. Three signals are classified in place,
+never stored: the Claude-only `run_in_background` boolean
 of a Bash tool input and the constant `<task-notification>` prefix that opens
 a background task's completion prompt, and zcode's `is_interrupt` boolean on
 a `PostToolUseFailure` — whose `error` payload is never read. No prompt text,
@@ -339,6 +340,11 @@ Notes:
 - `Interrupt` is wired because Kimi fires it in place of `Stop` when a turn is
   interrupted or a question dismissed — without it a dismissed prompt would
   leave the tile stuck in the waiting color until the next event.
+- `SessionStart` payloads also carry `model` (and `profile`); the helper
+  decodes and stores the bounded `model` value, and the tile renders it as
+  small neutral text right of the provider chip. `UserPromptSubmit` carries
+  no model field, so a session whose `SessionStart` was missed shows no
+  model for its lifetime.
 
 ### 3. Validate
 
