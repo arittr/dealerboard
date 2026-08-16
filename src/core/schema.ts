@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 5;
+export const LATEST_SCHEMA_VERSION = 6;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -142,14 +142,41 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
 `;
 
 /**
- * Ordered migrations keyed by the schema version each one produces. All due
- * migrations run inside a single transaction in `initializeDatabase`.
+ * v6 stamps sessions with their origin (a 'paseo' or 'terminal' kind, an
+ * opaque reference, and whether the row is a subagent) and tracks unread
+ * output with a timestamp. All four columns are plain additive ALTERs on
+ * the v5 table — no rebuild.
+ */
+const SCHEMA_VERSION_6 = `
+ALTER TABLE active_sessions
+  ADD COLUMN origin_kind TEXT
+  CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal'));
+
+ALTER TABLE active_sessions
+  ADD COLUMN origin_ref TEXT
+  CHECK (origin_ref IS NULL OR length(origin_ref) BETWEEN 1 AND 256);
+
+ALTER TABLE active_sessions
+  ADD COLUMN origin_subagent INTEGER NOT NULL DEFAULT 0
+  CHECK (origin_subagent IN (0, 1));
+
+ALTER TABLE active_sessions
+  ADD COLUMN unread_since TEXT;
+`;
+
+/**
+ * Ordered migrations keyed by the schema version each one produces. Entries
+ * below v5 alter the original table and run in one transaction before the
+ * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
+ * because it manages its own transaction. Entries above v5 assume the
+ * rebuilt table and run in a second transaction after it.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
   { version: 2, sql: SCHEMA_VERSION_2 },
   { version: 3, sql: SCHEMA_VERSION_3 },
   { version: 4, sql: SCHEMA_VERSION_4 },
+  { version: 6, sql: SCHEMA_VERSION_6 },
 ];
 
 /**
@@ -202,18 +229,31 @@ export const initializeDatabase = (paths: AppPaths): void => {
     // repeated init idempotent.
     db.exec("PRAGMA journal_mode = WAL");
     if (version < LATEST_SCHEMA_VERSION) {
-      const migrate = db.transaction(() => {
+      if (version < 5) {
+        // v1-v4 entries alter the original table and must precede the v5
+        // rebuild. The rebuild owns its transaction (see migrateToV5), so it
+        // cannot share theirs.
+        const migratePreV5 = db.transaction(() => {
+          for (const migration of MIGRATIONS) {
+            if (migration.version > version && migration.version < 5) {
+              db.exec(migration.sql);
+              db.exec(`PRAGMA user_version = ${migration.version}`);
+            }
+          }
+        });
+        migratePreV5();
+        migrateToV5(db);
+      }
+      // Entries above v5 (v6+) assume the rebuilt table and run after it.
+      const migratePostV5 = db.transaction(() => {
         for (const migration of MIGRATIONS) {
-          if (migration.version > version) {
+          if (migration.version > version && migration.version > 5) {
             db.exec(migration.sql);
             db.exec(`PRAGMA user_version = ${migration.version}`);
           }
         }
       });
-      migrate();
-      if (version < 5) {
-        migrateToV5(db);
-      }
+      migratePostV5();
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
   } finally {

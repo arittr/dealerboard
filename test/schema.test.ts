@@ -111,7 +111,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 5 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 6 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -120,7 +120,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -168,14 +168,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v5 with null bindings, no outstanding background work, and no transcript", () => {
+  test("migrates v1 rows additively to v6 with null bindings, no outstanding background work, and no transcript", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -184,7 +184,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 5 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
       expect(
         db
           .query(
@@ -560,7 +560,7 @@ describe("schema v5", () => {
       expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(5);
+      expect(version.user_version).toBe(6);
     } finally {
       db.close();
     }
@@ -607,6 +607,165 @@ describe("schema v5", () => {
     try {
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
       expect(version.user_version).toBe(4);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+const createVersion5Database = (path: string): void => {
+  const legacy = new Database(path, { create: true, readwrite: true });
+  try {
+    legacy.exec(`
+      CREATE TABLE active_sessions (
+        provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'kimi', 'pi', 'omp', 'zcode', 'deepseek')),
+        session_id TEXT NOT NULL,
+        parent_session_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('idle', 'working', 'waiting', 'error')),
+        title TEXT,
+        project TEXT,
+        logical_slot INTEGER,
+        opened_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        ghostty_terminal_id TEXT
+        CHECK (
+          ghostty_terminal_id IS NULL
+          OR (
+            provider = 'claude'
+            AND parent_session_id IS NULL
+            AND length(ghostty_terminal_id) BETWEEN 1 AND 256
+          )
+        ),
+        background_outstanding INTEGER NOT NULL DEFAULT 0
+        CHECK (background_outstanding IN (0, 1)),
+        transcript_path TEXT
+        CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256),
+        PRIMARY KEY (provider, session_id),
+        FOREIGN KEY (provider, parent_session_id)
+          REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
+        CHECK (
+          (parent_session_id IS NULL AND logical_slot IS NOT NULL AND logical_slot > 0)
+          OR
+          (parent_session_id IS NOT NULL AND logical_slot IS NULL)
+        )
+      ) WITHOUT ROWID;
+      CREATE UNIQUE INDEX active_sessions_unique_slot
+        ON active_sessions(logical_slot)
+        WHERE logical_slot IS NOT NULL;
+      PRAGMA user_version = 5;
+    `);
+    // One top-level row carrying representative NON-default values, so the
+    // post-migration assertions can tell "row untouched" apart from "row
+    // reset to defaults".
+    legacy.run(
+      `INSERT INTO active_sessions
+         (provider, session_id, parent_session_id, status, title, project, logical_slot,
+          opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path)
+       VALUES
+         ('claude', 'v5-root', NULL, 'working', 'V5 root', 'proj-v5', 2,
+          '2026-08-06T01:00:00.000Z', '2026-08-06T02:00:00.000Z', NULL, 1, '/transcripts/v5.jsonl')`,
+    );
+  } finally {
+    legacy.close();
+  }
+};
+
+describe("schema v6", () => {
+  test("migrates v5 to v6, adding origin and unread columns without touching rows", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(countSessions(db)).toBe(1);
+      expect(
+        db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions").get(),
+      ).toEqual({ origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null });
+      // The pre-existing row is untouched: its non-default v5 values survive.
+      expect(
+        db
+          .query("SELECT session_id, status, title, background_outstanding, transcript_path FROM active_sessions")
+          .get(),
+      ).toEqual({
+        session_id: "v5-root",
+        status: "working",
+        title: "V5 root",
+        background_outstanding: 1,
+        transcript_path: "/transcripts/v5.jsonl",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fresh init creates the v6 columns at their defaults", () => {
+    const paths = resolveAppPaths(tempHome);
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      insertSession(db, "s1", null, 1);
+      expect(
+        db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions").get(),
+      ).toEqual({ origin_kind: null, origin_ref: null, origin_subagent: 0, unread_since: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("rejects CHECK violations on the new columns", () => {
+    const paths = resolveAppPaths(tempHome);
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      insertSession(db, "parent", null, 1);
+      // A valid origin row passes first, so the rejections below are about
+      // the CHECKs rather than a missing column.
+      db.run(
+        `INSERT INTO active_sessions
+           (provider, session_id, parent_session_id, status, title, project, logical_slot,
+            opened_at, updated_at, origin_kind, origin_ref, origin_subagent, unread_since)
+         VALUES ('claude', 'origin-child', 'parent', 'idle', NULL, NULL, NULL,
+                 'opened', 'updated', 'paseo', 'ws-1', 1, '2026-08-06T00:00:00.000Z')`,
+      );
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_kind)
+           VALUES ('claude', 'bad-kind', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', 'bogus')`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_subagent)
+           VALUES ('claude', 'bad-flag', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', 2)`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_ref)
+           VALUES ('claude', 'empty-ref', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', '')`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+      expect(() =>
+        db.run(
+          `INSERT INTO active_sessions
+             (provider, session_id, parent_session_id, status, title, project, logical_slot,
+              opened_at, updated_at, origin_ref)
+           VALUES ('claude', 'long-ref', 'parent', 'idle', NULL, NULL, NULL, 'opened', 'updated', '${"x".repeat(257)}')`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
     } finally {
       db.close();
     }
