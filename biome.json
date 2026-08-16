@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["src/**", "test/**", "scripts/**", "*.json", "*.mjs"]
+    "includes": ["src/**", "test/**", "scripts/**", "extensions/**", "*.json", "*.mjs"]
   },
   "formatter": {
     "enabled": true,
@@ -65,6 +65,10 @@
           "style": { "noProcessEnv": "off", "noDefaultExport": "off" }
         }
       }
+    },
+    {
+      "includes": ["extensions/pi/stream-deck-agents.ts", "extensions/omp/stream-deck-agents.ts"],
+      "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     }
   ]
 }
