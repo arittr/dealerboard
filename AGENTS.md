@@ -72,32 +72,6 @@ Notes:
   `streamdeck link` to point the app at the repo's `.sdPlugin` instead of
   copying (not currently set up).
 
-## Subagent model allocation (orchestrated runs)
-
-Standing policy for subagent-driven work in this repo (Paseo or similar
-multi-agent orchestration). Paseo profiles `implementer-default`,
-`implementer-escalation`, and `reviewer` encode these choices — prefer them
-over hand-rolled provider/model pairs when dispatching:
-
-- Implementer (default): `pi/zai/glm-5.3`, thinking `high`. Brief execution
-  is mid-tier work; honest `NEEDS_CONTEXT` reporting matters more than raw
-  model power.
-- Implementer (escalation): `claude/claude-fable-5`, thinking `high` — for
-  tasks the orchestrator flags as gnarly upfront (schema migrations,
-  cross-file type surgery) or after a task fails review / returns
-  `NEEDS_CONTEXT` twice.
-- Reviewer: `codex/gpt-5.6-sol` for all tasks; scale thinking to diff size
-  (small mechanical diffs → `medium`, larger → `high`). The reviewer must
-  always be a different model family from the implementer — GLM or Fable
-  implementing + Sol reviewing satisfies this; never pair a codex-family
-  implementer with a codex-family reviewer.
-- Orchestrator: strongest available reasoning model at max thinking
-  (currently `kimi-code/k3`). Never economize here — every other role's
-  failures funnel to orchestrator adjudication.
-- If GLM brief-fidelity or gate-honesty problems show up in two consecutive
-  task reviews, fall back to Fable as the default implementer and record the
-  change in the run ledger.
-
 ## Conventions
 
 - Tile rendering lives in `src/plugin/render.ts` (pure SVG string functions,
