@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTitleResolver, type FileStat, type TitleTarget } from "../src/core/titles";
+import { createSessionFactsResolver, type FileStat, type TitleTarget } from "../src/core/titles";
 
 const CODEX_INDEX = "/home/test/.codex/session_index.jsonl";
 
@@ -20,13 +20,13 @@ const makeResolver = (seed?: {
   tails?: Record<string, string>;
   wholes?: Record<string, string>;
   zcodeDatabasePath?: string;
-}): { resolver: ReturnType<typeof createTitleResolver>; fs: FakeFs } => {
+}): { resolver: ReturnType<typeof createSessionFactsResolver>; fs: FakeFs } => {
   const stats = new Map(Object.entries(seed?.stats ?? {}));
   const tails = new Map(Object.entries(seed?.tails ?? {}));
   const wholes = new Map(Object.entries(seed?.wholes ?? {}));
   let tailReads = 0;
   let wholeReads = 0;
-  const resolver = createTitleResolver({
+  const resolver = createSessionFactsResolver({
     codexIndexPath: CODEX_INDEX,
     zcodeDatabasePath: seed?.zcodeDatabasePath ?? "/nonexistent/zcode/db.sqlite",
     statPath: (path) => stats.get(path) ?? null,
@@ -49,6 +49,7 @@ const claudeTarget = (overrides: Partial<TitleTarget> = {}): TitleTarget => ({
   provider: "claude",
   sessionId: "s1",
   title: null,
+  model: null,
   transcriptPath: "/transcripts/s1.jsonl",
   ...overrides,
 });
@@ -62,7 +63,7 @@ describe("Claude transcript titles", () => {
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": `${aiTitle("Old title")}${aiTitle("Test PR 2085 with Cursor")}` },
     });
-    expect(resolver.resolve([claudeTarget()])).toEqual([
+    expect(resolver.resolve([claudeTarget()]).titles).toEqual([
       { provider: "claude", sessionId: "s1", title: "Test PR 2085 with Cursor" },
     ]);
   });
@@ -74,7 +75,9 @@ describe("Claude transcript titles", () => {
         "/transcripts/s1.jsonl": `${aiTitle("Valid title")}{"type":"ai-title","aiTitle":"truncated\n`,
       },
     });
-    expect(resolver.resolve([claudeTarget()])).toEqual([{ provider: "claude", sessionId: "s1", title: "Valid title" }]);
+    expect(resolver.resolve([claudeTarget()]).titles).toEqual([
+      { provider: "claude", sessionId: "s1", title: "Valid title" },
+    ]);
   });
 
   test("proposes nothing when the transcript has no ai-title, is missing, or is unchanged", () => {
@@ -82,17 +85,17 @@ describe("Claude transcript titles", () => {
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": '{"type":"user","text":"hello"}\n' },
     });
-    expect(noTitle.resolver.resolve([claudeTarget()])).toEqual([]);
+    expect(noTitle.resolver.resolve([claudeTarget()]).titles).toEqual([]);
 
     const missing = makeResolver();
-    expect(missing.resolver.resolve([claudeTarget()])).toEqual([]);
+    expect(missing.resolver.resolve([claudeTarget()]).titles).toEqual([]);
 
     // An already-matching stored title produces no update.
     const same = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": aiTitle("Same") },
     });
-    expect(same.resolver.resolve([claudeTarget({ title: "Same" })])).toEqual([]);
+    expect(same.resolver.resolve([claudeTarget({ title: "Same" })]).titles).toEqual([]);
   });
 
   test("bounds a resolved title to 256 code points", () => {
@@ -100,7 +103,7 @@ describe("Claude transcript titles", () => {
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": aiTitle("🙂".repeat(300)) },
     });
-    const updates = resolver.resolve([claudeTarget()]);
+    const updates = resolver.resolve([claudeTarget()]).titles;
     expect(updates).toHaveLength(1);
     expect(Array.from(updates[0]?.title ?? "")).toHaveLength(256);
   });
@@ -111,25 +114,25 @@ describe("Claude transcript titles", () => {
       tails: { "/transcripts/s1.jsonl": aiTitle("First") },
     });
     const target = claudeTarget();
-    expect(resolver.resolve([target])).toHaveLength(1);
+    expect(resolver.resolve([target]).titles).toHaveLength(1);
     expect(fs.tailReads()).toBe(1);
 
     // Identical identity: stat only, no second read, and the session's stored
     // title now matches so no update is proposed.
     const titled = claudeTarget({ title: "First" });
-    expect(resolver.resolve([titled])).toEqual([]);
+    expect(resolver.resolve([titled]).titles).toEqual([]);
     expect(fs.tailReads()).toBe(1);
 
     // A grown transcript re-reads and yields the new title.
     fs.stats.set("/transcripts/s1.jsonl", { mtimeMs: 200, size: 900 });
     fs.tails.set("/transcripts/s1.jsonl", aiTitle("Second"));
-    expect(resolver.resolve([titled])).toEqual([{ provider: "claude", sessionId: "s1", title: "Second" }]);
+    expect(resolver.resolve([titled]).titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Second" }]);
     expect(fs.tailReads()).toBe(2);
   });
 
   test("skips Claude rows without a transcript path", () => {
     const { resolver, fs } = makeResolver();
-    expect(resolver.resolve([claudeTarget({ transcriptPath: null })])).toEqual([]);
+    expect(resolver.resolve([claudeTarget({ transcriptPath: null })]).titles).toEqual([]);
     expect(fs.tailReads()).toBe(0);
   });
 });
@@ -145,9 +148,9 @@ describe("Codex session-index titles", () => {
         [CODEX_INDEX]: `${indexLine("c1", "Old name")}\n${indexLine("c1", "Add AIS points to radar display")}\n`,
       },
     });
-    expect(resolver.resolve([{ provider: "codex", sessionId: "c1", title: null, transcriptPath: null }])).toEqual([
-      { provider: "codex", sessionId: "c1", title: "Add AIS points to radar display" },
-    ]);
+    expect(
+      resolver.resolve([{ provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null }]).titles,
+    ).toEqual([{ provider: "codex", sessionId: "c1", title: "Add AIS points to radar display" }]);
   });
 
   test("skips malformed lines and ids without a live session", () => {
@@ -159,9 +162,9 @@ describe("Codex session-index titles", () => {
     });
     expect(
       resolver.resolve([
-        { provider: "codex", sessionId: "c2", title: null, transcriptPath: null },
-        { provider: "codex", sessionId: "unknown", title: null, transcriptPath: null },
-      ]),
+        { provider: "codex", sessionId: "c2", title: null, model: null, transcriptPath: null },
+        { provider: "codex", sessionId: "unknown", title: null, model: null, transcriptPath: null },
+      ]).titles,
     ).toEqual([{ provider: "codex", sessionId: "c2", title: "Real name" }]);
   });
 
@@ -170,29 +173,118 @@ describe("Codex session-index titles", () => {
       stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } },
       wholes: { [CODEX_INDEX]: `${indexLine("c1", "First")}\n` },
     });
-    const target: TitleTarget = { provider: "codex", sessionId: "c1", title: null, transcriptPath: null };
-    expect(resolver.resolve([target])).toHaveLength(1);
+    const target: TitleTarget = { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null };
+    expect(resolver.resolve([target]).titles).toHaveLength(1);
     expect(fs.wholeReads()).toBe(1);
 
-    resolver.resolve([target, { provider: "codex", sessionId: "c2", title: null, transcriptPath: null }]);
+    resolver.resolve([target, { provider: "codex", sessionId: "c2", title: null, model: null, transcriptPath: null }]);
     expect(fs.wholeReads()).toBe(1);
 
     fs.stats.set(CODEX_INDEX, { mtimeMs: 200, size: 350 });
     fs.wholes.set(CODEX_INDEX, `${indexLine("c1", "Second")}\n`);
-    expect(resolver.resolve([target])).toEqual([{ provider: "codex", sessionId: "c1", title: "Second" }]);
+    expect(resolver.resolve([target]).titles).toEqual([{ provider: "codex", sessionId: "c1", title: "Second" }]);
     expect(fs.wholeReads()).toBe(2);
   });
 
   test("a missing or unreadable index resolves nothing", () => {
     const missing = makeResolver();
     expect(
-      missing.resolver.resolve([{ provider: "codex", sessionId: "c1", title: null, transcriptPath: null }]),
+      missing.resolver.resolve([{ provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null }])
+        .titles,
     ).toEqual([]);
 
     const unreadable = makeResolver({ stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } } });
     expect(
-      unreadable.resolver.resolve([{ provider: "codex", sessionId: "c1", title: null, transcriptPath: null }]),
+      unreadable.resolver.resolve([
+        { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null },
+      ]).titles,
     ).toEqual([]);
+  });
+});
+
+describe("Session model resolution", () => {
+  const modelLine = (model: string): string => `{"type":"assistant","model":"${model}"}\n`;
+
+  test("resolves a claude model from the same transcript tail as the title", () => {
+    const { resolver, fs } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": `${aiTitle("Fix the widget")}${modelLine("claude-fable-5")}` },
+    });
+    const result = resolver.resolve([claudeTarget()]);
+    expect(result.titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Fix the widget" }]);
+    expect(result.models).toEqual([{ provider: "claude", sessionId: "s1", model: "claude-fable-5" }]);
+    // One tail read serves both facts.
+    expect(fs.tailReads()).toBe(1);
+  });
+
+  test("last model occurrence wins after a mid-session model switch", () => {
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": `${modelLine("claude-fable-5")}${modelLine("claude-k2")}` },
+    });
+    expect(resolver.resolve([claudeTarget()]).models).toEqual([
+      { provider: "claude", sessionId: "s1", model: "claude-k2" },
+    ]);
+  });
+
+  test("a transcript with no model record proposes no model update", () => {
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": aiTitle("Only a title") },
+    });
+    const result = resolver.resolve([claudeTarget()]);
+    expect(result.titles).toHaveLength(1);
+    // Nothing proposed, so a stored model is never cleared — the registry
+    // only applies proposed updates.
+    expect(result.models).toEqual([]);
+  });
+
+  test("resolves a codex model from the rollout at transcript_path", () => {
+    const { resolver, fs } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: `${JSON.stringify({ id: "c1", thread_name: "Index name" })}\n` },
+      tails: { "/rollouts/c1.jsonl": `{"type":"turn_context","model":"gpt-5.6-luna"}\n` },
+    });
+    const result = resolver.resolve([
+      { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: "/rollouts/c1.jsonl" },
+    ]);
+    expect(result.titles).toEqual([{ provider: "codex", sessionId: "c1", title: "Index name" }]);
+    expect(result.models).toEqual([{ provider: "codex", sessionId: "c1", model: "gpt-5.6-luna" }]);
+    // The rollout is tail-read for the model; the whole-file session index
+    // is not asked for models (its single read serves the title).
+    expect(fs.tailReads()).toBe(1);
+    expect(fs.wholeReads()).toBe(1);
+  });
+
+  test("a stored-equal model proposes no update", () => {
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": modelLine("claude-fable-5") },
+    });
+    expect(resolver.resolve([claudeTarget({ model: "claude-fable-5" })]).models).toEqual([]);
+  });
+
+  test("zcode and kimi targets are never model-resolved", () => {
+    const { resolver, fs } = makeResolver({
+      stats: {
+        "/transcripts/k1.jsonl": { mtimeMs: 100, size: 500 },
+        "/transcripts/z1.jsonl": { mtimeMs: 100, size: 500 },
+      },
+      tails: {
+        "/transcripts/k1.jsonl": modelLine("k3"),
+        "/transcripts/z1.jsonl": modelLine("glm-5.3"),
+      },
+    });
+    const result = resolver.resolve([
+      { provider: "kimi", sessionId: "k1", title: null, model: null, transcriptPath: "/transcripts/k1.jsonl" },
+      { provider: "zcode", sessionId: "z1", title: null, model: null, transcriptPath: "/transcripts/z1.jsonl" },
+    ]);
+    expect(result.models).toEqual([]);
+    expect(fs.tailReads()).toBe(0);
+    expect(fs.wholeReads()).toBe(0);
   });
 });
 
@@ -203,7 +295,9 @@ describe("other providers", () => {
       tails: { "/transcripts/k1.jsonl": aiTitle("Should not be read") },
     });
     expect(
-      resolver.resolve([{ provider: "kimi", sessionId: "k1", title: null, transcriptPath: "/transcripts/k1.jsonl" }]),
+      resolver.resolve([
+        { provider: "kimi", sessionId: "k1", title: null, model: null, transcriptPath: "/transcripts/k1.jsonl" },
+      ]).titles,
     ).toEqual([]);
     expect(fs.tailReads()).toBe(0);
   });
@@ -238,6 +332,7 @@ describe("zcode SQLite titles", () => {
     provider: "zcode",
     sessionId,
     title,
+    model: null,
     transcriptPath: null,
   });
 
@@ -249,7 +344,7 @@ describe("zcode SQLite titles", () => {
       ],
       (dbPath) => {
         const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-        expect(resolver.resolve([zcodeTarget("z1"), zcodeTarget("z2"), zcodeTarget("ghost")])).toEqual([
+        expect(resolver.resolve([zcodeTarget("z1"), zcodeTarget("z2"), zcodeTarget("ghost")]).titles).toEqual([
           { provider: "zcode", sessionId: "z1", title: "Fix the widget renderer" },
         ]);
       },
@@ -265,7 +360,7 @@ describe("zcode SQLite titles", () => {
     expect(Array.from(longTitle).length).toBeGreaterThan(256);
     withFixtureDb([{ id: "z1", title: longTitle }], (dbPath) => {
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-      const updates = resolver.resolve([zcodeTarget("z1")]);
+      const updates = resolver.resolve([zcodeTarget("z1")]).titles;
       expect(updates).toHaveLength(1);
       const title = updates[0]?.title ?? "";
       expect(Array.from(title)).toHaveLength(256);
@@ -276,7 +371,7 @@ describe("zcode SQLite titles", () => {
   test("proposes nothing when the stored title already matches", () => {
     withFixtureDb([{ id: "z1", title: "Same" }], (dbPath) => {
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-      expect(resolver.resolve([zcodeTarget("z1", "Same")])).toEqual([]);
+      expect(resolver.resolve([zcodeTarget("z1", "Same")]).titles).toEqual([]);
     });
   });
 
@@ -298,11 +393,11 @@ describe("zcode SQLite titles", () => {
       // caching on (mtime, size) would never see this write.
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
       try {
-        expect(resolver.resolve([zcodeTarget("z1")])).toEqual([
+        expect(resolver.resolve([zcodeTarget("z1")]).titles).toEqual([
           { provider: "zcode", sessionId: "z1", title: "Initial" },
         ]);
         writer.run("UPDATE session SET title = 'Renamed mid-stream' WHERE id = 'z1'");
-        expect(resolver.resolve([zcodeTarget("z1")])).toEqual([
+        expect(resolver.resolve([zcodeTarget("z1")]).titles).toEqual([
           { provider: "zcode", sessionId: "z1", title: "Renamed mid-stream" },
         ]);
       } finally {
@@ -315,7 +410,7 @@ describe("zcode SQLite titles", () => {
 
   test("a missing database or an unexpected schema resolves nothing and never throws", () => {
     const missing = makeResolver();
-    expect(missing.resolver.resolve([zcodeTarget("z1")])).toEqual([]);
+    expect(missing.resolver.resolve([zcodeTarget("z1")]).titles).toEqual([]);
 
     const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-zcode-titles-"));
     try {
@@ -324,7 +419,7 @@ describe("zcode SQLite titles", () => {
       wrong.exec("CREATE TABLE unrelated (id TEXT PRIMARY KEY)");
       wrong.close();
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-      expect(resolver.resolve([zcodeTarget("z1")])).toEqual([]);
+      expect(resolver.resolve([zcodeTarget("z1")]).titles).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

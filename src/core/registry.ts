@@ -408,25 +408,27 @@ export const listSessions = (db: Database): ActiveSession[] => {
 };
 
 /**
- * The title-resolver view: every top-level row's identity, stored title, and
- * transcript path. Children never carry resolvable titles. Read-only.
+ * The session-facts-resolver view: every top-level row's identity, stored
+ * title, model, and transcript path. Children never carry resolvable
+ * titles. Read-only.
  */
 export const listTitleTargets = (db: Database): TitleTarget[] =>
   db
     .query(
-      `SELECT provider, session_id, title, transcript_path FROM active_sessions
+      `SELECT provider, session_id, title, model, transcript_path FROM active_sessions
        WHERE parent_session_id IS NULL
        ORDER BY logical_slot ASC`,
     )
     .all()
     .map((row) => {
-      const { provider, session_id, title, transcript_path } = row as {
+      const { provider, session_id, title, model, transcript_path } = row as {
         provider: Provider;
         session_id: string;
         title: string | null;
+        model: string | null;
         transcript_path: string | null;
       };
-      return { provider, sessionId: session_id, title, transcriptPath: transcript_path };
+      return { provider, sessionId: session_id, title, model, transcriptPath: transcript_path };
     });
 
 /**
@@ -462,11 +464,13 @@ export type SessionModelUpdate = {
   model: string;
 };
 
-/** The registry fields the daemon's title resolver needs per top-level row. */
+/** The registry fields the daemon's session-facts resolver needs per top-level row. */
 export type TitleTarget = {
   provider: Provider;
   sessionId: string;
   title: string | null;
+  /** Stored model id, for the differs-check that skips no-op write-backs. */
+  model: string | null;
   transcriptPath: string | null;
 };
 

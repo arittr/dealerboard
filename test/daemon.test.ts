@@ -421,14 +421,16 @@ describe("ProjectionDaemon maintenance", () => {
     startSession("s1");
     const targets: unknown[] = [];
     const harness = makeHarness({
-      resolveTitles: (seen) => {
+      resolveFacts: (seen) => {
         targets.push(...seen);
-        return [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }];
+        return { titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }], models: [] };
       },
     });
     harness.daemon.start();
     try {
-      expect(targets).toEqual([{ provider: "claude", sessionId: "s1", title: "Title for s1", transcriptPath: null }]);
+      expect(targets).toEqual([
+        { provider: "claude", sessionId: "s1", title: "Title for s1", transcriptPath: null, model: null },
+      ]);
       expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
       const row = (() => {
         const db = openRegistryDatabase(paths.database, "readonly");
@@ -448,15 +450,44 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
+  test("applies resolved models through updateSessionModels and republishes with them", () => {
+    startSession("s1");
+    const harness = makeHarness({
+      resolveFacts: () => ({
+        titles: [],
+        models: [{ provider: "claude" as const, sessionId: "s1", model: "claude-fable-5" }],
+      }),
+    });
+    harness.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions[0]?.model).toBe("claude-fable-5");
+      const row = (() => {
+        const db = openRegistryDatabase(paths.database, "readonly");
+        try {
+          return db.query("SELECT model, updated_at FROM active_sessions").get() as {
+            model: string;
+            updated_at: string;
+          } | null;
+        } finally {
+          db.close();
+        }
+      })();
+      // The model write leaves updated_at — the prune's aging signal — alone.
+      expect(row).toEqual({ model: "claude-fable-5", updated_at: NOW });
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
   test("runs the titles pass on its cadence, not on every poll", () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
     let resolveCalls = 0;
     const harness = makeHarness({
       nowMs: clock.nowMs,
-      resolveTitles: () => {
+      resolveFacts: () => {
         resolveCalls += 1;
-        return [];
+        return { titles: [], models: [] };
       },
     });
     harness.daemon.start();
@@ -492,7 +523,7 @@ describe("ProjectionDaemon maintenance", () => {
   test("a maintenance failure records one diagnostic and never harms publication", () => {
     startSession("s1");
     const harness = makeHarness({
-      resolveTitles: () => {
+      resolveFacts: () => {
         throw new Error("resolver exploded");
       },
     });
