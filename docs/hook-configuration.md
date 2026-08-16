@@ -635,19 +635,24 @@ if it does not exist yet).
 ZCode supports seven events — `SessionStart`, `UserPromptSubmit`,
 `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, and
 `Stop`. It has no `SessionEnd`, `StopFailure`, or subagent events and no
-dedicated interrupt event: an interrupt between tool calls surfaces as a
-`PostToolUseFailure` carrying `is_interrupt`, which the helper maps to a
-Stop. A `"type": "process"` hook is spawned directly with no shell, so the
+dedicated interrupt event: a `PostToolUseFailure` carrying `is_interrupt` is
+the only interrupt signal, and the helper maps it to a Stop when it arrives.
+An interrupt that fires no such event leaves the tile working until the
+next event or the 1-hour lease (see "Behavior to expect" below). A
+`"type": "process"` hook is spawned directly with no shell, so the
 executable path needs no quoting; each handler sets a two-second `timeoutMs`.
 
 ### 1. Back up
 
-If `~/.zcode/cli/config.json` does not exist yet, create it containing just
-an empty object `{}` first — never overwrite an existing config — then back
-it up:
+The config directory or file may not exist yet. The snippet below creates
+them only when absent — an existing config is never touched — then backs it
+up:
 
 ```bash
-printf '{}\n' > ~/.zcode/cli/config.json
+mkdir -p ~/.zcode/cli
+if [ ! -e ~/.zcode/cli/config.json ]; then
+  printf '{}\n' > ~/.zcode/cli/config.json
+fi
 cp ~/.zcode/cli/config.json ~/.zcode/cli/config.json.bak
 ```
 
@@ -709,9 +714,12 @@ below).
 
 - A tile appears on session start, goes working on prompt and tool activity,
   waiting while a permission prompt is pending, and idle when the turn ends.
-- An interrupt between tool calls maps to idle via `PostToolUseFailure`:
-  zcode delivers the interrupt as a failed tool call carrying `is_interrupt`,
-  and the helper treats it as a Stop.
+- An interrupt between tool calls maps to idle via `PostToolUseFailure`
+  when zcode emits one — a failed tool call carrying `is_interrupt`, which
+  the helper treats as a Stop. An interrupt that fires no such event leaves
+  the tile working until the next event or the 1-hour lease; this is the
+  behavior the live verification pins (dated verification record
+  forthcoming).
 - Quitting zcode leaves the tile until the 1-hour lease prunes it — zcode
   has no `SessionEnd` hook, so the daemon presumes a zcode row with no hook
   event for an hour dead and removes it then.
