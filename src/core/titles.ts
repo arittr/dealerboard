@@ -7,16 +7,17 @@
  * `resolve` on a cadence with the live top-level sessions:
  *
  * - Claude: the transcript JSONL (path stored on the registry row) carries
- *   `{"type":"ai-title","aiTitle":...}` records and assistant records with a
- *   `"model":"..."` field. The file can grow to megabytes, so only the last
- *   64 KiB (TAIL_BYTES) are read — one read serves both facts — and the final
- *   ai-title line and the last model occurrence win. Results are cached per
- *   path on the (mtime, size) identity, so a pass over an unchanged
- *   transcript costs one stat.
+ *   `{"type":"ai-title","aiTitle":...}` records and assistant records whose
+ *   `message.model` names the session's model. The file can grow to
+ *   megabytes, so only the last 64 KiB (TAIL_BYTES) are read — one read
+ *   serves both facts — and the last parseable ai-title and assistant
+ *   records win. Results are cached per path on the (mtime, size) identity,
+ *   so a pass over an unchanged transcript costs one stat.
  * - Codex: `~/.codex/session_index.jsonl` maps session ids to `thread_name`.
  *   The whole index is reparsed only when its (mtime, size) changes. Models
- *   come from a tail read of the rollout JSONL at the row's `transcript_path`,
- *   cached per path on (mtime, size) the same way the Claude facts are.
+ *   come from `turn_context` records' `payload.model` in a tail read of the
+ *   rollout JSONL at the row's `transcript_path`, cached per path on
+ *   (mtime, size) the same way the Claude facts are.
  * - zcode: `db.sqlite` under the zcode home, re-queried per pass — WAL makes
  *   stat caching unsafe. zcode has no model source at all, so its rows never
  *   resolve one.
@@ -106,18 +107,31 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const boundTitle = (value: string): string => Array.from(value).slice(0, MAX_TITLE_CODE_POINTS).join("");
 
-/** The last parseable ai-title line in the window wins; earlier lines may be truncated. */
-const claudeTitleFromTail = (tail: string): string | null => {
+/**
+ * Scans tail lines newest-first for records of the given type and returns the
+ * latest non-empty string the extractor yields, bounded. Malformed or
+ * truncated lines — the tail's first line usually starts mid-JSON — fall
+ * through to the next older one.
+ */
+const lastFromTail = (
+  tail: string,
+  recordType: string,
+  extract: (record: Record<string, unknown>) => unknown,
+): string | null => {
+  const marker = `"type":"${recordType}"`;
   const lines = tail.split("\n");
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];
-    if (line === undefined || !line.includes('"type":"ai-title"')) {
+    if (line === undefined || !line.includes(marker)) {
       continue;
     }
     try {
       const parsed: unknown = JSON.parse(line);
-      if (isRecord(parsed) && typeof parsed["aiTitle"] === "string" && parsed["aiTitle"].length > 0) {
-        return boundTitle(parsed["aiTitle"]);
+      if (isRecord(parsed) && parsed["type"] === recordType) {
+        const value = extract(parsed);
+        if (typeof value === "string" && value.length > 0) {
+          return boundTitle(value);
+        }
       }
     } catch {
       // A truncated or malformed line falls through to the next older one.
@@ -126,23 +140,23 @@ const claudeTitleFromTail = (tail: string): string | null => {
   return null;
 };
 
-const MODEL_PATTERN = /"model":"([^"]{1,300})"/g;
+/** The last parseable ai-title line in the window wins; earlier lines may be truncated. */
+const claudeTitleFromTail = (tail: string): string | null =>
+  lastFromTail(tail, "ai-title", (record) => record["aiTitle"]);
 
 /**
- * Last raw model id in the window wins — a mid-session model switch changes
- * the last occurrence. A regex over the tail string, not a per-line parse,
- * because the tail's first line is usually truncated mid-JSON.
+ * Only an assistant record's `message.model` is authoritative for the
+ * session: tool-call inputs nested in the same records can carry their own
+ * `model` argument (a subagent dispatch), so an unstructured scan would
+ * resolve the decoy. The last parsed record wins — a mid-session model
+ * switch changes it.
  */
-const modelFromTail = (tail: string): string | null => {
-  let found: string | null = null;
-  for (const match of tail.matchAll(MODEL_PATTERN)) {
-    const value = match[1];
-    if (value !== undefined && value.length > 0) {
-      found = value;
-    }
-  }
-  return found === null ? null : boundTitle(found);
-};
+const claudeModelFromTail = (tail: string): string | null =>
+  lastFromTail(tail, "assistant", (record) => (isRecord(record["message"]) ? record["message"]["model"] : null));
+
+/** Codex rollouts carry the turn's actual model on turn_context records' `payload.model`. */
+const codexModelFromTail = (tail: string): string | null =>
+  lastFromTail(tail, "turn_context", (record) => (isRecord(record["payload"]) ? record["payload"]["model"] : null));
 
 const codexTitlesFromIndex = (content: string): Map<string, string> => {
   const byId = new Map<string, string>();
@@ -232,7 +246,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     }
     const tail = readTail(path, TAIL_BYTES);
     const title = tail === null ? null : claudeTitleFromTail(tail);
-    const model = tail === null ? null : modelFromTail(tail);
+    const model = tail === null ? null : claudeModelFromTail(tail);
     claudeCache.set(path, { ...stat, title, model });
     return { title, model };
   };
@@ -247,7 +261,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
       return cached.model;
     }
     const tail = readTail(path, TAIL_BYTES);
-    const model = tail === null ? null : modelFromTail(tail);
+    const model = tail === null ? null : codexModelFromTail(tail);
     codexModelCache.set(path, { ...stat, model });
     return model;
   };

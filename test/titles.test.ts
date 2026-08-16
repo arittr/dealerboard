@@ -203,12 +203,14 @@ describe("Codex session-index titles", () => {
 });
 
 describe("Session model resolution", () => {
-  const modelLine = (model: string): string => `{"type":"assistant","model":"${model}"}\n`;
+  const assistantLine = (model: string): string => `${JSON.stringify({ type: "assistant", message: { model } })}\n`;
+  const turnContextLine = (model: string): string =>
+    `${JSON.stringify({ type: "turn_context", payload: { model } })}\n`;
 
   test("resolves a claude model from the same transcript tail as the title", () => {
     const { resolver, fs } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
-      tails: { "/transcripts/s1.jsonl": `${aiTitle("Fix the widget")}${modelLine("claude-fable-5")}` },
+      tails: { "/transcripts/s1.jsonl": `${aiTitle("Fix the widget")}${assistantLine("claude-fable-5")}` },
     });
     const result = resolver.resolve([claudeTarget()]);
     expect(result.titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Fix the widget" }]);
@@ -217,13 +219,45 @@ describe("Session model resolution", () => {
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("last model occurrence wins after a mid-session model switch", () => {
+  test("the last authoritative record wins after a mid-session model switch", () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
-      tails: { "/transcripts/s1.jsonl": `${modelLine("claude-fable-5")}${modelLine("claude-k2")}` },
+      tails: { "/transcripts/s1.jsonl": `${assistantLine("claude-fable-5")}${assistantLine("claude-k2")}` },
     });
     expect(resolver.resolve([claudeTarget()]).models).toEqual([
       { provider: "claude", sessionId: "s1", model: "claude-k2" },
+    ]);
+  });
+
+  test("an assistant record's nested tool-call model argument never beats message.model", () => {
+    // The decoy: a subagent dispatch whose tool input names a different model.
+    // Only message.model is the session's model; an unstructured scan of the
+    // tail would resolve the nested argument because it occurs later.
+    const dispatch = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        model: "claude-fable-5",
+        content: [{ type: "tool_use", name: "Task", input: { model: "claude-k2", prompt: "review this" } }],
+      },
+    })}\n`;
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": `${assistantLine("claude-fable-5")}${dispatch}` },
+    });
+    expect(resolver.resolve([claudeTarget()]).models).toEqual([
+      { provider: "claude", sessionId: "s1", model: "claude-fable-5" },
+    ]);
+  });
+
+  test("a truncated final model record is skipped without throwing", () => {
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: {
+        "/transcripts/s1.jsonl": `${assistantLine("claude-fable-5")}{"type":"assistant","message":{"model":"claude-tr`,
+      },
+    });
+    expect(resolver.resolve([claudeTarget()]).models).toEqual([
+      { provider: "claude", sessionId: "s1", model: "claude-fable-5" },
     ]);
   });
 
@@ -246,7 +280,7 @@ describe("Session model resolution", () => {
         "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
       },
       wholes: { [CODEX_INDEX]: `${JSON.stringify({ id: "c1", thread_name: "Index name" })}\n` },
-      tails: { "/rollouts/c1.jsonl": `{"type":"turn_context","model":"gpt-5.6-luna"}\n` },
+      tails: { "/rollouts/c1.jsonl": turnContextLine("gpt-5.6-luna") },
     });
     const result = resolver.resolve([
       { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: "/rollouts/c1.jsonl" },
@@ -259,10 +293,30 @@ describe("Session model resolution", () => {
     expect(fs.wholeReads()).toBe(1);
   });
 
+  test("a rollout response item's model field never beats turn_context", () => {
+    const responseItem = `${JSON.stringify({
+      type: "response_item",
+      payload: { type: "message", model: "gpt-5.6-sol" },
+    })}\n`;
+    const { resolver } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: "" },
+      tails: { "/rollouts/c1.jsonl": `${turnContextLine("gpt-5.6-luna")}${responseItem}` },
+    });
+    expect(
+      resolver.resolve([
+        { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: "/rollouts/c1.jsonl" },
+      ]).models,
+    ).toEqual([{ provider: "codex", sessionId: "c1", model: "gpt-5.6-luna" }]);
+  });
+
   test("a stored-equal model proposes no update", () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
-      tails: { "/transcripts/s1.jsonl": modelLine("claude-fable-5") },
+      tails: { "/transcripts/s1.jsonl": assistantLine("claude-fable-5") },
     });
     expect(resolver.resolve([claudeTarget({ model: "claude-fable-5" })]).models).toEqual([]);
   });
@@ -274,8 +328,8 @@ describe("Session model resolution", () => {
         "/transcripts/z1.jsonl": { mtimeMs: 100, size: 500 },
       },
       tails: {
-        "/transcripts/k1.jsonl": modelLine("k3"),
-        "/transcripts/z1.jsonl": modelLine("glm-5.3"),
+        "/transcripts/k1.jsonl": assistantLine("k3"),
+        "/transcripts/z1.jsonl": assistantLine("glm-5.3"),
       },
     });
     const result = resolver.resolve([

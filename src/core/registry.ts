@@ -203,10 +203,11 @@ const applySessionObserved = (
 ): MutationResult => {
   // A prompt proves missing membership, but it must not replay SessionStart's
   // metadata refresh over a session whose lifecycle is already registered.
-  // The one exception is backfilling absent facts: the transcript path
-  // unlocks title resolution and the model id (e.g. a Kimi prompt on a
-  // session whose start hook was missed) fills the tile's model label.
-  // Null event values never clear what is already stored.
+  // The exception is transcript_path and model: a non-null event value that
+  // differs from the stored one overwrites it — the transcript path unlocks
+  // title resolution, and a provider whose prompt event carries a model fills
+  // the label on a row that started without one. Null event values never
+  // clear what is already stored.
   const existing = getRow(db, event.provider, event.sessionId);
   if (existing !== null) {
     const backfillModel = event.model !== null && existing.model !== event.model;

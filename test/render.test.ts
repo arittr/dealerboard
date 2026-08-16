@@ -185,6 +185,23 @@ describe("renderKey output contract", () => {
     expect(textNodesByClass(decode(sessionModel({ model: "someverylongmodel" }), 0), "model")).toEqual(["someveryl…"]);
   });
 
+  test("caps the model label at six code points when a descendant badge is shown", () => {
+    // The badge occupies x≈99–130 in the same top band; a ten-point label
+    // starting at x=56 would draw through it.
+    expect(
+      textNodesByClass(decode(sessionModel({ model: "claude-fable-5", descendantCount: 12 }), 0), "model"),
+    ).toEqual(["fable…"]);
+    expect(textNodesByClass(decode(sessionModel({ model: "claude-fable-5", descendantCount: 0 }), 0), "model")).toEqual(
+      ["fable-5"],
+    );
+  });
+
+  test("a long unstripped model yields width to the badge", () => {
+    expect(
+      textNodesByClass(decode(sessionModel({ model: "someverylongmodel", descendantCount: 3 }), 0), "model"),
+    ).toEqual(["somev…"]);
+  });
+
   test("omits the model label when the model is unknown", () => {
     expect(textNodesByClass(decode(sessionModel({ model: null }), 0), "model")).toHaveLength(0);
   });

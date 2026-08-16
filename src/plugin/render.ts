@@ -35,6 +35,9 @@ const TITLE_MAX_LINES = 2;
 
 const MODEL_LABEL_PREFIXES = ["claude-", "gpt-", "zai/", "openai/"];
 const MODEL_LABEL_MAX_CODE_POINTS = 10;
+// The descendant badge occupies x≈99–130 in the same top band; a ten-point
+// label starting at x=56 would draw through it, so a badged tile caps at six.
+const MODEL_LABEL_BADGED_MAX_CODE_POINTS = 6;
 
 const COLOR_WORKING = "#20B8FF";
 const COLOR_WAITING = "#FFB020";
@@ -182,10 +185,11 @@ const providerMark = (provider: Provider): string =>
 
 /**
  * Raw id to chip label: strip one vendor prefix (keeping the raw id if
- * stripping would leave nothing), then cap at ten code points with an
- * ellipsis on overflow.
+ * stripping would leave nothing), then cap by code points with an ellipsis
+ * on overflow — ten normally, six when the label must yield width to the
+ * descendant badge.
  */
-const modelLabel = (model: string): string => {
+const modelLabel = (model: string, maxCodePoints: number): string => {
   let label = model;
   for (const prefix of MODEL_LABEL_PREFIXES) {
     if (label.startsWith(prefix) && label.length > prefix.length) {
@@ -194,15 +198,16 @@ const modelLabel = (model: string): string => {
     }
   }
   const points = Array.from(label);
-  return points.length > MODEL_LABEL_MAX_CODE_POINTS
-    ? `${points.slice(0, MODEL_LABEL_MAX_CODE_POINTS - 1).join("")}…`
-    : label;
+  return points.length > maxCodePoints ? `${points.slice(0, maxCodePoints - 1).join("")}…` : label;
 };
 
-const modelMark = (model: string | null): string =>
-  model === null
-    ? ""
-    : `<text class="model" x="56" y="32" text-anchor="start" font-size="12" fill="${COLOR_NEUTRAL}">${escapeXml(modelLabel(model))}</text>`;
+const modelMark = (model: string | null, descendantCount: number): string => {
+  if (model === null) {
+    return "";
+  }
+  const maxCodePoints = descendantCount > 0 ? MODEL_LABEL_BADGED_MAX_CODE_POINTS : MODEL_LABEL_MAX_CODE_POINTS;
+  return `<text class="model" x="56" y="32" text-anchor="start" font-size="12" fill="${COLOR_NEUTRAL}">${escapeXml(modelLabel(model, maxCodePoints))}</text>`;
+};
 
 const descendantBadge = (descendantCount: number): string =>
   descendantCount > 0
@@ -215,7 +220,7 @@ const SESSION_DEGRADED_FLAG = `<text class="flag" x="16" y="128" text-anchor="st
 const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, phase: number): string =>
   statusFrame(model.session.status, phase) +
   providerMark(model.session.provider) +
-  modelMark(model.session.model) +
+  modelMark(model.session.model, model.session.descendantCount) +
   titleLines(model.label) +
   descendantBadge(model.session.descendantCount) +
   (model.degraded ? SESSION_DEGRADED_FLAG : "");
