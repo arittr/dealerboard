@@ -100,13 +100,21 @@ export const createExtension = (host: OmpHost, spawnPort: SpawnPort = defaultSpa
   let current: { sessionId: string; sessionFile: string } | undefined;
 
   const refresh = (ctx: OmpContext): void => {
+    // Fail-safe disarm: clear FIRST, before any potentially throwing
+    // operation, so a getter that throws mid-refresh can never leave the
+    // previous session's identity armed for the ctx-less bus handler.
+    current = undefined;
+    // Reject non-true hasUI before touching the session manager (an absent
+    // hasUI reads headless — conservative, and the installed types say the
+    // field is a required boolean on every event's ctx).
+    if (ctx.hasUI !== true) {
+      return;
+    }
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionFile = ctx.sessionManager.getSessionFile();
-    // Installed omp 17.3.4 types: hasUI is a required boolean on the single
-    // ExtensionContext every event receives — truthiness is `=== true`, and a
-    // hypothetically absent hasUI reads headless (strict, conservative).
-    current =
-      ctx.hasUI && sessionId !== undefined && sessionFile !== undefined ? { sessionId, sessionFile } : undefined;
+    if (sessionId !== undefined && sessionFile !== undefined) {
+      current = { sessionId, sessionFile };
+    }
   };
 
   host.on("session_start", (_event: unknown, ctx: OmpContext) => {
