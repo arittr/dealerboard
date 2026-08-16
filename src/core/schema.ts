@@ -228,8 +228,14 @@ export const initializeDatabase = (paths: AppPaths): void => {
         migrateToV5(db);
       }
       if (readUserVersion(db) < 6) {
-        db.exec(SCHEMA_VERSION_6);
-        db.exec("PRAGMA user_version = 6");
+        // One transaction: an interruption between the ALTER and the version
+        // bump would otherwise leave a v5 database that already has the
+        // column, making every retried init die on a duplicate-column error.
+        const migrateV6 = db.transaction(() => {
+          db.exec(SCHEMA_VERSION_6);
+          db.exec("PRAGMA user_version = 6");
+        });
+        migrateV6();
       }
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);

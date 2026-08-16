@@ -743,6 +743,24 @@ describe("schema v6", () => {
     }
   });
 
+  test("re-running init on a database migrated to v6 is an idempotent no-op", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    initializeDatabase(paths);
+
+    // A retried init must never re-attempt the v6 ALTER (duplicate column).
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(countSessions(db)).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
   test("openRegistryDatabase accepts v6 and rejects v5", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
