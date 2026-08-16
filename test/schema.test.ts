@@ -111,7 +111,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 7 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 8 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -120,7 +120,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -168,14 +168,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v7 with null bindings, no outstanding background work, no transcript, and no model", () => {
+  test("migrates v1 rows additively to v8 with null bindings, no outstanding background work, no transcript, and no model", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -184,7 +184,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(
         db
           .query(
@@ -575,7 +575,7 @@ describe("schema v5", () => {
       expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(7);
+      expect(version.user_version).toBe(8);
     } finally {
       db.close();
     }
@@ -683,8 +683,8 @@ const createVersion5Database = (path: string): void => {
   }
 };
 
-describe("schema v7", () => {
-  test("migrates v5 to v7, adding origin and unread columns without touching rows", () => {
+describe("schema v7/v8", () => {
+  test("migrates v5 through v7 to v8, adding origin and unread columns without touching rows", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
@@ -693,7 +693,7 @@ describe("schema v7", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -724,13 +724,13 @@ describe("schema v7", () => {
     }
   });
 
-  test("migrates a v6 model-label database to v7, adding columns beside the model column", () => {
+  test("migrates a v6 model-label database to v8, adding columns beside the model column", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
     // Reproduce a v6 database the model-label build produced: a nullable
     // `model` column stamped as schema version 6. Init must apply only the
-    // v7 migration, leaving the column and its data alone.
+    // v7 migration and the v8 stamp, leaving the column and its data alone.
     const modelBuild = new Database(paths.database);
     try {
       modelBuild.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
@@ -744,7 +744,7 @@ describe("schema v7", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -763,15 +763,105 @@ describe("schema v7", () => {
     }
   });
 
-  test("fresh init runs the full chain to v7 with both the model and origin/unread columns", () => {
+  test("repairs a v7 database missing the model column (pre-merge branch shape) to v8", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    // Reproduce the divergent shape pre-merge branch builds created: the v7
+    // origin/unread ALTERs applied straight onto v5 — no model column —
+    // stamped as schema version 7. Init must detect the missing column,
+    // apply the v6 model ALTER, and stamp v8 without touching the rows.
+    const branchBuild = new Database(paths.database);
+    try {
+      branchBuild.exec(`
+        ALTER TABLE active_sessions
+          ADD COLUMN origin_kind TEXT
+          CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal'));
+        ALTER TABLE active_sessions
+          ADD COLUMN origin_ref TEXT
+          CHECK (origin_ref IS NULL OR length(origin_ref) BETWEEN 1 AND 256);
+        ALTER TABLE active_sessions
+          ADD COLUMN origin_subagent INTEGER NOT NULL DEFAULT 0
+          CHECK (origin_subagent IN (0, 1));
+        ALTER TABLE active_sessions
+          ADD COLUMN unread_since TEXT;
+        PRAGMA user_version = 7;
+      `);
+      branchBuild.run("UPDATE active_sessions SET origin_kind = 'paseo', origin_ref = 'a1' WHERE session_id = 'root'");
+    } finally {
+      branchBuild.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.map((column) => column.name)).toContain("model");
+      // Existing rows are intact: seeded v5 values and the stamped origin
+      // survive, and the repaired column reads back null.
+      expect(countSessions(db)).toBe(2);
+      expect(
+        db
+          .query(
+            "SELECT status, title, transcript_path, origin_kind, origin_ref, model FROM active_sessions WHERE session_id = 'root'",
+          )
+          .get(),
+      ).toEqual({
+        status: "working",
+        title: "Root session",
+        transcript_path: "/transcripts/root.jsonl",
+        origin_kind: "paseo",
+        origin_ref: "a1",
+        model: null,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("stamps v8 without re-altering when the model column already exists at v7", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    // A database main's v6 lineage brought to v7 (the deployed shape):
+    // model already present, version 7. The repair must only stamp.
+    const migrated = new Database(paths.database);
+    try {
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN origin_kind TEXT");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN origin_ref TEXT");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN origin_subagent INTEGER NOT NULL DEFAULT 0");
+      migrated.exec("ALTER TABLE active_sessions ADD COLUMN unread_since TEXT");
+      migrated.run("UPDATE active_sessions SET model = 'k3' WHERE session_id = 'root'");
+      migrated.exec("PRAGMA user_version = 7");
+    } finally {
+      migrated.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("SELECT model FROM active_sessions WHERE session_id = 'root'").get()).toEqual({ model: "k3" });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fresh init runs the full chain to v8 with both the model and origin/unread columns", () => {
     const paths = resolveAppPaths(tempHome);
     initializeDatabase(paths);
 
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       // A fresh database must not skip the v6 model migration on its way to
-      // v7: both features' columns exist on every migration path.
+      // v8: both features' columns exist on every migration path.
       const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
         name: string;
       }>;
@@ -854,7 +944,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       // Every seeded pre-v6 value must survive verbatim; model is NULL on both.
       expect(
         db
@@ -915,7 +1005,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       expect(countSessions(db)).toBe(2);
     } finally {
       db.close();

@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 7;
+export const LATEST_SCHEMA_VERSION = 8;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -182,7 +182,8 @@ ALTER TABLE active_sessions
  * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
  * because it manages its own transaction. Entries above v5 (v6 model,
  * v7 origin/unread) assume the rebuilt table and run in a second
- * transaction after it.
+ * transaction after it. v8 is special-cased too (`migrateToV8`): it is
+ * shape-driven repair, not a static SQL string.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
@@ -218,6 +219,28 @@ const migrateToV5 = (db: Database): void => {
     }
     db.exec("PRAGMA foreign_keys = ON");
   }
+};
+
+/**
+ * v8 repairs a shape divergence: pre-merge branch builds stamped
+ * user_version 7 without ever running the v6 model migration, so a database
+ * can report v7 while missing the `model` column. The repair is
+ * shape-driven — the column list, not the version, decides whether the v6
+ * ALTER applies — and every path is then stamped v8, after which version
+ * and shape agree again. Databases whose v7 already includes `model`
+ * (fresh inits, main's v6 lineage) are stamped without an ALTER. One
+ * transaction, so the ALTER and the stamp commit together and a retried
+ * init never dies on a duplicate column.
+ */
+const migrateToV8 = (db: Database): void => {
+  const repair = db.transaction(() => {
+    const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "model")) {
+      db.exec(SCHEMA_VERSION_6);
+    }
+    db.exec("PRAGMA user_version = 8");
+  });
+  repair();
 };
 
 const readUserVersion = (db: Database): number => {
@@ -271,6 +294,7 @@ export const initializeDatabase = (paths: AppPaths): void => {
         }
       });
       migratePostV5();
+      migrateToV8(db);
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
   } finally {

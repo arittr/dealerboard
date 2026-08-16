@@ -85,7 +85,9 @@ Notes:
   `#EAB308`, deepseek `#2DD4BF`. Session tiles also carry the model id as
   neutral-chrome text right of the chip (vendor prefix stripped,
   ten-code-point cap); the registry stores the raw id (schema v6 `model`
-  column), Kimi pushes it via SessionStart, and the daemon resolves
+  column; the v8 repair backfills it into pre-merge v7 databases that were
+  stamped without it, so v8 — the latest version — always has it), Kimi
+  pushes it via SessionStart, and the daemon resolves
   Claude/Codex ids in the same maintenance pass as titles (last
   `"model":"…"` in the tail wins). Null never clears a stored model. The
   Paseo origin pip uses `COLOR_ORIGIN_PASEO` `#A78BFA` (bottom-right):
@@ -105,14 +107,15 @@ Notes:
   working > idle`) over its whole subtree, and any live subagent row lifts it
   to at least `working` (`src/core/projection.ts`).
 - Unread ledger and grid visibility: a turn ending — a Stop that settles to
-  idle, or StopFailure — stamps `unread_since` (schema v7); a result landed.
+  idle, or StopFailure — stamps `unread_since` (added in schema v7; current
+  latest is v8, a shape-repair stamp); a result landed.
   Only viewing clears it: a tile press acks via `sessions ack` (the plugin's
   sole plugin→daemon write, executed against the installed binary), the Paseo
   overlay reports the agent viewed, or a reused SessionStart re-opens the row.
   Prompts never mark read. Projection admits only top-level rows that are
   active or unread, so a read-and-idle row stays in the registry (the prune is
   storage hygiene, not visibility) and on the grid idle ⟺ unread.
-- Origin (schema v7): hooks detect it at ingest (`src/core/origin.ts` —
+- Origin (added in schema v7): hooks detect it at ingest (`src/core/origin.ts` —
   `PASEO_AGENT_ID` → paseo with the agent id as `origin_ref`, `TERM_PROGRAM`
   → terminal, else null) into `origin_kind`/`origin_ref`/`origin_subagent`.
   The daemon's Paseo overlay (`src/core/paseo.ts`, every 2s) scans
