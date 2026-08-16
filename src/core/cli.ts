@@ -7,6 +7,7 @@
  *   stream-deck-agents daemon
  *   stream-deck-agents sessions list
  *   stream-deck-agents sessions clear <provider> <session-id>
+ *   stream-deck-agents sessions ack <provider> <session-id>
  *   stream-deck-agents sessions clear-all
  *   stream-deck-agents sessions prune [max-age-hours]
  *
@@ -20,13 +21,21 @@
  */
 
 import { join } from "node:path";
-import { PROVIDER_KEYS, type Provider } from "../protocol";
+import { PROVIDER_KEYS, type Provider, type RegistryEvent } from "../protocol";
 import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
 import { ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
+import { detectOrigin } from "./origin";
 import { type AppPaths, resolveAppPaths } from "./paths";
 import { decodeNativeHook } from "./providers";
-import { applyRegistryEvents, clearAllSessions, clearSession, listSessions, pruneStaleSessions } from "./registry";
+import {
+  acknowledgeSession,
+  applyRegistryEvents,
+  clearAllSessions,
+  clearSession,
+  listSessions,
+  pruneStaleSessions,
+} from "./registry";
 import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { createTitleResolver } from "./titles";
 
@@ -112,6 +121,7 @@ commands:
   daemon
   sessions list
   sessions clear <provider> <session-id>
+  sessions ack <provider> <session-id>
   sessions clear-all
   sessions prune [max-age-hours]
 `;
@@ -178,6 +188,12 @@ const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Pr
     if (events.length === 0) {
       return 0;
     }
+    // Origin evidence is spawn-time state of the hook helper's environment:
+    // stamp it on every membership event before any per-provider rewrite.
+    const origin = detectOrigin(deps.environment);
+    let eventsToApply: RegistryEvent[] = events.map((event) =>
+      event.kind === "SessionStart" || event.kind === "SessionObserved" ? { ...event, origin } : event,
+    );
     // Every decoded event carries the same payload's session identity; the
     // first one is already bounded by the decoder.
     const sessionId = events[0]?.sessionId;
@@ -200,8 +216,7 @@ const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Pr
     }
 
     try {
-      let eventsToApply = events;
-      const start = events[0];
+      const start = eventsToApply[0];
       if (providerArg === "claude" && start?.kind === "SessionStart") {
         let terminalId: string | null = null;
         try {
@@ -216,6 +231,7 @@ const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Pr
         if (terminalId === null) {
           report({ code: "claude_terminal_unbound", provider: providerArg, sessionId: start.sessionId });
         }
+        // The spread preserves the origin stamped above.
         eventsToApply = [{ ...start, ghosttyTerminalId: terminalId }];
       }
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -305,6 +321,25 @@ const runSessions = (args: readonly string[], deps: ResolvedDependencies): numbe
         return 0;
       } catch (error) {
         deps.stderr(`sessions clear failed: ${errorMessage(error)}\n`);
+        return 1;
+      }
+    }
+    case "ack": {
+      const [providerArg, sessionId, ...extra] = rest;
+      if (!isProvider(providerArg) || sessionId === undefined || sessionId.length === 0 || extra.length > 0) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      try {
+        const db = deps.openDatabase(deps.paths.database, "readwrite");
+        try {
+          acknowledgeSession(db, providerArg, sessionId);
+        } finally {
+          db.close();
+        }
+        return 0;
+      } catch (error) {
+        deps.stderr(`sessions ack failed: ${errorMessage(error)}\n`);
         return 1;
       }
     }
