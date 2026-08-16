@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createExtension, type OmpContext, type OmpHost, TOOL_EVENTS } from "../extensions/omp/stream-deck-agents";
+import {
+  createExtension,
+  type OmpContext,
+  type OmpHost,
+  type SpawnPort,
+  TOOL_EVENTS,
+} from "../extensions/omp/stream-deck-agents";
 
 type WirePayload = Record<string, unknown>;
 
@@ -19,7 +25,7 @@ const GHOST_CTX: OmpContext = {
   },
 };
 
-const makeHarness = () => {
+const makeHarness = (port?: SpawnPort) => {
   const handlers = new Map<string, ((event: unknown, ctx: OmpContext) => unknown)[]>();
   const busHandlers = new Map<string, ((payload: unknown) => void)[]>();
   const sent: WirePayload[] = [];
@@ -33,7 +39,13 @@ const makeHarness = () => {
       },
     },
   };
-  createExtension(host, (json) => sent.push(JSON.parse(json) as WirePayload));
+  createExtension(
+    host,
+    port ??
+      ((json) => {
+        sent.push(JSON.parse(json) as WirePayload);
+      }),
+  );
   const fire = (event: string, payload: unknown = {}, ctx: OmpContext = TUI_CTX): unknown[] => {
     const results: unknown[] = [];
     for (const handler of handlers.get(event) ?? []) {
@@ -268,5 +280,53 @@ describe("omp shim subagent lifecycle", () => {
     fire("session_start");
     fireBus("task:subagent:lifecycle", { id: "", status: "started" });
     expect(sent).toHaveLength(1); // the SessionStart only
+  });
+});
+
+describe("omp shim spawn ordering", () => {
+  // Same rationale as the pi ordering tests: helpers are independent
+  // detached processes, and unserialized spawns milliseconds apart can reach
+  // the registry out of order, letting a non-terminal write clobber a
+  // terminal one.
+  const drain = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  test("the next helper is not spawned until the previous one completes; wire order matches emission order", async () => {
+    const written: string[] = [];
+    const completions: Array<() => void> = [];
+    const port: SpawnPort = (json) => {
+      written.push((JSON.parse(json) as WirePayload)["hook_event_name"] as string);
+      return new Promise<void>((resolve) => completions.push(resolve));
+    };
+    const { fire } = makeHarness(port);
+    fire(TOOL_EVENTS.end, { toolName: "bash" });
+    fire("session_stop");
+    // The terminal spawn must wait for the PostToolUse helper.
+    expect(written).toEqual(["PostToolUse"]);
+    completions[0]?.();
+    await drain();
+    expect(written).toEqual(["PostToolUse", "Stop"]);
+    completions[1]?.();
+    await drain();
+  });
+
+  test("a dead helper never wedges the queue: later payloads still spawn, in order", async () => {
+    const written: string[] = [];
+    let rejectFirst: ((reason: Error) => void) | undefined;
+    const port: SpawnPort = (json) => {
+      written.push((JSON.parse(json) as WirePayload)["hook_event_name"] as string);
+      if (written.length === 1) {
+        return new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject;
+        });
+      }
+      return undefined;
+    };
+    const { fire } = makeHarness(port);
+    fire(TOOL_EVENTS.end, { toolName: "bash" });
+    fire("session_stop");
+    expect(written).toEqual(["PostToolUse"]);
+    rejectFirst?.(new Error("helper died"));
+    await drain();
+    expect(written).toEqual(["PostToolUse", "Stop"]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createExtension, type PiContext, type PiHost } from "../extensions/pi/stream-deck-agents";
+import { createExtension, type PiContext, type PiHost, type SpawnPort } from "../extensions/pi/stream-deck-agents";
 
 type WirePayload = Record<string, unknown>;
 type Handler = (event: unknown, ctx: PiContext) => void;
@@ -54,7 +54,7 @@ const ALL_EVENTS: Array<[string, Record<string, unknown>]> = [
   ["session_shutdown", {}],
 ];
 
-const makeHarness = (options: { sessionName?: string | undefined } = {}) => {
+const makeHarness = (options: { sessionName?: string | undefined; port?: SpawnPort } = {}) => {
   const handlers = new Map<string, Handler[]>();
   const sent: WirePayload[] = [];
   const host: PiHost = {
@@ -63,7 +63,13 @@ const makeHarness = (options: { sessionName?: string | undefined } = {}) => {
     },
     getSessionName: () => options.sessionName,
   };
-  createExtension(host, (json) => sent.push(JSON.parse(json) as WirePayload));
+  createExtension(
+    host,
+    options.port ??
+      ((json) => {
+        sent.push(JSON.parse(json) as WirePayload);
+      }),
+  );
   const fire = (event: string, payload: Record<string, unknown> = {}, ctx: PiContext = TUI_CTX): void => {
     for (const handler of handlers.get(event) ?? []) {
       handler(payload, ctx);
@@ -307,5 +313,55 @@ describe("pi shim ghost filter", () => {
       { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
       { hook_event_name: "Stop", session_id: "pi-s1" },
     ]);
+  });
+});
+
+describe("pi shim spawn ordering", () => {
+  // Helpers are independent detached processes; without serialization two
+  // spawned milliseconds apart can reach the registry out of order (live-
+  // observed: an Escape'd tool call's PostToolUse write landed after the
+  // terminal StopFailure and stuck the tile on working).
+  const drain = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  test("the next helper is not spawned until the previous one completes; wire order matches emission order", async () => {
+    const written: string[] = [];
+    const completions: Array<() => void> = [];
+    const port: SpawnPort = (json) => {
+      written.push((JSON.parse(json) as WirePayload)["hook_event_name"] as string);
+      return new Promise<void>((resolve) => completions.push(resolve));
+    };
+    const { fire } = makeHarness({ port });
+    // The live race pair: the aborted tool's end, then the terminal event.
+    fire("tool_execution_end", { toolName: "Bash" });
+    fire("agent_end", agentEnd("error"));
+    fire("agent_settled");
+    // The terminal spawn must wait for the PostToolUse helper.
+    expect(written).toEqual(["PostToolUse"]);
+    completions[0]?.();
+    await drain();
+    expect(written).toEqual(["PostToolUse", "StopFailure"]);
+    completions[1]?.();
+    await drain();
+  });
+
+  test("a dead helper never wedges the queue: later payloads still spawn, in order", async () => {
+    const written: string[] = [];
+    let rejectFirst: ((reason: Error) => void) | undefined;
+    const port: SpawnPort = (json) => {
+      written.push((JSON.parse(json) as WirePayload)["hook_event_name"] as string);
+      if (written.length === 1) {
+        return new Promise<void>((_resolve, reject) => {
+          rejectFirst = reject;
+        });
+      }
+      return undefined;
+    };
+    const { fire } = makeHarness({ port });
+    fire("tool_execution_end", { toolName: "Bash" });
+    fire("agent_settled");
+    expect(written).toEqual(["PostToolUse"]);
+    rejectFirst?.(new Error("helper died"));
+    await drain();
+    expect(written).toEqual(["PostToolUse", "Stop"]);
   });
 });

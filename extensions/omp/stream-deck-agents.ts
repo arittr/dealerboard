@@ -9,7 +9,10 @@
  * session_start and session_switch (the subagent bus handler has no ctx, so
  * a stale captured id would mis-parent rows). Telemetry never breaks the
  * host: every handler is fail-soft, the approval handler is observe-only,
- * and the helper spawn is fire-and-forget.
+ * and helper spawns are detached but serialized through a FIFO queue — each
+ * spawn starts only after the previous helper exits, so wire order always
+ * matches emission order (unserialized spawns milliseconds apart were
+ * live-observed reaching the registry out of order).
  */
 
 import { spawn } from "node:child_process";
@@ -28,7 +31,8 @@ const HELPER_ARGS = ["event", "omp"] as const;
  */
 export const TOOL_EVENTS = { start: "tool_execution_start", end: "tool_execution_end" } as const;
 
-export type SpawnPort = (json: string) => void;
+/** A returned Promise defers the next spawn until it settles (queue link). */
+export type SpawnPort = (json: string) => void | Promise<void>;
 
 export type OmpContext = {
   hasUI: boolean;
@@ -73,24 +77,65 @@ const readToolName = (event: unknown): string | undefined => readString(event, "
 /** omp's question tool normalizes to the decoder's existing waiting rule. */
 const normalizeToolName = (name: string | undefined): string | undefined => (name === "ask" ? "AskUserQuestion" : name);
 
-const defaultSpawn: SpawnPort = (json) => {
-  try {
-    const child = spawn(HELPER, [...HELPER_ARGS], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
-    child.on("error", () => {});
-    child.stdin?.on("error", () => {});
-    child.stdin?.end(json);
-    child.unref();
-  } catch {
-    // Never let telemetry surface in the host process.
-  }
-};
+const defaultSpawn: SpawnPort = (json) =>
+  new Promise<void>((resolve) => {
+    try {
+      const child = spawn(HELPER, [...HELPER_ARGS], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+      child.on("error", () => {
+        // Helper missing or unspawnable: the grid simply doesn't update.
+        resolve();
+      });
+      child.on("exit", () => resolve());
+      child.stdin?.on("error", () => {
+        // EPIPE if the helper exits first — irrelevant to the host.
+      });
+      child.stdin?.end(json);
+      child.unref();
+    } catch {
+      // Never let telemetry surface in the host process.
+      resolve();
+    }
+  });
 
 export const createExtension = (host: OmpHost, spawnPort: SpawnPort = defaultSpawn): void => {
+  // FIFO spawn queue. Helpers are independent detached processes, and two
+  // spawned milliseconds apart can reach the registry out of order — live-
+  // observed on pi's Escape'd tool call, where the PostToolUse write landed
+  // after the terminal StopFailure and stuck the tile on working. Each link
+  // starts only after the previous helper settles; every link is fail-soft,
+  // so a dead helper never wedges the queue. Handlers stay synchronous — the
+  // queue absorbs the asynchrony, and a port that completes synchronously
+  // (returns no promise) keeps emission fully synchronous.
+  let spawnTail: Promise<void> | undefined;
+
   const emit = (payload: WirePayload): void => {
     try {
-      spawnPort(JSON.stringify(payload));
+      const json = JSON.stringify(payload);
+      const link = (): Promise<void> | undefined => {
+        try {
+          const result: unknown = spawnPort(json);
+          return result instanceof Promise ? (result as Promise<void>) : undefined;
+        } catch {
+          // A broken port must never break the host session.
+          return undefined;
+        }
+      };
+      if (spawnTail === undefined) {
+        const first = link();
+        if (first !== undefined) {
+          spawnTail = first.then(
+            () => undefined,
+            () => undefined,
+          );
+        }
+      } else {
+        spawnTail = spawnTail.then(link).then(
+          () => undefined,
+          () => undefined,
+        );
+      }
     } catch {
-      // A broken port must never break the host session.
+      // Never let telemetry break the host session.
     }
   };
 
