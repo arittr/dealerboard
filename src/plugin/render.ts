@@ -3,8 +3,9 @@
  *
  * Every key is a 144x144 SVG returned as one percent-encoded data URL.
  * Session tiles carry a provider-colored corner chip with the one-letter
- * provider mark, up to two centered title lines, a prominent upper-right
- * descendant count when greater than zero, and a status-colored frame.
+ * provider mark and, when known, the session's model id label to its right,
+ * up to two centered title lines, a prominent upper-right descendant count
+ * when greater than zero, and a status-colored frame.
  * Animation is a pure function of the key model and an integer phase owned by
  * the plugin: working uses a shallow full-tile wash behind a static dim frame,
  * waiting and error breathe through deeper sinusoidal frame opacity (error
@@ -31,6 +32,9 @@ const FRAME_WIDTH = 6;
 
 const TITLE_LINE_CAPACITY = 12;
 const TITLE_MAX_LINES = 2;
+
+const MODEL_LABEL_PREFIXES = ["claude-", "gpt-", "zai/", "openai/"];
+const MODEL_LABEL_MAX_CODE_POINTS = 10;
 
 const COLOR_WORKING = "#20B8FF";
 const COLOR_WAITING = "#FFB020";
@@ -176,6 +180,30 @@ const providerMark = (provider: Provider): string =>
   `<rect class="markchip" x="12" y="13" width="38" height="26" rx="6" fill="${PROVIDER_COLORS[provider]}"/>` +
   `<text class="mark" x="31" y="32" text-anchor="middle" font-size="20" fill="${COLOR_BACKGROUND}">${escapeXml(PROVIDER_LETTERS[provider])}</text>`;
 
+/**
+ * Raw id to chip label: strip one vendor prefix (keeping the raw id if
+ * stripping would leave nothing), then cap at ten code points with an
+ * ellipsis on overflow.
+ */
+const modelLabel = (model: string): string => {
+  let label = model;
+  for (const prefix of MODEL_LABEL_PREFIXES) {
+    if (label.startsWith(prefix) && label.length > prefix.length) {
+      label = label.slice(prefix.length);
+      break;
+    }
+  }
+  const points = Array.from(label);
+  return points.length > MODEL_LABEL_MAX_CODE_POINTS
+    ? `${points.slice(0, MODEL_LABEL_MAX_CODE_POINTS - 1).join("")}…`
+    : label;
+};
+
+const modelMark = (model: string | null): string =>
+  model === null
+    ? ""
+    : `<text class="model" x="56" y="32" text-anchor="start" font-size="12" fill="${COLOR_NEUTRAL}">${escapeXml(modelLabel(model))}</text>`;
+
 const descendantBadge = (descendantCount: number): string =>
   descendantCount > 0
     ? `<text class="badge" x="130" y="38" text-anchor="end" font-size="28" fill="${COLOR_TEXT}">${descendantCount}</text>`
@@ -187,6 +215,7 @@ const SESSION_DEGRADED_FLAG = `<text class="flag" x="16" y="128" text-anchor="st
 const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, phase: number): string =>
   statusFrame(model.session.status, phase) +
   providerMark(model.session.provider) +
+  modelMark(model.session.model) +
   titleLines(model.label) +
   descendantBadge(model.session.descendantCount) +
   (model.degraded ? SESSION_DEGRADED_FLAG : "");

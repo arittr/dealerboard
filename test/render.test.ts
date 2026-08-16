@@ -168,6 +168,34 @@ describe("renderKey output contract", () => {
     expect(decode(sessionModel({ provider: "deepseek" }), 0)).toContain("#2DD4BF");
   });
 
+  test("renders the stripped model label right of the provider chip", () => {
+    expect(textNodesByClass(decode(sessionModel({ provider: "claude", model: "claude-fable-5" }), 0), "model")).toEqual(
+      ["fable-5"],
+    );
+    expect(textNodesByClass(decode(sessionModel({ provider: "codex", model: "gpt-5.6-luna" }), 0), "model")).toEqual([
+      "5.6-luna",
+    ]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "kimi", model: "k3" }), 0), "model")).toEqual(["k3"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "pi", model: "zai/glm-5.3" }), 0), "model")).toEqual([
+      "glm-5.3",
+    ]);
+  });
+
+  test("caps the model label at ten code points with an ellipsis", () => {
+    expect(textNodesByClass(decode(sessionModel({ model: "someverylongmodel" }), 0), "model")).toEqual(["someveryl…"]);
+  });
+
+  test("omits the model label when the model is unknown", () => {
+    expect(textNodesByClass(decode(sessionModel({ model: null }), 0), "model")).toHaveLength(0);
+  });
+
+  test("model label geometry and chrome color", () => {
+    const svg = decode(sessionModel({ model: "k3" }), 0);
+    expect(svg).toContain(
+      '<text class="model" x="56" y="32" text-anchor="start" font-size="12" fill="#94A3B8">k3</text>',
+    );
+  });
+
   test("shows a bare descendant count only when greater than zero", () => {
     const without = decode(sessionModel({ descendantCount: 0 }, "Review"), 0);
     expect(textNodesByClass(without, "badge")).toHaveLength(0);
