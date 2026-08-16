@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 5;
+export const LATEST_SCHEMA_VERSION = 6;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -142,8 +142,21 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
 `;
 
 /**
- * Ordered migrations keyed by the schema version each one produces. All due
- * migrations run inside a single transaction in `initializeDatabase`.
+ * v6 adds the nullable model column: the raw provider-reported model id
+ * (Kimi hook push, Claude/Codex resolver pull), never user text. Plain ALTER,
+ * same shape as v2-v4; no table rebuild.
+ */
+const SCHEMA_VERSION_6 = `
+ALTER TABLE active_sessions
+  ADD COLUMN model TEXT
+  CHECK (model IS NULL OR length(model) BETWEEN 1 AND 256);
+`;
+
+/**
+ * Ordered migrations for versions 1-4, keyed by the schema version each one
+ * produces; all due ones run inside a single transaction in
+ * `initializeDatabase`. v5 (table rebuild, own transaction) and v6 (must
+ * follow the rebuild) are applied by dedicated steps after the loop.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
@@ -204,7 +217,7 @@ export const initializeDatabase = (paths: AppPaths): void => {
     if (version < LATEST_SCHEMA_VERSION) {
       const migrate = db.transaction(() => {
         for (const migration of MIGRATIONS) {
-          if (migration.version > version) {
+          if (migration.version > version && migration.version <= 4) {
             db.exec(migration.sql);
             db.exec(`PRAGMA user_version = ${migration.version}`);
           }
@@ -213,6 +226,10 @@ export const initializeDatabase = (paths: AppPaths): void => {
       migrate();
       if (version < 5) {
         migrateToV5(db);
+      }
+      if (readUserVersion(db) < 6) {
+        db.exec(SCHEMA_VERSION_6);
+        db.exec("PRAGMA user_version = 6");
       }
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);

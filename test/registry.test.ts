@@ -99,6 +99,7 @@ type Row = {
   ghostty_terminal_id: string | null;
   background_outstanding: number;
   transcript_path: string | null;
+  model: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -132,6 +133,7 @@ describe("applyRegistryEvents", () => {
       ghostty_terminal_id: null,
       background_outstanding: 0,
       transcript_path: null,
+      model: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -216,6 +218,7 @@ describe("applyRegistryEvents", () => {
       ghostty_terminal_id: null,
       background_outstanding: 0,
       transcript_path: null,
+      model: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
