@@ -148,23 +148,23 @@ describe("renderKey output contract", () => {
   });
 
   test("renders the provider mark for each provider", () => {
-    expect(textNodesByClass(decode(sessionModel({ provider: "claude" }), 0), "mark")).toEqual(["CL"]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "codex" }), 0), "mark")).toEqual(["CO"]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "kimi" }), 0), "mark")).toEqual(["KI"]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "pi" }), 0), "mark")).toEqual(["PI"]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "omp" }), 0), "mark")).toEqual(["OM"]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "zcode" }), 0), "mark")).toEqual(["ZC"]);
-    expect(textNodesByClass(decode(sessionModel({ provider: "deepseek" }), 0), "mark")).toEqual(["DE"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "claude" }), 0), "mark")).toEqual(["C"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "codex" }), 0), "mark")).toEqual(["X"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "kimi" }), 0), "mark")).toEqual(["K"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "pi" }), 0), "mark")).toEqual(["P"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "omp" }), 0), "mark")).toEqual(["O"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "zcode" }), 0), "mark")).toEqual(["Z"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "deepseek" }), 0), "mark")).toEqual(["D"]);
   });
 
   test("colors the provider chip per harness", () => {
     expect(decode(sessionModel({ provider: "claude" }), 0)).toContain("#D97757");
-    expect(decode(sessionModel({ provider: "codex" }), 0)).toContain("#A855F7");
+    expect(decode(sessionModel({ provider: "codex" }), 0)).toContain("#D946EF");
     expect(decode(sessionModel({ provider: "kimi" }), 0)).toContain("#3B82F6");
     expect(decode(sessionModel({ provider: "pi" }), 0)).toContain("#0EA514");
     expect(decode(sessionModel({ provider: "omp" }), 0)).toContain("#F5F0EA");
-    expect(decode(sessionModel({ provider: "zcode" }), 0)).toContain("#49A1E8");
-    expect(decode(sessionModel({ provider: "deepseek" }), 0)).toContain("#426EFE");
+    expect(decode(sessionModel({ provider: "zcode" }), 0)).toContain("#EAB308");
+    expect(decode(sessionModel({ provider: "deepseek" }), 0)).toContain("#2DD4BF");
   });
 
   test("shows a bare descendant count only when greater than zero", () => {

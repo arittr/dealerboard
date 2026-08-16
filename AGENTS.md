@@ -103,9 +103,12 @@ over hand-rolled provider/model pairs when dispatching:
 - Tile rendering lives in `src/plugin/render.ts` (pure SVG string functions,
   no SDK imports). Status frame colors: working `#20B8FF`, waiting `#FFB020`,
   idle `#4ADE80`, error `#FF4D67`; `COLOR_NEUTRAL` `#94A3B8` is non-status
-  chrome only (NEXT frame, page count, OFFLINE text). Provider corner chips:
-  Claude `#D97757`, Codex `#A855F7`, Kimi `#3B82F6`, pi `#0EA514`, omp
-  `#F5F0EA`, zcode `#49A1E8`, deepseek `#426EFE` (`PROVIDER_COLORS`).
+  chrome only (NEXT frame, page count, OFFLINE text). Provider corner chips
+  carry a one-letter mark (`PROVIDER_LETTERS`: Claude C, Codex X, Kimi K, pi
+  P, omp O, zcode Z, deepseek D) on hues picked for mutual distinctness on
+  the LCD panel, not brand fidelity (`PROVIDER_COLORS`): Claude `#D97757`,
+  Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp `#F5F0EA`, zcode
+  `#EAB308`, deepseek `#2DD4BF`.
 - Session status model: `idle` = turn finished (set by the Stop hook),
   `working` = Activity, `waiting` = Attention, `error` = StopFailure. For
   Claude sessions, a Bash `run_in_background` PreToolUse arms the per-session

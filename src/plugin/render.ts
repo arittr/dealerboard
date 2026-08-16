@@ -2,7 +2,7 @@
  * XML-safe animated SVG tile renderer for the 5x3 keypad.
  *
  * Every key is a 144x144 SVG returned as one percent-encoded data URL.
- * Session tiles carry a provider-colored corner chip with the two-letter
+ * Session tiles carry a provider-colored corner chip with the one-letter
  * provider mark, up to two centered title lines, a prominent upper-right
  * descendant count when greater than zero, and a status-colored frame.
  * Animation is a pure function of the key model and an integer phase owned by
@@ -43,12 +43,22 @@ const COLOR_TEXT = "#E8EEF7";
 
 const PROVIDER_COLORS: Record<Provider, string> = {
   claude: "#D97757",
-  codex: "#A855F7",
+  codex: "#D946EF",
   kimi: "#3B82F6",
   pi: "#0EA514",
   omp: "#F5F0EA",
-  zcode: "#49A1E8",
-  deepseek: "#426EFE",
+  zcode: "#EAB308",
+  deepseek: "#2DD4BF",
+};
+
+const PROVIDER_LETTERS: Record<Provider, string> = {
+  claude: "C",
+  codex: "X",
+  kimi: "K",
+  pi: "P",
+  omp: "O",
+  zcode: "Z",
+  deepseek: "D",
 };
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
@@ -164,7 +174,7 @@ const titleLines = (label: string): string => {
 
 const providerMark = (provider: Provider): string =>
   `<rect class="markchip" x="12" y="13" width="38" height="26" rx="6" fill="${PROVIDER_COLORS[provider]}"/>` +
-  `<text class="mark" x="31" y="32" text-anchor="middle" font-size="20" fill="${COLOR_BACKGROUND}">${escapeXml(provider.slice(0, 2).toUpperCase())}</text>`;
+  `<text class="mark" x="31" y="32" text-anchor="middle" font-size="20" fill="${COLOR_BACKGROUND}">${escapeXml(PROVIDER_LETTERS[provider])}</text>`;
 
 const descendantBadge = (descendantCount: number): string =>
   descendantCount > 0
