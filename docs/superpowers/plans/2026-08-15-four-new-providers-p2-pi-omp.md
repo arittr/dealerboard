@@ -1074,7 +1074,7 @@ describe("omp session-file titles", () => {
   test("falls back to the first parseable JSONL title line after the slot", () => {
     const { resolver } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
-      heads: { "/sessions/o1.jsonl": `${" ".repeat(OMP_SLOT_BYTES)}${JSON.stringify({ type: "message" })}\n${JSON.stringify({ title: "Fallback title" })}\n` },
+      heads: { "/sessions/o1.jsonl": `${"\0".repeat(OMP_SLOT_BYTES)}${JSON.stringify({ type: "message" })}\n${JSON.stringify({ title: "Fallback title" })}\n` },
     });
     expect(resolver.resolve([ompTarget()])).toEqual([{ provider: "omp", sessionId: "o1", title: "Fallback title" }]);
   });
@@ -1082,7 +1082,7 @@ describe("omp session-file titles", () => {
   test("no slot and no fallback line resolves nothing; a missing file never throws", () => {
     const { resolver } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
-      heads: { "/sessions/o1.jsonl": `${" ".repeat(OMP_SLOT_BYTES)}${JSON.stringify({ type: "message" })}\n` },
+      heads: { "/sessions/o1.jsonl": `${"\0".repeat(OMP_SLOT_BYTES)}${JSON.stringify({ type: "message" })}\n` },
     });
     expect(resolver.resolve([ompTarget()])).toEqual([]);
 
@@ -1174,7 +1174,7 @@ const OMP_HEAD_BYTES = 4 * 1024;
  * the first parseable JSONL line after the slot carrying a `title` field.
  */
 const ompTitleFromHead = (head: string): string | null => {
-  const slot = head.slice(0, OMP_SLOT_BYTES).replace(/[ \s]+$/u, "");
+  const slot = head.slice(0, OMP_SLOT_BYTES).replace(/[\0\s]+$/u, "");
   try {
     const parsed: unknown = JSON.parse(slot);
     if (
