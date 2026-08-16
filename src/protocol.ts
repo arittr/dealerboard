@@ -11,6 +11,9 @@ export type Provider = (typeof PROVIDER_KEYS)[number];
 
 export type SessionStatus = "idle" | "working" | "waiting" | "error";
 
+/** Who spawned a session: a paseo agent or an interactive terminal. */
+export type SessionOrigin = { kind: "paseo" | "terminal"; ref: string };
+
 export type RegistryEvent =
   | {
       kind: "SessionStart";
@@ -20,6 +23,8 @@ export type RegistryEvent =
       project: string | null;
       ghosttyTerminalId: string | null;
       transcriptPath: string | null;
+      /** Origin evidence at spawn; absent/null means no new evidence. */
+      origin?: SessionOrigin | null;
       observedAt: string;
     }
   | {
@@ -29,6 +34,8 @@ export type RegistryEvent =
       title: string | null;
       project: string | null;
       transcriptPath: string | null;
+      /** Origin evidence carried by a late join; absent/null means no new evidence. */
+      origin?: SessionOrigin | null;
       observedAt: string;
     }
   | {

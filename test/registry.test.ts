@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
 import {
+  acknowledgeSession,
   applyRegistryEvents,
   clearAllSessions,
   clearSession,
@@ -13,7 +14,7 @@ import {
   updateSessionTitles,
 } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
-import type { Provider, RegistryEvent } from "../src/protocol";
+import type { Provider, RegistryEvent, SessionOrigin } from "../src/protocol";
 
 let tempHome: string;
 let db: Database;
@@ -41,8 +42,9 @@ const start = (
     ghosttyTerminalId?: string | null;
     transcriptPath?: string | null;
     at?: string;
+    origin?: SessionOrigin | null;
   } = {},
-): RegistryEvent => ({
+): Extract<RegistryEvent, { kind: "SessionStart" }> => ({
   kind: "SessionStart",
   provider: options.provider ?? "claude",
   sessionId,
@@ -51,6 +53,7 @@ const start = (
   ghosttyTerminalId: options.ghosttyTerminalId ?? null,
   transcriptPath: options.transcriptPath ?? null,
   observedAt: options.at ?? at(1),
+  ...(options.origin !== undefined ? { origin: options.origin } : {}),
 });
 
 const subStart = (
@@ -464,6 +467,79 @@ describe("background work outstanding", () => {
   });
 });
 
+describe("unread ledger", () => {
+  test("Stop transitioning to idle marks the session unread", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1"), simple("Stop", "s1", { at: at(9) })]);
+    expect(getRow("s1")?.unread_since).toBe(at(9));
+  });
+
+  test("Stop with background work outstanding stays working and does NOT mark unread", () => {
+    applyRegistryEvents(db, [start("s1"), simple("BackgroundWorkStarted", "s1"), simple("Stop", "s1")]);
+    expect(getRow("s1")?.status).toBe("working");
+    expect(getRow("s1")?.unread_since).toBeNull();
+  });
+
+  test("StopFailure marks unread", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1"), simple("StopFailure", "s1", { at: at(9) })]);
+    expect(getRow("s1")?.unread_since).toBe(at(9));
+  });
+
+  test("UserPromptSubmit does NOT clear unread (view, not interaction, marks read)", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("Activity", "s1"),
+      simple("Stop", "s1"),
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        observedAt: at(20),
+      },
+      simple("Activity", "s1", { at: at(20) }),
+    ]);
+    expect(getRow("s1")?.unread_since).not.toBeNull();
+  });
+
+  test("reused SessionStart clears unread and refreshes origin", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1")]);
+    applyRegistryEvents(db, [{ ...start("s1", { at: at(30) }), origin: { kind: "paseo", ref: "agent-1" } }]);
+    const row = getRow("s1");
+    expect(row?.unread_since).toBeNull();
+    expect(row?.origin_kind).toBe("paseo");
+    expect(row?.origin_ref).toBe("agent-1");
+  });
+
+  test("acknowledgeSession clears unread without touching updated_at", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(9) })]);
+    const before = getRow("s1")?.updated_at;
+    expect(acknowledgeSession(db, "claude", "s1")).toBe("applied");
+    const row = getRow("s1");
+    expect(row?.unread_since).toBeNull();
+    expect(row?.updated_at).toBe(before);
+    expect(acknowledgeSession(db, "claude", "s1")).toBe("ignored"); // already read
+  });
+});
+
+describe("origin", () => {
+  test("SessionStart stores origin; a null new origin keeps the existing one", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    applyRegistryEvents(db, [start("s1", { at: at(30) })]); // no origin evidence
+    expect(getRow("s1")?.origin_kind).toBe("paseo");
+  });
+
+  test("a fresh terminal origin overrides a stale paseo origin and clears the subagent bit", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1 WHERE provider = 'claude' AND session_id = 's1'");
+    applyRegistryEvents(db, [{ ...start("s1", { at: at(30) }), origin: { kind: "terminal", ref: "ghostty" } }]);
+    const row = getRow("s1");
+    expect(row?.origin_kind).toBe("terminal");
+    expect(row?.origin_subagent).toBe(0);
+  });
+});
+
 describe("repair commands", () => {
   test("clearSession deletes exactly one composite identity plus descendants", () => {
     applyRegistryEvents(db, [
@@ -652,6 +728,10 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(1),
         updatedAt: at(1),
       },
@@ -666,6 +746,10 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(2),
         updatedAt: at(2),
       },
@@ -680,6 +764,10 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(4),
         updatedAt: at(4),
       },
@@ -694,6 +782,10 @@ describe("listSessions", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
         openedAt: at(3),
         updatedAt: at(3),
       },
