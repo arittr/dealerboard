@@ -50,16 +50,27 @@ const readSource = (event: unknown): string | undefined => {
   return typeof source === "string" ? source : undefined;
 };
 
-/** Live-pinned accessor: agent_end carries no top-level stop reason — the final
- * AssistantMessage's stopReason does ("stop" clean, "error" failed; "aborted"
- * is a user interrupt, not a failure). Verified against pi 0.84.2. */
+/** Live-pinned accessor: agent_end carries no top-level stop reason, and the
+ * loop appends tool-result messages after the final assistant — so the
+ * terminal outcome is the LAST assistant record's stopReason ("stop" clean,
+ * "error" failed; "aborted" is a user interrupt, not a failure). Verified
+ * against pi 0.84.2. */
 const readStopReason = (event: unknown): string | undefined => {
   const messages = asRecord(event)["messages"];
   if (!Array.isArray(messages)) {
     return undefined;
   }
-  const stopReason = asRecord(messages[messages.length - 1])["stopReason"];
-  return typeof stopReason === "string" ? stopReason : undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = asRecord(messages[i]);
+    if (message["role"] !== "assistant") {
+      continue;
+    }
+    const stopReason = message["stopReason"];
+    if (typeof stopReason === "string") {
+      return stopReason;
+    }
+  }
+  return undefined;
 };
 
 /** Live-pinned accessor: pi's tool execution events carry the tool's name. */
@@ -107,11 +118,34 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
     return { sessionId, sessionFile };
   };
 
-  // Terminal-outcome latch: pi fires agent_end BEFORE agent_settled, and the
-  // registry's applyStop unconditionally rewrites status — StopFailure-then-Stop
-  // would flash the error tile and settle idle. Latch an errored agent_end and
-  // emit exactly one terminal event at agent_settled.
-  let errorLatched = false;
+  /**
+   * Terminal-outcome coordination, per turn. Upstream, pi fires agent_end
+   * BEFORE agent_settled, and the registry's applyStop unconditionally
+   * rewrites status — StopFailure-then-Stop would flash the error tile and
+   * settle idle, so exactly one terminal event is emitted per turn. Reverse
+   * order is coordinated too: agent_settled finalizes immediately (an
+   * Escape-swallowed agent_end must not stall the tile — known accepted
+   * gap), and the turn stays armed so its pending agent_end completes it.
+   * An agent_end with no turn in flight (after a finalized turn) is ignored
+   * — it must not contaminate the next turn's outcome.
+   */
+  const turn = { inFlight: false, endSeen: false, settledSeen: false, errorLatched: false };
+
+  const finalize = (sessionId: string): void => {
+    emit({ hook_event_name: turn.errorLatched ? "StopFailure" : "Stop", session_id: sessionId });
+    if (turn.endSeen) {
+      // Both signals observed — the turn is fully terminal.
+      turn.inFlight = false;
+      turn.endSeen = false;
+      turn.settledSeen = false;
+      turn.errorLatched = false;
+    }
+    // else: settled finalized alone (agent_end still pending). Keep the turn
+    // armed and settledSeen set so the pending agent_end completes the turn
+    // exactly once; with no turn in flight nothing stays armed for a stray
+    // end to touch. errorLatched is false here by construction — only a live
+    // agent_end sets it, and any end also sets endSeen.
+  };
 
   host.on("session_start", (_event: unknown, ctx: PiContext) => {
     try {
@@ -142,6 +176,13 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
       if (readSource(event) !== "interactive") {
         return;
       }
+      // A user prompt opens a fresh turn: arm the coordinator and clear any
+      // stale terminal signals. errorLatched is deliberately kept — it is
+      // never stale (only a live agent_end sets it, and every finalize that
+      // observed one resets it), and a mid-turn error should still surface.
+      turn.inFlight = true;
+      turn.endSeen = false;
+      turn.settledSeen = false;
       emit({ hook_event_name: "UserPromptSubmit", session_id: session.sessionId });
     } catch {
       // fail-soft
@@ -156,6 +197,9 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
       if (session === undefined) {
         return;
       }
+      // Tool activity counts as turn activity (execution can resume without
+      // a fresh prompt).
+      turn.inFlight = true;
       const toolName = readToolName(event);
       emit({
         hook_event_name: "PreToolUse",
@@ -186,11 +230,20 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
 
   host.on("agent_end", (event: unknown, ctx: PiContext) => {
     try {
-      if (liveSession(ctx) === undefined) {
+      const session = liveSession(ctx);
+      if (session === undefined) {
         return;
       }
+      if (!turn.inFlight) {
+        // Stray end after a finalized turn: must not touch the latch.
+        return;
+      }
+      turn.endSeen = true;
       if (readStopReason(event) === "error") {
-        errorLatched = true;
+        turn.errorLatched = true;
+      }
+      if (turn.settledSeen) {
+        finalize(session.sessionId);
       }
     } catch {
       // fail-soft
@@ -203,8 +256,9 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
       if (session === undefined) {
         return;
       }
-      emit({ hook_event_name: errorLatched ? "StopFailure" : "Stop", session_id: session.sessionId });
-      errorLatched = false;
+      // Finalize always — never wait for agent_end (Escape may swallow it).
+      turn.settledSeen = true;
+      finalize(session.sessionId);
     } catch {
       // fail-soft
     }

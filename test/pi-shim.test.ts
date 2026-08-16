@@ -20,6 +20,40 @@ const GHOST_CTX: PiContext = {
   },
 };
 
+// Ghost-matrix contexts: each fails exactly one liveSession predicate.
+const NON_TUI_WITH_FILE: PiContext = {
+  mode: "print",
+  sessionManager: {
+    getSessionId: () => "pi-ghost",
+    getSessionFile: () => "/sessions/pi-ghost.jsonl",
+  },
+};
+
+const TUI_WITHOUT_FILE: PiContext = {
+  mode: "tui",
+  sessionManager: {
+    getSessionId: () => "pi-ghost",
+    getSessionFile: () => undefined,
+  },
+};
+
+// Real agent_end shape (pi 0.84.2): no top-level stop reason — the terminal
+// outcome rides the final AssistantMessage's stopReason ("stop" clean,
+// "error" failed). The loop may append tool-result messages after it.
+const agentEnd = (stopReason: string) => ({ messages: [{ role: "assistant", stopReason }] });
+
+// Every event the shim registers, with a representative live payload.
+const ALL_EVENTS: Array<[string, Record<string, unknown>]> = [
+  ["session_start", {}],
+  ["input", { source: "interactive" }],
+  ["tool_execution_start", { toolName: "Bash" }],
+  ["tool_execution_end", { toolName: "Bash" }],
+  ["agent_end", agentEnd("error")],
+  ["agent_settled", {}],
+  ["session_info_changed", {}],
+  ["session_shutdown", {}],
+];
+
 const makeHarness = (options: { sessionName?: string | undefined } = {}) => {
   const handlers = new Map<string, Handler[]>();
   const sent: WirePayload[] = [];
@@ -53,6 +87,20 @@ describe("pi shim event mapping", () => {
     ]);
   });
 
+  test("an unnamed session_start omits the title key entirely", () => {
+    const { sent, fire } = makeHarness({ sessionName: undefined });
+    fire("session_start");
+    expect(sent).toEqual([
+      {
+        hook_event_name: "SessionStart",
+        session_id: "pi-s1",
+        cwd: process.cwd(),
+        transcript_path: "/sessions/pi-s1.jsonl",
+      },
+    ]);
+    expect("title" in (sent[0] ?? {})).toBe(false);
+  });
+
   test("interactive input emits UserPromptSubmit; scripted input emits nothing", () => {
     const { sent, fire } = makeHarness();
     fire("input", { source: "interactive" });
@@ -60,12 +108,26 @@ describe("pi shim event mapping", () => {
     expect(sent).toEqual([{ hook_event_name: "UserPromptSubmit", session_id: "pi-s1" }]);
   });
 
-  test("tool execution emits Pre/PostToolUse with the tool name", () => {
+  test("tool execution emits Pre/PostToolUse with the tool name and nothing else", () => {
     const { sent, fire } = makeHarness();
-    fire("tool_execution_start", { toolName: "Bash" });
-    fire("tool_execution_end", { toolName: "Bash" });
-    expect(sent.map((payload) => payload["hook_event_name"])).toEqual(["PreToolUse", "PostToolUse"]);
-    expect(sent[0]?.["tool_name"]).toBe("Bash");
+    fire("tool_execution_start", { toolName: "Bash", input: { command: "rm -rf /" }, durationMs: 42 });
+    fire("tool_execution_end", { toolName: "Bash", result: "0", isError: false, durationMs: 42 });
+    expect(sent).toEqual([
+      { hook_event_name: "PreToolUse", session_id: "pi-s1", tool_name: "Bash" },
+      { hook_event_name: "PostToolUse", session_id: "pi-s1", tool_name: "Bash" },
+    ]);
+  });
+
+  test("tool execution without a tool name omits the tool_name key entirely", () => {
+    const { sent, fire } = makeHarness();
+    fire("tool_execution_start", { toolCallId: "tc_1" });
+    fire("tool_execution_end", { toolCallId: "tc_1", result: "0", isError: false });
+    expect(sent).toEqual([
+      { hook_event_name: "PreToolUse", session_id: "pi-s1" },
+      { hook_event_name: "PostToolUse", session_id: "pi-s1" },
+    ]);
+    expect("tool_name" in (sent[0] ?? {})).toBe(false);
+    expect("tool_name" in (sent[1] ?? {})).toBe(false);
   });
 
   test("session_info_changed pushes SessionTitleChanged only when a name exists", () => {
@@ -78,61 +140,157 @@ describe("pi shim event mapping", () => {
     expect(unnamed.sent).toEqual([]);
   });
 
-  test("session_shutdown emits SessionEnd for every reason", () => {
+  test("session_shutdown emits a bare SessionEnd for every reason", () => {
     const { sent, fire } = makeHarness();
     fire("session_shutdown", { reason: "quit" });
-    fire("session_shutdown", { reason: "new" });
-    expect(sent.map((payload) => payload["hook_event_name"])).toEqual(["SessionEnd", "SessionEnd"]);
+    fire("session_shutdown", { reason: "new", targetSessionFile: "/sessions/next.jsonl" });
+    expect(sent).toEqual([
+      { hook_event_name: "SessionEnd", session_id: "pi-s1" },
+      { hook_event_name: "SessionEnd", session_id: "pi-s1" },
+    ]);
   });
 });
 
-describe("pi shim terminal-outcome latch", () => {
-  // Real agent_end shape (pi 0.84.2): the terminal outcome is the final
-  // AssistantMessage's stopReason — "stop" clean, "error" failed.
-  const agentEnd = (stopReason: string) => ({ messages: [{ role: "assistant", stopReason }] });
-
-  test("a clean turn settles to Stop", () => {
+describe("pi shim terminal-outcome coordination", () => {
+  test("upstream order: a clean turn settles to Stop", () => {
     const { sent, fire } = makeHarness();
+    fire("input", { source: "interactive" });
     fire("agent_end", agentEnd("stop"));
+    fire("agent_settled");
+    expect(sent).toEqual([
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+    ]);
+  });
+
+  test("upstream order: an errored turn settles to StopFailure exactly once", () => {
+    const { sent, fire } = makeHarness();
+    fire("input", { source: "interactive" });
+    fire("agent_end", agentEnd("error"));
+    fire("agent_settled");
+    expect(sent).toEqual([
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
+      { hook_event_name: "StopFailure", session_id: "pi-s1" },
+    ]);
+  });
+
+  test("the stop reason is read from the last assistant message even when tool results follow it", () => {
+    const { sent, fire } = makeHarness();
+    fire("input", { source: "interactive" });
+    fire("agent_end", {
+      messages: [
+        { role: "toolResult", toolCallId: "tc_1", content: [], isError: false },
+        { role: "assistant", stopReason: "error", errorMessage: "provider 500" },
+        { role: "toolResult", toolCallId: "tc_2", content: [], isError: true },
+      ],
+    });
+    fire("agent_settled");
+    expect(sent.map((payload) => payload["hook_event_name"])).toEqual(["UserPromptSubmit", "StopFailure"]);
+  });
+
+  test("reverse order: a settled turn is completed by its late errored end, exactly once", () => {
+    const { sent, fire } = makeHarness();
+    fire("input", { source: "interactive" });
+    fire("agent_settled");
+    fire("agent_end", agentEnd("error"));
+    expect(sent).toEqual([
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
+      // settled finalized before the error was knowable:
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+      // the pending end completes the turn:
+      { hook_event_name: "StopFailure", session_id: "pi-s1" },
+    ]);
+  });
+
+  test("a stray errored end after a finalized turn cannot contaminate the next turn", () => {
+    const { sent, fire } = makeHarness();
+    fire("input", { source: "interactive" });
+    fire("agent_end", agentEnd("stop"));
+    fire("agent_settled");
+    fire("agent_end", agentEnd("error"));
+    fire("input", { source: "interactive" });
+    fire("agent_end", agentEnd("stop"));
+    fire("agent_settled");
+    expect(sent.map((payload) => payload["hook_event_name"])).toEqual([
+      "UserPromptSubmit",
+      "Stop",
+      "UserPromptSubmit",
+      "Stop",
+    ]);
+  });
+
+  test("a bare settled with no end still settles to Stop (Escape may swallow agent_end)", () => {
+    const { sent, fire } = makeHarness();
     fire("agent_settled");
     expect(sent).toEqual([{ hook_event_name: "Stop", session_id: "pi-s1" }]);
   });
 
-  test("an errored turn settles to StopFailure exactly once (upstream order: agent_end then agent_settled)", () => {
-    const { sent, fire } = makeHarness();
-    fire("agent_end", agentEnd("error"));
-    fire("agent_settled");
-    expect(sent).toEqual([{ hook_event_name: "StopFailure", session_id: "pi-s1" }]);
-  });
-
   test("the latch clears: the next clean turn emits Stop", () => {
     const { sent, fire } = makeHarness();
+    fire("input", { source: "interactive" });
     fire("agent_end", agentEnd("error"));
     fire("agent_settled");
+    fire("input", { source: "interactive" });
     fire("agent_end", agentEnd("stop"));
     fire("agent_settled");
-    expect(sent.map((payload) => payload["hook_event_name"])).toEqual(["StopFailure", "Stop"]);
+    expect(sent.map((payload) => payload["hook_event_name"])).toEqual([
+      "UserPromptSubmit",
+      "StopFailure",
+      "UserPromptSubmit",
+      "Stop",
+    ]);
   });
 });
 
 describe("pi shim ghost filter", () => {
   test("a non-TUI process without a session file emits nothing for any event", () => {
     const { sent, fire } = makeHarness({ sessionName: "Ghost" });
-    fire("session_start", {}, GHOST_CTX);
-    fire("input", { source: "interactive" }, GHOST_CTX);
-    fire("tool_execution_start", { toolName: "Bash" }, GHOST_CTX);
-    fire("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, GHOST_CTX);
-    fire("agent_settled", {}, GHOST_CTX);
-    fire("session_info_changed", {}, GHOST_CTX);
-    fire("session_shutdown", {}, GHOST_CTX);
+    for (const [event, payload] of ALL_EVENTS) {
+      fire(event, payload, GHOST_CTX);
+    }
     expect(sent).toEqual([]);
+  });
+
+  test("a non-TUI context with a valid session file emits nothing for any event", () => {
+    const { sent, fire } = makeHarness({ sessionName: "Ghost" });
+    for (const [event, payload] of ALL_EVENTS) {
+      fire(event, payload, NON_TUI_WITH_FILE);
+    }
+    expect(sent).toEqual([]);
+  });
+
+  test("a TUI context without a session file emits nothing for any event", () => {
+    const { sent, fire } = makeHarness({ sessionName: "Ghost" });
+    for (const [event, payload] of ALL_EVENTS) {
+      fire(event, payload, TUI_WITHOUT_FILE);
+    }
+    expect(sent).toEqual([]);
+  });
+
+  test("ghost events leave the coordinator untouched: the next visible turn settles cleanly", () => {
+    const { sent, fire } = makeHarness();
+    for (const [event, payload] of ALL_EVENTS) {
+      fire(event, payload, NON_TUI_WITH_FILE);
+      fire(event, payload, TUI_WITHOUT_FILE);
+    }
+    fire("input", { source: "interactive" });
+    fire("agent_end", agentEnd("stop"));
+    fire("agent_settled");
+    expect(sent).toEqual([
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+    ]);
   });
 
   test("a ghost agent_end never latches the visible session", () => {
     const { sent, fire } = makeHarness();
-    fire("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, GHOST_CTX);
-    fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+    fire("input", { source: "interactive" });
+    fire("agent_end", agentEnd("error"), GHOST_CTX);
+    fire("agent_end", agentEnd("stop"));
     fire("agent_settled");
-    expect(sent).toEqual([{ hook_event_name: "Stop", session_id: "pi-s1" }]);
+    expect(sent).toEqual([
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+    ]);
   });
 });
