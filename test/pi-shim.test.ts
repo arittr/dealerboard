@@ -179,6 +179,18 @@ describe("pi shim terminal latch", () => {
     ]);
   });
 
+  test("a retried turn that recovers settles to Stop (last agent_end wins)", () => {
+    const { sent, fire } = makeHarness();
+    fire("input", { source: "interactive" });
+    fire("agent_end", agentEnd("error"));
+    fire("agent_end", agentEnd("stop")); // the auto-retry attempt succeeded
+    fire("agent_settled");
+    expect(sent).toEqual([
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+    ]);
+  });
+
   test("the stop reason is read from the last assistant message even when tool results follow it", () => {
     const { sent, fire } = makeHarness();
     fire("input", { source: "interactive" });

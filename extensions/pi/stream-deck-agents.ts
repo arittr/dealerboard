@@ -128,9 +128,12 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
    * the loop and all retry/compaction continuations. Settled can therefore
    * never precede its turn's end, and a new turn's start implies the previous
    * turn's end already fired: the cross-turn window is closed by pi's
-   * architecture, not by our flags. Turn-boundary clearing is still hygiene
-   * against a straggler end latching after a settled turn — it can never
-   * contaminate the next turn.
+   * architecture, not by our flags. The latch is last-end-wins: a settled turn
+   * can follow several agent_ends (auto-retry runs each emit one), and the
+   * final attempt's outcome is the turn's outcome — a retried turn that
+   * recovers must not end as StopFailure. Turn-boundary clearing is still
+   * hygiene against a straggler end latching after a settled turn — it can
+   * never contaminate the next turn.
    */
   let errorLatched = false;
 
@@ -218,11 +221,9 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
         return;
       }
       // Latch the error; the single terminal event is emitted at settled.
-      // Multiple ends can precede one settled (auto-retry runs) — the last
-      // end is the definitive outcome.
-      if (readStopReason(event) === "error") {
-        errorLatched = true;
-      }
+      // Assignment, not OR: with multiple ends before one settled (auto-retry
+      // runs), the final attempt's outcome is the turn's outcome.
+      errorLatched = readStopReason(event) === "error";
     } catch {
       // fail-soft
     }
