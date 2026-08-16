@@ -29,8 +29,10 @@ never stored: the Claude-only `run_in_background` boolean
 of a Bash tool input and the constant `<task-notification>` prefix that opens
 a background task's completion prompt, and zcode's `is_interrupt` boolean on
 a `PostToolUseFailure` — whose `error` payload is never read. No prompt text,
-transcript content, or tool payload is ever written to the registry, the
-snapshot, or the logs.
+raw transcript lines, or tool payload is ever written to the registry, the
+snapshot, or the logs; the only transcript-derived facts that persist are the
+session title (Claude's `ai-title` record) and the bounded raw model id —
+both extracted by design, never verbatim.
 
 ---
 
