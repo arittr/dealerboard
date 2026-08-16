@@ -757,8 +757,8 @@ top-level keys, mirroring the enabled provider entry from that file:
   when zcode emits one — a failed tool call carrying `is_interrupt`, which
   the helper treats as a Stop. An interrupt that fires no such event leaves
   the tile working until the next event or the 1-hour lease; this is the
-  behavior the live verification pins (dated verification record
-  forthcoming).
+  behavior the live verification pins (recorded in
+  docs/verification/2026-08-15-zcode-p1.md).
 - In a headless `--mode plan` run, denying a permission prompt strands the
   tile at waiting until the next event or the 1-hour lease — the deny path
   delivers no event after `PermissionRequest` (observed live on 0.16.3);
