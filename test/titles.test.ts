@@ -355,9 +355,14 @@ describe("omp session-file titles", () => {
 
   // Mirrors omp's slot writer: one JSON record whose "pad" field absorbs the
   // slack so the line is exactly OMP_SLOT_BYTES UTF-8 bytes, newline included.
+  // "source" appears only once a title is set, matching observed captures.
   const slotRecord = (title: string): string => {
     const record = (pad: string): string =>
-      `${JSON.stringify({ type: "title", v: 1, title, source: "auto", updatedAt: "2026-08-16T07:01:52.082Z", pad })}\n`;
+      `${JSON.stringify(
+        title === ""
+          ? { type: "title", v: 1, title, updatedAt: "2026-08-16T07:01:52.082Z", pad }
+          : { type: "title", v: 1, title, source: "auto", updatedAt: "2026-08-16T07:01:52.082Z", pad },
+      )}\n`;
     return record(" ".repeat(OMP_SLOT_BYTES - Buffer.byteLength(record(""), "utf8")));
   };
 
@@ -401,20 +406,23 @@ describe("omp session-file titles", () => {
     expect(fs.headReads()).toBe(2);
   });
 
-  test("falls back to the first parseable JSONL title line after the slot", () => {
+  test("falls back to the first parseable JSONL title line after the untitled 256-byte slot", () => {
+    // Wire-exact boundary: the untitled slot occupies exactly the first
+    // OMP_SLOT_BYTES bytes, and the title_change record lives beyond them.
+    expect(Buffer.byteLength(slotRecord(""), "utf8")).toBe(OMP_SLOT_BYTES);
     const { resolver } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
       heads: {
-        "/sessions/o1.jsonl": `{"type":"session","version":3,"id":"o1"}\n{"type":"message"}\n{"type":"title_change","id":"x","title":"Fallback title"}\n`,
+        "/sessions/o1.jsonl": `${slotRecord("")}{"type":"message"}\n{"type":"title_change","id":"x","title":"Fallback title"}\n`,
       },
     });
     expect(resolver.resolve([ompTarget()])).toEqual([{ provider: "omp", sessionId: "o1", title: "Fallback title" }]);
   });
 
-  test("no slot and no fallback line resolves nothing; a missing file never throws", () => {
+  test("an untitled slot with no fallback line resolves nothing; a missing file never throws", () => {
     const { resolver } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
-      heads: { "/sessions/o1.jsonl": `{"type":"session","version":3,"id":"o1"}\nnot-json\n{"type":"message"}\n` },
+      heads: { "/sessions/o1.jsonl": `${slotRecord("")}not-json\n{"type":"message"}\n` },
     });
     expect(resolver.resolve([ompTarget()])).toEqual([]);
 
