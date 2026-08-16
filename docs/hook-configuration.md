@@ -801,10 +801,11 @@ reports session lifecycle to the daemon through the same helper every
 provider above invokes.
 
 **Ownership marker.** The file's first line is
-`// stream-deck-agents: managed shim v1`. The installer refuses to overwrite a
-same-named file without that marker — it treats such a file as user content.
-If you customize the file, the installer leaves it alone from then on, and
-your copy stops receiving updates.
+`// stream-deck-agents: managed shim v1`. The installer re-copies any
+same-named file that still starts with that marker line — customizations kept
+beneath a retained marker are overwritten on the next install. To customize
+the file, delete its first-line marker: the installer then treats the file as
+yours, never touches it again, and it stops receiving updates.
 
 ### Behavior to expect
 
@@ -841,9 +842,9 @@ installer, not by hand.
 Same shape as pi: omp needs no config edits, the installer places one
 extension file in omp's auto-discovered extensions directory, and omp loads it
 on every start. The same ownership-marker rule applies — the file's first line
-is `// stream-deck-agents: managed shim v1`, the installer never overwrites a
-same-named file without it, and a customized copy is left alone (and stops
-receiving updates).
+is `// stream-deck-agents: managed shim v1`; the installer re-copies any
+same-named file that still starts with that line, and to customize the file
+you delete the marker, making it yours (untouched, and no longer updated).
 
 ### Behavior to expect
 
