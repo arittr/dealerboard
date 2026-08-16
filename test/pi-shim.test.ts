@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { createExtension, type PiContext, type PiHost, type SpawnPort } from "../extensions/pi/stream-deck-agents";
+import {
+  type ChildSpawn,
+  createExtension,
+  createSpawnPort,
+  type PiContext,
+  type PiHost,
+  type SettleTimerFactory,
+  type SpawnPort,
+} from "../extensions/pi/stream-deck-agents";
 
 type WirePayload = Record<string, unknown>;
 type Handler = (event: unknown, ctx: PiContext) => void;
@@ -383,5 +391,175 @@ describe("pi shim spawn ordering", () => {
     // ...until the settle timeout releases the queue link.
     await new Promise<void>((resolve) => setTimeout(resolve, 80));
     expect(written).toEqual(["PostToolUse", "Stop"]);
+  });
+});
+
+describe("pi shim spawn adapter lifecycle", () => {
+  // The ordering tests above drive an injected promise port; these drive the
+  // PRODUCTION adapter (createSpawnPort, defaultSpawn's extracted body) with
+  // a fake child process and a fake settle-timer factory — kill spy,
+  // controllable exit/error events — so the adapter's own lifecycle is
+  // pinned: deleting the SIGKILL, the unref, or the timer clearing from the
+  // adapter fails here, not just in production.
+  const drain = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  type FakeTimer = { cleared: boolean; unrefs: number; clear(): void; unref(): void; fire(): void };
+
+  const makeTimerFactory = (): { factory: SettleTimerFactory; timers: FakeTimer[] } => {
+    const timers: FakeTimer[] = [];
+    const factory: SettleTimerFactory = (callback) => {
+      const timer: FakeTimer = {
+        cleared: false,
+        unrefs: 0,
+        clear: () => {
+          timer.cleared = true;
+        },
+        unref: () => {
+          timer.unrefs += 1;
+        },
+        fire: () => {
+          // A cleared timer must never fire — that is the timer-clearing pin.
+          if (!timer.cleared) {
+            callback();
+          }
+        },
+      };
+      timers.push(timer);
+      return timer;
+    };
+    return { factory, timers };
+  };
+
+  type FakeChild = {
+    json: string;
+    killSignals: Array<string | number | undefined>;
+    unrefs: number;
+    emitExit(): void;
+    emitError(): void;
+  };
+
+  const makeFakeSpawn = (): { children: FakeChild[]; spawnCalls: string[][]; spawnFn: ChildSpawn } => {
+    const children: FakeChild[] = [];
+    const spawnCalls: string[][] = [];
+    const spawnFn: ChildSpawn = (_command, args) => {
+      spawnCalls.push(args);
+      const exitHandlers: Array<() => void> = [];
+      const errorHandlers: Array<() => void> = [];
+      const child: FakeChild = {
+        json: "",
+        killSignals: [],
+        unrefs: 0,
+        emitExit: () => {
+          for (const handler of exitHandlers) {
+            handler();
+          }
+        },
+        emitError: () => {
+          for (const handler of errorHandlers) {
+            handler();
+          }
+        },
+      };
+      children.push(child);
+      return {
+        on: (event: string, listener: () => void) => {
+          if (event === "exit") {
+            exitHandlers.push(listener);
+          } else if (event === "error") {
+            errorHandlers.push(listener);
+          }
+        },
+        kill: (signal?: string | number) => {
+          child.killSignals.push(signal);
+          return true;
+        },
+        unref: () => {
+          child.unrefs += 1;
+        },
+        stdin: {
+          on: () => undefined,
+          end: (data: string) => {
+            child.json = data;
+          },
+        },
+      };
+    };
+    return { children, spawnCalls, spawnFn };
+  };
+
+  test("a child exit clears the settle timer, settles the link, and the next payload spawns", async () => {
+    const fake = makeFakeSpawn();
+    const timer = makeTimerFactory();
+    const { fire } = makeHarness({ port: createSpawnPort(fake.spawnFn, timer.factory) });
+    fire("tool_execution_end", { toolName: "Bash" });
+    fire("agent_settled");
+    // The second payload waits on the first link — only one child so far.
+    expect(fake.children).toHaveLength(1);
+    expect(fake.children[0]?.json).toBe(
+      JSON.stringify({ hook_event_name: "PostToolUse", session_id: "pi-s1", tool_name: "Bash" }),
+    );
+    // Armed timer is unref'd, and the child itself is detached (unref'd).
+    expect(timer.timers[0]?.unrefs).toBe(1);
+    expect(fake.children[0]?.unrefs).toBe(1);
+    fake.children[0]?.emitExit();
+    await drain();
+    // The link settled on exit, so the queued terminal payload spawned.
+    expect(fake.children).toHaveLength(2);
+    expect(fake.children[1]?.json).toBe(JSON.stringify({ hook_event_name: "Stop", session_id: "pi-s1" }));
+    // The timer was cleared on settle: firing it after the exit kills nothing.
+    expect(timer.timers[0]?.cleared).toBe(true);
+    timer.timers[0]?.fire();
+    expect(fake.children[0]?.killSignals).toEqual([]);
+    // Release the second link so the queue drains before the test ends.
+    fake.children[1]?.emitExit();
+    await drain();
+  });
+
+  test("a child error (unspawnable helper) settles the link and the queue continues", async () => {
+    const fake = makeFakeSpawn();
+    const timer = makeTimerFactory();
+    const { fire } = makeHarness({ port: createSpawnPort(fake.spawnFn, timer.factory) });
+    fire("tool_execution_end", { toolName: "Bash" });
+    fire("agent_settled");
+    expect(fake.children).toHaveLength(1);
+    fake.children[0]?.emitError();
+    await drain();
+    expect(fake.children).toHaveLength(2);
+    expect(timer.timers[0]?.cleared).toBe(true);
+    fake.children[1]?.emitExit();
+    await drain();
+  });
+
+  test("a synchronously throwing spawn settles the link fail-soft and the queue continues", async () => {
+    let calls = 0;
+    const spawnFn: ChildSpawn = () => {
+      calls += 1;
+      throw new Error("spawn unavailable");
+    };
+    const { fire } = makeHarness({ port: createSpawnPort(spawnFn, makeTimerFactory().factory) });
+    fire("agent_settled");
+    fire("input", { source: "interactive" });
+    expect(calls).toBe(1);
+    await drain();
+    // The throw was swallowed and the link released: the next payload spawns.
+    expect(calls).toBe(2);
+  });
+
+  test("a hung helper is SIGKILLed by the settle timeout and the queue releases", async () => {
+    const fake = makeFakeSpawn();
+    const timer = makeTimerFactory();
+    // The queue backstop sits far beyond the adapter's timer, so the release
+    // is provably the adapter's own SIGKILL path, not the queue's fallback.
+    const { fire } = makeHarness({ port: createSpawnPort(fake.spawnFn, timer.factory), settleTimeoutMs: 10_000 });
+    fire("tool_execution_end", { toolName: "Bash" });
+    fire("agent_settled");
+    expect(fake.children).toHaveLength(1);
+    // Neither exit nor error ever fires — the helper is hung.
+    timer.timers[0]?.fire();
+    expect(fake.children[0]?.killSignals).toEqual(["SIGKILL"]);
+    await drain();
+    expect(fake.children).toHaveLength(2);
+    fake.children[1]?.emitExit();
+    await drain();
   });
 });

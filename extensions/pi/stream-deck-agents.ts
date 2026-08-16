@@ -90,37 +90,87 @@ const readToolName = (event: unknown): string | undefined => {
   return typeof toolName === "string" ? toolName : undefined;
 };
 
-const defaultSpawn: SpawnPort = (json) =>
-  new Promise<void>((resolve) => {
-    try {
-      const child = spawn(HELPER, [...HELPER_ARGS], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
-      const timer = setTimeout(() => {
-        // Hung helper: kill best-effort and release the queue link.
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // The kill is best-effort; the link releases regardless.
-        }
+/**
+ * The child surface the adapter touches — structural, so tests drive the
+ * production adapter with a fake child (kill spy, controllable exit/error
+ * events) instead of real helper processes.
+ */
+export type SpawnedChild = {
+  on(event: string, listener: () => void): unknown;
+  kill(signal?: string | number): boolean;
+  unref(): void;
+  stdin: { on(event: string, listener: () => void): unknown; end(data: string): void } | null;
+};
+
+/** node:child_process spawn as the adapter calls it — the injectable seam. */
+export type ChildSpawn = (
+  command: string,
+  args: string[],
+  options: { detached: boolean; stdio: ["pipe", "ignore", "ignore"] },
+) => SpawnedChild;
+
+/** Injectable settle-timer handle — armed on spawn, cleared on settle, unref'd. */
+export type SettleTimer = {
+  clear(): void;
+  unref(): void;
+};
+
+/** Timer seam: tests observe arm/clear/unref without wall-clock waits. */
+export type SettleTimerFactory = (callback: () => void, timeoutMs: number) => SettleTimer;
+
+/** The production timer: one ambient timeout, unref'd at arm, cleared at settle. */
+const defaultSettleTimer: SettleTimerFactory = (callback, timeoutMs) => {
+  const timer = setTimeout(callback, timeoutMs);
+  return {
+    clear: () => clearTimeout(timer),
+    unref: () => timer.unref(),
+  };
+};
+
+/**
+ * The production spawn adapter (defaultSpawn's body) as an injectable
+ * factory — behavior identical to the inline original; tests drive it with
+ * a fake child-spawn and a fake settle-timer factory.
+ */
+export const createSpawnPort =
+  (
+    spawnFn: ChildSpawn = spawn,
+    settleTimer: SettleTimerFactory = defaultSettleTimer,
+    timeoutMs: number = SPAWN_SETTLE_TIMEOUT_MS,
+  ): SpawnPort =>
+  (json) =>
+    new Promise<void>((resolve) => {
+      try {
+        const child = spawnFn(HELPER, [...HELPER_ARGS], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+        const timer = settleTimer(() => {
+          // Hung helper: kill best-effort and release the queue link.
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // The kill is best-effort; the link releases regardless.
+          }
+          resolve();
+        }, timeoutMs);
+        timer.unref();
+        const settle = (): void => {
+          timer.clear();
+          resolve();
+        };
+        // Helper missing or unspawnable ("error") and any exit both settle.
+        child.on("error", settle);
+        child.on("exit", settle);
+        child.stdin?.on("error", () => {
+          // EPIPE if the helper exits first — irrelevant to the host.
+        });
+        child.stdin?.end(json);
+        child.unref();
+      } catch {
+        // Never let telemetry surface in the host process.
         resolve();
-      }, SPAWN_SETTLE_TIMEOUT_MS);
-      timer.unref();
-      const settle = (): void => {
-        clearTimeout(timer);
-        resolve();
-      };
-      // Helper missing or unspawnable ("error") and any exit both settle.
-      child.on("error", settle);
-      child.on("exit", settle);
-      child.stdin?.on("error", () => {
-        // EPIPE if the helper exits first — irrelevant to the host.
-      });
-      child.stdin?.end(json);
-      child.unref();
-    } catch {
-      // Never let telemetry surface in the host process.
-      resolve();
-    }
-  });
+      }
+    });
+
+const defaultSpawn: SpawnPort = createSpawnPort();
 
 export const createExtension = (
   host: PiHost,
