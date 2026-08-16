@@ -23,11 +23,13 @@ session on the grid — event name, session and subagent identifiers, status
 hints, title, the working directory's basename, and the transcript path — and
 discards everything else in memory. The transcript path is stored so the
 daemon can resolve the session's title from the transcript file; transcript
-*content* is only ever read for its title record. Two Claude-only signals are
-classified in place, never stored: the `run_in_background` boolean of a Bash
-tool input and the constant `<task-notification>` prefix that opens a
-background task's completion prompt. No prompt text, transcript content, or
-tool payload is ever written to the registry, the snapshot, or the logs.
+*content* is only ever read for its title record. Three signals are
+classified in place, never stored: the Claude-only `run_in_background` boolean
+of a Bash tool input and the constant `<task-notification>` prefix that opens
+a background task's completion prompt, and zcode's `is_interrupt` boolean on
+a `PostToolUseFailure` — whose `error` payload is never read. No prompt text,
+transcript content, or tool payload is ever written to the registry, the
+snapshot, or the logs.
 
 ---
 
@@ -225,7 +227,7 @@ unchanged; no wrapper is installed.
 
 Start a new Claude Code session and run `/hooks`. Each of the eleven events
 should list the stream-deck-agents command. The registry should show the
-session within one polling interval (see "After all three providers" below).
+session within one polling interval (see "After every provider" below).
 
 ### 4. Compare before replace, and restore
 
@@ -625,7 +627,167 @@ not exist before, delete it instead of restoring.)
 
 ---
 
-## After all three providers
+## ZCode
+
+Target file: `~/.zcode/cli/config.json` (created in the back-up step below
+if it does not exist yet).
+
+ZCode supports seven events — `SessionStart`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, and
+`Stop`. It has no `SessionEnd`, `StopFailure`, or subagent events and no
+dedicated interrupt event: a `PostToolUseFailure` carrying `is_interrupt` is
+the only interrupt signal, and the helper maps it to a Stop when it arrives.
+An interrupt that fires no such event leaves the tile working until the
+next event or the 1-hour lease (see "Behavior to expect" below). A
+`"type": "process"` hook is spawned directly with no shell, so the
+executable path needs no quoting; each handler sets a two-second `timeoutMs`.
+
+### 1. Back up
+
+The config directory or file may not exist yet. The snippet below creates
+them only when absent — an existing config is never touched — then backs it
+up:
+
+```bash
+mkdir -p ~/.zcode/cli
+if [ ! -e ~/.zcode/cli/config.json ]; then
+  printf '{}\n' > ~/.zcode/cli/config.json
+fi
+cp ~/.zcode/cli/config.json ~/.zcode/cli/config.json.bak
+```
+
+### 2. Edit
+
+Merge the following top-level `"hooks"` object into the config, keeping
+every existing key. Replace every `<helper>` with the installed executable
+path — `/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents`,
+the same helper every provider above invokes:
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "SessionStart":      [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "UserPromptSubmit":  [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PreToolUse":        [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PostToolUse":       [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PostToolUseFailure":[{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PermissionRequest": [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "Stop":              [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }]
+    }
+  }
+}
+```
+
+Warnings — these are the traps to know before editing:
+
+- The matcher-group wrapper is required: every `events.<Event>` value is a
+  list of `{ "hooks": [...] }` objects, optionally with a `matcher`. A flat
+  list of executors in its place is silently ignored — zcode loads the
+  config without any error and the hooks never fire.
+- `timeoutMs` is **milliseconds**; `timeout` is **seconds** — never write
+  `timeout` in this file.
+- Hooks are snapshotted at session start: existing zcode sessions never pick
+  the hooks up. Start a new session to test.
+- Some 2026-06/07 builds reject the `args` array (validation bug). If zcode
+  refuses to start or logs a config error, fall back to one shell string per
+  event — `{ "type": "command", "command": "\"<helper>\" event zcode", "timeoutMs": 2000 }` —
+  quote the path, it contains a space.
+- If hooks seem inert after a zcode update, re-check this file: older builds
+  silently dropped the whole section on one unknown key.
+
+### 3. Validate
+
+Parse the merged file before trusting it — a typo can silently disable every
+hook:
+
+```bash
+bun -e 'try { JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")) } catch { process.exit(1) }' ~/.zcode/cli/config.json
+```
+
+The command prints nothing and exits zero when the JSON is valid. Then start
+a NEW zcode session and confirm its tile appears (see "After every provider"
+below).
+
+### Headless and CLI use (optional)
+
+The hooks above are all the desktop app needs. Driving zcode headlessly —
+`--prompt` one-shots or the `app-server` protocol — additionally requires an
+explicit model provider in this same file; without one the CLI refuses to
+start (`Model config is missing`). The desktop app keeps its providers in
+`~/.zcode/v2/config.json`, which the CLI does not read. Merge two more
+top-level keys, mirroring the enabled provider entry from that file:
+
+```json
+{
+  "model": { "main": "builtin:zai-coding-plan/GLM-5.3" },
+  "provider": {
+    "builtin:zai-coding-plan": {
+      "name": "Z.ai - Coding Plan",
+      "kind": "anthropic",
+      "options": {
+        "apiKey": "<key>",
+        "baseURL": "https://api.z.ai/api/anthropic",
+        "apiKeyRequired": true
+      },
+      "enabled": true,
+      "source": "custom"
+    }
+  }
+}
+```
+
+- `model.main` is a `provider/model` string ref. The object form
+  (`{ "provider": ..., "model": ... }`) is silently ignored and the CLI
+  keeps reporting the config missing.
+- Replace `<key>` with the API key from the same entry in
+  `~/.zcode/v2/config.json` — never a literal key in documentation or
+  scripts. The file now carries a credential: keep it mode 0600
+  (`chmod 600 ~/.zcode/cli/config.json`).
+- The back-up, diff, and restore ritual in this section now handles a
+  key-bearing file — treat `config.json.bak` with the same care and delete
+  it once verification is complete.
+
+### Behavior to expect
+
+- A tile appears at the first prompt, not at session creation: zcode
+  materializes hooks lazily, and the live probes saw no event (and no
+  registry row) from creating a session until `UserPromptSubmit` fired.
+  From there the tile goes working on prompt and tool activity, waiting
+  while a permission prompt is pending, and idle when the turn ends. (All
+  of this is registry-row evidence; the physical key face itself was not
+  part of the live observation.)
+- The helper maps a `PostToolUseFailure` carrying `is_interrupt` to a Stop
+  when one arrives, but the live probes on 0.16.3 never saw one: stopping a
+  session both mid-tool-call and between tool calls delivered no hook event
+  at all, leaving the tile working until the next event or the 1-hour
+  lease. That is the behavior to expect from an interrupt (recorded in the
+  [dated verification record](verification/2026-08-15-zcode-p1.md)).
+- In a headless `--mode plan` run, denying a permission prompt strands the
+  tile at waiting until the next event or the 1-hour lease — the deny path
+  delivers no event after `PermissionRequest` (observed live on 0.16.3);
+  interactive sessions return to working and idle after the prompt is
+  answered.
+- Quitting zcode leaves the tile until the 1-hour lease prunes it — zcode
+  has no `SessionEnd` hook, so the daemon presumes a zcode row with no hook
+  event for an hour dead and removes it then.
+- Titles arrive from zcode's own database a few seconds after zcode generates
+  them: the daemon re-queries `~/.zcode/cli/db/db.sqlite` (`ZCODE_HOME`
+  override) on its title cadence.
+
+### 4. Compare before replace, and restore
+
+```bash
+diff ~/.zcode/cli/config.json.bak ~/.zcode/cli/config.json
+cp ~/.zcode/cli/config.json.bak ~/.zcode/cli/config.json
+```
+
+Keep the backup until physical verification is complete.
+
+---
+
+## After every provider
 
 Start a session in each provider, then list what the registry recorded:
 
@@ -637,5 +799,7 @@ Each active session should appear with its provider, title, and project. To
 remove every recorded session (for example after testing), run
 `... sessions clear-all` with the same binary. `... sessions prune
 [max-age-hours]` deletes only sessions whose last hook is older than the
-cutoff (default 24 hours); the daemon runs the same prune automatically once
-a minute.
+cutoff (default 24 hours); that one operator cutoff applies to every
+provider alike. The daemon's automatic pass — the same prune, once a minute
+— is split by provider instead: zcode rows are pruned at 1 hour, every
+other provider at 24 hours.

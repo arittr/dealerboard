@@ -471,19 +471,34 @@ export const updateSessionTitles = (db: Database, updates: readonly SessionTitle
   });
 
 /**
- * Remove every top-level row whose last hook predates the cutoff, cascading
- * to children. `updated_at` holds an ISO-8601 UTC timestamp, so the lexical
- * comparison is chronological. Returns the number of stale top-level rows
- * (SQLite's own change count would also include cascade-deleted children).
+ * Remove every top-level row whose last hook predates its provider's cutoff,
+ * cascading to children. zcode has no SessionEnd hook, so its rows lease out
+ * on a shorter cutoff supplied by the caller; `zcodeCutoffIso` defaults to
+ * `cutoffIso` so operator-driven single-cutoff prunes (`sessions prune`)
+ * apply one age to every provider. `updated_at` holds an ISO-8601 UTC
+ * timestamp, so the lexical comparison is chronological. Returns the number
+ * of stale top-level rows (SQLite's own change count would also include
+ * cascade-deleted children).
  */
-export const pruneStaleSessions = (db: Database, cutoffIso: string): number =>
+export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffIso: string = cutoffIso): number =>
   inWriteTransaction(db, () => {
     const stale = db
-      .query("SELECT COUNT(*) AS n FROM active_sessions WHERE parent_session_id IS NULL AND updated_at < ?")
-      .get(cutoffIso) as { n: number } | null;
+      .query(
+        `SELECT COUNT(*) AS n FROM active_sessions
+         WHERE parent_session_id IS NULL AND (
+           (provider = 'zcode' AND updated_at < ?) OR (provider != 'zcode' AND updated_at < ?)
+         )`,
+      )
+      .get(zcodeCutoffIso, cutoffIso) as { n: number } | null;
     const count = stale?.n ?? 0;
     if (count > 0) {
-      db.run("DELETE FROM active_sessions WHERE parent_session_id IS NULL AND updated_at < ?", [cutoffIso]);
+      db.run(
+        `DELETE FROM active_sessions
+         WHERE parent_session_id IS NULL AND (
+           (provider = 'zcode' AND updated_at < ?) OR (provider != 'zcode' AND updated_at < ?)
+         )`,
+        [zcodeCutoffIso, cutoffIso],
+      );
     }
     return count;
   });

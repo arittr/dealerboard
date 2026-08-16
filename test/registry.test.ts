@@ -589,6 +589,34 @@ describe("pruneStaleSessions", () => {
     ).toEqual(["applied", "applied"]);
     expect(getRow("s1")).toMatchObject({ status: "working", logical_slot: 1 });
   });
+
+  test("zcode rows prune on the 1h lease while other providers keep the 24h one", () => {
+    const T0 = "2026-08-06T00:00:00.000Z";
+    const nowMs = Date.parse(T0) + 2 * 60 * 60 * 1000; // "now" is 2h after T0
+    const thirtyMinutesAgo = new Date(nowMs - 30 * 60 * 1000).toISOString();
+
+    applyRegistryEvents(db, [
+      start("z-old", { provider: "zcode", at: T0 }), // 2h stale — past both leases
+      start("c-old", { provider: "claude", at: T0 }), // 2h stale — inside the 24h lease
+      start("z-fresh", { provider: "zcode", at: thirtyMinutesAgo }), // inside the 1h lease
+    ]);
+
+    const defaultCutoff = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+    const zcodeCutoff = new Date(nowMs - 60 * 60 * 1000).toISOString();
+
+    expect(pruneStaleSessions(db, defaultCutoff, zcodeCutoff)).toBe(1);
+    expect(listSessions(db).map((session) => session.sessionId)).toEqual(["c-old", "z-fresh"]);
+  });
+
+  test("a single cutoff applies to every provider (operator override shape)", () => {
+    const T0 = "2026-08-06T00:00:00.000Z";
+    applyRegistryEvents(db, [start("z-old", { provider: "zcode", at: T0 })]);
+
+    const singleCutoff = new Date(Date.parse(T0) + 60 * 1000).toISOString(); // 1min after T0
+
+    expect(pruneStaleSessions(db, singleCutoff)).toBe(1);
+    expect(listSessions(db)).toEqual([]);
+  });
 });
 
 describe("listSessions", () => {

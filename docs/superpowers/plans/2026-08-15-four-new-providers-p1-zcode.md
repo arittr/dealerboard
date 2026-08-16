@@ -486,7 +486,7 @@ git commit -m "docs: zcode hook configuration and conventions"
 - Consumes: everything above, deployed.
 - Produces: the verification record; the ghost-filter decision; the pinned zcode SQLite schema names.
 
-This task is interactive with the user and touches their live environment. Get explicit go-ahead for each of: editing `~/.zcode/cli/config.json`, running `bun scripts/install-local.ts`, and driving zcode sessions.
+This task touches the user's live environment. **Controller amendment: the user gave blanket go-ahead for Task 4 on 2026-08-16** ("you don't need my approval for task4 or touching any configs") — edit `~/.zcode/cli/config.json`, run `bun scripts/install-local.ts`, and drive zcode sessions autonomously; record everything in the verification file.
 
 - [ ] **Step 1: Pin the SQLite schema (prerequisite for titles)**
 
