@@ -12,6 +12,8 @@
  *   pass over an unchanged transcript costs one stat.
  * - Codex: `~/.codex/session_index.jsonl` maps session ids to `thread_name`.
  *   The whole index is reparsed only when its (mtime, size) changes.
+ * - zcode: `db.sqlite` under the zcode home, re-queried per pass — WAL makes
+ *   stat caching unsafe.
  * - Kimi rows are never resolved here — hooks already deliver their titles.
  *
  * Resolution is additive: a found title is proposed only when it differs from
@@ -19,6 +21,7 @@
  * filesystem access flows through injected dependencies so tests use fakes.
  */
 
+import { Database } from "bun:sqlite";
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import type { SessionTitleUpdate, TitleTarget } from "./registry";
 
@@ -32,6 +35,8 @@ export type FileStat = { mtimeMs: number; size: number };
 
 export type TitleResolverDependencies = {
   codexIndexPath: string;
+  /** zcode's SQLite store; resolved by the caller (ZCODE_HOME override lives in cli.ts). */
+  zcodeDatabasePath: string;
   statPath?: (path: string) => FileStat | null;
   readTail?: (path: string, maxBytes: number) => string | null;
   readWhole?: (path: string) => string | null;
@@ -128,6 +133,42 @@ const codexTitlesFromIndex = (content: string): Map<string, string> => {
   return byId;
 };
 
+/**
+ * zcode stores auto-generated titles in its own SQLite database. The schema
+ * names are pinned by live verification (Task 4 of the P1 plan); if that
+ * probe finds different names, this constant is the only change.
+ */
+const ZCODE_TITLE_QUERY = "SELECT title FROM session WHERE id = ?";
+
+/**
+ * Read zcode titles in one per-pass read-only connection. zcode's database is
+ * WAL, so committed titles can live in db.sqlite-wal without touching the main
+ * file's stat — the (mtime, size) caching Claude/Codex use would go stale
+ * indefinitely here, so every pass re-queries (one indexed lookup per live
+ * zcode row on the daemon's 2s cadence). Any failure — missing file,
+ * SQLITE_BUSY from zcode's writer, unexpected schema — skips the pass; the
+ * next cadence retries.
+ */
+const readZcodeTitles = (databasePath: string, sessionIds: readonly string[]): Map<string, string> => {
+  const titles = new Map<string, string>();
+  let db: Database | null = null;
+  try {
+    db = new Database(databasePath, { readonly: true, create: false });
+    const statement = db.query(ZCODE_TITLE_QUERY);
+    for (const sessionId of sessionIds) {
+      const row = statement.get(sessionId) as { title: unknown } | null;
+      if (row !== null && typeof row.title === "string" && row.title.length > 0) {
+        titles.set(sessionId, boundTitle(row.title));
+      }
+    }
+  } catch {
+    return new Map();
+  } finally {
+    db?.close();
+  }
+  return titles;
+};
+
 export const createTitleResolver = (dependencies: TitleResolverDependencies): TitleResolver => {
   const statPath = dependencies.statPath ?? defaultStatPath;
   const readTail = dependencies.readTail ?? defaultReadTail;
@@ -171,6 +212,7 @@ export const createTitleResolver = (dependencies: TitleResolverDependencies): Ti
     resolve: (targets) => {
       const updates: SessionTitleUpdate[] = [];
       let codexById: Map<string, string> | null = null;
+      let zcodeById: Map<string, string> | null = null;
       for (const target of targets) {
         let resolved: string | null = null;
         if (target.provider === "claude" && target.transcriptPath !== null) {
@@ -178,6 +220,12 @@ export const createTitleResolver = (dependencies: TitleResolverDependencies): Ti
         } else if (target.provider === "codex") {
           codexById ??= codexTitles();
           resolved = codexById.get(target.sessionId) ?? null;
+        } else if (target.provider === "zcode") {
+          zcodeById ??= readZcodeTitles(
+            dependencies.zcodeDatabasePath,
+            targets.filter((candidate) => candidate.provider === "zcode").map((candidate) => candidate.sessionId),
+          );
+          resolved = zcodeById.get(target.sessionId) ?? null;
         }
         if (resolved !== null && resolved !== target.title) {
           updates.push({ provider: target.provider, sessionId: target.sessionId, title: resolved });

@@ -368,8 +368,11 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   environment: process.env,
   parentPid: process.ppid,
   runDaemon: (daemonPaths, diagnostics) => {
+    const environment = process.env;
+    const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
     const resolveTitles = createTitleResolver({
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
+      zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
     }).resolve;
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveTitles });
     daemon.start();

@@ -1,4 +1,8 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createTitleResolver, type FileStat, type TitleTarget } from "../src/core/titles";
 
 const CODEX_INDEX = "/home/test/.codex/session_index.jsonl";
@@ -15,6 +19,7 @@ const makeResolver = (seed?: {
   stats?: Record<string, FileStat>;
   tails?: Record<string, string>;
   wholes?: Record<string, string>;
+  zcodeDatabasePath?: string;
 }): { resolver: ReturnType<typeof createTitleResolver>; fs: FakeFs } => {
   const stats = new Map(Object.entries(seed?.stats ?? {}));
   const tails = new Map(Object.entries(seed?.tails ?? {}));
@@ -23,6 +28,7 @@ const makeResolver = (seed?: {
   let wholeReads = 0;
   const resolver = createTitleResolver({
     codexIndexPath: CODEX_INDEX,
+    zcodeDatabasePath: seed?.zcodeDatabasePath ?? "/nonexistent/zcode/db.sqlite",
     statPath: (path) => stats.get(path) ?? null,
     readTail: (path) => {
       tailReads += 1;
@@ -200,5 +206,110 @@ describe("other providers", () => {
       resolver.resolve([{ provider: "kimi", sessionId: "k1", title: null, transcriptPath: "/transcripts/k1.jsonl" }]),
     ).toEqual([]);
     expect(fs.tailReads()).toBe(0);
+  });
+});
+
+describe("zcode SQLite titles", () => {
+  const ZCODE_TABLE_DDL = "CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT)";
+
+  const withFixtureDb = (
+    rows: readonly { id: string; title: string | null }[],
+    run: (dbPath: string) => void,
+  ): void => {
+    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-zcode-titles-"));
+    try {
+      const dbPath = join(dir, "db.sqlite");
+      const setup = new Database(dbPath, { create: true, readwrite: true });
+      try {
+        setup.exec(ZCODE_TABLE_DDL);
+        for (const row of rows) {
+          setup.run("INSERT INTO session (id, title) VALUES (?, ?)", [row.id, row.title]);
+        }
+      } finally {
+        setup.close();
+      }
+      run(dbPath);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  const zcodeTarget = (sessionId: string, title: string | null = null): TitleTarget => ({
+    provider: "zcode",
+    sessionId,
+    title,
+    transcriptPath: null,
+  });
+
+  test("resolves titles per live zcode row and bounds to 256 code points", () => {
+    withFixtureDb(
+      [
+        { id: "z1", title: "Fix the widget renderer" },
+        { id: "z2", title: null },
+      ],
+      (dbPath) => {
+        const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
+        expect(resolver.resolve([zcodeTarget("z1"), zcodeTarget("z2"), zcodeTarget("ghost")])).toEqual([
+          { provider: "zcode", sessionId: "z1", title: "Fix the widget renderer" },
+        ]);
+      },
+    );
+  });
+
+  test("proposes nothing when the stored title already matches", () => {
+    withFixtureDb([{ id: "z1", title: "Same" }], (dbPath) => {
+      const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
+      expect(resolver.resolve([zcodeTarget("z1", "Same")])).toEqual([]);
+    });
+  });
+
+  test("sees a WAL commit that has not checkpointed (no stat cache)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-zcode-titles-"));
+    try {
+      const dbPath = join(dir, "db.sqlite");
+      const writer = new Database(dbPath, { create: true, readwrite: true });
+      try {
+        writer.exec("PRAGMA journal_mode = WAL");
+        writer.exec(ZCODE_TABLE_DDL);
+        writer.run("INSERT INTO session (id, title) VALUES ('z1', 'Initial')");
+      } catch (error) {
+        writer.close();
+        throw error;
+      }
+      // The writer stays OPEN and nothing checkpoints: the title lives only
+      // in db.sqlite-wal, and the main file's stat is unchanged. A resolver
+      // caching on (mtime, size) would never see this write.
+      const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
+      try {
+        expect(resolver.resolve([zcodeTarget("z1")])).toEqual([
+          { provider: "zcode", sessionId: "z1", title: "Initial" },
+        ]);
+        writer.run("UPDATE session SET title = 'Renamed mid-stream' WHERE id = 'z1'");
+        expect(resolver.resolve([zcodeTarget("z1")])).toEqual([
+          { provider: "zcode", sessionId: "z1", title: "Renamed mid-stream" },
+        ]);
+      } finally {
+        writer.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing database or an unexpected schema resolves nothing and never throws", () => {
+    const missing = makeResolver();
+    expect(missing.resolver.resolve([zcodeTarget("z1")])).toEqual([]);
+
+    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-zcode-titles-"));
+    try {
+      const dbPath = join(dir, "db.sqlite");
+      const wrong = new Database(dbPath, { create: true, readwrite: true });
+      wrong.exec("CREATE TABLE unrelated (id TEXT PRIMARY KEY)");
+      wrong.close();
+      const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
+      expect(resolver.resolve([zcodeTarget("z1")])).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
