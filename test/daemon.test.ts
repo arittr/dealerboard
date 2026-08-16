@@ -50,6 +50,9 @@ const startSession = (sessionId: string, observedAt: string = NOW): void => {
       transcriptPath: null,
       observedAt,
     },
+    // The projection hides read-and-idle sessions, so the fixture session
+    // ends its turn with an unread result to stay visible.
+    { kind: "Stop", provider: "claude", sessionId, observedAt },
   ]);
 };
 
@@ -140,6 +143,9 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       descendantCount: 0,
       logicalSlot: 1,
       ghosttyTerminalId: null,
+      originKind: null,
+      originRef: null,
+      originSubagent: false,
     },
   ],
 };

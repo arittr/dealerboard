@@ -12,7 +12,9 @@ export type Provider = (typeof PROVIDER_KEYS)[number];
 export type SessionStatus = "idle" | "working" | "waiting" | "error";
 
 /** Who spawned a session: a paseo agent or an interactive terminal. */
-export type SessionOrigin = { kind: "paseo" | "terminal"; ref: string };
+export type SessionOriginKind = "paseo" | "terminal";
+
+export type SessionOrigin = { kind: SessionOriginKind; ref: string };
 
 export type RegistryEvent =
   | {
@@ -73,6 +75,9 @@ export type ProjectedSession = {
   descendantCount: number;
   logicalSlot: number;
   ghosttyTerminalId: string | null;
+  originKind: SessionOriginKind | null;
+  originRef: string | null;
+  originSubagent: boolean;
 };
 
 export type SnapshotHealth = {
@@ -90,6 +95,7 @@ const MAX_STRING_CODE_POINTS = 256;
 
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
+const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -160,6 +166,19 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (value["ghosttyTerminalId"] !== null && value["provider"] !== "claude") {
     return invalid("session.ghosttyTerminalId is only valid for Claude");
   }
+  // Origin fields are validated when present and defaulted when absent, so
+  // an older daemon's snapshot (which predates them) still parses.
+  if (value["originKind"] !== undefined && value["originKind"] !== null) {
+    if (typeof value["originKind"] !== "string" || !ORIGIN_KINDS.has(value["originKind"])) {
+      return invalid("session.originKind must be paseo, terminal, or null");
+    }
+  }
+  if (value["originRef"] !== undefined && !isNullableBoundedString(value["originRef"])) {
+    return invalid("session.originRef must be null or a bounded string");
+  }
+  if (value["originSubagent"] !== undefined && typeof value["originSubagent"] !== "boolean") {
+    return invalid("session.originSubagent must be a boolean");
+  }
   return {
     provider: value["provider"] as Provider,
     sessionId: value["sessionId"],
@@ -169,6 +188,9 @@ const parseSession = (value: unknown): ProjectedSession => {
     descendantCount: value["descendantCount"],
     logicalSlot: value["logicalSlot"],
     ghosttyTerminalId: value["ghosttyTerminalId"],
+    originKind: value["originKind"] === undefined ? null : (value["originKind"] as SessionOriginKind | null),
+    originRef: value["originRef"] === undefined ? null : (value["originRef"] as string | null),
+    originSubagent: value["originSubagent"] === undefined ? false : (value["originSubagent"] as boolean),
   };
 };
 

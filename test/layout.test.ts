@@ -21,6 +21,9 @@ const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {})
   descendantCount: 0,
   logicalSlot,
   ghosttyTerminalId: null,
+  originKind: null,
+  originRef: null,
+  originSubagent: false,
   ...overrides,
 });
 

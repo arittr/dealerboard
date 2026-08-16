@@ -7,7 +7,13 @@ import { ProjectionError, type ProjectionRow, projectRows, readProjection } from
 import { applyRegistryEvents } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
-import { type Provider, parseSessionSnapshot, type SessionSnapshotV2, type SessionStatus } from "../src/protocol";
+import {
+  type Provider,
+  parseSessionSnapshot,
+  type SessionOriginKind,
+  type SessionSnapshotV2,
+  type SessionStatus,
+} from "../src/protocol";
 
 const row = (
   sessionId: string,
@@ -19,6 +25,10 @@ const row = (
     project?: string | null;
     slot?: number | null;
     ghosttyTerminalId?: string | null;
+    originKind?: SessionOriginKind | null;
+    originRef?: string | null;
+    originSubagent?: number;
+    unreadSince?: string | null;
   } = {},
 ): ProjectionRow => {
   const parent = options.parent ?? null;
@@ -31,6 +41,12 @@ const row = (
     project: options.project ?? null,
     logicalSlot: options.slot === undefined ? (parent === null ? 1 : null) : options.slot,
     ghosttyTerminalId: options.ghosttyTerminalId ?? null,
+    originKind: options.originKind ?? null,
+    originRef: options.originRef ?? null,
+    originSubagent: options.originSubagent ?? 0,
+    // Unread by default so idle roots stay visible; tests exercising the
+    // visibility filter pass null explicitly (a `??` default would swallow it).
+    unreadSince: options.unreadSince === undefined ? "2026-08-16T00:00:00.000Z" : options.unreadSince,
   };
 };
 
@@ -77,6 +93,9 @@ describe("projectRows", () => {
       descendantCount: 3,
       logicalSlot: 2,
       ghosttyTerminalId: null,
+      originKind: null,
+      originRef: null,
+      originSubagent: false,
     });
   });
 
@@ -90,6 +109,47 @@ describe("projectRows", () => {
     expect(effective([row("p", { status: "waiting" }), row("c", { parent: "p", status: "idle" })])).toBe("waiting");
     // An idle root with no descendants stays idle.
     expect(effective([row("p", { status: "idle" })])).toBe("idle");
+  });
+
+  test("read-and-idle sessions are hidden; unread-idle, working, waiting, error stay visible", () => {
+    const rows = [
+      row("read-idle", { status: "idle", unreadSince: null, slot: 1 }),
+      row("unread-idle", { status: "idle", unreadSince: "2026-08-16T00:00:00.000Z", slot: 2 }),
+      row("busy", { status: "working", unreadSince: null, slot: 3 }),
+      row("blocked", { status: "waiting", unreadSince: null, slot: 4 }),
+      row("broken", { status: "error", unreadSince: null, slot: 5 }),
+    ];
+    expect(projectRows(rows).map((session) => session.sessionId)).toEqual(["unread-idle", "busy", "blocked", "broken"]);
+  });
+
+  test("a read-idle root with a live child is lifted to working and stays visible", () => {
+    const sessions = projectRows([
+      row("p", { status: "idle", unreadSince: null }),
+      row("c", { parent: "p", status: "idle" }),
+    ]);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ sessionId: "p", status: "working", descendantCount: 1 });
+  });
+
+  test("hidden roots' children still validate topology (no missing-parent error)", () => {
+    // A live child lifts its root to working, so a hidden root is childless
+    // by definition — but its subtree still counts toward the total-visited
+    // reachability check: skipping traversal for hidden roots would flag the
+    // leftover rows as a phantom cycle.
+    const sessions = projectRows([
+      row("hidden", { status: "idle", unreadSince: null, slot: 1 }),
+      row("p", { status: "working", slot: 2 }),
+      row("c", { parent: "p" }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["p"]);
+    expect(sessions[0]?.descendantCount).toBe(1);
+  });
+
+  test("origin fields are projected", () => {
+    const sessions = projectRows([
+      row("s", { originKind: "paseo", originRef: "a1", originSubagent: 1, status: "working" }),
+    ]);
+    expect(sessions[0]).toMatchObject({ originKind: "paseo", originRef: "a1", originSubagent: true });
   });
 
   test("reduces effective status by error > waiting > working > idle across the subtree", () => {
@@ -265,6 +325,9 @@ describe("readProjection", () => {
             descendantCount: 2,
             logicalSlot: 1,
             ghosttyTerminalId: null,
+            originKind: null,
+            originRef: null,
+            originSubagent: false,
           },
         ]);
         // The snapshot satisfies the published v2 contract.
@@ -335,6 +398,27 @@ describe("readProjection", () => {
             transcriptPath: null,
             observedAt: "2026-08-06T00:00:05.000Z",
           },
+          // The projection hides read-and-idle sessions, so p1/z1/d1 must
+          // land an unread result to stay visible; o1 is lifted by its live
+          // child either way.
+          {
+            kind: "Stop",
+            provider: "pi",
+            sessionId: "p1",
+            observedAt: "2026-08-06T00:00:06.000Z",
+          },
+          {
+            kind: "Stop",
+            provider: "zcode",
+            sessionId: "z1",
+            observedAt: "2026-08-06T00:00:07.000Z",
+          },
+          {
+            kind: "Stop",
+            provider: "deepseek",
+            sessionId: "d1",
+            observedAt: "2026-08-06T00:00:08.000Z",
+          },
         ]);
       } finally {
         writer.close();
@@ -376,6 +460,9 @@ describe("writeSnapshotAtomically", () => {
         descendantCount: 2,
         logicalSlot: 3,
         ghosttyTerminalId: null,
+        originKind: null,
+        originRef: null,
+        originSubagent: false,
       },
     ],
   };
