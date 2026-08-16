@@ -164,7 +164,14 @@ const readZcodeTitles = (databasePath: string, sessionIds: readonly string[]): M
   } catch {
     return new Map();
   } finally {
-    db?.close();
+    if (db !== null) {
+      try {
+        db.close();
+      } catch {
+        // A close failure has no bearing on the titles already read; the
+        // reader never throws regardless of how the pass ends.
+      }
+    }
   }
   return titles;
 };
