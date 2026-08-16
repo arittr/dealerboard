@@ -232,9 +232,15 @@ export class ProjectionDaemon {
       if (this.state.lastTitlePassAtMs === null || nowMs - this.state.lastTitlePassAtMs >= DAEMON_TITLE_INTERVAL_MS) {
         this.state.lastTitlePassAtMs = nowMs;
         const facts = this.deps.resolveFacts(listTitleTargets(this.connection));
-        const titlesChanged = facts.titles.length > 0 && updateSessionTitles(this.connection, facts.titles) > 0;
-        const modelsChanged = facts.models.length > 0 && updateSessionModels(this.connection, facts.models) > 0;
-        if (titlesChanged || modelsChanged) {
+        // The flag is set eagerly per write: each update is its own
+        // transaction, so a committed change must force reprojection even
+        // if the sibling write throws (own-connection commits never bump
+        // data_version, and the fast path would otherwise suppress the
+        // republication).
+        if (facts.titles.length > 0 && updateSessionTitles(this.connection, facts.titles) > 0) {
+          changed = true;
+        }
+        if (facts.models.length > 0 && updateSessionModels(this.connection, facts.models) > 0) {
           changed = true;
         }
       }

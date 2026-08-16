@@ -9,10 +9,10 @@
  * - Claude: the transcript JSONL (path stored on the registry row) carries
  *   `{"type":"ai-title","aiTitle":...}` records and assistant records with a
  *   `"model":"..."` field. The file can grow to megabytes, so only the last
- *   64 KiB are read — one read serves both facts — and the final ai-title
- *   line and the last model occurrence win. Results are cached per path on
- *   the (mtime, size) identity, so a pass over an unchanged transcript costs
- *   one stat.
+ *   64 KiB (TAIL_BYTES) are read — one read serves both facts — and the final
+ *   ai-title line and the last model occurrence win. Results are cached per
+ *   path on the (mtime, size) identity, so a pass over an unchanged
+ *   transcript costs one stat.
  * - Codex: `~/.codex/session_index.jsonl` maps session ids to `thread_name`.
  *   The whole index is reparsed only when its (mtime, size) changes. Models
  *   come from a tail read of the rollout JSONL at the row's `transcript_path`,
@@ -35,7 +35,7 @@ import { Database } from "bun:sqlite";
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import type { SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
 
-export const CLAUDE_TAIL_BYTES = 64 * 1024;
+export const TAIL_BYTES = 64 * 1024;
 
 const MAX_TITLE_CODE_POINTS = 256;
 
@@ -230,7 +230,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       return { title: cached.title, model: cached.model };
     }
-    const tail = readTail(path, CLAUDE_TAIL_BYTES);
+    const tail = readTail(path, TAIL_BYTES);
     const title = tail === null ? null : claudeTitleFromTail(tail);
     const model = tail === null ? null : modelFromTail(tail);
     claudeCache.set(path, { ...stat, title, model });
@@ -246,7 +246,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       return cached.model;
     }
-    const tail = readTail(path, CLAUDE_TAIL_BYTES);
+    const tail = readTail(path, TAIL_BYTES);
     const model = tail === null ? null : modelFromTail(tail);
     codexModelCache.set(path, { ...stat, model });
     return model;

@@ -537,4 +537,54 @@ describe("ProjectionDaemon maintenance", () => {
       harness.daemon.stop();
     }
   });
+
+  test("a committed title write republishes even when the model write then fails", () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    let proposals = 0;
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      resolveFacts: () => {
+        proposals += 1;
+        if (proposals === 1) {
+          return { titles: [], models: [] };
+        }
+        return {
+          titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }],
+          // 300 code points violates the v6 CHECK (length BETWEEN 1 AND 256),
+          // so updateSessionModels throws AFTER the title write committed —
+          // the two writes are separate transactions.
+          models: [{ provider: "claude" as const, sessionId: "s1", model: "m".repeat(300) }],
+        };
+      },
+    });
+    harness.daemon.start();
+    try {
+      // First poll: clean baseline, arming the data_version fast path.
+      expect(harness.writes).toEqual([HEALTHY_S1]);
+
+      clock.advance(2_000);
+      harness.tick();
+
+      // The title write committed even though the model write threw...
+      const row = (() => {
+        const db = openRegistryDatabase(paths.database, "readonly");
+        try {
+          return db.query("SELECT title FROM active_sessions").get() as { title: string } | null;
+        } finally {
+          db.close();
+        }
+      })();
+      expect(row).toEqual({ title: "Resolved from disk" });
+      // ...and the failure was reported without harming publication health.
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "maintenance_failed" }]);
+      expect(harness.writes.at(-1)?.health.status).toBe("ok");
+      // The committed title must reach the snapshot: own-connection commits
+      // never bump data_version, so only maintain's changed flag forces the
+      // reprojection.
+      expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
+    } finally {
+      harness.daemon.stop();
+    }
+  });
 });
