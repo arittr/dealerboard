@@ -111,22 +111,32 @@ over hand-rolled provider/model pairs when dispatching:
   Claude sessions, a Bash `run_in_background` PreToolUse arms the per-session
   `background_outstanding` flag (schema v3) and Stop then maps to `working`
   instead of `idle`; a `<task-notification>` prompt or a TaskStop PreToolUse
-  disarms it. A tile's effective status is the max (`error > waiting > working
-  > idle`) over its whole subtree, and any live subagent row lifts it to at
-  least `working` (`src/core/projection.ts`).
+  disarms it. zcode has no SessionEnd hook (rows age out via the daemon's 1h
+  zcode lease — `ZCODE_STALE_SESSION_TTL_MS`), no StopFailure event (zcode
+  tiles never go `error`), and no interrupt event except `PostToolUseFailure`
+  with `is_interrupt: true`, which maps to `Stop`; an interrupt between tool
+  calls that fires no such event leaves the tile `working` until the next
+  event or the lease. A tile's effective status is the max (`error > waiting >
+  working > idle`) over its whole subtree, and any live subagent row lifts it
+  to at least `working` (`src/core/projection.ts`).
 - Session lifecycle: rows are deleted by SessionEnd hooks, by the daemon's
-  stale prune (top-level rows with no hook for 24h, checked every minute;
-  `sessions prune [hours]` manually), or by `sessions clear`/`clear-all`.
+  stale prune (top-level rows with no hook for 24h — 1h for zcode —
+  checked every minute; `sessions prune [hours]` manually), or by
+  `sessions clear`/`clear-all`.
   Every provider late-joins on `UserPromptSubmit` (`SessionObserved`), so a
   session whose start hook was missed — or whose row was pruned while still
   alive — reappears at its next prompt.
 - Tile labels prefer the session title over the project name. Only Kimi
   pushes titles via hooks; the daemon resolves Claude titles from the
   transcript's `ai-title` records (path stored in schema v5's
-  `transcript_path`) and Codex titles from `~/.codex/session_index.jsonl`'s
-  `thread_name` (`src/core/titles.ts`), writing them back without touching
-  `updated_at` (the prune's aging signal). Titles word-wrap to two
-  12-code-point lines with an ellipsis on overflow.
+  `transcript_path`), Codex titles from `~/.codex/session_index.jsonl`'s
+  `thread_name`, and zcode titles from `~/.zcode/cli/db/db.sqlite`
+  (`ZCODE_HOME` override) via the resolver in `src/core/titles.ts` — zcode's
+  database is re-queried per pass, never stat-cached (WAL means committed
+  titles can live in `db.sqlite-wal` without changing the main file's stat).
+  All are written back without touching `updated_at` (the prune's aging
+  signal). Titles word-wrap to two 12-code-point lines with an ellipsis on
+  overflow.
 - The daemon is no longer read-only: it owns maintenance (titles every 2s,
   prune every 60s) and rewrites the snapshot every 5s as a heartbeat. The
   plugin treats a snapshot older than 10s as a dead daemon and renders the
