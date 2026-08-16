@@ -119,33 +119,20 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
   };
 
   /**
-   * Terminal-outcome coordination, per turn. Upstream, pi fires agent_end
-   * BEFORE agent_settled, and the registry's applyStop unconditionally
-   * rewrites status — StopFailure-then-Stop would flash the error tile and
-   * settle idle, so exactly one terminal event is emitted per turn. Reverse
-   * order is coordinated too: agent_settled finalizes immediately (an
-   * Escape-swallowed agent_end must not stall the tile — known accepted
-   * gap), and the turn stays armed so its pending agent_end completes it.
-   * An agent_end with no turn in flight (after a finalized turn) is ignored
-   * — it must not contaminate the next turn's outcome.
+   * Terminal-outcome latch. The registry's applyStop unconditionally rewrites
+   * status — StopFailure-then-Stop would flash the error tile and settle idle
+   * — so exactly one terminal event is emitted, at agent_settled. Ordering is
+   * structural in pi (verified against 0.84.2 sources): the agent loop emits
+   * agent_end on every termination path before returning, prompt() awaits the
+   * loop, and agent_settled fires only in _runAgentPrompt's finally — after
+   * the loop and all retry/compaction continuations. Settled can therefore
+   * never precede its turn's end, and a new turn's start implies the previous
+   * turn's end already fired: the cross-turn window is closed by pi's
+   * architecture, not by our flags. Turn-boundary clearing is still hygiene
+   * against a straggler end latching after a settled turn — it can never
+   * contaminate the next turn.
    */
-  const turn = { inFlight: false, endSeen: false, settledSeen: false, errorLatched: false };
-
-  const finalize = (sessionId: string): void => {
-    emit({ hook_event_name: turn.errorLatched ? "StopFailure" : "Stop", session_id: sessionId });
-    if (turn.endSeen) {
-      // Both signals observed — the turn is fully terminal.
-      turn.inFlight = false;
-      turn.endSeen = false;
-      turn.settledSeen = false;
-      turn.errorLatched = false;
-    }
-    // else: settled finalized alone (agent_end still pending). Keep the turn
-    // armed and settledSeen set so the pending agent_end completes the turn
-    // exactly once; with no turn in flight nothing stays armed for a stray
-    // end to touch. errorLatched is false here by construction — only a live
-    // agent_end sets it, and any end also sets endSeen.
-  };
+  let errorLatched = false;
 
   host.on("session_start", (_event: unknown, ctx: PiContext) => {
     try {
@@ -176,13 +163,9 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
       if (readSource(event) !== "interactive") {
         return;
       }
-      // A user prompt opens a fresh turn: arm the coordinator and clear any
-      // stale terminal signals. errorLatched is deliberately kept — it is
-      // never stale (only a live agent_end sets it, and every finalize that
-      // observed one resets it), and a mid-turn error should still surface.
-      turn.inFlight = true;
-      turn.endSeen = false;
-      turn.settledSeen = false;
+      // Turn start: clear the latch first — a stale latch from a straggler
+      // end must never contaminate the new turn's outcome.
+      errorLatched = false;
       emit({ hook_event_name: "UserPromptSubmit", session_id: session.sessionId });
     } catch {
       // fail-soft
@@ -197,9 +180,9 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
       if (session === undefined) {
         return;
       }
-      // Tool activity counts as turn activity (execution can resume without
-      // a fresh prompt).
-      turn.inFlight = true;
+      // Turn-start boundary, same rule as interactive input: clear the latch
+      // first so a straggler's stale latch never contaminates this turn.
+      errorLatched = false;
       const toolName = readToolName(event);
       emit({
         hook_event_name: "PreToolUse",
@@ -234,16 +217,11 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
       if (session === undefined) {
         return;
       }
-      if (!turn.inFlight) {
-        // Stray end after a finalized turn: must not touch the latch.
-        return;
-      }
-      turn.endSeen = true;
+      // Latch the error; the single terminal event is emitted at settled.
+      // Multiple ends can precede one settled (auto-retry runs) — the last
+      // end is the definitive outcome.
       if (readStopReason(event) === "error") {
-        turn.errorLatched = true;
-      }
-      if (turn.settledSeen) {
-        finalize(session.sessionId);
+        errorLatched = true;
       }
     } catch {
       // fail-soft
@@ -256,9 +234,8 @@ export const createExtension = (host: PiHost, spawnPort: SpawnPort = defaultSpaw
       if (session === undefined) {
         return;
       }
-      // Finalize always — never wait for agent_end (Escape may swallow it).
-      turn.settledSeen = true;
-      finalize(session.sessionId);
+      emit({ hook_event_name: errorLatched ? "StopFailure" : "Stop", session_id: session.sessionId });
+      errorLatched = false;
     } catch {
       // fail-soft
     }

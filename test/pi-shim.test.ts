@@ -151,7 +151,12 @@ describe("pi shim event mapping", () => {
   });
 });
 
-describe("pi shim terminal-outcome coordination", () => {
+describe("pi shim terminal latch", () => {
+  // pi's ordering is structural (verified against 0.84.2 sources): the agent
+  // loop emits agent_end on every termination path before returning, prompt()
+  // awaits the loop, and agent_settled fires only afterwards, in
+  // _runAgentPrompt's finally. These tests use the real order.
+
   test("upstream order: a clean turn settles to Stop", () => {
     const { sent, fire } = makeHarness();
     fire("input", { source: "interactive" });
@@ -188,43 +193,6 @@ describe("pi shim terminal-outcome coordination", () => {
     expect(sent.map((payload) => payload["hook_event_name"])).toEqual(["UserPromptSubmit", "StopFailure"]);
   });
 
-  test("reverse order: a settled turn is completed by its late errored end, exactly once", () => {
-    const { sent, fire } = makeHarness();
-    fire("input", { source: "interactive" });
-    fire("agent_settled");
-    fire("agent_end", agentEnd("error"));
-    expect(sent).toEqual([
-      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
-      // settled finalized before the error was knowable:
-      { hook_event_name: "Stop", session_id: "pi-s1" },
-      // the pending end completes the turn:
-      { hook_event_name: "StopFailure", session_id: "pi-s1" },
-    ]);
-  });
-
-  test("a stray errored end after a finalized turn cannot contaminate the next turn", () => {
-    const { sent, fire } = makeHarness();
-    fire("input", { source: "interactive" });
-    fire("agent_end", agentEnd("stop"));
-    fire("agent_settled");
-    fire("agent_end", agentEnd("error"));
-    fire("input", { source: "interactive" });
-    fire("agent_end", agentEnd("stop"));
-    fire("agent_settled");
-    expect(sent.map((payload) => payload["hook_event_name"])).toEqual([
-      "UserPromptSubmit",
-      "Stop",
-      "UserPromptSubmit",
-      "Stop",
-    ]);
-  });
-
-  test("a bare settled with no end still settles to Stop (Escape may swallow agent_end)", () => {
-    const { sent, fire } = makeHarness();
-    fire("agent_settled");
-    expect(sent).toEqual([{ hook_event_name: "Stop", session_id: "pi-s1" }]);
-  });
-
   test("the latch clears: the next clean turn emits Stop", () => {
     const { sent, fire } = makeHarness();
     fire("input", { source: "interactive" });
@@ -239,6 +207,41 @@ describe("pi shim terminal-outcome coordination", () => {
       "UserPromptSubmit",
       "Stop",
     ]);
+  });
+
+  test("turn-start hygiene: a straggler errored end after a settled turn is cleared by the next turn's input", () => {
+    const { sent, fire } = makeHarness();
+    fire("agent_settled");
+    fire("agent_end", agentEnd("error"));
+    fire("input", { source: "interactive" });
+    fire("agent_end", agentEnd("stop"));
+    fire("agent_settled");
+    // The stale latch was cleared at the input; the second turn settles clean.
+    expect(sent).toEqual([
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-s1" },
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+    ]);
+  });
+
+  test("turn-start hygiene also holds when the next turn begins with tool activity, not a prompt", () => {
+    const { sent, fire } = makeHarness();
+    fire("agent_settled");
+    fire("agent_end", agentEnd("error"));
+    fire("tool_execution_start", { toolName: "Bash" });
+    fire("agent_end", agentEnd("stop"));
+    fire("agent_settled");
+    expect(sent).toEqual([
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+      { hook_event_name: "PreToolUse", session_id: "pi-s1", tool_name: "Bash" },
+      { hook_event_name: "Stop", session_id: "pi-s1" },
+    ]);
+  });
+
+  test("a bare settled with no end still settles to Stop (settled also fires when the prompt throws)", () => {
+    const { sent, fire } = makeHarness();
+    fire("agent_settled");
+    expect(sent).toEqual([{ hook_event_name: "Stop", session_id: "pi-s1" }]);
   });
 });
 
@@ -267,7 +270,7 @@ describe("pi shim ghost filter", () => {
     expect(sent).toEqual([]);
   });
 
-  test("ghost events leave the coordinator untouched: the next visible turn settles cleanly", () => {
+  test("ghost events never latch the visible session: the next turn settles cleanly", () => {
     const { sent, fire } = makeHarness();
     for (const [event, payload] of ALL_EVENTS) {
       fire(event, payload, NON_TUI_WITH_FILE);
