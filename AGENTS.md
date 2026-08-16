@@ -115,7 +115,8 @@ Notes:
   alive — reappears at its next prompt.
 - The pi/omp shims (`extensions/{pi,omp}/stream-deck-agents.ts`) are
   dependency-free structural host files (no host imports — jiti loads them
-  bare) that spawn the helper detached; wire payloads carry only canonical
+  bare) that spawn the helper detached, serialized through a FIFO queue so
+  wire order matches emission order; wire payloads carry only canonical
   event names and allowlisted keys, omitted rather than nulled when absent
   (omit-don't-null); the installer substitutes the
   `__STREAM_DECK_AGENTS_EXECUTABLE__` token, writes atomically at mode 0600,

@@ -832,20 +832,16 @@ yours, never touches it again, and it stops receiving updates.
 - Escape during a streaming response settles the tile to idle. Escape during
   a tool call shows the error tile: pi records the aborted tool as an errored
   turn (live-probed on 0.84.2 — the abort fires the same terminal event pair
-  as a real failure, with the error outcome).
+  as a real failure, with the error outcome). The shim serializes its helper
+  spawns, so the tool-end and terminal writes always reach the registry in
+  emission order — re-probed live, 6/6 abort trials showed the error tile
+  with no stuck-working outcome.
 - Quitting pi removes the tile.
 
 ### Known gaps
 
 - pi has no permission or question surface, so the tile never shows waiting.
 - pi reports no subagent rows.
-- Escape during a tool call can leave the tile stuck on working (observed 2
-  of 5 live trials on 0.84.2): the tool-end and terminal events fire
-  milliseconds apart, each spawning its own detached helper, and the
-  tool-end write can land after the terminal one and overwrite it. The next
-  turn's activity (or the hourly lease) corrects the tile. Natural tool
-  turns are unaffected — the model streams text between tool end and turn
-  end, so those writes are seconds apart.
 
 ### Verify and remove
 
@@ -882,7 +878,7 @@ you delete the marker, making it yours (untouched, and no longer updated).
 - Switching sessions mid-process keeps parentage correct — the shim follows
   the visible session. The previous session's row is not closed by an
   in-process switch (omp signals session end only at process exit), so it
-  lingers with its last status until the hourly lease prunes it — or until
+  lingers with its last status until the 24-hour lease prunes it — or until
   that session is resumed and quit.
 - Quitting omp removes the tile.
 
