@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 6;
+export const LATEST_SCHEMA_VERSION = 7;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -142,12 +142,15 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
 `;
 
 /**
- * v6 stamps sessions with their origin (a 'paseo' or 'terminal' kind, an
+ * v7 stamps sessions with their origin (a 'paseo' or 'terminal' kind, an
  * opaque reference, and whether the row is a subagent) and tracks unread
- * output with a timestamp. All four columns are plain additive ALTERs on
- * the v5 table — no rebuild.
+ * output with a timestamp. All four columns are plain additive ALTERs — no
+ * rebuild — so they apply equally to a v5 table and to the v6 table main's
+ * model-label migration produced: its `model` column is outside this build's
+ * explicit column lists and survives untouched. (Schema version 6 is reserved
+ * by that merged migration; origin/unread therefore ship as v7.)
  */
-const SCHEMA_VERSION_6 = `
+const SCHEMA_VERSION_7 = `
 ALTER TABLE active_sessions
   ADD COLUMN origin_kind TEXT
   CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal'));
@@ -176,7 +179,7 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 2, sql: SCHEMA_VERSION_2 },
   { version: 3, sql: SCHEMA_VERSION_3 },
   { version: 4, sql: SCHEMA_VERSION_4 },
-  { version: 6, sql: SCHEMA_VERSION_6 },
+  { version: 7, sql: SCHEMA_VERSION_7 },
 ];
 
 /**
@@ -244,7 +247,7 @@ export const initializeDatabase = (paths: AppPaths): void => {
         migratePreV5();
         migrateToV5(db);
       }
-      // Entries above v5 (v6+) assume the rebuilt table and run after it.
+      // Entries above v5 (v7+) assume the rebuilt table and run after it.
       const migratePostV5 = db.transaction(() => {
         for (const migration of MIGRATIONS) {
           if (migration.version > version && migration.version > 5) {

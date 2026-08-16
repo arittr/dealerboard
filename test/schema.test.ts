@@ -111,7 +111,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 6 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 7 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -120,7 +120,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -168,14 +168,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v6 with null bindings, no outstanding background work, and no transcript", () => {
+  test("migrates v1 rows additively to v7 with null bindings, no outstanding background work, and no transcript", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -184,7 +184,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
       expect(
         db
           .query(
@@ -560,7 +560,7 @@ describe("schema v5", () => {
       expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(6);
+      expect(version.user_version).toBe(7);
     } finally {
       db.close();
     }
@@ -670,8 +670,8 @@ const createVersion5Database = (path: string): void => {
   }
 };
 
-describe("schema v6", () => {
-  test("migrates v5 to v6, adding origin and unread columns without touching rows", () => {
+describe("schema v7", () => {
+  test("migrates v5 to v7, adding origin and unread columns without touching rows", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
@@ -680,7 +680,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
       expect(countSessions(db)).toBe(1);
       expect(
         db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions").get(),
@@ -702,13 +702,46 @@ describe("schema v6", () => {
     }
   });
 
-  test("fresh init creates the v6 columns at their defaults", () => {
+  test("migrates a v6 model-label database to v7, adding columns beside the model column", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    // Reproduce main's model-label v6: a nullable `model` column stamped as
+    // schema version 6. This build must migrate it to v7 without touching
+    // the unknown column or its data.
+    const modelBuild = new Database(paths.database);
+    try {
+      modelBuild.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
+      modelBuild.run("UPDATE active_sessions SET model = 'claude-sonnet-4-6' WHERE session_id = 'v5-root'");
+      modelBuild.exec("PRAGMA user_version = 6");
+    } finally {
+      modelBuild.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(countSessions(db)).toBe(1);
+      expect(db.query("SELECT origin_kind, origin_subagent, unread_since, model FROM active_sessions").get()).toEqual({
+        origin_kind: null,
+        origin_subagent: 0,
+        unread_since: null,
+        model: "claude-sonnet-4-6",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fresh init creates the v7 columns at their defaults", () => {
     const paths = resolveAppPaths(tempHome);
     initializeDatabase(paths);
 
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 7 });
       insertSession(db, "s1", null, 1);
       expect(
         db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since FROM active_sessions").get(),
