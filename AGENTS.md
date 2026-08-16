@@ -82,7 +82,10 @@ Notes:
   P, omp O, zcode Z, deepseek D) on hues picked for mutual distinctness on
   the LCD panel, not brand fidelity (`PROVIDER_COLORS`): Claude `#D97757`,
   Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp `#F5F0EA`, zcode
-  `#EAB308`, deepseek `#2DD4BF`.
+  `#EAB308`, deepseek `#2DD4BF`. The Paseo origin pip uses
+  `COLOR_ORIGIN_PASEO` `#A78BFA` (bottom-right): filled disc for a Paseo
+  parent session, hollow ring for a Paseo subagent, nothing for
+  terminal/native sessions.
 - Session status model: `idle` = turn finished (set by the Stop hook),
   `working` = Activity, `waiting` = Attention, `error` = StopFailure. For
   Claude sessions, a Bash `run_in_background` PreToolUse arms the per-session
@@ -96,6 +99,26 @@ Notes:
   event or the lease. A tile's effective status is the max (`error > waiting >
   working > idle`) over its whole subtree, and any live subagent row lifts it
   to at least `working` (`src/core/projection.ts`).
+- Unread ledger and grid visibility: a turn ending — a Stop that settles to
+  idle, or StopFailure — stamps `unread_since` (schema v7); a result landed.
+  Only viewing clears it: a tile press acks via `sessions ack` (the plugin's
+  sole plugin→daemon write, executed against the installed binary), the Paseo
+  overlay reports the agent viewed, or a reused SessionStart re-opens the row.
+  Prompts never mark read. Projection admits only top-level rows that are
+  active or unread, so a read-and-idle row stays in the registry (the prune is
+  storage hygiene, not visibility) and on the grid idle ⟺ unread.
+- Origin (schema v7): hooks detect it at ingest (`src/core/origin.ts` —
+  `PASEO_AGENT_ID` → paseo with the agent id as `origin_ref`, `TERM_PROGRAM`
+  → terminal, else null) into `origin_kind`/`origin_ref`/`origin_subagent`.
+  The daemon's Paseo overlay (`src/core/paseo.ts`, every 2s) scans
+  `~/.paseo/agents/<workspace>/<agentId>.json`, joins on
+  `persistence.sessionId` (fallback `runtimeInfo.sessionId`), stamps origin
+  plus the subagent bit (`parentAgentId` present), and mirrors
+  `requiresAttention` both ways — false clears unread (viewed in Paseo), true
+  sets it without moving the first-news timestamp; a difference-guard keeps
+  unchanged rows from dirtying the maintenance signal. Tile presses route
+  paseo-first: a paseo-origin tile with a known ref opens
+  `paseo://h/<serverId>/agent/<agentId>`, else falls back to provider routing.
 - Session lifecycle: rows are deleted by SessionEnd hooks, by the daemon's
   stale prune (top-level rows with no hook for 24h — 1h for zcode —
   checked every minute; `sessions prune [hours]` manually), or by
@@ -115,9 +138,9 @@ Notes:
   signal). Titles word-wrap to two 12-code-point lines with an ellipsis on
   overflow.
 - The daemon is no longer read-only: it owns maintenance (titles every 2s,
-  prune every 60s) and rewrites the snapshot every 5s as a heartbeat. The
-  plugin treats a snapshot older than 10s as a dead daemon and renders the
-  degraded treatment (OFFLINE / "!" flags).
+  the Paseo overlay every 2s, prune every 60s) and rewrites the snapshot
+  every 5s as a heartbeat. The plugin treats a snapshot older than 10s as a
+  dead daemon and renders the degraded treatment (OFFLINE / "!" flags).
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.
