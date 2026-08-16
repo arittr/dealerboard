@@ -3,7 +3,10 @@
 This is the final, manual setup step. Drew performs these edits by hand, one
 provider at a time, after `bun run scripts/install-local.ts` has completed and
 been verified — the registry database and the LaunchAgent daemon must already
-exist so that the first hook event has a consumer.
+exist so that the first hook event has a consumer. pi and oh-my-pi are the
+exceptions: the installer places their reporting shim itself, so their
+sections below describe what to expect from the installed shim, not a config
+edit.
 
 Every provider invokes the same installed helper with one JSON event object on
 standard input:
@@ -784,6 +787,91 @@ cp ~/.zcode/cli/config.json.bak ~/.zcode/cli/config.json
 ```
 
 Keep the backup until physical verification is complete.
+
+---
+
+## pi
+
+Target file: `~/.pi/agent/extensions/stream-deck-agents.ts` — placed by the
+installer, not by hand.
+
+pi needs no config edits. The installer copies one extension file into pi's
+auto-discovered extensions directory; pi loads it on every start, and it
+reports session lifecycle to the daemon through the same helper every
+provider above invokes.
+
+**Ownership marker.** The file's first line is
+`// stream-deck-agents: managed shim v1`. The installer refuses to overwrite a
+same-named file without that marker — it treats such a file as user content.
+If you customize the file, the installer leaves it alone from then on, and
+your copy stops receiving updates.
+
+### Behavior to expect
+
+- A tile appears when a session starts. Extensions load in every pi process,
+  but only interactive TUI sessions are reported — print (`pi -p`), JSON, and
+  RPC processes never produce tiles.
+- The tile goes working on prompt and tool activity, and idle when the turn
+  settles.
+- A failed turn shows the error tile, and it stays: the shim reports exactly
+  one terminal event per turn, so the error is never overwritten by a later
+  idle — it persists until the next turn's first activity.
+- `/name` retitles the tile.
+- `/new`, `/resume`, and `/fork` close the old row and open the new session's
+  — pi reports the old session's shutdown whatever the reason.
+- Quitting pi removes the tile.
+
+### Known gaps
+
+- pi has no permission or question surface, so the tile never shows waiting.
+- pi reports no subagent rows.
+
+### Verify and remove
+
+Start a new pi session and watch its tile appear (see "After every provider"
+below). To remove pi reporting, delete the file.
+
+---
+
+## oh-my-pi (omp)
+
+Target file: `~/.omp/agent/extensions/stream-deck-agents.ts` — placed by the
+installer, not by hand.
+
+Same shape as pi: omp needs no config edits, the installer places one
+extension file in omp's auto-discovered extensions directory, and omp loads it
+on every start. The same ownership-marker rule applies — the file's first line
+is `// stream-deck-agents: managed shim v1`, the installer never overwrites a
+same-named file without it, and a customized copy is left alone (and stops
+receiving updates).
+
+### Behavior to expect
+
+- A tile appears when a session starts, goes working on prompt and tool
+  activity, and idle when the turn ends.
+- Approval prompts show waiting, and omp's ask question shows waiting. The
+  approval UX is unchanged: the shim observes the approval event and never
+  intercepts it.
+- Subagent runs show the descendant badge on the parent tile.
+- Auto-generated titles appear a few seconds after the first message: the
+  daemon reads them from the title slot at the head of the session file.
+- Switching sessions mid-process keeps parentage correct — the shim follows
+  the visible session.
+- Quitting omp removes the tile.
+
+### Known gaps
+
+- omp has no StopFailure-equivalent event, so there is no error tile;
+  interrupted turns settle the tile to idle.
+
+**Fork churn.** omp ships multiple builds a day. If tiles stop updating after
+an omp upgrade, reinstall (`bun scripts/install-local.ts`) and re-check — the
+shim's host-event surface is re-verified per upgrade.
+
+### Verify and remove
+
+Start a new omp session and watch its tile appear (see "After every provider"
+below). To remove omp reporting, delete the file.
 
 ---
 

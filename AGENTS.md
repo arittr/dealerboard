@@ -93,9 +93,14 @@ Notes:
   tiles never go `error`), and no interrupt event except `PostToolUseFailure`
   with `is_interrupt: true`, which maps to `Stop`; an interrupt between tool
   calls that fires no such event leaves the tile `working` until the next
-  event or the lease. A tile's effective status is the max (`error > waiting >
-  working > idle`) over its whole subtree, and any live subagent row lifts it
-  to at least `working` (`src/core/projection.ts`).
+  event or the lease. pi has no permission or question surface (a pi tile
+  never shows `waiting`), and pi's `session_shutdown` maps to `SessionEnd`
+  for every reason — `/new` and friends close the old row, and the new
+  session re-registers via the next start or late-join. omp fires no
+  StopFailure-equivalent (an omp tile never shows `error`; an interrupt
+  settles as `Stop`, i.e. idle). A tile's effective status is the max
+  (`error > waiting > working > idle`) over its whole subtree, and any live
+  subagent row lifts it to at least `working` (`src/core/projection.ts`).
 - Session lifecycle: rows are deleted by SessionEnd hooks, by the daemon's
   stale prune (top-level rows with no hook for 24h — 1h for zcode —
   checked every minute; `sessions prune [hours]` manually), or by
@@ -103,17 +108,28 @@ Notes:
   Every provider late-joins on `UserPromptSubmit` (`SessionObserved`), so a
   session whose start hook was missed — or whose row was pruned while still
   alive — reappears at its next prompt.
-- Tile labels prefer the session title over the project name. Only Kimi
-  pushes titles via hooks; the daemon resolves Claude titles from the
-  transcript's `ai-title` records (path stored in schema v5's
-  `transcript_path`), Codex titles from `~/.codex/session_index.jsonl`'s
-  `thread_name`, and zcode titles from `~/.zcode/cli/db/db.sqlite`
-  (`ZCODE_HOME` override) via the resolver in `src/core/titles.ts` — zcode's
-  database is re-queried per pass, never stat-cached (WAL means committed
-  titles can live in `db.sqlite-wal` without changing the main file's stat).
-  All are written back without touching `updated_at` (the prune's aging
-  signal). Titles word-wrap to two 12-code-point lines with an ellipsis on
-  overflow.
+- The pi/omp shims (`extensions/{pi,omp}/stream-deck-agents.ts`) are
+  dependency-free structural host files (no host imports — jiti loads them
+  bare) that spawn the helper detached; wire payloads carry only canonical
+  event names and allowlisted keys, omitted rather than nulled when absent
+  (omit-don't-null); the installer substitutes the
+  `__STREAM_DECK_AGENTS_EXECUTABLE__` token, writes atomically at mode 0600,
+  and refuses to overwrite a same-named file lacking the managed marker
+  (`// stream-deck-agents: managed shim v1`).
+- Tile labels prefer the session title over the project name. Kimi and pi
+  push titles via hook events (pi's shim pushes on `session_info_changed`,
+  fired by `/name`); the daemon resolves Claude titles from the transcript's
+  `ai-title` records (path stored in schema v5's `transcript_path`), Codex
+  titles from `~/.codex/session_index.jsonl`'s `thread_name`, zcode titles
+  from `~/.zcode/cli/db/db.sqlite` (`ZCODE_HOME` override), and omp titles
+  from the fixed 256-byte title slot at the head of the session JSONL at the
+  row's `transcript_path` (cached on `(mtime, size)`, safe because omp
+  rewrites the slot in place on the otherwise append-only file) via the
+  resolver in `src/core/titles.ts` — zcode's database is re-queried per pass,
+  never stat-cached (WAL means committed titles can live in `db.sqlite-wal`
+  without changing the main file's stat). All are written back without
+  touching `updated_at` (the prune's aging signal). Titles word-wrap to two
+  12-code-point lines with an ellipsis on overflow.
 - The daemon is no longer read-only: it owns maintenance (titles every 2s,
   prune every 60s) and rewrites the snapshot every 5s as a heartbeat. The
   plugin treats a snapshot older than 10s as a dead daemon and renders the
