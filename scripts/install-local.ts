@@ -2,8 +2,8 @@
  * Explicit macOS-local installer for the hook-driven session registry.
  *
  * Step order (any pre-hook failure exits nonzero immediately; this script
- * installs its own shim files into provider extension dirs; it still never
- * edits provider **config files**):
+ * installs its own managed artifacts — the pi/omp shims and the grok hook
+ * file — into provider dirs; it still never edits provider **config files**):
  *   1. Require macOS; canonical paths resolve through node:os homedir().
  *   2. Preflight: an existing database newer than this build aborts the
  *      install before anything is clobbered — init would throw
@@ -22,8 +22,8 @@
  *       installed copy reaches this build's version (the app's install
  *       confirmation dialog can otherwise park the install silently), and
  *       restart it through the official Stream Deck CLI.
- *   11. Install the managed shims into the pi/omp agent extension dirs that
- *       exist; never overwrite unmarked user files.
+ *   11. Install the managed shims and grok hook file into the provider
+ *       dirs that exist; never overwrite unmarked user files.
  *   12. Print the canonical paths; the Claude/Kimi/Codex hooks remain a
  *       manual step.
  *
@@ -69,6 +69,11 @@ const SHIM_TARGETS = [
   { provider: "omp", homeDir: ".omp" },
 ] as const;
 const SHIM_MODE = 0o600;
+
+const GROK_HOOK_MARKER = "x-stream-deck-agents";
+const GROK_HOOK_TEMPLATE = join("extensions", "grok", "stream-deck-agents.hook.json");
+const GROK_HOOK_NAME = "stream-deck-agents.json";
+const GROK_HOOK_MODE = 0o600;
 
 const LAUNCHCTL = "/bin/launchctl";
 const PLUTIL = "/usr/bin/plutil";
@@ -139,6 +144,42 @@ const installShims = (paths: AppPaths): void => {
     renameSync(temp, destination);
     process.stdout.write(`install-local: installed ${target.provider} shim → ${destination}\n`);
   }
+};
+
+/**
+ * Install the managed grok hook file into ~/.grok/hooks when the grok home
+ * exists. Same rules as the shims: skip when the provider dir is absent,
+ * refuse to overwrite a same-named file without the managed marker (user
+ * content), atomic temp + rename, token substituted at copy time.
+ */
+const installGrokHook = (paths: AppPaths): void => {
+  const grokRoot = join(paths.home, ".grok");
+  const hooksDir = join(grokRoot, "hooks");
+  const destination = join(hooksDir, GROK_HOOK_NAME);
+  if (!existsSync(grokRoot)) {
+    process.stdout.write(`install-local: skipping grok hook (${grokRoot} does not exist)\n`);
+    return;
+  }
+  const source = readFileSync(join(repositoryRoot, GROK_HOOK_TEMPLATE), "utf8");
+  if (!source.includes(GROK_HOOK_MARKER) || !source.includes(EXECUTABLE_TOKEN)) {
+    fail("grok-hook", `${GROK_HOOK_TEMPLATE} is missing its marker or token`);
+  }
+  const rendered = source.split(EXECUTABLE_TOKEN).join(paths.executable);
+  if (existsSync(destination)) {
+    const installed = readFileSync(destination, "utf8");
+    if (!installed.includes(GROK_HOOK_MARKER)) {
+      process.stdout.write(`install-local: NOT overwriting ${destination} — no managed marker (user content)\n`);
+      return;
+    }
+    if (installed === rendered) {
+      return;
+    }
+  }
+  mkdirSync(hooksDir, { recursive: true });
+  const temp = join(hooksDir, `.${GROK_HOOK_NAME}.tmp-${process.pid}`);
+  writeFileSync(temp, rendered, { mode: GROK_HOOK_MODE });
+  renameSync(temp, destination);
+  process.stdout.write(`install-local: installed grok hook → ${destination}\n`);
 };
 
 /** The `"Version"` field of a plugin manifest, or null when unreadable or absent. */
@@ -289,9 +330,11 @@ const main = (): void => {
   );
   run("install-plugin", process.execPath, [STREAMDECK_CLI, "restart", LABEL]);
 
-  // 11. Install the managed shims last — auto-discovered shims must never
-  // activate before the compatible daemon and plugin are live.
+  // 11. Install the managed shims and the grok hook file last — managed
+  // artifacts must never activate before the compatible daemon and plugin
+  // are live.
   installShims(paths);
+  installGrokHook(paths);
 
   // 12. Report canonical paths; the Claude/Kimi/Codex hooks remain manual.
   process.stdout.write(
@@ -305,8 +348,9 @@ const main = (): void => {
       `  plugin:      ${packagePath}`,
       `  service:     ${serviceTarget}`,
       "",
-      "Managed pi/omp shims were installed where their extension dirs exist (see",
-      "above). Claude, Kimi, and Codex hooks are NOT installed — follow",
+      "Managed pi/omp shims and the grok hook file were installed where their",
+      "provider dirs exist (see above). Claude, Kimi, and Codex hooks are NOT",
+      "installed — follow",
       "docs/hook-configuration.md to add them manually as the final setup step.",
       "",
     ].join("\n"),
