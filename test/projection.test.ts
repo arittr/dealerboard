@@ -154,6 +154,70 @@ describe("projectRows", () => {
     expect(sessions[0]).toMatchObject({ originKind: "paseo", originRef: "a1", originSubagent: true });
   });
 
+  test("an idle paseo subagent is hidden even when its result is unread", () => {
+    // Subagent results are consumed by the orchestrating parent agent, so a
+    // finished paseo subagent must not hold the grid as an unread tile.
+    const sessions = projectRows([
+      row("sub", {
+        status: "idle",
+        unreadSince: "2026-08-16T00:00:00.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        slot: 1,
+      }),
+    ]);
+    expect(sessions).toEqual([]);
+  });
+
+  test("an active paseo subagent stays visible with its subagent mark", () => {
+    for (const status of ["working", "waiting", "error"] as const) {
+      const sessions = projectRows([
+        row("sub", {
+          status,
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-1",
+          originSubagent: 1,
+          slot: 1,
+        }),
+      ]);
+      expect(sessions.map((session) => session.sessionId)).toEqual(["sub"]);
+      expect(sessions[0]?.originSubagent).toBe(true);
+    }
+  });
+
+  test("an idle paseo parent with an unread result stays visible", () => {
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: "2026-08-16T00:00:00.000Z",
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["parent"]);
+  });
+
+  test("an idle paseo subagent with a live child is lifted to working and stays visible", () => {
+    const sessions = projectRows([
+      row("sub", {
+        status: "idle",
+        unreadSince: "2026-08-16T00:00:00.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        slot: 1,
+      }),
+      row("grandchild", { parent: "sub", status: "idle" }),
+    ]);
+    expect(sessions.map((session) => ({ id: session.sessionId, status: session.status }))).toEqual([
+      { id: "sub", status: "working" },
+    ]);
+  });
+
   test("reduces effective status by error > waiting > working > idle across the subtree", () => {
     const effective = (rows: ProjectionRow[]): SessionStatus | undefined => projectRows(rows)[0]?.status;
 

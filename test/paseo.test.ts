@@ -146,6 +146,118 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
+  test("flags subagents from the paseo.parent-agent-id label (the persisted shape)", () => {
+    const content = agentRecord({
+      id: "agent-2",
+      labels: {
+        "paseo.parent-agent-id": "agent-1",
+        "paseo.open-agent-tab.cid123": "true",
+      },
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-2",
+        requiresAttention: true,
+        isSubagent: true,
+        attentionTimestamp: null,
+        updatedAt: null,
+      },
+    ]);
+  });
+
+  test("other labels alone do not mark a subagent", () => {
+    const content = agentRecord({ labels: { "paseo.open-agent-tab.cid123": "true" } });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+      },
+    ]);
+  });
+
+  test("normalizes offset-form timestamps to canonical UTC", () => {
+    const content = agentRecord({
+      attentionTimestamp: "2026-08-06T02:10:00+02:00",
+      updatedAt: "2026-08-06T00:12:00.000Z",
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: "2026-08-06T00:10:00.000Z",
+        updatedAt: "2026-08-06T00:12:00.000Z",
+      },
+    ]);
+  });
+
+  test("unparseable timestamp strings parse as null", () => {
+    const content = agentRecord({ attentionTimestamp: "not a timestamp", updatedAt: "2026-13-40" });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+      },
+    ]);
+  });
+
+  test("evicts cache entries for files missing from a pass", () => {
+    const path = join(AGENTS_DIR, "work/agent-1.json");
+    const { loader, fs } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [path]: { mtimeMs: 100, size: 500 } },
+      files: { [path]: agentRecord() },
+    });
+    expect(loader(AGENTS_DIR)).toHaveLength(1);
+    expect(fs.wholeReads()).toBe(1);
+
+    // The file vanishes for a pass: its cache entry must be evicted.
+    fs.dirs.set(join(AGENTS_DIR, "work"), []);
+    fs.stats.delete(path);
+    expect(loader(AGENTS_DIR)).toHaveLength(0);
+
+    // It returns with the same (mtime, size) identity; without eviction this
+    // would be a stale cache hit and skip the read.
+    fs.dirs.set(join(AGENTS_DIR, "work"), ["agent-1.json"]);
+    fs.stats.set(path, { mtimeMs: 100, size: 500 });
+    expect(loader(AGENTS_DIR)).toHaveLength(1);
+    expect(fs.wholeReads()).toBe(2);
+  });
+
   test("requiresAttention defaults to false when absent", () => {
     const content = agentRecord({ requiresAttention: undefined });
     const { loader } = makeLoader({

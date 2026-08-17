@@ -510,12 +510,21 @@ export const clearSession = (db: Database, provider: Provider, sessionId: string
     return "applied";
   });
 
-/** Mark one session read: the user has viewed the latest result. Never touches updated_at. */
-export const acknowledgeSession = (db: Database, provider: Provider, sessionId: string): MutationResult =>
+/**
+ * Mark one session read: the user has viewed the latest result. The ack time
+ * is recorded in `acked_at` so the Paseo overlay can never resurrect unread
+ * from an attention flag raised before the view. Never touches updated_at.
+ */
+export const acknowledgeSession = (
+  db: Database,
+  provider: Provider,
+  sessionId: string,
+  ackedAt: string,
+): MutationResult =>
   inWriteTransaction(db, () => {
     const result = db.run(
-      "UPDATE active_sessions SET unread_since = NULL WHERE provider = ? AND session_id = ? AND unread_since IS NOT NULL",
-      [provider, sessionId],
+      "UPDATE active_sessions SET unread_since = NULL, acked_at = ? WHERE provider = ? AND session_id = ? AND unread_since IS NOT NULL",
+      [ackedAt, provider, sessionId],
     );
     return result.changes > 0 ? "applied" : "ignored";
   });
@@ -593,7 +602,9 @@ export type PaseoSyncState = {
  *   timestamp the unread write is skipped entirely (origin stamping still
  *   happens — a timestamp-less flag is not dated news). With a flag time, a
  *   null `unread_since` adopts it and a non-null one is always kept: local
- *   news at least as new as the flag is never regressed or churned.
+ *   news at least as new as the flag is never regressed or churned. A flag
+ *   raised at or before the row's `acked_at` is stale news — the user
+ *   already viewed a newer state — and never resurrects unread.
  * - A cleared or absent-flag record clears `unread_since` only when its
  *   `updatedAt` is present and strictly newer than the stored unread stamp:
  *   a stale or timestamp-less record is not proof of viewing, so an older
@@ -604,37 +615,39 @@ export type PaseoSyncState = {
  * guarded writes exactly — keeps unchanged rows from counting (the daemon's
  * maintenance-changed signal feeds the reprojection fast-path). Never
  * creates rows and never touches updated_at.
- *
- * Accepted residual: after a tile-press ack, a still-stale flagged record can
- * re-set unread for up to one sync cycle. It self-heals because the press
- * opens Paseo, which natively clears the attention flag, so the next record
- * write retires the row again.
  */
 export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
   inWriteTransaction(db, () => {
     let changed = 0;
     for (const state of states) {
       if (state.requiresAttention) {
-        // Flagged: set unread only when currently null, to the flag time.
+        // Flagged: set unread only when currently null, to the flag time —
+        // and only when the flag postdates the last ack, so a stale flag can
+        // never resurrect a session the user already marked read.
         const flagTime = state.attentionTimestamp ?? state.updatedAt;
         const result = db.run(
           `UPDATE active_sessions
            SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?,
-               unread_since = CASE WHEN ? IS NOT NULL THEN COALESCE(unread_since, ?) ELSE unread_since END
+               unread_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN COALESCE(unread_since, ?)
+                 ELSE unread_since
+               END
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND (
                origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
-               OR (? IS NOT NULL AND unread_since IS NULL)
+               OR (? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) AND unread_since IS NULL)
              )`,
           [
             state.agentId,
             state.isSubagent ? 1 : 0,
             flagTime,
             flagTime,
+            flagTime,
             state.provider,
             state.sessionId,
             state.agentId,
             state.isSubagent ? 1 : 0,
+            flagTime,
             flagTime,
           ],
         );

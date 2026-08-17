@@ -5,21 +5,27 @@
  * installs its own shim files into provider extension dirs; it still never
  * edits provider **config files**):
  *   1. Require macOS; canonical paths resolve through node:os homedir().
- *   2. Run the repository build and plugin validate/package commands with an
+ *   2. Preflight: an existing database newer than this build aborts the
+ *      install before anything is clobbered — init would throw
+ *      UnsupportedSchemaVersion only after the swap and bootout.
+ *   3. Run the repository build and plugin validate/package commands with an
  *      explicit working directory.
- *   3. Create or correct the application directories to mode 0700.
- *   4. Copy the compiled core to the canonical executable, chmod 0700.
- *   5. Boot out the exact existing service only if present, so the schema
+ *   4. Create or correct the application directories to mode 0700.
+ *   5. Copy the compiled core to the canonical executable, chmod 0700.
+ *   6. Boot out the exact existing service only if present, so the schema
  *      migration never contends with a live daemon.
- *   6. Run the installed executable's init; verify the latest schema version.
- *   7. Replace the exact executable/log tokens in the plist template, write
+ *   7. Run the installed executable's init; verify the latest schema version.
+ *   8. Replace the exact executable/log tokens in the plist template, write
  *      the canonical plist at mode 0600, and validate with plutil -lint.
- *   8. Bootstrap and kickstart the exact label.
- *   9. Install the single packaged plugin from dist and restart it through
- *      the official Stream Deck CLI.
- *   10. Install the managed shims into the pi/omp agent extension dirs that
+ *   9. Bootstrap and kickstart the exact label.
+ *   10. Install the single packaged plugin from dist, wait until the
+ *       installed copy reaches this build's version (the app's install
+ *       confirmation dialog can otherwise park the install silently), and
+ *       restart it through the official Stream Deck CLI.
+ *   11. Install the managed shims into the pi/omp agent extension dirs that
  *       exist; never overwrite unmarked user files.
- *   11. Print the canonical paths; provider hooks remain uninstalled.
+ *   12. Print the canonical paths; the Claude/Kimi/Codex hooks remain a
+ *       manual step.
  *
  * Every subprocess runs through spawnSync with an argument array — no shell
  * command strings — and every tool path is absolute.
@@ -67,6 +73,10 @@ const SHIM_MODE = 0o600;
 const LAUNCHCTL = "/bin/launchctl";
 const PLUTIL = "/usr/bin/plutil";
 const OPEN = "/usr/bin/open";
+
+const PLUGIN_DIR_NAME = "com.drewritter.stream-deck-agents.sdPlugin";
+const PLUGIN_INSTALL_TIMEOUT_MS = 120_000;
+const PLUGIN_INSTALL_POLL_MS = 2_000;
 
 /** Repository root: this script lives at <root>/scripts/install-local.ts. */
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -131,6 +141,50 @@ const installShims = (paths: AppPaths): void => {
   }
 };
 
+/** The `"Version"` field of a plugin manifest, or null when unreadable or absent. */
+const manifestVersion = (manifestPath: string): string | null => {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || !("Version" in parsed)) {
+      return null;
+    }
+    const version = (parsed as { Version: unknown }).Version;
+    return typeof version === "string" && version.length > 0 ? version : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Block until the Stream Deck app's installed copy of the plugin reaches the
+ * expected version. The app installs behind a confirmation dialog whenever it
+ * chooses to show one; polling the installed manifest (rather than trusting
+ * `open`'s immediate return) keeps a parked dialog from leaving the old
+ * plugin running under a "complete" report. On timeout the step fails with
+ * instructions — every install step is idempotent, so accepting the dialog
+ * and re-running this installer converges.
+ */
+const awaitPluginInstall = (installedManifest: string, expectedVersion: string): void => {
+  const deadline = Date.now() + PLUGIN_INSTALL_TIMEOUT_MS;
+  let announced = false;
+  while (manifestVersion(installedManifest) !== expectedVersion) {
+    if (Date.now() >= deadline) {
+      fail(
+        "install-plugin",
+        `plugin v${expectedVersion} was not installed within 120s — accept the Stream Deck confirmation dialog and re-run this installer`,
+      );
+    }
+    if (!announced) {
+      process.stdout.write(
+        `install-local: waiting for the Stream Deck app to install plugin v${expectedVersion} (accept its confirmation dialog if shown)\n`,
+      );
+      announced = true;
+    }
+    Bun.sleepSync(PLUGIN_INSTALL_POLL_MS);
+  }
+  process.stdout.write(`install-local: plugin v${expectedVersion} confirmed installed\n`);
+};
+
 const main = (): void => {
   // 1. macOS only; resolveAppPaths resolves the home directory via node:os.
   if (process.platform !== "darwin") {
@@ -139,18 +193,39 @@ const main = (): void => {
   process.umask(0o077);
   const paths = resolveAppPaths();
 
-  // 2. Core/plugin build, then plugin validate + package.
+  // 2. Preflight the schema before anything can clobber the install: a
+  // database newer than this build makes step 7's init throw
+  // UnsupportedSchemaVersion — after the executable swap and daemon bootout,
+  // leaving the daemon unable to start. Refuse while everything is untouched.
+  if (existsSync(paths.database)) {
+    const db = new Database(paths.database, { readonly: true, create: false });
+    let found = 0;
+    try {
+      const row = db.query("PRAGMA user_version").get() as { user_version: number } | null;
+      found = row?.user_version ?? 0;
+    } finally {
+      db.close();
+    }
+    if (found > LATEST_SCHEMA_VERSION) {
+      fail(
+        "preflight",
+        `schema user_version ${String(found)} needs a newer build (this build supports ${String(LATEST_SCHEMA_VERSION)})`,
+      );
+    }
+  }
+
+  // 3. Core/plugin build, then plugin validate + package.
   run("build", process.execPath, ["run", "build"]);
   run("package-plugin", process.execPath, ["run", "pack:plugin"]);
 
-  // 3. Application directories, created or corrected to 0700.
+  // 4. Application directories, created or corrected to 0700.
   ensureAppDirectories(paths);
 
-  // 4. Install the compiled core as the canonical executable.
+  // 5. Install the compiled core as the canonical executable.
   copyFileSync(join(repositoryRoot, BUILT_CORE), paths.executable);
   chmodSync(paths.executable, EXECUTABLE_MODE);
 
-  // 5. Stop the live daemon before init runs the schema migration; the rebuild
+  // 6. Stop the live daemon before init runs the schema migration; the rebuild
   // must not contend with the daemon's write cadence on a 250ms busy timeout.
   const uid =
     typeof process.getuid === "function"
@@ -162,7 +237,7 @@ const main = (): void => {
     run("launchagent", LAUNCHCTL, ["bootout", serviceTarget]);
   }
 
-  // 6. Initialize the latest schema version through the installed executable and verify it.
+  // 7. Initialize the latest schema version through the installed executable and verify it.
   run("init", paths.executable, ["init"]);
   const db = new Database(paths.database, { readonly: true, create: false });
   try {
@@ -174,7 +249,7 @@ const main = (): void => {
     db.close();
   }
 
-  // 7. Render the plist template and install the LaunchAgent definition.
+  // 8. Render the plist template and install the LaunchAgent definition.
   const template = readFileSync(join(repositoryRoot, PLIST_TEMPLATE), "utf8");
   if (!template.includes(EXECUTABLE_TOKEN) || !template.includes(LOGS_TOKEN)) {
     fail("launchagent", "plist template is missing an expected token");
@@ -189,30 +264,36 @@ const main = (): void => {
   chmodSync(paths.launchAgent, PLIST_MODE);
   run("launchagent", PLUTIL, ["-lint", paths.launchAgent]);
 
-  // 8. Load the daemon under the exact label.
+  // 9. Load the daemon under the exact label.
   run("launchagent", LAUNCHCTL, ["bootstrap", `gui/${uid}`, paths.launchAgent]);
   run("launchagent", LAUNCHCTL, ["kickstart", "-k", serviceTarget]);
 
-  // 9. Install the single packaged plugin and start it through the official
+  // 10. Install the single packaged plugin and start it through the official
   // Stream Deck CLI. @elgato/cli (1.7.4, the latest) ships no install verb,
   // so the package is opened: LaunchServices hands the registered
-  // .streamDeckPlugin document to the Stream Deck app, which installs it. If
-  // the app presents an install confirmation, accept it and re-run this
-  // installer — every step is idempotent and converges.
+  // .streamDeckPlugin document to the Stream Deck app, which installs it.
+  // The restart waits until the installed copy reaches this build's version.
   const packages = readdirSync(join(repositoryRoot, "dist")).filter((name) => name.endsWith(PACKAGE_SUFFIX));
   const packageName =
     packages.length === 1 && packages[0] !== undefined
       ? packages[0]
       : fail("install-plugin", `expected exactly one ${PACKAGE_SUFFIX} package in dist, found ${packages.length}`);
   const packagePath = join(repositoryRoot, "dist", packageName);
+  const expectedVersion =
+    manifestVersion(join(repositoryRoot, PLUGIN_DIR_NAME, "manifest.json")) ??
+    fail("install-plugin", "the repository plugin manifest has no readable Version");
   run("install-plugin", OPEN, [packagePath]);
+  awaitPluginInstall(
+    join(paths.home, "Library/Application Support/com.elgato.StreamDeck/Plugins", PLUGIN_DIR_NAME, "manifest.json"),
+    expectedVersion,
+  );
   run("install-plugin", process.execPath, [STREAMDECK_CLI, "restart", LABEL]);
 
-  // 10. Install the managed shims last — auto-discovered shims must never
+  // 11. Install the managed shims last — auto-discovered shims must never
   // activate before the compatible daemon and plugin are live.
   installShims(paths);
 
-  // 11. Report canonical paths; provider hooks remain a manual final step.
+  // 12. Report canonical paths; the Claude/Kimi/Codex hooks remain manual.
   process.stdout.write(
     [
       "install-local: complete",
@@ -224,8 +305,9 @@ const main = (): void => {
       `  plugin:      ${packagePath}`,
       `  service:     ${serviceTarget}`,
       "",
-      "Provider hooks are NOT installed. Follow docs/hook-configuration.md to add",
-      "the Claude, Kimi, and Codex hook entries manually as the final setup step.",
+      "Managed pi/omp shims were installed where their extension dirs exist (see",
+      "above). Claude, Kimi, and Codex hooks are NOT installed — follow",
+      "docs/hook-configuration.md to add them manually as the final setup step.",
       "",
     ].join("\n"),
   );

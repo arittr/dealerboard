@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 8;
+export const LATEST_SCHEMA_VERSION = 9;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -177,13 +177,25 @@ ALTER TABLE active_sessions
 `;
 
 /**
+ * v9 adds the ack watermark: the time a session was last marked read.
+ * `syncPaseoStates` consults it so a Paseo attention flag raised before the
+ * ack can never resurrect unread afterwards. Plain additive ALTER, nullable
+ * and unconstrained like unread_since.
+ */
+const SCHEMA_VERSION_9 = `
+ALTER TABLE active_sessions
+  ADD COLUMN acked_at TEXT;
+`;
+
+/**
  * Ordered migrations keyed by the schema version each one produces. Entries
  * below v5 alter the original table and run in one transaction before the
  * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
- * because it manages its own transaction. Entries above v5 (v6 model,
- * v7 origin/unread) assume the rebuilt table and run in a second
+ * because it manages its own transaction. Entries between v5 and v8 (v6
+ * model, v7 origin/unread) assume the rebuilt table and run in a second
  * transaction after it. v8 is special-cased too (`migrateToV8`): it is
- * shape-driven repair, not a static SQL string.
+ * shape-driven repair, not a static SQL string. Entries above v8 (v9
+ * acked_at) run in a final transaction after the repair.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
@@ -192,6 +204,7 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 4, sql: SCHEMA_VERSION_4 },
   { version: 6, sql: SCHEMA_VERSION_6 },
   { version: 7, sql: SCHEMA_VERSION_7 },
+  { version: 9, sql: SCHEMA_VERSION_9 },
 ];
 
 /**
@@ -281,13 +294,13 @@ export const initializeDatabase = (paths: AppPaths): void => {
         migratePreV5();
         migrateToV5(db);
       }
-      // Entries above v5 (v6, v7) assume the rebuilt table and run after it.
-      // One transaction: an interruption between an ALTER and its version
-      // bump would otherwise leave a database that already has the column,
-      // making every retried init die on a duplicate-column error.
+      // Entries between v5 and v8 (v6, v7) assume the rebuilt table and run
+      // after it. One transaction: an interruption between an ALTER and its
+      // version bump would otherwise leave a database that already has the
+      // column, making every retried init die on a duplicate-column error.
       const migratePostV5 = db.transaction(() => {
         for (const migration of MIGRATIONS) {
-          if (migration.version > version && migration.version > 5) {
+          if (migration.version > version && migration.version > 5 && migration.version < 8) {
             db.exec(migration.sql);
             db.exec(`PRAGMA user_version = ${migration.version}`);
           }
@@ -295,6 +308,17 @@ export const initializeDatabase = (paths: AppPaths): void => {
       });
       migratePostV5();
       migrateToV8(db);
+      // Entries above v8 (v9) run after the shape repair, whose stamp would
+      // otherwise clobber their version back to 8.
+      const migratePostV8 = db.transaction(() => {
+        for (const migration of MIGRATIONS) {
+          if (migration.version > version && migration.version > 8) {
+            db.exec(migration.sql);
+            db.exec(`PRAGMA user_version = ${migration.version}`);
+          }
+        }
+      });
+      migratePostV8();
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
   } finally {

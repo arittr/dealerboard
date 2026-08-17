@@ -111,6 +111,7 @@ type Row = {
   origin_ref: string | null;
   origin_subagent: number;
   unread_since: string | null;
+  acked_at: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -149,6 +150,7 @@ describe("applyRegistryEvents", () => {
       origin_ref: null,
       origin_subagent: 0,
       unread_since: null,
+      acked_at: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -238,6 +240,7 @@ describe("applyRegistryEvents", () => {
       origin_ref: null,
       origin_subagent: 0,
       unread_since: null,
+      acked_at: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
@@ -520,14 +523,15 @@ describe("unread ledger", () => {
     expect(row?.origin_ref).toBe("agent-1");
   });
 
-  test("acknowledgeSession clears unread without touching updated_at", () => {
+  test("acknowledgeSession clears unread and stamps acked_at without touching updated_at", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(9) })]);
     const before = getRow("s1")?.updated_at;
-    expect(acknowledgeSession(db, "claude", "s1")).toBe("applied");
+    expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
     const row = getRow("s1");
     expect(row?.unread_since).toBeNull();
+    expect(row?.acked_at).toBe(at(12));
     expect(row?.updated_at).toBe(before);
-    expect(acknowledgeSession(db, "claude", "s1")).toBe("ignored"); // already read
+    expect(acknowledgeSession(db, "claude", "s1", at(13))).toBe("ignored"); // already read
   });
 });
 
@@ -866,23 +870,24 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")?.unread_since).toBe(at(5));
   });
 
-  test("an acknowledged row re-flags from a stale flagged record for one cycle (accepted residual)", () => {
-    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
-    expect(acknowledgeSession(db, "claude", "s1")).toBe("applied");
+  test("an acked row never resurrects unread from a stale flagged record", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    expect(acknowledgeSession(db, "claude", "s1", at(8))).toBe("applied");
     expect(getRow("s1")?.unread_since).toBeNull();
 
-    // A still-stale flagged record re-sets unread to its own flag time. This
-    // is the adjudicated residual: it self-heals because the tile press
-    // opened Paseo, which natively clears the attention flag, so the next
-    // record write retires the row again.
+    // The record still flags attention raised before the ack: the acked_at
+    // watermark suppresses the resurrection (the old one-sync-cycle window).
     const staleFlag = "2026-08-06T00:00:02.000Z";
-    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: staleFlag })])).toBe(1);
-    expect(getRow("s1")?.unread_since).toBe(staleFlag);
-
-    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:09.000Z" })])).toBe(
-      1,
-    );
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: staleFlag })])).toBe(0);
     expect(getRow("s1")?.unread_since).toBeNull();
+
+    // A flag raised after the ack is fresh news and re-flags normally.
+    const freshFlag = "2026-08-06T00:00:09.000Z";
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: freshFlag })])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(freshFlag);
   });
 
   test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {

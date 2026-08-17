@@ -35,6 +35,8 @@ export type PiContext = {
     getSessionId(): string | undefined;
     getSessionFile(): string | undefined;
   };
+  /** pi's ExtensionContext.model (live-pinned on 0.84.2): the current model. */
+  model?: { id: string };
 };
 
 export type PiHost = {
@@ -48,6 +50,7 @@ type WirePayload = {
   cwd?: string;
   transcript_path?: string;
   title?: string;
+  model?: string;
   tool_name?: string;
 };
 
@@ -280,6 +283,7 @@ export const createExtension = (
         return;
       }
       const title = host.getSessionName();
+      const modelId = ctx.model?.id;
       emit({
         hook_event_name: "SessionStart",
         session_id: session.sessionId,
@@ -287,6 +291,8 @@ export const createExtension = (
         transcript_path: session.sessionFile,
         // omit-don't-null: no title key at all for unnamed sessions
         ...(title === undefined ? {} : { title }),
+        // omit-don't-null: no model key when pi exposes no current model
+        ...(modelId === undefined ? {} : { model: modelId }),
       });
     } catch {
       // fail-soft

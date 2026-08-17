@@ -10,19 +10,23 @@
  *   session id verbatim (e.g. kimi `session_<uuid>`, claude UUID);
  * - `.requiresAttention`, defaulting to false when absent;
  * - `.attentionTimestamp` and `.updatedAt`, both optional ISO-8601 strings
- *   bounded like every other record string — the registry sync's attention
- *   watermark compares them against `unread_since` to order Paseo-side and
- *   local news; absent or non-string values parse as null;
- * - `.parentAgentId` (present → the agent is a subagent);
+ *   bounded like every other record string, then validated and re-emitted in
+ *   canonical UTC form (`Date.parse` + `toISOString`, unparseable → null) —
+ *   the registry sync's attention watermark compares them lexically against
+ *   `unread_since`, which only works when both sides are canonical;
+ * - parentage: `.labels["paseo.parent-agent-id"]` is where Paseo persists
+ *   the dispatching agent's id (present → the agent is a subagent); a
+ *   top-level `.parentAgentId` is honored as a fallback;
  * - `.id` and `.provider`, the latter validated against the canonical
  *   provider keys — records naming an unknown provider are skipped.
  *
  * Every read flows through injected filesystem dependencies, and results are
  * cached per file on the (mtime, size) identity, so a pass over unchanged
  * records costs one stat each (mirroring the titles resolver's Claude
- * transcript cache). The loader never throws: a missing agents directory
- * yields an empty list, and malformed or incomplete records are skipped
- * without voiding the pass.
+ * transcript cache). Entries for files missing from a pass are evicted, so
+ * deleted agents never accumulate in the long-lived daemon. The loader never
+ * throws: a missing agents directory yields an empty list, and malformed or
+ * incomplete records are skipped without voiding the pass.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -64,9 +68,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const boundString = (value: string): string => Array.from(value).slice(0, MAX_STRING_CODE_POINTS).join("");
 
-/** A bounded ISO-8601 timestamp string, or null when absent or non-string. */
-const isoTimestampFrom = (value: unknown): string | null =>
-  typeof value === "string" && value.length > 0 ? boundString(value) : null;
+/** A bounded, canonical UTC ISO-8601 timestamp, or null when absent, non-string, or unparseable. */
+const isoTimestampFrom = (value: unknown): string | null => {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  const parsed = Date.parse(boundString(value));
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+};
 
 /** The provider-native session id at `container`.sessionId, or null when absent. */
 const sessionIdFrom = (value: Record<string, unknown>, container: string): string | null => {
@@ -76,6 +85,25 @@ const sessionIdFrom = (value: Record<string, unknown>, container: string): strin
   }
   const sessionId = nested["sessionId"];
   return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
+};
+
+const PARENT_AGENT_ID_LABEL = "paseo.parent-agent-id";
+
+/**
+ * Paseo persists the dispatching agent's id in the record's labels map; a
+ * top-level `parentAgentId` field is honored as a fallback. Either one
+ * present and non-empty marks the agent as a subagent.
+ */
+const parentAgentIdFrom = (value: Record<string, unknown>): string | null => {
+  const labels = value["labels"];
+  if (isRecord(labels)) {
+    const labeled = labels[PARENT_AGENT_ID_LABEL];
+    if (typeof labeled === "string" && labeled.length > 0) {
+      return labeled;
+    }
+  }
+  const topLevel = value["parentAgentId"];
+  return typeof topLevel === "string" && topLevel.length > 0 ? topLevel : null;
 };
 
 /** Extract one agent record's overlay facts, or null when it must be skipped. */
@@ -95,7 +123,7 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
   if (sessionId === null) {
     return null;
   }
-  const parentAgentId = value["parentAgentId"];
+  const parentAgentId = parentAgentIdFrom(value);
   return {
     provider,
     sessionId: boundString(sessionId),
@@ -164,16 +192,26 @@ export const createPaseoAgentStateLoader = (dependencies: PaseoLoaderDependencie
 
   return (paseoDir: string): PaseoAgentState[] => {
     const states: PaseoAgentState[] = [];
+    const seen = new Set<string>();
     for (const workspace of listFiles(paseoDir)) {
       const workspaceDir = join(paseoDir, workspace);
       for (const entry of listFiles(workspaceDir)) {
         if (!entry.endsWith(".json")) {
           continue;
         }
-        const state = readAgentFile(join(workspaceDir, entry));
+        const path = join(workspaceDir, entry);
+        seen.add(path);
+        const state = readAgentFile(path);
         if (state !== null) {
           states.push(state);
         }
+      }
+    }
+    // Evict entries for files this pass did not see — deleted agent records
+    // must not accumulate in the cache over the daemon's lifetime.
+    for (const path of cache.keys()) {
+      if (!seen.has(path)) {
+        cache.delete(path);
       }
     }
     return states;

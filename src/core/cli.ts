@@ -336,7 +336,7 @@ const runSessions = (args: readonly string[], deps: ResolvedDependencies): numbe
       try {
         const db = deps.openDatabase(deps.paths.database, "readwrite");
         try {
-          acknowledgeSession(db, providerArg, sessionId);
+          acknowledgeSession(db, providerArg, sessionId, deps.now());
         } finally {
           db.close();
         }

@@ -111,7 +111,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 8 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 9 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -120,7 +120,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -168,14 +168,14 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
     }
   });
 
-  test("migrates v1 rows additively to v8 with null bindings, no outstanding background work, no transcript, and no model", () => {
+  test("migrates v1 rows additively to v9 with null bindings, no outstanding background work, no transcript, and no model", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion1Database(paths.database);
@@ -184,7 +184,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(
         db
           .query(
@@ -575,7 +575,7 @@ describe("schema v5", () => {
       expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(8);
+      expect(version.user_version).toBe(9);
     } finally {
       db.close();
     }
@@ -684,7 +684,7 @@ const createVersion5Database = (path: string): void => {
 };
 
 describe("schema v7/v8", () => {
-  test("migrates v5 through v7 to v8, adding origin and unread columns without touching rows", () => {
+  test("migrates v5 through v7 to v9, adding origin and unread columns without touching rows", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
@@ -693,7 +693,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -724,13 +724,14 @@ describe("schema v7/v8", () => {
     }
   });
 
-  test("migrates a v6 model-label database to v8, adding columns beside the model column", () => {
+  test("migrates a v6 model-label database to v9, adding columns beside the model column", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
     // Reproduce a v6 database the model-label build produced: a nullable
     // `model` column stamped as schema version 6. Init must apply only the
-    // v7 migration and the v8 stamp, leaving the column and its data alone.
+    // v7 migration, the v8 stamp, and the v9 acked_at column, leaving the
+    // model column and its data alone.
     const modelBuild = new Database(paths.database);
     try {
       modelBuild.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
@@ -744,7 +745,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -763,7 +764,7 @@ describe("schema v7/v8", () => {
     }
   });
 
-  test("repairs a v7 database missing the model column (pre-merge branch shape) to v8", () => {
+  test("repairs a v7 database missing the model column (pre-merge branch shape) on the way to v9", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion5Database(paths.database);
@@ -796,7 +797,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
         name: string;
       }>;
@@ -846,22 +847,22 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(db.query("SELECT model FROM active_sessions WHERE session_id = 'root'").get()).toEqual({ model: "k3" });
     } finally {
       db.close();
     }
   });
 
-  test("fresh init runs the full chain to v8 with both the model and origin/unread columns", () => {
+  test("fresh init runs the full chain to v9 with the model, origin/unread, and acked_at columns", () => {
     const paths = resolveAppPaths(tempHome);
     initializeDatabase(paths);
 
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       // A fresh database must not skip the v6 model migration on its way to
-      // v8: both features' columns exist on every migration path.
+      // v9: every feature's columns exist on every migration path.
       const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
         name: string;
       }>;
@@ -871,6 +872,7 @@ describe("schema v7/v8", () => {
       expect(names).toContain("origin_ref");
       expect(names).toContain("origin_subagent");
       expect(names).toContain("unread_since");
+      expect(names).toContain("acked_at");
       insertSession(db, "s1", null, 1);
       expect(
         db.query("SELECT origin_kind, origin_ref, origin_subagent, unread_since, model FROM active_sessions").get(),
@@ -944,7 +946,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       // Every seeded pre-v6 value must survive verbatim; model is NULL on both.
       expect(
         db
@@ -1005,7 +1007,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
       expect(countSessions(db)).toBe(2);
     } finally {
       db.close();
@@ -1024,5 +1026,45 @@ describe("schema v6", () => {
     createVersion5Database(stale);
     expect(() => openRegistryDatabase(stale, "readonly")).toThrow(UnsupportedSchemaVersion);
     expect(() => openRegistryDatabase(stale, "readwrite")).toThrow(UnsupportedSchemaVersion);
+  });
+});
+
+describe("schema v9", () => {
+  test("migrates a v8 database to v9, adding a nullable acked_at without touching rows", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion5Database(paths.database);
+    // Reproduce a deployed v8 database: the v6 model and v7 origin/unread
+    // columns present, stamped 8. Init must add only acked_at and stamp 9.
+    const v8Build = new Database(paths.database);
+    try {
+      v8Build.exec("ALTER TABLE active_sessions ADD COLUMN model TEXT");
+      v8Build.exec("ALTER TABLE active_sessions ADD COLUMN origin_kind TEXT");
+      v8Build.exec("ALTER TABLE active_sessions ADD COLUMN origin_ref TEXT");
+      v8Build.exec("ALTER TABLE active_sessions ADD COLUMN origin_subagent INTEGER NOT NULL DEFAULT 0");
+      v8Build.exec("ALTER TABLE active_sessions ADD COLUMN unread_since TEXT");
+      v8Build.run("UPDATE active_sessions SET unread_since = '2026-08-06T05:00:00.000Z' WHERE session_id = 'root'");
+      v8Build.exec("PRAGMA user_version = 8");
+    } finally {
+      v8Build.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(countSessions(db)).toBe(2);
+      // acked_at lands null on existing rows; everything else is untouched.
+      expect(db.query("SELECT acked_at FROM active_sessions ORDER BY session_id").all()).toEqual([
+        { acked_at: null },
+        { acked_at: null },
+      ]);
+      expect(db.query("SELECT unread_since FROM active_sessions WHERE session_id = 'root'").get()).toEqual({
+        unread_since: "2026-08-06T05:00:00.000Z",
+      });
+    } finally {
+      db.close();
+    }
   });
 });

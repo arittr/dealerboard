@@ -348,9 +348,11 @@ Notes:
   leave the tile stuck in the waiting color until the next event.
 - `SessionStart` payloads also carry `model` (and `profile`); the helper
   decodes and stores the bounded `model` value, and the tile renders it as
-  small neutral text right of the provider chip. `UserPromptSubmit` carries
-  no model field, so a session whose `SessionStart` was missed shows no
-  model for its lifetime.
+  small neutral text right of the provider chip. Titleless starts register
+  too — a blank page's row stays grid-invisible until its first prompt — so
+  fresh sessions get their model; only a start the hook never delivered
+  leaves the model unset, since `UserPromptSubmit` carries no model field to
+  backfill from.
 
 ### 3. Validate
 
@@ -821,6 +823,9 @@ yours, never touches it again, and it stops receiving updates.
 - A tile appears when a session starts. Extensions load in every pi process,
   but only interactive TUI sessions are reported — print (`pi -p`), JSON, and
   RPC processes never produce tiles.
+- The tile shows the current model id right of the provider chip: the shim
+  forwards pi's current model (`ExtensionContext.model`, pinned on 0.84.2)
+  at session start. A mid-session model switch is not reported.
 - The tile goes working on prompt and tool activity, and idle when the turn
   settles.
 - A failed turn shows the error tile, and it stays: the shim reports exactly

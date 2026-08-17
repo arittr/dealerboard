@@ -205,8 +205,25 @@ describe("event mapping", () => {
     ]);
   });
 
-  test("defers titleless Kimi sessions until the first prompt", () => {
-    expect(decode(withIdentity({ hook_event_name: "SessionStart", cwd: "/users/drew/project-x" }), "kimi")).toEqual([]);
+  test("keeps titleless Kimi starts, model included — the projection hides the idle row", () => {
+    // A blank Kimi Web page fires SessionStart eagerly with no title. The row
+    // registers (so the start's model lands), but an idle, never-unread row
+    // is never projected — the grid stays clean until the first prompt.
+    expect(
+      decode(withIdentity({ hook_event_name: "SessionStart", cwd: "/users/drew/project-x", model: "k3" }), "kimi"),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "kimi",
+        sessionId: "s1",
+        title: null,
+        project: "project-x",
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: "k3",
+        observedAt: NOW,
+      },
+    ]);
 
     expect(
       decode(

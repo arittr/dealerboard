@@ -7,6 +7,7 @@ import type { ClaudeGhosttyBindingContext } from "../src/core/claude-ghostty-bin
 import { type CliDependencies, MAX_STDIN_BYTES, runCli } from "../src/core/cli";
 import { createFileDiagnostics, type DiagnosticRecord } from "../src/core/diagnostics";
 import { type AppPaths, resolveAppPaths } from "../src/core/paths";
+import { readProjection } from "../src/core/projection";
 import { applyRegistryEvents, listSessions } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { RegistryEvent } from "../src/protocol";
@@ -101,18 +102,27 @@ const listRows = (): ReturnType<typeof listSessions> => {
   }
 };
 
+const projectedRows = (): ReturnType<typeof readProjection>["sessions"] => {
+  const db = openRegistryDatabase(paths.database, "readonly");
+  try {
+    return readProjection(db).sessions;
+  } finally {
+    db.close();
+  }
+};
+
 const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 8 database and stays silent on stdout", async () => {
+  test("creates a version 9 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 8 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
     } finally {
       db.close();
     }
@@ -250,7 +260,7 @@ describe("event ingress", () => {
     expect(listRows().map((row) => [row.provider, row.sessionId])).toEqual([["kimi", "s1"]]);
   });
 
-  test("keeps a blank Kimi page absent until its first prompt", async () => {
+  test("keeps a blank Kimi page off the grid while storing its model", async () => {
     initRegistry();
     const blankStart = makeHarness({
       stdin: stdinOf(
@@ -259,12 +269,37 @@ describe("event ingress", () => {
           session_id: "blank-kimi",
           cwd: "/users/drew/project-x",
           source: "startup",
+          model: "k3",
         }),
       ),
     });
     expect(await runCli(["event", "kimi"], blankStart.deps)).toBe(0);
     expect(blankStart.diagnostics).toEqual([]);
-    expect(listRows()).toEqual([]);
+    // Registry membership begins at the eager start — and with it the model —
+    // but an idle, never-unread row is projection-invisible, so an abandoned
+    // blank page still never becomes a tile (it ages out via the prune).
+    expect(listRows()).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "blank-kimi",
+        parentSessionId: null,
+        status: "idle",
+        title: null,
+        project: "project-x",
+        logicalSlot: 1,
+        ghosttyTerminalId: null,
+        backgroundOutstanding: 0,
+        transcriptPath: null,
+        model: "k3",
+        originKind: null,
+        originRef: null,
+        originSubagent: 0,
+        unreadSince: null,
+        openedAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    expect(projectedRows()).toEqual([]);
 
     const firstPrompt = makeHarness({
       stdin: stdinOf(
@@ -290,7 +325,7 @@ describe("event ingress", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
-        model: null,
+        model: "k3",
         originKind: null,
         originRef: null,
         originSubagent: 0,
@@ -299,6 +334,7 @@ describe("event ingress", () => {
         updatedAt: NOW,
       },
     ]);
+    expect(projectedRows().map((session) => session.sessionId)).toEqual(["blank-kimi"]);
 
     const repeatedPrompt = makeHarness({
       stdin: stdinOf(
@@ -324,7 +360,7 @@ describe("event ingress", () => {
         ghosttyTerminalId: null,
         backgroundOutstanding: 0,
         transcriptPath: null,
-        model: null,
+        model: "k3",
         originKind: null,
         originRef: null,
         originSubagent: 0,
@@ -1187,7 +1223,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 8");
+      restore.exec("PRAGMA user_version = 9");
     } finally {
       restore.close();
     }

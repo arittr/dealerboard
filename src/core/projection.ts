@@ -7,8 +7,10 @@
  * `rows.length + 1`. Any invalid topology throws `ProjectionError` — the
  * projection never emits partial output. The grid is an attention inbox:
  * a read-and-idle root is filtered from the snapshot (its registry row
- * persists until its lifecycle ends), while hidden roots and their subtrees
- * still participate in every topology validation. `readProjection` owns the
+ * persists until its lifecycle ends), and so is an idle Paseo subagent even
+ * when unread — its result is consumed by the orchestrating parent agent,
+ * not by the user pressing tiles. Hidden roots and their subtrees still
+ * participate in every topology validation. `readProjection` owns the
  * read transaction boundary around the SQLite select: it commits only a
  * fully mapped and projected snapshot and rolls back if mapping or
  * projection throws. The read side issues no writes.
@@ -83,8 +85,10 @@ const identityKey = (provider: Provider, sessionId: string): string => `${provid
  * at least "working": child rows exist only while a subagent runs, and a
  * subagent may never emit its own Activity event. The grid is an attention
  * inbox, so a root is emitted iff its subtree is still active or its last
- * result is unread (`effectiveStatus !== "idle" || unreadSince !== null`);
- * hidden roots keep their registry rows and still traverse for validation.
+ * result is unread — except that an idle Paseo subagent root is never
+ * emitted: its unread result is the orchestrating parent's to report, not
+ * the user's to ack. Hidden roots keep their registry rows and still
+ * traverse for validation.
  * Pure; throws `ProjectionError` on any invalid topology rather than
  * emitting partial output.
  */
@@ -171,7 +175,11 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       }
     }
     totalVisited += visited.size;
-    const visible = effectiveStatus !== "idle" || root.unreadSince !== null;
+    // A finished Paseo subagent never holds the grid: its result is consumed
+    // by the orchestrating parent agent, so idle subagent roots stay hidden
+    // even when unread. Active ones (or idle ones lifted by live children)
+    // still show with their hollow-ring mark.
+    const visible = effectiveStatus !== "idle" || (root.unreadSince !== null && root.originSubagent !== 1);
     if (visible) {
       projected.push({
         provider: root.provider,

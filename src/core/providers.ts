@@ -203,8 +203,12 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
 
   switch (hookEventName) {
     case "SessionStart": {
-      const event = sessionStartEvent(provider, sessionId, value, now);
-      return provider === "kimi" && event.title === null ? [] : [event];
+      // Kimi emits SessionStart eagerly for blank Web pages, so a titleless
+      // start is not evidence of a user-visible session — but the row still
+      // registers: an idle, never-unread row is projection-invisible (the
+      // abandoned page never becomes a tile and ages out via the prune), and
+      // registering is what stores the start's model for the session's life.
+      return [sessionStartEvent(provider, sessionId, value, now)];
     }
     case "SessionTitleChanged": {
       // Shim-pushed title (pi session_info_changed, dsh session/title). The

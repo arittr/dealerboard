@@ -118,6 +118,27 @@ describe("pi shim event mapping", () => {
     expect("title" in (sent[0] ?? {})).toBe(false);
   });
 
+  test("session_start includes the current model id when pi exposes one", () => {
+    const { sent, fire } = makeHarness({ sessionName: "Fix the widget" });
+    fire("session_start", {}, { ...TUI_CTX, model: { id: "glm-5.3" } });
+    expect(sent).toEqual([
+      {
+        hook_event_name: "SessionStart",
+        session_id: "pi-s1",
+        cwd: process.cwd(),
+        transcript_path: "/sessions/pi-s1.jsonl",
+        title: "Fix the widget",
+        model: "glm-5.3",
+      },
+    ]);
+  });
+
+  test("session_start omits the model key when pi exposes no model", () => {
+    const { sent, fire } = makeHarness({ sessionName: undefined });
+    fire("session_start"); // TUI_CTX declares no model
+    expect("model" in (sent[0] ?? {})).toBe(false);
+  });
+
   test("interactive input emits UserPromptSubmit; scripted input emits nothing", () => {
     const { sent, fire } = makeHarness();
     fire("input", { source: "interactive" });

@@ -64,6 +64,12 @@ Notes:
 - Only the plugin process restarts; the launchd daemon is untouched. Core
   changes under `src/core/` instead need `bun scripts/install-local.ts` (full
   reinstall: daemon, plist, packaged plugin).
+- The installer fails safe on two deploy hazards: it refuses up front —
+  before the executable swap or daemon bootout — when the installed
+  database's schema is newer than the build being installed, and it waits
+  for the Stream Deck app to actually install the packaged plugin version
+  (accept the app's confirmation dialog; at 120s unconfirmed it fails, and
+  a re-run converges).
 - The plugin and daemon deploy in lockstep: the plugin's snapshot parser
   rejects unknown provider keys, so a new daemon with an old plugin degrades
   the grid — and the manifest `Version` bump above is what makes the plugin
@@ -86,9 +92,9 @@ Notes:
   neutral-chrome text right of the chip (vendor prefix stripped,
   ten-code-point cap); the registry stores the raw id (schema v6 `model`
   column; the v8 repair backfills it into pre-merge v7 databases that were
-  stamped without it, so v8 — the latest version — always has it), Kimi
-  pushes it via SessionStart, and the daemon resolves
-  Claude/Codex ids in the same maintenance pass as titles (last
+  stamped without it, so every v8-or-later database has it), Kimi and pi push
+  it at session start (pi via its shim's `session_start`), and the daemon
+  resolves Claude/Codex ids in the same maintenance pass as titles (last
   `"model":"…"` in the tail wins). Null never clears a stored model. The
   Paseo origin pip uses `COLOR_ORIGIN_PASEO` `#A78BFA` (bottom-right):
   filled disc for a Paseo parent session, hollow ring for a Paseo subagent,
@@ -112,13 +118,18 @@ Notes:
   (`error > waiting > working > idle`) over its whole subtree, and any live
   subagent row lifts it to at least `working` (`src/core/projection.ts`).
 - Unread ledger and grid visibility: a turn ending — a Stop that settles to
-  idle, or StopFailure — stamps `unread_since` (added in schema v7; current
-  latest is v8, a shape-repair stamp); a result landed.
+  idle, or StopFailure — stamps `unread_since` (added in schema v7; v8 was a
+  shape-repair stamp; the current latest, v9, adds the `acked_at` watermark);
+  a result landed.
   Only viewing clears it: a tile press acks via `sessions ack` (the plugin's
   sole plugin→daemon write, executed against the installed binary), the Paseo
   overlay reports the agent viewed, or a reused SessionStart re-opens the row.
+  The ack records its time in `acked_at`, and the overlay never resurrects
+  unread from an attention flag raised at or before it.
   Prompts never mark read. Projection admits only top-level rows that are
-  active or unread, so a read-and-idle row stays in the registry (the prune is
+  active or unread — except that an idle Paseo subagent is never admitted
+  (its result is the orchestrating parent's to report, not the user's to
+  ack) — so a read-and-idle row stays in the registry (the prune is
   storage hygiene, not visibility) and on the grid idle ⟺ unread.
 - Origin (added in schema v7): hooks detect it at ingest (`src/core/origin.ts` —
   `PASEO_AGENT_ID` → paseo with the agent id as `origin_ref`, `TERM_PROGRAM`
@@ -126,10 +137,17 @@ Notes:
   The daemon's Paseo overlay (`src/core/paseo.ts`, every 2s) scans
   `~/.paseo/agents/<workspace>/<agentId>.json`, joins on
   `persistence.sessionId` (fallback `runtimeInfo.sessionId`), stamps origin
-  plus the subagent bit (`parentAgentId` present), and mirrors
+  plus the subagent bit (Paseo persists the dispatching agent as
+  `labels["paseo.parent-agent-id"]`; a top-level `parentAgentId` is honored
+  as a fallback), and mirrors
   `requiresAttention` both ways — false clears unread (viewed in Paseo), true
-  sets it without moving the first-news timestamp; a difference-guard keeps
-  unchanged rows from dirtying the maintenance signal. Tile presses route
+  sets it without moving the first-news timestamp and subject to the
+  `acked_at` watermark; a difference-guard keeps
+  unchanged rows from dirtying the maintenance signal. The loader normalizes
+  record timestamps to canonical UTC (`Date.parse` + `toISOString`,
+  unparseable → null) so the watermark's string comparisons stay
+  chronological, and its per-file cache evicts entries missing from a pass
+  so deleted agent records never accumulate. Tile presses route
   paseo-first: a paseo-origin tile with a known ref opens
   `paseo://h/<serverId>/agent/<agentId>`, else falls back to provider routing.
 - Session lifecycle: rows are deleted by SessionEnd hooks, by the daemon's
@@ -138,7 +156,11 @@ Notes:
   `sessions clear`/`clear-all`.
   Every provider late-joins on `UserPromptSubmit` (`SessionObserved`), so a
   session whose start hook was missed — or whose row was pruned while still
-  alive — reappears at its next prompt.
+  alive — reappears at its next prompt. Kimi fires SessionStart eagerly for
+  blank Web pages; those titleless starts register the row (which is what
+  stores the session's model) but stay grid-invisible — idle and never
+  unread — until the first prompt, and an abandoned page's row ages out via
+  the prune.
 - The pi/omp shims (`extensions/{pi,omp}/stream-deck-agents.ts`) are
   dependency-free structural host files (no host imports — jiti loads them
   bare) that spawn the helper detached, serialized through a FIFO queue so
