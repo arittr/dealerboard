@@ -1,8 +1,10 @@
 /**
- * Bounded decoder for hook payloads from the seven canonical providers —
- * Claude, Codex, Kimi, pi, oh-my-pi, zcode, and the deepseek harness —
+ * Bounded decoder for hook payloads from the eight canonical providers —
+ * Claude, Codex, Kimi, pi, oh-my-pi, zcode, the deepseek harness, and grok —
  * native payloads for the first three and zcode, shim-normalized canonical
- * events for pi, omp, and dsh.
+ * events for pi, omp, and dsh. Grok's native payloads are camelCase-keyed
+ * with snake_case event values; a small value-mapping branch (plus its
+ * stop-reason and subagentType filters) is its only special case.
  *
  * A provider hook invokes the CLI with one JSON object on stdin. This module
  * maps the supported hook events onto normalized `RegistryEvent` values while
@@ -43,6 +45,7 @@ const SAFE_FIELDS = {
   transcriptPath: ["transcript_path", "transcriptPath"],
   model: ["model"],
   isInterrupt: ["is_interrupt", "isInterrupt"],
+  reason: ["reason"],
 } as const;
 
 /**
@@ -170,6 +173,25 @@ const sessionObservedEvent = (
 });
 
 /**
+ * Grok's native envelope uses camelCase keys (allowlisted as aliases above)
+ * with snake_case event values; this maps the values grok emits to the
+ * canonical names the switch handles. `stop_cancelled` rides the Interrupt
+ * case: an interrupted turn settles idle either way. `post_tool_use_failure`
+ * is deliberately unmapped — a failed grok tool call is not a turn event.
+ */
+const GROK_EVENT_NAMES: Readonly<Record<string, string>> = {
+  session_start: "SessionStart",
+  user_prompt_submit: "UserPromptSubmit",
+  pre_tool_use: "PreToolUse",
+  post_tool_use: "PostToolUse",
+  stop: "Stop",
+  stop_failure: "StopFailure",
+  stop_cancelled: "Interrupt",
+  notification: "Notification",
+  session_end: "SessionEnd",
+};
+
+/**
  * Decode one parsed native hook payload into zero or more normalized events.
  * Unknown hook names and invalid payloads return an empty sequence; nothing
  * throws into the hook caller.
@@ -201,7 +223,30 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
     return [];
   }
 
-  switch (hookEventName) {
+  let hookName = hookEventName;
+  if (provider === "grok") {
+    // grok-native subagent sessions never fire SessionStart, so they never
+    // register; every event from inside one carries subagentType, and
+    // dropping it keeps a subagent's user_prompt_submit from late-joining a
+    // phantom top-level row.
+    if ("subagentType" in value) {
+      return [];
+    }
+    const mapped = GROK_EVENT_NAMES[hookEventName];
+    if (mapped === undefined) {
+      return [];
+    }
+    // grok fires an observe-only Stop at session teardown; SessionEnd owns
+    // the row's removal, so only genuine turn ends settle the tile.
+    if (hookEventName === "stop") {
+      const reason = firstAllowlistedString(value, SAFE_FIELDS.reason);
+      if (reason !== undefined && reason !== "end_turn") {
+        return [];
+      }
+    }
+    hookName = mapped;
+  }
+  switch (hookName) {
     case "SessionStart": {
       // Kimi emits SessionStart eagerly for blank Web pages, so a titleless
       // start is not evidence of a user-visible session — but the row still
