@@ -85,18 +85,20 @@ Notes:
   idle `#4ADE80`, error `#FF4D67`; `COLOR_NEUTRAL` `#94A3B8` is non-status
   chrome only (NEXT frame, page count, OFFLINE text). Provider corner chips
   carry a one-letter mark (`PROVIDER_LETTERS`: Claude C, Codex X, Kimi K, pi
-  P, omp O, zcode Z, deepseek D) on hues picked for mutual distinctness on
-  the LCD panel, not brand fidelity (`PROVIDER_COLORS`): Claude `#D97757`,
-  Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp `#F5F0EA`, zcode
-  `#EAB308`, deepseek `#2DD4BF`. Session tiles also carry the model id as
-  neutral-chrome text right of the chip (vendor prefix stripped,
-  ten-code-point cap); the registry stores the raw id (schema v6 `model`
-  column; the v8 repair backfills it into pre-merge v7 databases that were
+  P, omp O, zcode Z, deepseek D, grok G) on hues picked for mutual
+  distinctness on the LCD panel, not brand fidelity (`PROVIDER_COLORS`):
+  Claude `#D97757`, Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp
+  `#F5F0EA`, zcode `#EAB308`, deepseek `#2DD4BF`, grok `#F472B6`. Session
+  tiles also carry the model id as neutral-chrome text right of the chip
+  (vendor prefix stripped, ten-code-point cap); the registry stores the raw
+  id (schema v6 `model` column; the v8 repair backfills it into pre-merge v7
+  databases that were
   stamped without it, so every v8-or-later database has it), Kimi and pi push
   it at session start (pi via its shim's `session_start`), and the daemon
-  resolves Claude/Codex ids in the same maintenance pass as titles (last
-  `"model":"…"` in the tail wins). Null never clears a stored model. The
-  Paseo origin pip uses `COLOR_ORIGIN_PASEO` `#A78BFA` (bottom-right):
+  resolves Claude/Codex ids (transcript tails) and grok's id (summary.json)
+  in the same maintenance pass as titles (last `"model":"…"` in the tail
+  wins). Null never clears a stored model.
+  The Paseo origin pip uses `COLOR_ORIGIN_PASEO` `#A78BFA` (bottom-right):
   filled disc for a Paseo parent session, hollow ring for a Paseo subagent,
   nothing for terminal/native sessions.
 - Session status model: `idle` = turn finished (set by the Stop hook),
@@ -114,12 +116,20 @@ Notes:
   for every reason — `/new` and friends close the old row, and the new
   session re-registers via the next start or late-join. omp fires no
   StopFailure-equivalent (an omp tile never shows `error`; an interrupt
-  settles as `Stop`, i.e. idle). A tile's effective status is the max
-  (`error > waiting > working > idle`) over its whole subtree, and any live
-  subagent row lifts it to at least `working` (`src/core/projection.ts`).
+  settles as `Stop`, i.e. idle). grok fires `StopCancelled` for
+  interrupted/declined turns (mapped to `Stop`, i.e. idle), real `StopFailure`
+  (tiles can show `error`), and `permission_prompt` Notifications (tiles can
+  show `waiting`); grok has no background tracking, no subagent rows (its
+  `subagentType` payloads are dropped), and no `SessionTitleChanged` push
+  (titles are pulled). A grok `Stop` with a non-`end_turn` reason is the
+  session-teardown observe fire and is dropped — `SessionEnd` owns removal.
+  A tile's effective status is the max (`error > waiting > working > idle`)
+  over its whole subtree, and any live subagent row lifts it to at least
+  `working` (`src/core/projection.ts`).
 - Unread ledger and grid visibility: a turn ending — a Stop that settles to
   idle, or StopFailure — stamps `unread_since` (added in schema v7; v8 was a
-  shape-repair stamp; the current latest, v9, adds the `acked_at` watermark);
+  shape-repair stamp; the current latest, v10, widens
+  the provider CHECK for grok (v9 added the `acked_at` watermark));
   a result landed.
   Only viewing clears it: a tile press acks via `sessions ack` (the plugin's
   sole plugin→daemon write, executed against the installed binary), the Paseo
@@ -154,6 +164,8 @@ Notes:
   stale prune (top-level rows with no hook for 24h — 1h for zcode —
   checked every minute; `sessions prune [hours]` manually), or by
   `sessions clear`/`clear-all`.
+  grok has a real SessionEnd and uses the standard 24h prune — no special
+  lease.
   Every provider late-joins on `UserPromptSubmit` (`SessionObserved`), so a
   session whose start hook was missed — or whose row was pruned while still
   alive — reappears at its next prompt. Kimi fires SessionStart eagerly for
@@ -169,12 +181,17 @@ Notes:
   (omit-don't-null); the installer substitutes the
   `__STREAM_DECK_AGENTS_EXECUTABLE__` token, writes atomically at mode 0600,
   and refuses to overwrite a same-named file lacking the managed marker
-  (`// stream-deck-agents: managed shim v1`).
+  (`// stream-deck-agents: managed shim v1`). The grok hook file
+  `~/.grok/hooks/stream-deck-agents.json` is managed the same way (marker
+  key `x-stream-deck-agents`, token substitution, atomic 0600 write,
+  refusal without the marker).
 - Tile labels prefer the session title over the project name. Kimi and pi
   push titles via hook events (pi's shim pushes on `session_info_changed`,
   fired by `/name`); the daemon resolves Claude titles from the transcript's
   `ai-title` records (path stored in schema v5's `transcript_path`), Codex
-  titles from `~/.codex/session_index.jsonl`'s `thread_name`, zcode titles
+  titles from `~/.codex/session_index.jsonl`'s `thread_name`, grok titles
+  and models from the `summary.json` under the session directory (globbed
+  per target, `(mtime, size)`-cached, `GROK_HOME` override), zcode titles
   from `~/.zcode/cli/db/db.sqlite` (`ZCODE_HOME` override), and omp titles
   from the fixed 256-byte title slot at the head of the session JSONL at the
   row's `transcript_path` (cached on `(mtime, size)`, safe because omp

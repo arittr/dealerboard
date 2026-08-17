@@ -3,10 +3,10 @@
 This is the final, manual setup step. Drew performs these edits by hand, one
 provider at a time, after `bun run scripts/install-local.ts` has completed and
 been verified — the registry database and the LaunchAgent daemon must already
-exist so that the first hook event has a consumer. pi and oh-my-pi are the
-exceptions: the installer places their reporting shim itself, so their
-sections below describe what to expect from the installed shim, not a config
-edit.
+exist so that the first hook event has a consumer. pi, oh-my-pi, and grok
+are the exceptions: the installer places their reporting shim or hook file
+itself, so their sections below describe what to expect from the installed
+artifact, not a config edit.
 
 Every provider invokes the same installed helper with one JSON event object on
 standard input:
@@ -903,6 +903,64 @@ below). To remove omp reporting, delete the file.
 
 ---
 
+## grok
+
+Target file: `~/.grok/hooks/stream-deck-agents.json` — written by the
+installer, not by hand.
+
+grok needs no config edits. The installer manages this one hook file: it
+renders the template, substitutes the installed executable path, and writes
+the file atomically at mode 0600 — but only when `~/.grok` exists (a machine
+without grok is skipped entirely). The file carries the marker key
+`"x-stream-deck-agents": "managed hook v1"`; the installer refuses to
+overwrite a same-named file that lacks that exact marker key and value, so a
+user-owned file named the same is never clobbered.
+
+The file registers nine events — SessionStart, UserPromptSubmit, PreToolUse,
+PostToolUse, Stop, StopFailure, StopCancelled, Notification, and SessionEnd.
+Every handler is observe-only, sets `timeout: 5`, and runs
+`"<installed-binary>" event grok` — the same helper every provider above
+invokes.
+
+### Behavior to expect
+
+- grok's stdin envelope is camelCase-keyed with snake_case `hookEventName`
+  values; the daemon maps them to canonical events (`session_start` →
+  `SessionStart`, and so on).
+- grok fires an observe-only `Stop` at session teardown with a `reason` of
+  `channel_closed` or `shutdown`; any `Stop` whose reason is not `end_turn`
+  is dropped, so only a genuine turn end settles the tile idle — `SessionEnd`
+  owns the row's removal.
+- Events carrying `subagentType` are dropped: grok-native subagents are
+  invisible in v1, and a subagent's prompt must not late-join a phantom
+  top-level row.
+- `StopCancelled` covers interrupted and declined turns and maps to `Stop`
+  (idle); `StopFailure` is real, so a failed turn shows the error color.
+- Only a Notification with `notificationType === "permission_prompt"` raises
+  the waiting color; `idle_prompt` is deliberately unmapped.
+
+### Compat scanning (leave it on)
+
+grok also loads `~/.claude/settings.json` hooks by default, so the Claude
+hook commands configured above also spawn under grok sessions. The payload
+grok hands them is the camelCase envelope, whose snake_case event names fail
+the Claude decode — the helper decodes zero events and exits 0. It is
+harmless; leave compat scanning on.
+
+### Titles and models
+
+The daemon pulls both from `~/.grok/sessions/*/<id>/summary.json`
+(`generated_title`, `current_model_id`), locating the file by globbing the
+group directories and re-reading only when its stat changes. The `GROK_HOME`
+override is honored.
+
+### Verify and remove
+
+Start a new grok session and watch its tile appear (see "After every
+provider" below). To remove grok reporting, delete the file.
+
+---
+
 ## After every provider
 
 Start a session in each provider, then list what the registry recorded:
@@ -918,4 +976,5 @@ remove every recorded session (for example after testing), run
 cutoff (default 24 hours); that one operator cutoff applies to every
 provider alike. The daemon's automatic pass — the same prune, once a minute
 — is split by provider instead: zcode rows are pruned at 1 hour, every
-other provider at 24 hours.
+other provider at 24 hours. grok fires a real `SessionEnd`, so it uses the
+standard 24-hour lease — no special TTL like zcode's.
