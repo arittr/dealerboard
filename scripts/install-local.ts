@@ -48,6 +48,7 @@ import { fileURLToPath } from "node:url";
 import type { AppPaths } from "../src/core/paths";
 import { ensureAppDirectories, resolveAppPaths } from "../src/core/paths";
 import { LATEST_SCHEMA_VERSION } from "../src/core/schema";
+import { GROK_HOOK_NAME, type GrokHookInstallOutcome, installGrokHookFile } from "./grok-hook-install";
 
 const LABEL = "com.drewritter.stream-deck-agents";
 const PLIST_TEMPLATE = "launchd/com.drewritter.stream-deck-agents.plist.template";
@@ -70,11 +71,7 @@ const SHIM_TARGETS = [
 ] as const;
 const SHIM_MODE = 0o600;
 
-const GROK_HOOK_MARKER = "x-stream-deck-agents";
-const GROK_HOOK_MARKER_VALUE = "managed hook v1";
 const GROK_HOOK_TEMPLATE = join("extensions", "grok", "stream-deck-agents.hook.json");
-const GROK_HOOK_NAME = "stream-deck-agents.json";
-const GROK_HOOK_MODE = 0o600;
 
 const LAUNCHCTL = "/bin/launchctl";
 const PLUTIL = "/usr/bin/plutil";
@@ -148,57 +145,46 @@ const installShims = (paths: AppPaths): void => {
 };
 
 /**
- * True only when the installed JSON carries this installer's exact managed
- * marker key/value. Malformed JSON, a missing key, or any other value means
- * the file is not ours — user content, never overwritten.
+ * The grok-hook steps below are thin wrappers: all decisions and writes
+ * live in grok-hook-install.ts (behavior-tested in
+ * test/grok-hook-install.test.ts); install-local maps the outcomes to its
+ * stdout notes and the throw to the fail() path.
  */
-const isManagedGrokHook = (contents: string): boolean => {
+const readGrokHookTemplate = (): string => {
   try {
-    const parsed: unknown = JSON.parse(contents);
-    return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as Record<string, unknown>)[GROK_HOOK_MARKER] === GROK_HOOK_MARKER_VALUE
+    return readFileSync(join(repositoryRoot, GROK_HOOK_TEMPLATE), "utf8");
+  } catch (error) {
+    return fail(
+      "grok-hook",
+      `cannot read ${GROK_HOOK_TEMPLATE}: ${error instanceof Error ? error.message : String(error)}`,
     );
-  } catch {
-    return false;
   }
 };
 
-/**
- * Install the managed grok hook file into ~/.grok/hooks when the grok home
- * exists. Same rules as the shims: skip when the provider dir is absent,
- * refuse to overwrite a same-named file without the managed marker (user
- * content), atomic temp + rename, token substituted at copy time.
- */
+const runGrokHookInstall = (grokRoot: string, template: string, executable: string): GrokHookInstallOutcome => {
+  try {
+    return installGrokHookFile({ grokRoot, source: template, executable });
+  } catch {
+    return fail("grok-hook", `${GROK_HOOK_TEMPLATE} is missing its marker or token`);
+  }
+};
+
 const installGrokHook = (paths: AppPaths): void => {
   const grokRoot = join(paths.home, ".grok");
-  const hooksDir = join(grokRoot, "hooks");
-  const destination = join(hooksDir, GROK_HOOK_NAME);
-  if (!existsSync(grokRoot)) {
-    process.stdout.write(`install-local: skipping grok hook (${grokRoot} does not exist)\n`);
-    return;
-  }
-  const source = readFileSync(join(repositoryRoot, GROK_HOOK_TEMPLATE), "utf8");
-  if (!source.includes(GROK_HOOK_MARKER) || !source.includes(EXECUTABLE_TOKEN)) {
-    fail("grok-hook", `${GROK_HOOK_TEMPLATE} is missing its marker or token`);
-  }
-  const rendered = source.split(EXECUTABLE_TOKEN).join(paths.executable);
-  if (existsSync(destination)) {
-    const installed = readFileSync(destination, "utf8");
-    if (!isManagedGrokHook(installed)) {
+  const destination = join(grokRoot, "hooks", GROK_HOOK_NAME);
+  switch (runGrokHookInstall(grokRoot, readGrokHookTemplate(), paths.executable)) {
+    case "skipped-no-grok-home":
+      process.stdout.write(`install-local: skipping grok hook (${grokRoot} does not exist)\n`);
+      return;
+    case "skipped-user-content":
       process.stdout.write(`install-local: NOT overwriting ${destination} — no managed marker (user content)\n`);
       return;
-    }
-    if (installed === rendered) {
+    case "unchanged":
       return;
-    }
+    case "installed":
+      process.stdout.write(`install-local: installed grok hook → ${destination}\n`);
+      return;
   }
-  mkdirSync(hooksDir, { recursive: true });
-  const temp = join(hooksDir, `.${GROK_HOOK_NAME}.tmp-${process.pid}`);
-  writeFileSync(temp, rendered, { mode: GROK_HOOK_MODE });
-  renameSync(temp, destination);
-  process.stdout.write(`install-local: installed grok hook → ${destination}\n`);
 };
 
 /** The `"Version"` field of a plugin manifest, or null when unreadable or absent. */
