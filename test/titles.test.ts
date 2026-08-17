@@ -648,6 +648,15 @@ describe("grok summary.json facts", () => {
     ]);
   });
 
+  test("bounds an oversized current_model_id to the registry model column cap", () => {
+    const { resolver } = makeResolver(
+      grokSeed(JSON.stringify({ generated_title: "T", current_model_id: "x".repeat(300) })),
+    );
+    expect(resolver.resolve([grokTarget()]).models).toEqual([
+      { provider: "grok", sessionId: GROK_ID, model: "x".repeat(256) },
+    ]);
+  });
+
   test("proposes nothing when the stored values already match", () => {
     const { resolver } = makeResolver(
       grokSeed(JSON.stringify({ generated_title: "Same", current_model_id: "grok-4.6" })),

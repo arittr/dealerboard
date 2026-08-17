@@ -268,7 +268,10 @@ const grokFactsFromSummary = (content: string): { title: string | null; model: s
           : null;
     return {
       title: title === null ? null : boundTitle(title),
-      model: typeof model === "string" && model.length > 0 ? model : null,
+      // Bounded like the title: the registry caps model at 256 characters, and
+      // an abnormal oversized id would otherwise roll back the whole
+      // model-update transaction.
+      model: typeof model === "string" && model.length > 0 ? boundTitle(model) : null,
     };
   } catch {
     return { title: null, model: null };

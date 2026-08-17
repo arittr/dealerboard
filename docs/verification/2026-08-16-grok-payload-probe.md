@@ -65,11 +65,13 @@ Captured verbatim (fixtures in `test/fixtures/grok/`, redacted — see Redaction
 
 Coherent-session note: the brief says "last line per file", but the literal last
 `session_start`/`session_end`/teardown-`stop` in the logs came from run 8 — an
-aborted session whose shape is identical but which never ran a turn. The captured
-fixtures above instead all come from run 7 — `grok --permission-mode default -p "Use the terminal to run this exact command: curl -s --max-time 5 https://example.com — then report the HTTP status only."`
+aborted session whose shape is identical but which never ran a turn. The seven
+core lifecycle fixtures above (rows 1–7) instead all come from run 7 — `grok --permission-mode default -p "Use the terminal to run this exact command: curl -s --max-time 5 https://example.com — then report the HTTP status only."`
 (`sessionId` `01a00e7d-588a-7de0-88a1-d9c0848594c1`), the last complete session, so
-every captured fixture shares one sessionId. No field was altered by this choice; the shapes are the
-same either way.
+those seven share one sessionId (the remaining two captured fixtures —
+`stop-cancelled.json` from run 4 and `subagent-activity.json` from run 5 — come
+from their own sessions, as the Trigger column notes). No field was altered by
+this choice; the shapes are the same either way.
 
 Synthesized from the §10 envelope (`~/.grok/docs/user-guide/10-hooks.md`) plus
 documented per-event fields, with synthetic session/prompt ids
