@@ -3,7 +3,7 @@
  * disk.
  *
  * Only Kimi and pi push titles through hooks; the other providers keep theirs
- * in files near the session transcripts. The daemon owns this resolver and
+ * in files on disk. The daemon owns this resolver and
  * calls `resolve` on a cadence with the live top-level sessions:
  *
  * - Claude: the transcript JSONL (path stored on the registry row) carries
@@ -25,19 +25,23 @@
  *   row's transcript_path, (mtime, size)-cached — every change to the file
  *   (appended records or the in-place slot rewrite) bumps its stat identity.
  *   No model source; omp rows never resolve one.
+ * - grok: `summary.json` under the session's directory (found by globbing the
+ *   sessions root), carrying `generated_title` (fallback `session_summary`)
+ *   and `current_model_id`, (mtime, size)-cached like the other file readers.
  * - Kimi rows are never resolved here — hooks already deliver their titles
  *   and models.
  *
  * Resolution is additive: a found title or model is proposed only when it
  * differs from the stored one, and a missing value never clears an existing
- * one. Claude and Codex filesystem access flows through injected dependencies
- * so their tests use fakes; zcode opens its SQLite database directly
- * (read-only, one connection per pass) and its tests deliberately use real
- * fixture databases.
+ * one. Claude, Codex, and grok filesystem access flows through injected
+ * dependencies so their tests use fakes; zcode opens its SQLite database
+ * directly (read-only, one connection per pass) and its tests deliberately
+ * use real fixture databases.
  */
 
 import { Database } from "bun:sqlite";
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
 
 export const TAIL_BYTES = 64 * 1024;
@@ -52,10 +56,13 @@ export type SessionFactsResolverDependencies = {
   codexIndexPath: string;
   /** zcode's SQLite store; resolved by the caller (ZCODE_HOME override lives in cli.ts). */
   zcodeDatabasePath: string;
+  /** grok's sessions directory; resolved by the caller (GROK_HOME override lives in cli.ts). */
+  grokSessionsRoot: string;
   statPath?: (path: string) => FileStat | null;
   readTail?: (path: string, maxBytes: number) => string | null;
   readWhole?: (path: string) => string | null;
   readHead?: (path: string, maxBytes: number) => string | null;
+  listDirectories?: (path: string) => string[];
 };
 
 /** The facts one pass proposes: title and model updates, applied additively. */
@@ -124,6 +131,14 @@ const defaultReadWhole = (path: string): string | null => {
     return readFileSync(path, "utf8");
   } catch {
     return null;
+  }
+};
+
+const defaultListDirectories = (path: string): string[] => {
+  try {
+    return readdirSync(path);
+  } catch {
+    return [];
   }
 };
 
@@ -231,6 +246,35 @@ const ompTitleFromHead = (head: string): string | null => {
   return null;
 };
 
+/**
+ * grok keeps per-session metadata at sessions/<group>/<id>/summary.json.
+ * The generated title is the user-visible one (also what /resume shows);
+ * session_summary is the fallback. current_model_id is the live model.
+ */
+const grokFactsFromSummary = (content: string): { title: string | null; model: string | null } => {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (!isRecord(parsed)) {
+      return { title: null, model: null };
+    }
+    const generated = parsed["generated_title"];
+    const summary = parsed["session_summary"];
+    const model = parsed["current_model_id"];
+    const title =
+      typeof generated === "string" && generated.length > 0
+        ? generated
+        : typeof summary === "string" && summary.length > 0
+          ? summary
+          : null;
+    return {
+      title: title === null ? null : boundTitle(title),
+      model: typeof model === "string" && model.length > 0 ? model : null,
+    };
+  } catch {
+    return { title: null, model: null };
+  }
+};
+
 const codexTitlesFromIndex = (content: string): Map<string, string> => {
   const byId = new Map<string, string>();
   for (const line of content.split("\n")) {
@@ -302,11 +346,14 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
   const readTail = dependencies.readTail ?? defaultReadTail;
   const readWhole = dependencies.readWhole ?? defaultReadWhole;
   const readHead = dependencies.readHead ?? defaultReadHead;
+  const listDirectories = dependencies.listDirectories ?? defaultListDirectories;
 
   const claudeCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
   const ompCache = new Map<string, FileStat & { title: string | null }>();
   let codexCache: (FileStat & { byId: Map<string, string> }) | null = null;
   const codexModelCache = new Map<string, FileStat & { model: string | null }>();
+  const grokCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
+  const grokSummaryPaths = new Map<string, string>();
 
   const claudeFacts = (path: string): { title: string | null; model: string | null } => {
     const stat = statPath(path);
@@ -342,6 +389,47 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     const title = head === null ? null : ompTitleFromHead(head);
     ompCache.set(path, { ...stat, title });
     return title;
+  };
+
+  /**
+   * Locate sessions/<group>/<sessionId>/summary.json by scanning group dirs.
+   * The group name is the URL-encoded cwd with a slug+hash fallback past 255
+   * bytes, so it is never reconstructed — only globbed. A found path is
+   * remembered; an unfound session re-scans next pass (the scan is one
+   * readdir plus one stat per group, and grok rows are few).
+   */
+  const grokSummaryPath = (sessionId: string): string | null => {
+    const known = grokSummaryPaths.get(sessionId);
+    if (known !== undefined) {
+      return known;
+    }
+    for (const group of listDirectories(dependencies.grokSessionsRoot)) {
+      const candidate = join(dependencies.grokSessionsRoot, group, sessionId, "summary.json");
+      if (statPath(candidate) !== null) {
+        grokSummaryPaths.set(sessionId, candidate);
+        return candidate;
+      }
+    }
+    return null;
+  };
+
+  const grokFacts = (sessionId: string): { title: string | null; model: string | null } => {
+    const path = grokSummaryPath(sessionId);
+    if (path === null) {
+      return { title: null, model: null };
+    }
+    const stat = statPath(path);
+    if (stat === null) {
+      return { title: null, model: null };
+    }
+    const cached = grokCache.get(path);
+    if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return { title: cached.title, model: cached.model };
+    }
+    const content = readWhole(path);
+    const facts = content === null ? { title: null, model: null } : grokFactsFromSummary(content);
+    grokCache.set(path, { ...stat, ...facts });
+    return facts;
   };
 
   const codexModel = (path: string): string | null => {
@@ -400,6 +488,10 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
             targets.filter((candidate) => candidate.provider === "zcode").map((candidate) => candidate.sessionId),
           );
           resolvedTitle = zcodeById.get(target.sessionId) ?? null;
+        } else if (target.provider === "grok") {
+          const facts = grokFacts(target.sessionId);
+          resolvedTitle = facts.title;
+          resolvedModel = facts.model;
         }
         if (resolvedTitle !== null && resolvedTitle !== target.title) {
           titles.push({ provider: target.provider, sessionId: target.sessionId, title: resolvedTitle });

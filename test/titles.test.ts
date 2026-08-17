@@ -12,6 +12,7 @@ type FakeFs = {
   tails: Map<string, string>;
   wholes: Map<string, string>;
   heads: Map<string, string>;
+  lists: Map<string, string[]>;
   tailReads: () => number;
   wholeReads: () => number;
   headReads: () => number;
@@ -22,19 +23,24 @@ const makeResolver = (seed?: {
   tails?: Record<string, string>;
   wholes?: Record<string, string>;
   heads?: Record<string, string>;
+  lists?: Record<string, string[]>;
   zcodeDatabasePath?: string;
+  grokSessionsRoot?: string;
 }): { resolver: ReturnType<typeof createSessionFactsResolver>; fs: FakeFs } => {
   const stats = new Map(Object.entries(seed?.stats ?? {}));
   const tails = new Map(Object.entries(seed?.tails ?? {}));
   const wholes = new Map(Object.entries(seed?.wholes ?? {}));
   const heads = new Map(Object.entries(seed?.heads ?? {}));
+  const lists = new Map(Object.entries(seed?.lists ?? {}));
   let tailReads = 0;
   let wholeReads = 0;
   let headReads = 0;
   const resolver = createSessionFactsResolver({
     codexIndexPath: CODEX_INDEX,
     zcodeDatabasePath: seed?.zcodeDatabasePath ?? "/nonexistent/zcode/db.sqlite",
+    grokSessionsRoot: seed?.grokSessionsRoot ?? "/nonexistent/grok/sessions",
     statPath: (path) => stats.get(path) ?? null,
+    listDirectories: (path) => lists.get(path) ?? [],
     readTail: (path) => {
       tailReads += 1;
       return tails.get(path) ?? null;
@@ -55,6 +61,7 @@ const makeResolver = (seed?: {
       tails,
       wholes,
       heads,
+      lists,
       tailReads: () => tailReads,
       wholeReads: () => wholeReads,
       headReads: () => headReads,
@@ -529,6 +536,7 @@ describe("omp session-file titles", () => {
     const resolver = createSessionFactsResolver({
       codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
       zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
+      grokSessionsRoot: "/nonexistent/grok/sessions",
     });
     const updates = resolver.resolve([
       { provider: "omp", sessionId: "o1", title: null, model: null, transcriptPath: FIXTURE_PATH },
@@ -588,5 +596,109 @@ describe("omp session-file titles", () => {
     const { resolver, fs } = makeResolver();
     expect(resolver.resolve([ompTarget({ transcriptPath: null })]).titles).toEqual([]);
     expect(fs.headReads()).toBe(0);
+  });
+});
+
+describe("grok summary.json facts", () => {
+  const GROK_ROOT = "/fake/grok/sessions";
+  const GROK_ID = "01a00c8e-d275-75b1-bc98-6bf70e28fcdb";
+  const GROK_SUMMARY = `${GROK_ROOT}/%2FUsers%2Fyou%2Fproject/${GROK_ID}/summary.json`;
+
+  const grokTarget = (overrides: Partial<TitleTarget> = {}): TitleTarget => ({
+    provider: "grok",
+    sessionId: GROK_ID,
+    title: null,
+    model: null,
+    transcriptPath: null,
+    ...overrides,
+  });
+
+  const grokSeed = (summary: string) => ({
+    grokSessionsRoot: GROK_ROOT,
+    lists: { [GROK_ROOT]: ["%2FUsers%2Fyou%2Fproject"] },
+    stats: { [GROK_SUMMARY]: { mtimeMs: 100, size: summary.length } },
+    wholes: { [GROK_SUMMARY]: summary },
+  });
+
+  test("resolves title and model from summary.json found by group glob", () => {
+    const { resolver } = makeResolver(
+      grokSeed(
+        JSON.stringify({
+          info: { id: GROK_ID, cwd: "/Users/you/project" },
+          session_summary: "Fallback title",
+          generated_title: "Pi/OMP Ghostty Activation Spec Review",
+          current_model_id: "grok-4.6",
+        }),
+      ),
+    );
+    expect(resolver.resolve([grokTarget()])).toEqual({
+      titles: [{ provider: "grok", sessionId: GROK_ID, title: "Pi/OMP Ghostty Activation Spec Review" }],
+      models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.6" }],
+    });
+  });
+
+  test("falls back to session_summary when generated_title is absent or empty", () => {
+    const { resolver } = makeResolver(
+      grokSeed(
+        JSON.stringify({ session_summary: "Fallback title", generated_title: "", current_model_id: "grok-4.6" }),
+      ),
+    );
+    expect(resolver.resolve([grokTarget()]).titles).toEqual([
+      { provider: "grok", sessionId: GROK_ID, title: "Fallback title" },
+    ]);
+  });
+
+  test("proposes nothing when the stored values already match", () => {
+    const { resolver } = makeResolver(
+      grokSeed(JSON.stringify({ generated_title: "Same", current_model_id: "grok-4.6" })),
+    );
+    expect(resolver.resolve([grokTarget({ title: "Same", model: "grok-4.6" })])).toEqual({ titles: [], models: [] });
+  });
+
+  test("caches on (mtime, size): an unchanged summary costs one stat, no re-read", () => {
+    const { resolver, fs } = makeResolver(
+      grokSeed(JSON.stringify({ generated_title: "T", current_model_id: "grok-4.6" })),
+    );
+    resolver.resolve([grokTarget()]);
+    const readsAfterFirst = fs.wholeReads();
+    resolver.resolve([grokTarget()]);
+    expect(fs.wholeReads()).toBe(readsAfterFirst);
+  });
+
+  test("re-reads when the stat identity changes", () => {
+    const seed = grokSeed(JSON.stringify({ generated_title: "Before", current_model_id: "grok-4.6" }));
+    const { resolver, fs } = makeResolver(seed);
+    expect(resolver.resolve([grokTarget()]).titles[0]?.title).toBe("Before");
+    fs.wholes.set(GROK_SUMMARY, JSON.stringify({ generated_title: "After", current_model_id: "grok-4.7" }));
+    fs.stats.set(GROK_SUMMARY, { mtimeMs: 200, size: 60 });
+    expect(resolver.resolve([grokTarget()])).toEqual({
+      titles: [{ provider: "grok", sessionId: GROK_ID, title: "After" }],
+      models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.7" }],
+    });
+  });
+
+  test("a missing session, missing summary, or malformed JSON resolves nothing and never throws", () => {
+    expect(makeResolver().resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+    const emptyGroup = makeResolver({ grokSessionsRoot: GROK_ROOT, lists: { [GROK_ROOT]: [] } });
+    expect(emptyGroup.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+    const malformed = makeResolver({
+      ...grokSeed("not json"),
+      wholes: { [GROK_SUMMARY]: "not json" },
+    });
+    expect(malformed.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+  });
+
+  test("a summary without facts proposes nothing (never clears)", () => {
+    const { resolver } = makeResolver(grokSeed(JSON.stringify({ info: { id: GROK_ID } })));
+    expect(resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+  });
+
+  test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", () => {
+    const longTitle = `${"🔧".repeat(120)}${"y".repeat(125)}${"🛠".repeat(20)}`;
+    const expected = Array.from(longTitle).slice(0, 256).join("");
+    const { resolver } = makeResolver(grokSeed(JSON.stringify({ generated_title: longTitle })));
+    const title = resolver.resolve([grokTarget()]).titles[0]?.title ?? "";
+    expect(Array.from(title)).toHaveLength(256);
+    expect(title).toBe(expected);
   });
 });

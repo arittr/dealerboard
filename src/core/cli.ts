@@ -408,9 +408,11 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   runDaemon: (daemonPaths, diagnostics) => {
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
+    const grokRoot = environment["GROK_HOME"] ?? join(daemonPaths.home, ".grok");
     const resolveFacts = createSessionFactsResolver({
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
+      grokSessionsRoot: join(grokRoot, "sessions"),
     }).resolve;
     const loadPaseoStates = createPaseoAgentStateLoader();
     const paseoDir = join(daemonPaths.home, ".paseo", "agents");
