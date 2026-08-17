@@ -4,7 +4,7 @@
   "cwd": "/Users/you/project",
   "workspaceRoot": "/Users/you/project",
   "timestamp": "2026-08-17T06:51:32.020365+00:00",
-  "transcriptPath": "/Users/you/.grok/sessions/%2FUsers%2Fyou%2Fproject/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
+  "transcriptPath": "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
   "promptId": "037a891e-f1fa-4bfc-ab07-7c3eab9e9ad7",
   "permissionMode": "auto",
   "prompt": "<user_query>\nUse the terminal to run this exact command: curl -s --max-time 5 https://example.com — then report the HTTP status only.\n</user_query>"

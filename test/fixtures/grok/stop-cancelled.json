@@ -4,7 +4,7 @@
   "cwd": "/Users/you/project",
   "workspaceRoot": "/Users/you/project",
   "timestamp": "2026-08-17T06:50:18.125731+00:00",
-  "transcriptPath": "/Users/you/.grok/sessions/%2FUsers%2Fyou%2Fproject/01a00e7c-2060-7311-9b04-a890bb62949a/updates.jsonl",
+  "transcriptPath": "/Users/you/project/.grok-sessions/01a00e7c-2060-7311-9b04-a890bb62949a/updates.jsonl",
   "promptId": "df637b2d-e4d1-4f1e-a5c7-fe674957ca09",
   "permissionMode": "auto",
   "reason": "max_turns",

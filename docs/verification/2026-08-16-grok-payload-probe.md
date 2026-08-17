@@ -21,7 +21,7 @@ Eight headless sessions ran from `/tmp/grok-probe-cwd`:
 | 4 | `grok --max-turns 1 -p "Use the terminal to run: echo step-one — then run a second command: echo step-two — then summarize both outputs."` | scripted StopCancelled (`--max-turns` cut the turn; run errored "max turns reached") |
 | 5 | `grok -p "Spawn a subagent (use your subagent-spawning capability) to determine what 7 times 8 is, then report the subagent's answer."` | SubagentStart/SubagentStop + child SessionEnd |
 | 6 | `grok --permission-mode default -p "Use the terminal to run: echo perm-probe"` | try for Notification permission_prompt (not fired) |
-| 7 | `grok --permission-mode default -p "…curl -s --max-time 5 https://example.com — then report the HTTP status only."` | second permission-mode attempt + coherent fixture session |
+| 7 | `grok --permission-mode default -p "Use the terminal to run this exact command: curl -s --max-time 5 https://example.com — then report the HTTP status only."` | second permission-mode attempt + coherent fixture session |
 | 8 | `grok -m nonexistent-model-sda-probe -p "Say hi."` | try for StopFailure via invalid_request (run aborted at model resolution) |
 
 `tee -a` appends each payload without a trailing newline, so per-file JSONL was parsed
@@ -29,9 +29,11 @@ by streaming `JSONDecoder.raw_decode`, not line-splitting.
 
 ## Headless firing: YES
 
-Headless `grok -p` fires the full hook surface (the ACP-fidelity signal the design's
-Paseo path depends on). All 8 sessions fired `session_start`/`session_end`; every
-turn reported `stop` (end-turn + a session-scoped teardown fire). Session 8 (invalid
+The lifecycle hooks this project's design depends on fire headless (the ACP-fidelity
+signal the design's Paseo path depends on); `PostToolUseFailure` and `Notification`
+were **not** observed headless (see Not fired, below). All 8 sessions fired
+`session_start`/`session_end`; every turn reported `stop` (end-turn + a
+session-scoped teardown fire). Session 8 (invalid
 model id) fired `session_start`, one teardown `stop`, and `session_end` with **no**
 `user_prompt_submit` and no turn — `session_start` fires before model resolution, so
 a start hook always lands even for a run that dies at startup.
@@ -39,9 +41,11 @@ a start hook always lands even for a run that dies at startup.
 ## Marker-key tolerance: PASS
 
 The capture hook file carried `"x-capture-probe": "stream-deck-agents probe v1"` as
-an unknown top-level key alongside `hooks`, and grok loaded and executed every
-registered hook across all 8 sessions with no complaint. An unknown top-level key in
-a hook file is tolerated — the installer's ownership-marker scheme is safe.
+an unknown top-level key alongside `hooks`, and grok loaded the file without complaint
+and executed the hooks for 9 of the 12 registered events across the 8 sessions (the
+remaining three — StopFailure, Notification, PostToolUseFailure — never fired; see
+Not fired, below). An unknown top-level key in a hook file is tolerated — the
+installer's ownership-marker scheme is safe.
 
 ## Captured vs synthesized
 
@@ -62,9 +66,9 @@ Captured verbatim (fixtures in `test/fixtures/grok/`, redacted — see Redaction
 Coherent-session note: the brief says "last line per file", but the literal last
 `session_start`/`session_end`/teardown-`stop` in the logs came from run 8 — an
 aborted session whose shape is identical but which never ran a turn. The captured
-fixtures above instead all come from run 7 (`sessionId`
-`01a00e7d-588a-7de0-88a1-d9c0848594c1`), the last complete session, so every captured
-fixture shares one sessionId. No field was altered by this choice; the shapes are the
+fixtures above instead all come from run 7 — `grok --permission-mode default -p "Use the terminal to run this exact command: curl -s --max-time 5 https://example.com — then report the HTTP status only."`
+(`sessionId` `01a00e7d-588a-7de0-88a1-d9c0848594c1`), the last complete session, so
+every captured fixture shares one sessionId. No field was altered by this choice; the shapes are the
 same either way.
 
 Synthesized from the §10 envelope (`~/.grok/docs/user-guide/10-hooks.md`) plus
@@ -116,8 +120,13 @@ all keys camelCase (`hookEventName`, `sessionId`, `transcriptPath`, `promptId`,
   `total_bytes`), plus `toolResultTruncated`, `isBackgrounded`.
 - `stop`: `reason: "end_turn"` on the turn-end fire (with `promptId`,
   `stopHookActive`, `lastAssistantMessage`, `backgroundTasks: []`,
-  `sessionCrons: []`); `reason: "shutdown"` on the session-scoped teardown fire
-  (none of those fields, no `promptId`). **Observed stop reasons: `end_turn`,
+  `sessionCrons: []`); `reason: "shutdown"` on the session-scoped teardown fire.
+  The teardown fire DID carry `stopHookActive: false` — per
+  `stop-session-teardown.json` its fields are exactly the common envelope
+  (`hookEventName`, `sessionId`, `cwd`, `workspaceRoot`, `timestamp`,
+  `permissionMode`) plus `transcriptPath`, `reason`, and `stopHookActive: false`; it
+  did NOT carry `promptId`, `lastAssistantMessage`, `backgroundTasks`, or
+  `sessionCrons`. **Observed stop reasons: `end_turn`,
   `shutdown`.** `channel_closed` documented but not observed headless (every
   teardown reported `shutdown`).
 - `stop_cancelled` (captured via `--max-turns 1`): `reason: "max_turns"`,
@@ -142,7 +151,7 @@ Run 5 spawned one subagent; three payloads fired:
     "cwd": "/Users/you/project",
     "workspaceRoot": "/Users/you/project",
     "timestamp": "2026-08-17T06:50:42.287430+00:00",
-    "transcriptPath": "/Users/you/.grok/sessions/%2FUsers%2Fyou%2Fproject/01a00e7c-703d-7873-b3d2-f0542b99e795/updates.jsonl",
+    "transcriptPath": "/Users/you/project/.grok-sessions/01a00e7c-703d-7873-b3d2-f0542b99e795/updates.jsonl",
     "permissionMode": "auto",
     "subagentId": "01a00e7c-9ae8-7940-89d3-1cf71edcbe63",
     "subagentType": "general-purpose",
@@ -163,13 +172,17 @@ Run 5 spawned one subagent; three payloads fired:
 
 ## Redaction
 
-All path values redacted, key casing verbatim: `cwd`/`workspaceRoot` →
-`/Users/you/project`; `transcriptPath`/`output_file`/`current_dir` →
-`/Users/you/.grok/sessions/%2FUsers%2Fyou%2Fproject/…` (the URL-encoded workspace
-segment redacted consistently). Session/prompt/tool ids and timestamps kept verbatim
+All path-valued fields redacted, key casing verbatim: directory values (`cwd`,
+`workspaceRoot`, `toolResult.current_dir`) → `/Users/you/project`; file paths
+(`transcriptPath`, `toolResult.output_file`) → clearly synthetic paths under it:
+`/Users/you/project/.grok-sessions/<sessionId>/updates.jsonl` and
+`/Users/you/project/.grok-sessions/<sessionId>/terminal/<toolUseId>.log`
+respectively — the ids re-embedded there are the payload's own already-verbatim
+session/tool ids, so no real filesystem location survives. Every non-path field is
+byte-identical to the capture. Session/prompt/tool ids and timestamps kept verbatim
 in captured fixtures; synthesized fixtures use obviously-zeroed ids. A repo-wide
-sweep over `test/fixtures/grok/` for `drewritter`, `/private/tmp`, `grok-probe-cwd`
-found nothing.
+sweep over `test/fixtures/grok/` for `drewritter`, `/private/tmp`, `grok-probe-cwd`,
+`.grok/sessions`, `%2F` found nothing.
 
 ## Cleanup
 
