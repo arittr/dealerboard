@@ -175,3 +175,48 @@ Evidence artifacts: `/tmp/task8-install.log`, `/tmp/task8-check.log`,
 `/tmp/task8-grok-probe/poll.log`, `/tmp/task8-grok-probe/replay-*.json`,
 `/tmp/task8-grok-probe/{grok-out,replay-grok-out}.log`; full execution detail in
 `.superpowers/sdd/2026-08-16-grok-provider/task-8-report.md` (not committed).
+
+## Interactive TUI lifecycle (addendum, 2026-08-17)
+
+The review's remaining acceptance gate — one real interactive TUI session
+lifecycle against the live deployed daemon — was run after the probes above: a
+pexpect-driven grok TUI session in a scratch dir (`/private/tmp/grok-tui-probe`,
+grok build 1.0.4, model grok-4.6), with the registry polled every 2s. The
+verified sequence, verbatim from the probe's `transitions.log` (local times;
+row format `status|unread|title|model`):
+
+```
+11:37:45 boot: '(no grok rows)'
+11:37:48 turn1-running: 'working|0||grok-4.6'
+11:37:50 after-esc+2s: 'idle|1|300-Word Essay About Octopuses|grok-4.6'
+11:37:58 turn2+2s: 'working|1|300-Word Essay About Octopuses|grok-4.6'
+11:38:13 turn3+2s: 'working|1|300-Word Essay About Octopuses|grok-4.6'
+11:38:19 turn3+8s: 'idle|1|300-Word Essay About Octopuses|grok-4.6'
+```
+
+Observed end to end:
+
+- **Boot** — zero grok rows; the TUI itself rendered `session_start [hooks: 3/3]`,
+  so the hooks visibly ran in the interactive TUI (its footer also showed
+  `user_prompt_submit [hooks: 2/4]`, `stop_cancelled [hooks: 1]`, and
+  `stop [hooks: 2/4]` as the session progressed).
+- **Turn 1** — essay prompt submitted 11:37:48: `working`, model present from
+  the start, title empty. Esc mid-turn: by 11:37:50 the native `stop_cancelled`
+  had settled the row `idle`, stamped it unread (`1`), and the resolver had the
+  title ("300-Word Essay About Octopuses") — all within one 2s maintenance pass.
+- **Turn 2** — echo prompt ("run exactly: echo SDA-TUI-PROBE"): `working` for the
+  whole turn. **No permission prompt was raised** — grok auto-approved the safe
+  command — so the `waiting` state remains replay-verified only, exactly as
+  already documented in Scope notes above.
+- **Turn 3** — short turn settled `idle` (11:38:19), still unread.
+- **`/quit`** — the TUI exited cleanly ("Resume this session with:
+  `grok --resume 01a01103-edc2-7750-8a7e-e89499bd4162`"); the registry polled
+  immediately after showed **0 grok rows** — SessionEnd removed the row.
+
+This closes the spec's interactive-TUI acceptance gate: a full real lifecycle
+(start → working → cancel → idle+unread → working → idle → quit → removal) on
+the deployed stack, complementing the headless and fixture-replay probes. The
+`/rename` storage-field question (Scope notes) was not part of this probe and
+remains open. Cleanup: the probe session was deleted via `grok sessions delete`,
+and the pexpect venv plus the `/tmp/grok-tui-probe` scratch dir were removed
+after this record was written (the table above is the retained evidence).
