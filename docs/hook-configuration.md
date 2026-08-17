@@ -928,9 +928,9 @@ invokes.
   values; the daemon maps them to canonical events (`session_start` →
   `SessionStart`, and so on).
 - grok fires an observe-only `Stop` at session teardown with a `reason` of
-  `channel_closed` or `shutdown`; any `Stop` whose reason is not `end_turn`
-  is dropped, so only a genuine turn end settles the tile idle — `SessionEnd`
-  owns the row's removal.
+  `channel_closed` or `shutdown`; any `Stop` carrying a reason other than
+  `end_turn` is dropped, so only a genuine turn end settles the tile idle —
+  `SessionEnd` owns the row's removal.
 - Events carrying `subagentType` are dropped: grok-native subagents are
   invisible in v1, and a subagent's prompt must not late-join a phantom
   top-level row.
