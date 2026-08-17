@@ -71,6 +71,7 @@ const SHIM_TARGETS = [
 const SHIM_MODE = 0o600;
 
 const GROK_HOOK_MARKER = "x-stream-deck-agents";
+const GROK_HOOK_MARKER_VALUE = "managed hook v1";
 const GROK_HOOK_TEMPLATE = join("extensions", "grok", "stream-deck-agents.hook.json");
 const GROK_HOOK_NAME = "stream-deck-agents.json";
 const GROK_HOOK_MODE = 0o600;
@@ -147,6 +148,24 @@ const installShims = (paths: AppPaths): void => {
 };
 
 /**
+ * True only when the installed JSON carries this installer's exact managed
+ * marker key/value. Malformed JSON, a missing key, or any other value means
+ * the file is not ours — user content, never overwritten.
+ */
+const isManagedGrokHook = (contents: string): boolean => {
+  try {
+    const parsed: unknown = JSON.parse(contents);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      (parsed as Record<string, unknown>)[GROK_HOOK_MARKER] === GROK_HOOK_MARKER_VALUE
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Install the managed grok hook file into ~/.grok/hooks when the grok home
  * exists. Same rules as the shims: skip when the provider dir is absent,
  * refuse to overwrite a same-named file without the managed marker (user
@@ -167,7 +186,7 @@ const installGrokHook = (paths: AppPaths): void => {
   const rendered = source.split(EXECUTABLE_TOKEN).join(paths.executable);
   if (existsSync(destination)) {
     const installed = readFileSync(destination, "utf8");
-    if (!installed.includes(GROK_HOOK_MARKER)) {
+    if (!isManagedGrokHook(installed)) {
       process.stdout.write(`install-local: NOT overwriting ${destination} — no managed marker (user content)\n`);
       return;
     }
