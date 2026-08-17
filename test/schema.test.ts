@@ -111,7 +111,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 9 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 10 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -120,7 +120,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -168,7 +168,7 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
@@ -184,7 +184,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(
         db
           .query(
@@ -575,7 +575,7 @@ describe("schema v5", () => {
       expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(9);
+      expect(version.user_version).toBe(10);
     } finally {
       db.close();
     }
@@ -693,7 +693,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -745,7 +745,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -797,7 +797,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
         name: string;
       }>;
@@ -847,7 +847,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(db.query("SELECT model FROM active_sessions WHERE session_id = 'root'").get()).toEqual({ model: "k3" });
     } finally {
       db.close();
@@ -860,7 +860,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       // A fresh database must not skip the v6 model migration on its way to
       // v9: every feature's columns exist on every migration path.
       const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
@@ -946,7 +946,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       // Every seeded pre-v6 value must survive verbatim; model is NULL on both.
       expect(
         db
@@ -1007,7 +1007,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(countSessions(db)).toBe(2);
     } finally {
       db.close();
@@ -1053,7 +1053,7 @@ describe("schema v9", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 10 });
       expect(countSessions(db)).toBe(2);
       // acked_at lands null on existing rows; everything else is untouched.
       expect(db.query("SELECT acked_at FROM active_sessions ORDER BY session_id").all()).toEqual([
@@ -1063,6 +1063,222 @@ describe("schema v9", () => {
       expect(db.query("SELECT unread_since FROM active_sessions WHERE session_id = 'root'").get()).toEqual({
         unread_since: "2026-08-06T05:00:00.000Z",
       });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+const createVersion9Database = (path: string, options?: { orphan?: boolean }): void => {
+  const legacy = new Database(path, { create: true, readwrite: true });
+  try {
+    legacy.exec("PRAGMA foreign_keys = OFF");
+    legacy.exec(`
+      CREATE TABLE active_sessions (
+        provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'kimi', 'pi', 'omp', 'zcode', 'deepseek')),
+        session_id TEXT NOT NULL,
+        parent_session_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('idle', 'working', 'waiting', 'error')),
+        title TEXT,
+        project TEXT,
+        logical_slot INTEGER,
+        opened_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        ghostty_terminal_id TEXT
+          CHECK (
+            ghostty_terminal_id IS NULL
+            OR (provider = 'claude' AND parent_session_id IS NULL AND length(ghostty_terminal_id) BETWEEN 1 AND 256)
+          ),
+        background_outstanding INTEGER NOT NULL DEFAULT 0
+          CHECK (background_outstanding IN (0, 1)),
+        transcript_path TEXT
+          CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256),
+        model TEXT
+          CHECK (model IS NULL OR length(model) BETWEEN 1 AND 256),
+        origin_kind TEXT
+          CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal')),
+        origin_ref TEXT
+          CHECK (origin_ref IS NULL OR length(origin_ref) BETWEEN 1 AND 256),
+        origin_subagent INTEGER NOT NULL DEFAULT 0
+          CHECK (origin_subagent IN (0, 1)),
+        unread_since TEXT,
+        acked_at TEXT,
+        PRIMARY KEY (provider, session_id),
+        FOREIGN KEY (provider, parent_session_id)
+          REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
+        CHECK (
+          (parent_session_id IS NULL AND logical_slot IS NOT NULL AND logical_slot > 0)
+          OR
+          (parent_session_id IS NOT NULL AND logical_slot IS NULL)
+        )
+      ) WITHOUT ROWID;
+      CREATE UNIQUE INDEX active_sessions_unique_slot
+        ON active_sessions(logical_slot)
+        WHERE logical_slot IS NOT NULL;
+      PRAGMA user_version = 9;
+    `);
+    // Every nullable/defaulted column carries a non-default value so a value
+    // lost on the rebuild path cannot pass as a default.
+    legacy.run(
+      `INSERT INTO active_sessions
+         (provider, session_id, parent_session_id, status, title, project, logical_slot,
+          opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path,
+          model, origin_kind, origin_ref, origin_subagent, unread_since, acked_at)
+       VALUES
+         ('claude', 'root', NULL, 'working', 'Root session', 'proj-root', 1,
+          '2026-08-06T01:00:00.000Z', '2026-08-06T02:00:00.000Z', 'ghostty-a1', 1, '/transcripts/root.jsonl',
+          'claude-fable-5', 'paseo', 'agent-1', 0,
+          '2026-08-06T02:30:00.000Z', '2026-08-06T02:45:00.000Z'),
+         ('claude', 'child', 'root', 'waiting', 'Child session', 'proj-child', NULL,
+          '2026-08-06T03:00:00.000Z', '2026-08-06T04:00:00.000Z', NULL, 1, '/transcripts/child.jsonl',
+          'claude-fable-5', 'terminal', 'ghostty', 1,
+          '2026-08-06T04:30:00.000Z', '2026-08-06T04:45:00.000Z')`,
+    );
+    if (options?.orphan === true) {
+      legacy.run(
+        `INSERT INTO active_sessions
+           (provider, session_id, parent_session_id, status, opened_at, updated_at)
+         VALUES ('claude', 'orphan', 'gone', 'idle', '2026-08-06T05:00:00.000Z', '2026-08-06T05:00:00.000Z')`,
+      );
+    }
+    legacy.exec("PRAGMA foreign_keys = ON");
+  } finally {
+    legacy.close();
+  }
+};
+
+describe("schema v10 rebuild", () => {
+  test("migrates a v9 database, preserving every row value", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion9Database(paths.database);
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      const version = db.query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(10);
+      const rows = db.query("SELECT * FROM active_sessions ORDER BY session_id ASC").all() as Array<
+        Record<string, unknown>
+      >;
+      expect(rows).toHaveLength(2);
+      const child = rows[0];
+      const root = rows[1];
+      expect(root).toMatchObject({
+        provider: "claude",
+        session_id: "root",
+        status: "working",
+        title: "Root session",
+        logical_slot: 1,
+        ghostty_terminal_id: "ghostty-a1",
+        background_outstanding: 1,
+        transcript_path: "/transcripts/root.jsonl",
+        model: "claude-fable-5",
+        origin_kind: "paseo",
+        origin_ref: "agent-1",
+        origin_subagent: 0,
+        unread_since: "2026-08-06T02:30:00.000Z",
+        acked_at: "2026-08-06T02:45:00.000Z",
+      });
+      expect(child).toMatchObject({
+        parent_session_id: "root",
+        logical_slot: null,
+        origin_subagent: 1,
+        acked_at: "2026-08-06T04:45:00.000Z",
+      });
+      // The widened CHECK accepts grok and still rejects non-providers.
+    } finally {
+      db.close();
+    }
+
+    const writer = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      writer.run(
+        `INSERT INTO active_sessions (provider, session_id, status, logical_slot, opened_at, updated_at)
+         VALUES ('grok', 'g1', 'idle', 2, '2026-08-16T00:00:00.000Z', '2026-08-16T00:00:00.000Z')`,
+      );
+      expect(() =>
+        writer.run(
+          `INSERT INTO active_sessions (provider, session_id, status, logical_slot, opened_at, updated_at)
+           VALUES ('vscode', 'v1', 'idle', 3, '2026-08-16T00:00:00.000Z', '2026-08-16T00:00:00.000Z')`,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+      // Partial unique index: duplicate live slot rejected, sibling slots for
+      // children (NULL) unaffected.
+      expect(() =>
+        writer.run(
+          `INSERT INTO active_sessions (provider, session_id, status, logical_slot, opened_at, updated_at)
+           VALUES ('grok', 'g2', 'idle', 2, '2026-08-16T00:00:00.000Z', '2026-08-16T00:00:00.000Z')`,
+        ),
+      ).toThrow();
+      // Self-FK cascade survives the rebuild.
+      writer.run(
+        `INSERT INTO active_sessions (provider, session_id, parent_session_id, status, opened_at, updated_at)
+         VALUES ('grok', 'g1-child', 'g1', 'idle', '2026-08-16T00:00:00.000Z', '2026-08-16T00:00:00.000Z')`,
+      );
+      writer.run("DELETE FROM active_sessions WHERE provider = 'grok' AND session_id = 'g1'");
+      expect(
+        (writer.query("SELECT COUNT(*) AS n FROM active_sessions WHERE provider = 'grok'").get() as { n: number }).n,
+      ).toBe(0);
+      // Storage contract preserved, and the archive table is gone.
+      const ddl = writer.query("SELECT sql FROM sqlite_master WHERE name = 'active_sessions'").get() as {
+        sql: string;
+      };
+      expect(ddl.sql).toContain("WITHOUT ROWID");
+      expect(ddl.sql).toContain("'grok'");
+      expect(
+        writer.query("SELECT name FROM sqlite_master WHERE name = 'active_sessions_v9_archived'").all(),
+      ).toHaveLength(0);
+    } finally {
+      writer.close();
+    }
+  });
+
+  test("a failed v10 rebuild keeps user_version = 9 and the original table; a retry converges", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion9Database(paths.database, { orphan: true });
+
+    // The orphan trips the rebuild's foreign_key_check; the attempt rolls back.
+    expect(() => initializeDatabase(paths)).toThrow();
+    const peek = new Database(paths.database, { readonly: true, create: false });
+    try {
+      expect((peek.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(9);
+      // The original table is intact, orphan included.
+      expect((peek.query("SELECT COUNT(*) AS n FROM active_sessions").get() as { n: number }).n).toBe(3);
+    } finally {
+      peek.close();
+    }
+
+    // Without the version < 8 gate, the failed attempt would have committed
+    // user_version = 8 (migrateToV8) and this retry would die re-adding
+    // acked_at. With the gate the retry from 9 runs the rebuild alone.
+    const fix = new Database(paths.database, { readwrite: true });
+    try {
+      fix.run("DELETE FROM active_sessions WHERE session_id = 'orphan'");
+    } finally {
+      fix.close();
+    }
+    initializeDatabase(paths);
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(10);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fresh init lands at v10 and repeated init is idempotent", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    initializeDatabase(paths);
+    initializeDatabase(paths);
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(10);
+      const ddl = db.query("SELECT sql FROM sqlite_master WHERE name = 'active_sessions'").get() as { sql: string };
+      expect(ddl.sql).toContain("'grok'");
     } finally {
       db.close();
     }

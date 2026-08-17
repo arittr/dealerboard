@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 9;
+export const LATEST_SCHEMA_VERSION = 10;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -188,14 +188,88 @@ ALTER TABLE active_sessions
 `;
 
 /**
+ * v10 widens the provider CHECK for grok. SQLite cannot alter a CHECK, so the
+ * table is rebuilt following the v5 pattern: rename aside (the self-FK is
+ * rewritten to the archived name by SQLite and dropped with it), create the
+ * final table as a verbatim clone of the post-v9 shape with only the provider
+ * list changed, copy rows with an explicit full column list, recreate the
+ * partial unique index.
+ */
+const SCHEMA_VERSION_10 = `
+ALTER TABLE active_sessions RENAME TO active_sessions_v9_archived;
+
+CREATE TABLE active_sessions (
+  provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'kimi', 'pi', 'omp', 'zcode', 'deepseek', 'grok')),
+  session_id TEXT NOT NULL,
+  parent_session_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('idle', 'working', 'waiting', 'error')),
+  title TEXT,
+  project TEXT,
+  logical_slot INTEGER,
+  opened_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  ghostty_terminal_id TEXT
+  CHECK (
+    ghostty_terminal_id IS NULL
+    OR (
+      provider = 'claude'
+      AND parent_session_id IS NULL
+      AND length(ghostty_terminal_id) BETWEEN 1 AND 256
+    )
+  ),
+  background_outstanding INTEGER NOT NULL DEFAULT 0
+  CHECK (background_outstanding IN (0, 1)),
+  transcript_path TEXT
+  CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256),
+  model TEXT
+  CHECK (model IS NULL OR length(model) BETWEEN 1 AND 256),
+  origin_kind TEXT
+  CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal')),
+  origin_ref TEXT
+  CHECK (origin_ref IS NULL OR length(origin_ref) BETWEEN 1 AND 256),
+  origin_subagent INTEGER NOT NULL DEFAULT 0
+  CHECK (origin_subagent IN (0, 1)),
+  unread_since TEXT,
+  acked_at TEXT,
+  PRIMARY KEY (provider, session_id),
+  FOREIGN KEY (provider, parent_session_id)
+    REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
+  CHECK (
+    (parent_session_id IS NULL AND logical_slot IS NOT NULL AND logical_slot > 0)
+    OR
+    (parent_session_id IS NOT NULL AND logical_slot IS NULL)
+  )
+) WITHOUT ROWID;
+
+INSERT INTO active_sessions
+  (provider, session_id, parent_session_id, status, title, project, logical_slot,
+   opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path,
+   model, origin_kind, origin_ref, origin_subagent, unread_since, acked_at)
+SELECT
+  provider, session_id, parent_session_id, status, title, project, logical_slot,
+  opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path,
+  model, origin_kind, origin_ref, origin_subagent, unread_since, acked_at
+FROM active_sessions_v9_archived;
+
+DROP TABLE active_sessions_v9_archived;
+
+CREATE UNIQUE INDEX active_sessions_unique_slot
+  ON active_sessions(logical_slot)
+  WHERE logical_slot IS NOT NULL;
+`;
+
+/**
  * Ordered migrations keyed by the schema version each one produces. Entries
  * below v5 alter the original table and run in one transaction before the
  * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
  * because it manages its own transaction. Entries between v5 and v8 (v6
  * model, v7 origin/unread) assume the rebuilt table and run in a second
  * transaction after it. v8 is special-cased too (`migrateToV8`): it is
- * shape-driven repair, not a static SQL string. Entries above v8 (v9
- * acked_at) run in a final transaction after the repair.
+ * shape-driven repair, not a static SQL string, and it is gated on
+ * `version < 8` so post-v8 databases never re-enter it. Entries above v8
+ * and below v10 (v9 acked_at) run in a final transaction after the repair.
+ * v10 is special-cased like v5 (`migrateToV10`): a table rebuild that runs
+ * strictly last.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
@@ -224,6 +298,33 @@ const migrateToV5 = (db: Database): void => {
       throw new Error(`schema v5 rebuild left ${String(violations.length)} foreign key violation(s)`);
     }
     db.exec("PRAGMA user_version = 5");
+    db.exec("COMMIT");
+    committed = true;
+  } finally {
+    if (!committed) {
+      db.exec("ROLLBACK");
+    }
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+};
+
+/**
+ * The v10 rebuild manages its own BEGIN/COMMIT for the same reason v5 does:
+ * `PRAGMA foreign_keys` is a no-op inside a transaction. It runs strictly
+ * last in initializeDatabase, after every ALTER migration, so the archive
+ * copy always starts from the final post-v9 shape.
+ */
+const migrateToV10 = (db: Database): void => {
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+  let committed = false;
+  try {
+    db.exec(SCHEMA_VERSION_10);
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      throw new Error(`schema v10 rebuild left ${String(violations.length)} foreign key violation(s)`);
+    }
+    db.exec("PRAGMA user_version = 10");
     db.exec("COMMIT");
     committed = true;
   } finally {
@@ -307,7 +408,12 @@ export const initializeDatabase = (paths: AppPaths): void => {
         }
       });
       migratePostV5();
-      migrateToV8(db);
+      // v8 is shape repair for pre-merge v7 databases; a v8-or-later database
+      // must never re-enter it — its unconditional stamp would clobber
+      // user_version back to 8 mid-pipeline (the v10 bricking hazard).
+      if (version < 8) {
+        migrateToV8(db);
+      }
       // Entries above v8 (v9) run after the shape repair, whose stamp would
       // otherwise clobber their version back to 8.
       const migratePostV8 = db.transaction(() => {
@@ -319,6 +425,9 @@ export const initializeDatabase = (paths: AppPaths): void => {
         }
       });
       migratePostV8();
+      // The v10 rebuild runs strictly last and owns its transaction (see
+      // migrateToV10); the MIGRATIONS loop cannot contain it.
+      migrateToV10(db);
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
   } finally {
