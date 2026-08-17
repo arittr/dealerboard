@@ -1,0 +1,12 @@
+{
+  "hookEventName": "notification",
+  "sessionId": "00000000-0000-4000-8000-000000000001",
+  "cwd": "/Users/you/project",
+  "workspaceRoot": "/Users/you/project",
+  "timestamp": "2026-08-17T06:55:10.000000+00:00",
+  "transcriptPath": "/Users/you/.grok/sessions/%2FUsers%2Fyou%2Fproject/00000000-0000-4000-8000-000000000001/updates.jsonl",
+  "promptId": "00000000-0000-4000-8000-000000000003",
+  "permissionMode": "default",
+  "notificationType": "permission_prompt",
+  "message": "Grok needs permission to run: rm -rf build"
+}

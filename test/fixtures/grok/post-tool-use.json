@@ -1,0 +1,32 @@
+{
+  "hookEventName": "post_tool_use",
+  "sessionId": "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+  "cwd": "/Users/you/project",
+  "workspaceRoot": "/Users/you/project",
+  "timestamp": "2026-08-17T06:52:02.690704+00:00",
+  "transcriptPath": "/Users/you/.grok/sessions/%2FUsers%2Fyou%2Fproject/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
+  "permissionMode": "auto",
+  "toolName": "run_terminal_command",
+  "toolUseId": "call-70ddf75c-98b3-4909-8b01-3ac665ad0b3e-1",
+  "toolInput": {
+    "command": "curl -s --max-time 5 -o /dev/null -w \"%{http_code}\" https://example.com",
+    "description": "Get HTTP status code from example.com"
+  },
+  "toolResult": {
+    "type": "Bash",
+    "output": [50, 48, 48],
+    "output_for_prompt": "exit: 0\n200",
+    "exit_code": 0,
+    "command": "curl -s --max-time 5 -o /dev/null -w \"%{http_code}\" https://example.com",
+    "truncated": false,
+    "signal": null,
+    "timed_out": false,
+    "description": "Get HTTP status code from example.com",
+    "current_dir": "/Users/you/project",
+    "output_file": "/Users/you/.grok/sessions/%2FUsers%2Fyou%2Fproject/01a00e7d-588a-7de0-88a1-d9c0848594c1/terminal/call-70ddf75c-98b3-4909-8b01-3ac665ad0b3e-1.log",
+    "total_bytes": 3
+  },
+  "toolInputTruncated": false,
+  "toolResultTruncated": false,
+  "isBackgrounded": false
+}
