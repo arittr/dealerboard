@@ -35,7 +35,7 @@ const FRAME_WIDTH = 6;
 const TITLE_LINE_CAPACITY = 12;
 const TITLE_MAX_LINES = 2;
 
-const MODEL_LABEL_PREFIXES = ["claude-", "gpt-", "zai/", "openai/"];
+const MODEL_LABEL_PREFIXES = ["claude-", "gpt-", "zai/", "openai/", "grok-"];
 const MODEL_LABEL_MAX_CODE_POINTS = 10;
 // The descendant badge occupies x≈99–130 in the same top band; a ten-point
 // label starting at x=56 would draw through it, so a badged tile caps at six.
@@ -60,6 +60,7 @@ const PROVIDER_COLORS: Record<Provider, string> = {
   omp: "#F5F0EA",
   zcode: "#EAB308",
   deepseek: "#2DD4BF",
+  grok: "#F472B6",
 };
 
 const PROVIDER_LETTERS: Record<Provider, string> = {
@@ -70,6 +71,7 @@ const PROVIDER_LETTERS: Record<Provider, string> = {
   omp: "O",
   zcode: "Z",
   deepseek: "D",
+  grok: "G",
 };
 
 const STATUS_COLORS: Record<SessionStatus, string> = {

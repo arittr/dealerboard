@@ -159,6 +159,7 @@ describe("renderKey output contract", () => {
     expect(textNodesByClass(decode(sessionModel({ provider: "omp" }), 0), "mark")).toEqual(["O"]);
     expect(textNodesByClass(decode(sessionModel({ provider: "zcode" }), 0), "mark")).toEqual(["Z"]);
     expect(textNodesByClass(decode(sessionModel({ provider: "deepseek" }), 0), "mark")).toEqual(["D"]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "grok" }), 0), "mark")).toEqual(["G"]);
   });
 
   test("colors the provider chip per harness", () => {
@@ -169,6 +170,7 @@ describe("renderKey output contract", () => {
     expect(decode(sessionModel({ provider: "omp" }), 0)).toContain("#F5F0EA");
     expect(decode(sessionModel({ provider: "zcode" }), 0)).toContain("#EAB308");
     expect(decode(sessionModel({ provider: "deepseek" }), 0)).toContain("#2DD4BF");
+    expect(decode(sessionModel({ provider: "grok" }), 0)).toContain("#F472B6");
   });
 
   test("renders the stripped model label right of the provider chip", () => {
@@ -181,6 +183,9 @@ describe("renderKey output contract", () => {
     expect(textNodesByClass(decode(sessionModel({ provider: "kimi", model: "k3" }), 0), "model")).toEqual(["k3"]);
     expect(textNodesByClass(decode(sessionModel({ provider: "pi", model: "zai/glm-5.3" }), 0), "model")).toEqual([
       "glm-5.3",
+    ]);
+    expect(textNodesByClass(decode(sessionModel({ provider: "grok", model: "grok-4.6" }), 0), "model")).toEqual([
+      "4.6",
     ]);
   });
 

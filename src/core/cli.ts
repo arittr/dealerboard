@@ -3,7 +3,7 @@
  *
  * Grammar (exact):
  *   stream-deck-agents init
- *   stream-deck-agents event <claude|codex|kimi|pi|omp|zcode|deepseek>
+ *   stream-deck-agents event <claude|codex|kimi|pi|omp|zcode|deepseek|grok>
  *   stream-deck-agents daemon
  *   stream-deck-agents sessions list
  *   stream-deck-agents sessions clear <provider> <session-id>

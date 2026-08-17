@@ -470,7 +470,18 @@ describe("readProjection", () => {
             model: null,
             observedAt: "2026-08-06T00:00:05.000Z",
           },
-          // The projection hides read-and-idle sessions, so p1/z1/d1 must
+          {
+            kind: "SessionStart",
+            provider: "grok",
+            sessionId: "g1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-06T00:00:05.500Z",
+          },
+          // The projection hides read-and-idle sessions, so p1/z1/d1/g1 must
           // land an unread result to stay visible; o1 is lifted by its live
           // child either way.
           {
@@ -491,6 +502,12 @@ describe("readProjection", () => {
             sessionId: "d1",
             observedAt: "2026-08-06T00:00:08.000Z",
           },
+          {
+            kind: "Stop",
+            provider: "grok",
+            sessionId: "g1",
+            observedAt: "2026-08-06T00:00:08.500Z",
+          },
         ]);
       } finally {
         writer.close();
@@ -500,7 +517,13 @@ describe("readProjection", () => {
       const reader = openRegistryDatabase(paths.database, "readonly");
       try {
         const snapshot = readProjection(reader);
-        expect(snapshot.sessions.map((session) => session.provider)).toEqual(["pi", "omp", "zcode", "deepseek"]);
+        expect(snapshot.sessions.map((session) => session.provider)).toEqual([
+          "pi",
+          "omp",
+          "zcode",
+          "deepseek",
+          "grok",
+        ]);
         expect(snapshot.sessions[1]?.descendantCount).toBe(1);
         expect(snapshot.sessions[1]?.status).toBe("working"); // live child lifts the tree
         expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);

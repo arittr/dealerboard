@@ -713,7 +713,7 @@ describe("event ingress", () => {
     expect(pulled).toBe(false);
   });
 
-  test.each(["pi", "omp", "zcode", "deepseek"] as const)("event %s is accepted", async (provider) => {
+  test.each(["pi", "omp", "zcode", "deepseek", "grok"] as const)("event %s is accepted", async (provider) => {
     initRegistry();
     const harness = makeHarness({
       stdin: stdinOf(JSON.stringify({ hook_event_name: "Stop", session_id: `${provider}-1` })),
@@ -727,7 +727,7 @@ describe("event ingress", () => {
     const harness = makeHarness();
 
     expect(await runCli(["bogus-command"], harness.deps)).toBe(1);
-    expect(harness.stderr()).toContain("event <claude|codex|kimi|pi|omp|zcode|deepseek>");
+    expect(harness.stderr()).toContain("event <claude|codex|kimi|pi|omp|zcode|deepseek|grok>");
   });
 
   test("returns zero for extra event arguments", async () => {
