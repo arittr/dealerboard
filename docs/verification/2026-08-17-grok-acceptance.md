@@ -51,15 +51,20 @@ tool>"` in a scratch dir, snapshot polled at 0.5s
 - Row appears on start: provider grok, project label, slot 16, `status=working`
   with `model=grok-4.6` already present.
 - `working` held for the whole turn (~26s).
-- Title resolved from `summary.json` **~6.3s** after first appearance
-  (`'List current directory files via shell'`) — inside the ~one-maintenance-pass
-  budget; model from first appearance.
+- Title visible **~6.3s end-to-end** after first appearance (hook event →
+  title in the snapshot; `'List current directory files via shell'`). This is
+  an end-to-end bound, not a resolver measurement: the poll has no timestamp
+  for when `summary.json` became readable, so resolver-within-one-pass is
+  UNMEASURED — the ~6.3s bounds grok's own summary-write latency plus the
+  resolver pass (daemon maintenance interval ~2s), not the resolver alone.
+  Model from first appearance.
 - Turn end: `status=idle`; registry `unread_since` stamped (direct unread evidence
   under Probe 2); the idle row stayed in the snapshot (unread ⟺ admitted).
 - Process exit: row removed within ~0.5s (SessionEnd).
 
 A second headless session from the scratch cwd re-confirmed appearance (~3s),
-title+model resolution (~6s: `"Run sleep 150 then reply done"` / `grok-4.6`), and
+title visible ~6s end-to-end (same bound as above; `"Run sleep 150 then reply done"` /
+`grok-4.6`), and
 that `grok -p` fires the full hook set including SessionStart/SessionEnd. Live
 `summary.json` for that session, verbatim:
 
@@ -134,11 +139,18 @@ session before the intentional probes ran.
 - **waiting/error states** were verified via fixture replay against a live row
   (auto-approve/dontAsk configs prevented a live permission prompt); teardown was
   verified by the real SessionEnd removing replayed rows.
-- **`/rename` storage field** (spec's open question: does a rename rewrite
-  `generated_title` in `summary.json`?) was not exercised — it needs an
-  interactive TUI session. What is verified live: the resolver reads
-  `generated_title` (fallback `session_summary`) and titles track it within one
-  maintenance pass, so a rename that rewrites either field surfaces within ~2s.
+- **`/rename` storage field — OPEN.** The spec's question (does a rename
+  rewrite `generated_title` in `summary.json`?) stays unanswered. It could not
+  be answered headless: two scripted attempts to drive the grok TUI through a
+  pty (burst keystrokes and per-character keystrokes, both piped through
+  macOS `script(1)`) never reached the TUI's input — zero trace of the rename
+  marker in the session transcript or `summary.json` of either attempt — and
+  grok exposes no headless rename verb (`grok sessions` offers only
+  list/search/delete). Both probe sessions were deleted and the registry left
+  clean. Residual risk: if `/rename` writes only `session_summary` and leaves
+  `generated_title` stale, a renamed session shows its stale auto title under
+  the resolver's `generated_title`-first preference; the preference order gets
+  revisited the day a stale-rename is observed in the wild.
 
 ## Deviations and detours found live
 
