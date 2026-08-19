@@ -39,10 +39,12 @@ const persistSettings = (settings: unknown): void => {
 };
 
 /**
- * Grid-visible unread: the projection admits only active or unread rows, and
- * unread is stamped exactly when a turn settles to idle or error, so an
- * on-grid idle/error tile is an unread result. A session re-prompted back to
- * working while still unread is not counted (prompts never mark read).
+ * Grid-visible unread, exact only for idle: the projection admits
+ * read-and-idle rows solely off the grid, so an on-grid idle tile is unread
+ * for certain. Error tiles are counted as news even though an acked error
+ * row lingers on-grid until its next lifecycle event — an accepted overcount,
+ * since the wire format carries no unread field; a daemon-side unread flag
+ * would make this exact.
  */
 const unreadCount = (view: SnapshotView): number =>
   view.snapshot.sessions.filter((session) => session.status === "idle" || session.status === "error").length;
