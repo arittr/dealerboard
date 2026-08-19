@@ -5,9 +5,10 @@
  * persist to localStorage; the reducer validates them on every read.
  */
 
-import { type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
+import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
 import type { SessionSnapshotV2, SnapshotView } from "../../src/protocol";
-import { readSnapshot } from "./bridge";
+import { ackSession, focusGhostty, openUrl, readPaseoServerId, readSnapshot } from "./bridge";
+import { pressSessionTile } from "./press";
 import { renderRail } from "./rail";
 import { reduceSnapshotRead } from "./snapshot-view";
 import { renderTiles } from "./tiles";
@@ -21,6 +22,7 @@ let currentView: SnapshotView | null = null;
 let lastReadMtimeMs: number | null = null;
 let currentPage = 0;
 let currentPageCount = 1;
+let currentKeys: readonly KeyModel[] = [];
 
 const loadStoredSettings = (): unknown => {
   try {
@@ -85,6 +87,7 @@ const applyLayout = (layout: LayoutResult): void => {
   }
   currentPage = layout.settings.currentPage;
   currentPageCount = layout.pageCount;
+  currentKeys = layout.keys;
   const signature = JSON.stringify(layout.keys);
   const root = document.querySelector<HTMLElement>("#tiles");
   if (root !== null && signature !== renderedSignature) {
@@ -103,11 +106,45 @@ const poll = async (): Promise<void> => {
 };
 
 const start = (): void => {
+  wireInteraction();
   void poll();
   setInterval(() => {
     void poll();
   }, POLL_MS);
   setInterval(renderRailNow, 1000);
+};
+
+const FLASH_MS = 320;
+
+const flashTile = (tile: HTMLElement): void => {
+  tile.classList.add("flash");
+  setTimeout(() => tile.classList.remove("flash"), FLASH_MS);
+};
+
+const onTilesClick = (event: MouseEvent): void => {
+  if (!(event.target instanceof HTMLElement)) {
+    return;
+  }
+  const tile = event.target.closest<HTMLElement>("[data-key-index]");
+  if (tile === null) {
+    return;
+  }
+  const index = Number(tile.dataset["keyIndex"]);
+  const model = currentKeys[index];
+  if (model === undefined || model.kind !== "session") {
+    return;
+  }
+  void pressSessionTile(model.session, {
+    ack: ackSession,
+    openUrl,
+    focusGhostty,
+    readPaseoServerId,
+    flash: () => flashTile(tile),
+  });
+};
+
+const wireInteraction = (): void => {
+  document.querySelector<HTMLElement>("#tiles")?.addEventListener("click", onTilesClick);
 };
 
 start();

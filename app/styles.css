@@ -250,3 +250,15 @@ body {
 .page-dot.current {
   color: #94a3b8;
 }
+
+.tile.flash {
+  animation: flashblink 0.32s ease-out;
+}
+@keyframes flashblink {
+  0% {
+    box-shadow: inset 0 0 0 1vw rgb(148 163 184 / 0.9);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
