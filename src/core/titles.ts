@@ -200,9 +200,12 @@ const activityTargetFrom = (
 };
 
 /**
- * Compose "Tool target", truncating the target (never the tool name) with an
- * ellipsis so the whole line stays within MAX_ACTIVITY_LINE_CODE_POINTS — the
- * registry's activity_line CHECK rejects anything longer.
+ * Compose "Tool target": the target truncates first, with an ellipsis, so
+ * the whole line stays within MAX_ACTIVITY_LINE_CODE_POINTS — the registry's
+ * activity_line CHECK rejects anything longer. An independently overlong
+ * tool name is capped at that same bound, without an ellipsis: it is the
+ * whole line when the target is null, and the target budget derives from
+ * the capped length.
  */
 const composeActivityLine = (toolName: string, target: string | null): string => {
   const name = Array.from(toolName).slice(0, MAX_ACTIVITY_LINE_CODE_POINTS).join("");

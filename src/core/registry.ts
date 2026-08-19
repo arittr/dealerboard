@@ -68,6 +68,7 @@ type SessionRow = {
   origin_kind: "paseo" | "terminal" | null;
   origin_ref: string | null;
   origin_subagent: number;
+  origin_parent_ref: string | null;
   unread_since: string | null;
   opened_at: string;
   updated_at: string;
@@ -78,7 +79,10 @@ const COLUMNS =
 
 const getRow = (db: Database, provider: Provider, sessionId: string): SessionRow | null =>
   db
-    .query(`SELECT ${COLUMNS} FROM active_sessions WHERE provider = ? AND session_id = ?`)
+    // origin_parent_ref postdates COLUMNS (schema v7) and the INSERT column
+    // lists stay frozen — select it here so the SessionObserved difference
+    // guard can see the stored value.
+    .query(`SELECT ${COLUMNS}, origin_parent_ref FROM active_sessions WHERE provider = ? AND session_id = ?`)
     .get(provider, sessionId) as SessionRow | null;
 
 const toActiveSession = (row: SessionRow): ActiveSession => ({
@@ -249,16 +253,24 @@ const applySessionObserved = (
   // value that differs from the stored one overwrites it — the transcript
   // path unlocks title resolution, a provider whose prompt event carries a
   // model fills the label on a row that started without one, and a fresh
-  // non-null origin replaces the stored one (resetting the subagent bit)
-  // with SessionStart's semantics, refreshing routing on a late join.
+  // non-null origin replaces the stored one (resetting the subagent bit and
+  // clearing a stale parent ref) with SessionStart's semantics, refreshing
+  // routing on a late join.
   // Null event values never clear what is already stored, and a row whose
   // observed event would change nothing reports "ignored".
   const existing = getRow(db, event.provider, event.sessionId);
   if (existing !== null) {
     const origin = event.origin ?? null;
+    // A same-kind/ref origin with no subagent bit still carries fresh
+    // evidence: the reset it applies (subagent 0, parent ref null) differs
+    // from the stored row while origin_parent_ref is set, so the stale
+    // parent must count toward the refresh decision.
     const refreshOrigin =
       origin !== null &&
-      (existing.origin_kind !== origin.kind || existing.origin_ref !== origin.ref || existing.origin_subagent !== 0);
+      (existing.origin_kind !== origin.kind ||
+        existing.origin_ref !== origin.ref ||
+        existing.origin_subagent !== 0 ||
+        existing.origin_parent_ref !== null);
     const backfillModel = event.model !== null && existing.model !== event.model;
     const backfillTranscript = event.transcriptPath !== null && existing.transcript_path !== event.transcriptPath;
     if (refreshOrigin || backfillModel || backfillTranscript) {

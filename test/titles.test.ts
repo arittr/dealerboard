@@ -828,7 +828,7 @@ describe("activity line resolution", () => {
     ]);
   });
 
-  test("takes only a command's first line and truncates the target, never the tool name, to 64 code points", () => {
+  test("takes only a command's first line; truncates the target to fit, and caps an overlong tool name, at 64 code points", () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": toolUseLine("Bash", { command: `${"x".repeat(100)}\necho second` }) },

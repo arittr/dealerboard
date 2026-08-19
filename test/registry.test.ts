@@ -629,6 +629,21 @@ describe("origin", () => {
     expect(getRow("s1")).toMatchObject({ origin_kind: "terminal", origin_subagent: 0, origin_parent_ref: null });
   });
 
+  test("a same-origin observed clears a stale origin_parent_ref (parent-only reset)", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "terminal", ref: "ghostty" } }]);
+    db.run("UPDATE active_sessions SET origin_parent_ref = 'agent-0' WHERE provider = 'claude' AND session_id = 's1'");
+
+    expect(applyRegistryEvents(db, [observedWithOrigin("s1", { kind: "terminal", ref: "ghostty" }, 2)])).toEqual([
+      "applied",
+    ]);
+    expect(getRow("s1")).toMatchObject({
+      origin_kind: "terminal",
+      origin_ref: "ghostty",
+      origin_subagent: 0,
+      origin_parent_ref: null,
+    });
+  });
+
   test("an observed without origin evidence preserves the stored origin and is ignored", () => {
     applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "terminal", ref: "ghostty" } }]);
 
@@ -1261,6 +1276,19 @@ describe("status_since", () => {
       simple("Stop", "s1", { at: at(6) }),
     ]);
     expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(6) });
+  });
+
+  test("a background-held Stop that changes status (waiting→working) restamps status_since", () => {
+    applyRegistryEvents(db, [
+      start("s1", { at: at(1) }),
+      simple("Activity", "s1", { at: at(2) }),
+      simple("BackgroundWorkStarted", "s1", { at: at(3) }),
+      simple("Attention", "s1", { at: at(4) }),
+    ]);
+    expect(getRow("s1")).toMatchObject({ status: "waiting", status_since: at(4) });
+
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(5) })]);
+    expect(getRow("s1")).toMatchObject({ status: "working", status_since: at(5), unread_since: null });
   });
 
   test("a reused SessionStart restamps only when its idle-reset changes the status", () => {
