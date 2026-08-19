@@ -5,3 +5,5 @@ node_modules/
 com.drewritter.stream-deck-agents.sdPlugin/bin/
 .verification-private/
 .DS_Store
+app/dist/
+app/src-tauri/target/

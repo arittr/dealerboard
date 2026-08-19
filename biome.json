@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["src/**", "test/**", "scripts/**", "extensions/**", "*.json", "*.mjs"]
+    "includes": ["src/**", "test/**", "scripts/**", "extensions/**", "app/**", "!app/src-tauri", "*.json", "*.mjs"]
   },
   "formatter": {
     "enabled": true,

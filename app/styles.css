@@ -1,0 +1,30 @@
+:root {
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #10151c;
+  color: #e8eef7;
+  font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#strip {
+  display: grid;
+  grid-template-columns: 1fr 24%;
+  gap: 1.56vw;
+  padding: 8.33vh 1.56vw;
+  height: 100vh;
+}
+#tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.56vw;
+}
+.tile.blank {
+  background: #0f131b;
+  border-radius: 1vw;
+}

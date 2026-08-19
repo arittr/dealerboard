@@ -11,8 +11,7 @@
  * reducer performs no I/O and imports no Stream Deck SDK types.
  */
 
-import type { ProjectedSession } from "../protocol";
-import type { SnapshotView } from "./snapshot-reader";
+import type { ProjectedSession, SnapshotView } from "../protocol";
 
 export type KeyModel =
   | { kind: "blank"; degraded: boolean }
