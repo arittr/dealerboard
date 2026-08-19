@@ -13,15 +13,15 @@
  * mtime doubles as the daemon-liveness signal the plugin watches.
  *
  * Maintenance runs inside the same poll loop, as three passes: a
- * session-facts pass (resolve session titles and models from provider files,
- * update rows that changed) every two seconds, a Paseo overlay pass (mirror
- * Paseo's per-agent attention and origin state onto matching rows) on the
- * same cadence, and a prune pass (delete sessions whose last hook is older
- * than the stale TTL — one hour for zcode, which has no SessionEnd hook, a
- * day for everyone else) every minute. A poll gap beyond the clock-jump
- * threshold — the sleep signature of the host machine — records a
- * diagnostic. Maintenance failures record their own diagnostic and never
- * affect publication health.
+ * session-facts pass (resolve session titles, models, and activity lines
+ * from provider files, update rows that changed) every two seconds, a Paseo
+ * overlay pass (mirror Paseo's per-agent attention and origin state onto
+ * matching rows) on the same cadence, and a prune pass (delete sessions
+ * whose last hook is older than the stale TTL — one hour for zcode, which
+ * has no SessionEnd hook, a day for everyone else) every minute. A poll gap
+ * beyond the clock-jump threshold — the sleep signature of the host machine
+ * — records a diagnostic. Maintenance failures record their own diagnostic
+ * and never affect publication health.
  *
  * `PRAGMA user_version` is validated when the connection opens; on an open,
  * read, or projection failure the daemon publishes the schema-valid unhealthy
@@ -34,7 +34,13 @@ import type { SessionSnapshotV2 } from "../protocol";
 import type { DiagnosticCode, DiagnosticRecord } from "./diagnostics";
 import type { AppPaths } from "./paths";
 import { readProjection } from "./projection";
-import { listTitleTargets, pruneStaleSessions, updateSessionModels, updateSessionTitles } from "./registry";
+import {
+  listTitleTargets,
+  pruneStaleSessions,
+  updateSessionActivityLines,
+  updateSessionModels,
+  updateSessionTitles,
+} from "./registry";
 import { openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { writeSnapshotAtomically } from "./snapshot";
 import type { SessionFactsResolver } from "./titles";
@@ -42,7 +48,7 @@ import type { SessionFactsResolver } from "./titles";
 export const DAEMON_POLL_INTERVAL_MS = 250;
 /** How often the snapshot file is rewritten even when nothing changed. */
 export const DAEMON_HEARTBEAT_MS = 5_000;
-/** How often session facts (titles, models) are resolved from provider files. */
+/** How often session facts (titles, models, activity lines) are resolved from provider files. */
 export const DAEMON_TITLE_INTERVAL_MS = 2_000;
 /** How often Paseo's per-agent state is mirrored onto registry rows. */
 export const DAEMON_PASEO_INTERVAL_MS = 2_000;
@@ -142,7 +148,7 @@ export class ProjectionDaemon {
       schedule: defaultSchedule,
       now: () => new Date().toISOString(),
       nowMs: () => Date.now(),
-      resolveFacts: () => ({ titles: [], models: [] }),
+      resolveFacts: () => ({ titles: [], models: [], activities: [] }),
       syncPaseo: () => 0,
       diagnostics: () => {},
       ...dependencies,
@@ -227,10 +233,10 @@ export class ProjectionDaemon {
   }
 
   /**
-   * Time-based upkeep: session facts (titles, models) and the Paseo overlay
-   * on the fast cadence, stale pruning on the slow one. Returns true when any row changed,
-   * forcing reprojection. Failures record one diagnostic and never mark the
-   * daemon unhealthy.
+   * Time-based upkeep: session facts (titles, models, activity lines) and the
+   * Paseo overlay on the fast cadence, stale pruning on the slow one. Returns
+   * true when any row changed, forcing reprojection. Failures record one
+   * diagnostic and never mark the daemon unhealthy.
    */
   private maintain(nowMs: number): boolean {
     if (this.connection === null) {
@@ -250,6 +256,9 @@ export class ProjectionDaemon {
           changed = true;
         }
         if (facts.models.length > 0 && updateSessionModels(this.connection, facts.models) > 0) {
+          changed = true;
+        }
+        if (facts.activities.length > 0 && updateSessionActivityLines(this.connection, facts.activities) > 0) {
           changed = true;
         }
       }

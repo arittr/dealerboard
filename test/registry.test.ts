@@ -12,6 +12,7 @@ import {
   listSessions,
   pruneStaleSessions,
   syncPaseoStates,
+  updateSessionActivityLines,
   updateSessionModels,
   updateSessionTitles,
 } from "../src/core/registry";
@@ -801,6 +802,32 @@ describe("updateSessionModels", () => {
     // A second identical pass changes nothing.
     expect(updateSessionModels(db, [{ provider: "claude", sessionId: "s1", model: "claude-fable-5" }])).toBe(0);
     expect(getRow("s1")).toMatchObject({ model: "claude-fable-5", updated_at: at(1) });
+  });
+});
+
+describe("updateSessionActivityLines", () => {
+  test("writes only differing activity lines without touching updated_at", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), start("s2", { at: at(2) })]);
+    db.run("UPDATE active_sessions SET activity_line = 'Bash ls' WHERE provider = 'claude' AND session_id = 's2'");
+
+    expect(
+      updateSessionActivityLines(db, [
+        { provider: "claude", sessionId: "s1", activityLine: "Read /src/core/registry.ts" },
+        { provider: "claude", sessionId: "s2", activityLine: "Bash ls" },
+        { provider: "claude", sessionId: "ghost", activityLine: "Nope" },
+      ]),
+    ).toBe(1);
+
+    expect(getRow("s1")).toMatchObject({ activity_line: "Read /src/core/registry.ts", updated_at: at(1) });
+    expect(getRow("s2")).toMatchObject({ activity_line: "Bash ls", updated_at: at(2) });
+
+    // A second identical pass changes nothing.
+    expect(
+      updateSessionActivityLines(db, [
+        { provider: "claude", sessionId: "s1", activityLine: "Read /src/core/registry.ts" },
+      ]),
+    ).toBe(0);
+    expect(getRow("s1")).toMatchObject({ activity_line: "Read /src/core/registry.ts", updated_at: at(1) });
   });
 });
 

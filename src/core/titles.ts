@@ -1,6 +1,6 @@
 /**
- * Resolves session facts — titles and model ids — from provider state on
- * disk.
+ * Resolves session facts — titles, model ids, and activity lines — from
+ * provider state on disk.
  *
  * Only Kimi and pi push titles through hooks; the other providers keep theirs
  * in files on disk. The daemon owns this resolver and
@@ -10,14 +10,16 @@
  *   `{"type":"ai-title","aiTitle":...}` records and assistant records whose
  *   `message.model` names the session's model. The file can grow to
  *   megabytes, so only the last 64 KiB (TAIL_BYTES) are read — one read
- *   serves both facts — and the last parseable ai-title and assistant
+ *   serves all three facts — and the last parseable ai-title and assistant
  *   records win. Results are cached per path on the (mtime, size) identity,
  *   so a pass over an unchanged transcript costs one stat.
  * - Codex: `~/.codex/session_index.jsonl` maps session ids to `thread_name`.
  *   The whole index is reparsed only when its (mtime, size) changes. Models
  *   come from `turn_context` records' `payload.model` in a tail read of the
  *   rollout JSONL at the row's `transcript_path`, cached per path on
- *   (mtime, size) the same way the Claude facts are.
+ *   (mtime, size) the same way the Claude facts are. The same tail read
+ *   yields the activity line: the last function_call or local_shell_call as
+ *   `Tool target` (≤64 code points, arguments never carried whole).
  * - zcode: `db.sqlite` under the zcode home, re-queried per pass — WAL makes
  *   stat caching unsafe. zcode has no model source at all, so its rows never
  *   resolve one.
@@ -31,24 +33,27 @@
  * - Kimi rows are never resolved here — hooks already deliver their titles
  *   and models.
  *
- * Resolution is additive: a found title or model is proposed only when it
- * differs from the stored one, and a missing value never clears an existing
- * one. Claude, Codex, and grok filesystem access flows through injected
- * dependencies so their tests use fakes; zcode opens its SQLite database
- * directly (read-only, one connection per pass) and its tests deliberately
- * use real fixture databases.
+ * Resolution is additive: a found title, model, or activity line is proposed
+ * only when it differs from the stored one, and a missing value never clears
+ * an existing one. Claude, Codex, and grok filesystem access flows through
+ * injected dependencies so their tests use fakes; zcode opens its SQLite
+ * database directly (read-only, one connection per pass) and its tests
+ * deliberately use real fixture databases.
  */
 
 import { Database } from "bun:sqlite";
 import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
+import type { SessionActivityLineUpdate, SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
 
 export const TAIL_BYTES = 64 * 1024;
 
 const MAX_TITLE_CODE_POINTS = 256;
 
-export type { SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
+/** The activity footer's cap, mirrored by the activity_line column CHECK (1-64). */
+export const MAX_ACTIVITY_LINE_CODE_POINTS = 64;
+
+export type { SessionActivityLineUpdate, SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
 
 export type FileStat = { mtimeMs: number; size: number };
 
@@ -65,10 +70,11 @@ export type SessionFactsResolverDependencies = {
   listDirectories?: (path: string) => string[];
 };
 
-/** The facts one pass proposes: title and model updates, applied additively. */
+/** The facts one pass proposes: title, model, and activity-line updates, applied additively. */
 export type SessionFacts = {
   titles: SessionTitleUpdate[];
   models: SessionModelUpdate[];
+  activities: SessionActivityLineUpdate[];
 };
 
 export type SessionFactsResolver = {
@@ -147,6 +153,63 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const boundTitle = (value: string): string => Array.from(value).slice(0, MAX_TITLE_CODE_POINTS).join("");
 
+const ACTIVITY_TARGET_KEYS = ["file_path", "path", "command", "pattern", "query", "url"] as const;
+
+/** A command's head is its first line; the rest never crosses the wire. */
+const firstLine = (value: string): string => value.split("\n", 1)[0] ?? value;
+
+/** Join an all-string argv, or null when the value is not one. */
+const stringArrayJoin = (value: unknown): string | null => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+  if (!value.every((item) => typeof item === "string")) {
+    return null;
+  }
+  return (value as string[]).join(" ");
+};
+
+/**
+ * A tool call's short target: the first known path/command/pattern-style
+ * input key (string, or string array joined), first line only. Never full
+ * arguments — matching the payload-minimality posture.
+ */
+const activityTargetFrom = (input: Record<string, unknown>): string | null => {
+  for (const key of ACTIVITY_TARGET_KEYS) {
+    const value = input[key];
+    if (typeof value === "string" && value.length > 0) {
+      return firstLine(value);
+    }
+    const joined = stringArrayJoin(value);
+    if (joined !== null && joined.length > 0) {
+      return firstLine(joined);
+    }
+  }
+  return null;
+};
+
+/**
+ * Compose "Tool target", truncating the target (never the tool name) with an
+ * ellipsis so the whole line stays within MAX_ACTIVITY_LINE_CODE_POINTS — the
+ * registry's activity_line CHECK rejects anything longer.
+ */
+const composeActivityLine = (toolName: string, target: string | null): string => {
+  const name = Array.from(toolName).slice(0, MAX_ACTIVITY_LINE_CODE_POINTS).join("");
+  if (target === null) {
+    return name;
+  }
+  const budget = MAX_ACTIVITY_LINE_CODE_POINTS - Array.from(name).length - 1;
+  if (budget < 1) {
+    return name;
+  }
+  const points = Array.from(target);
+  if (points.length === 0) {
+    return name;
+  }
+  const kept = points.length > budget ? `${points.slice(0, budget - 1).join("")}…` : target;
+  return `${name} ${kept}`;
+};
+
 /**
  * Scans tail lines newest-first for records of the given type and returns the
  * latest non-empty string the extractor yields, bounded. Malformed or
@@ -194,9 +257,73 @@ const claudeTitleFromTail = (tail: string): string | null =>
 const claudeModelFromTail = (tail: string): string | null =>
   lastFromTail(tail, "assistant", (record) => (isRecord(record["message"]) ? record["message"]["model"] : null));
 
+/**
+ * The last tool call in a Claude transcript tail: assistant records carry
+ * content arrays whose tool_use items name the tool and its input. Records
+ * scan newest-first and items newest-first within a record, so the result is
+ * the most recent call; records without tool use fall through to older ones.
+ */
+const claudeActivityFromTail = (tail: string): string | null =>
+  lastFromTail(tail, "assistant", (record) => {
+    const message = record["message"];
+    if (!isRecord(message) || !Array.isArray(message["content"])) {
+      return null;
+    }
+    const content: unknown[] = message["content"];
+    for (let index = content.length - 1; index >= 0; index -= 1) {
+      const item = content[index];
+      if (
+        isRecord(item) &&
+        item["type"] === "tool_use" &&
+        typeof item["name"] === "string" &&
+        item["name"].length > 0
+      ) {
+        const input = isRecord(item["input"]) ? item["input"] : {};
+        return composeActivityLine(item["name"], activityTargetFrom(input));
+      }
+    }
+    return null;
+  });
+
 /** Codex rollouts carry the turn's actual model on turn_context records' `payload.model`. */
 const codexModelFromTail = (tail: string): string | null =>
   lastFromTail(tail, "turn_context", (record) => (isRecord(record["payload"]) ? record["payload"]["model"] : null));
+
+/** Lift a short target from a function_call's stringified JSON arguments; null when unparseable. */
+const codexArgumentsTarget = (value: unknown): string | null => {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? activityTargetFrom(parsed) : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The last tool call in a Codex rollout tail: response_item records whose
+ * payload is a function_call (name plus stringified JSON arguments) or a
+ * local_shell_call (an exec action's argv, shown as "shell <argv head>").
+ * Arguments are parsed only to lift a short target — never carried whole.
+ */
+const codexActivityFromTail = (tail: string): string | null =>
+  lastFromTail(tail, "response_item", (record) => {
+    const payload = record["payload"];
+    if (!isRecord(payload)) {
+      return null;
+    }
+    if (payload["type"] === "function_call" && typeof payload["name"] === "string" && payload["name"].length > 0) {
+      return composeActivityLine(payload["name"], codexArgumentsTarget(payload["arguments"]));
+    }
+    if (payload["type"] === "local_shell_call") {
+      const action = payload["action"];
+      const joined = isRecord(action) ? stringArrayJoin(action["command"]) : null;
+      return composeActivityLine("shell", joined === null ? null : firstLine(joined));
+    }
+    return null;
+  });
 
 /** omp's session JSONL reserves a fixed-size title slot at the head. */
 export const OMP_SLOT_BYTES = 256;
@@ -351,29 +478,33 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
   const readHead = dependencies.readHead ?? defaultReadHead;
   const listDirectories = dependencies.listDirectories ?? defaultListDirectories;
 
-  const claudeCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
+  const claudeCache = new Map<
+    string,
+    FileStat & { title: string | null; model: string | null; activity: string | null }
+  >();
   const ompCache = new Map<string, FileStat & { title: string | null }>();
   let codexCache: (FileStat & { byId: Map<string, string> }) | null = null;
-  const codexModelCache = new Map<string, FileStat & { model: string | null }>();
+  const codexModelCache = new Map<string, FileStat & { model: string | null; activity: string | null }>();
   const grokCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
   const grokSummaryPaths = new Map<string, string>();
 
-  const claudeFacts = (path: string): { title: string | null; model: string | null } => {
+  const claudeFacts = (path: string): { title: string | null; model: string | null; activity: string | null } => {
     const stat = statPath(path);
     if (stat === null) {
       // A missing transcript is re-statted every pass; the failure is cheap
       // and there is no identity to cache against.
-      return { title: null, model: null };
+      return { title: null, model: null, activity: null };
     }
     const cached = claudeCache.get(path);
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return { title: cached.title, model: cached.model };
+      return { title: cached.title, model: cached.model, activity: cached.activity };
     }
     const tail = readTail(path, TAIL_BYTES);
     const title = tail === null ? null : claudeTitleFromTail(tail);
     const model = tail === null ? null : claudeModelFromTail(tail);
-    claudeCache.set(path, { ...stat, title, model });
-    return { title, model };
+    const activity = tail === null ? null : claudeActivityFromTail(tail);
+    claudeCache.set(path, { ...stat, title, model, activity });
+    return { title, model, activity };
   };
 
   const ompTitle = (path: string): string | null => {
@@ -435,19 +566,20 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     return facts;
   };
 
-  const codexModel = (path: string): string | null => {
+  const codexRolloutFacts = (path: string): { model: string | null; activity: string | null } => {
     const stat = statPath(path);
     if (stat === null) {
-      return null;
+      return { model: null, activity: null };
     }
     const cached = codexModelCache.get(path);
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return cached.model;
+      return { model: cached.model, activity: cached.activity };
     }
     const tail = readTail(path, TAIL_BYTES);
     const model = tail === null ? null : codexModelFromTail(tail);
-    codexModelCache.set(path, { ...stat, model });
-    return model;
+    const activity = tail === null ? null : codexActivityFromTail(tail);
+    codexModelCache.set(path, { ...stat, model, activity });
+    return { model, activity };
   };
 
   const codexTitles = (): Map<string, string> => {
@@ -468,22 +600,27 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     resolve: (targets) => {
       const titles: SessionTitleUpdate[] = [];
       const models: SessionModelUpdate[] = [];
+      const activities: SessionActivityLineUpdate[] = [];
       let codexById: Map<string, string> | null = null;
       let zcodeById: Map<string, string> | null = null;
       for (const target of targets) {
         let resolvedTitle: string | null = null;
         let resolvedModel: string | null = null;
+        let resolvedActivity: string | null = null;
         if (target.provider === "claude" && target.transcriptPath !== null) {
           const facts = claudeFacts(target.transcriptPath);
           resolvedTitle = facts.title;
           resolvedModel = facts.model;
+          resolvedActivity = facts.activity;
         } else if (target.provider === "omp" && target.transcriptPath !== null) {
           resolvedTitle = ompTitle(target.transcriptPath);
         } else if (target.provider === "codex") {
           codexById ??= codexTitles();
           resolvedTitle = codexById.get(target.sessionId) ?? null;
           if (target.transcriptPath !== null) {
-            resolvedModel = codexModel(target.transcriptPath);
+            const facts = codexRolloutFacts(target.transcriptPath);
+            resolvedModel = facts.model;
+            resolvedActivity = facts.activity;
           }
         } else if (target.provider === "zcode") {
           zcodeById ??= readZcodeTitles(
@@ -502,8 +639,11 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
         if (resolvedModel !== null && resolvedModel !== target.model) {
           models.push({ provider: target.provider, sessionId: target.sessionId, model: resolvedModel });
         }
+        if (resolvedActivity !== null && resolvedActivity !== target.activityLine) {
+          activities.push({ provider: target.provider, sessionId: target.sessionId, activityLine: resolvedActivity });
+        }
       }
-      return { titles, models };
+      return { titles, models, activities };
     },
   };
 };

@@ -74,6 +74,7 @@ const claudeTarget = (overrides: Partial<TitleTarget> = {}): TitleTarget => ({
   sessionId: "s1",
   title: null,
   model: null,
+  activityLine: null,
   transcriptPath: "/transcripts/s1.jsonl",
   ...overrides,
 });
@@ -173,7 +174,9 @@ describe("Codex session-index titles", () => {
       },
     });
     expect(
-      resolver.resolve([{ provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null }]).titles,
+      resolver.resolve([
+        { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
+      ]).titles,
     ).toEqual([{ provider: "codex", sessionId: "c1", title: "Add AIS points to radar display" }]);
   });
 
@@ -186,8 +189,8 @@ describe("Codex session-index titles", () => {
     });
     expect(
       resolver.resolve([
-        { provider: "codex", sessionId: "c2", title: null, model: null, transcriptPath: null },
-        { provider: "codex", sessionId: "unknown", title: null, model: null, transcriptPath: null },
+        { provider: "codex", sessionId: "c2", title: null, model: null, activityLine: null, transcriptPath: null },
+        { provider: "codex", sessionId: "unknown", title: null, model: null, activityLine: null, transcriptPath: null },
       ]).titles,
     ).toEqual([{ provider: "codex", sessionId: "c2", title: "Real name" }]);
   });
@@ -197,11 +200,21 @@ describe("Codex session-index titles", () => {
       stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } },
       wholes: { [CODEX_INDEX]: `${indexLine("c1", "First")}\n` },
     });
-    const target: TitleTarget = { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null };
+    const target: TitleTarget = {
+      provider: "codex",
+      sessionId: "c1",
+      title: null,
+      model: null,
+      activityLine: null,
+      transcriptPath: null,
+    };
     expect(resolver.resolve([target]).titles).toHaveLength(1);
     expect(fs.wholeReads()).toBe(1);
 
-    resolver.resolve([target, { provider: "codex", sessionId: "c2", title: null, model: null, transcriptPath: null }]);
+    resolver.resolve([
+      target,
+      { provider: "codex", sessionId: "c2", title: null, model: null, activityLine: null, transcriptPath: null },
+    ]);
     expect(fs.wholeReads()).toBe(1);
 
     fs.stats.set(CODEX_INDEX, { mtimeMs: 200, size: 350 });
@@ -213,14 +226,15 @@ describe("Codex session-index titles", () => {
   test("a missing or unreadable index resolves nothing", () => {
     const missing = makeResolver();
     expect(
-      missing.resolver.resolve([{ provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null }])
-        .titles,
+      missing.resolver.resolve([
+        { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
+      ]).titles,
     ).toEqual([]);
 
     const unreadable = makeResolver({ stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } } });
     expect(
       unreadable.resolver.resolve([
-        { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: null },
+        { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
       ]).titles,
     ).toEqual([]);
   });
@@ -307,7 +321,14 @@ describe("Session model resolution", () => {
       tails: { "/rollouts/c1.jsonl": turnContextLine("gpt-5.6-luna") },
     });
     const result = resolver.resolve([
-      { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: "/rollouts/c1.jsonl" },
+      {
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        model: null,
+        activityLine: null,
+        transcriptPath: "/rollouts/c1.jsonl",
+      },
     ]);
     expect(result.titles).toEqual([{ provider: "codex", sessionId: "c1", title: "Index name" }]);
     expect(result.models).toEqual([{ provider: "codex", sessionId: "c1", model: "gpt-5.6-luna" }]);
@@ -332,7 +353,14 @@ describe("Session model resolution", () => {
     });
     expect(
       resolver.resolve([
-        { provider: "codex", sessionId: "c1", title: null, model: null, transcriptPath: "/rollouts/c1.jsonl" },
+        {
+          provider: "codex",
+          sessionId: "c1",
+          title: null,
+          model: null,
+          activityLine: null,
+          transcriptPath: "/rollouts/c1.jsonl",
+        },
       ]).models,
     ).toEqual([{ provider: "codex", sessionId: "c1", model: "gpt-5.6-luna" }]);
   });
@@ -357,8 +385,22 @@ describe("Session model resolution", () => {
       },
     });
     const result = resolver.resolve([
-      { provider: "kimi", sessionId: "k1", title: null, model: null, transcriptPath: "/transcripts/k1.jsonl" },
-      { provider: "zcode", sessionId: "z1", title: null, model: null, transcriptPath: "/transcripts/z1.jsonl" },
+      {
+        provider: "kimi",
+        sessionId: "k1",
+        title: null,
+        model: null,
+        activityLine: null,
+        transcriptPath: "/transcripts/k1.jsonl",
+      },
+      {
+        provider: "zcode",
+        sessionId: "z1",
+        title: null,
+        model: null,
+        activityLine: null,
+        transcriptPath: "/transcripts/z1.jsonl",
+      },
     ]);
     expect(result.models).toEqual([]);
     expect(fs.tailReads()).toBe(0);
@@ -374,7 +416,14 @@ describe("other providers", () => {
     });
     expect(
       resolver.resolve([
-        { provider: "kimi", sessionId: "k1", title: null, model: null, transcriptPath: "/transcripts/k1.jsonl" },
+        {
+          provider: "kimi",
+          sessionId: "k1",
+          title: null,
+          model: null,
+          activityLine: null,
+          transcriptPath: "/transcripts/k1.jsonl",
+        },
       ]).titles,
     ).toEqual([]);
     expect(fs.tailReads()).toBe(0);
@@ -411,6 +460,7 @@ describe("zcode SQLite titles", () => {
     sessionId,
     title,
     model: null,
+    activityLine: null,
     transcriptPath: null,
   });
 
@@ -527,6 +577,7 @@ describe("omp session-file titles", () => {
     sessionId: "o1",
     title: null,
     model: null,
+    activityLine: null,
     transcriptPath: "/sessions/o1.jsonl",
     ...overrides,
   });
@@ -539,7 +590,7 @@ describe("omp session-file titles", () => {
       grokSessionsRoot: "/nonexistent/grok/sessions",
     });
     const updates = resolver.resolve([
-      { provider: "omp", sessionId: "o1", title: null, model: null, transcriptPath: FIXTURE_PATH },
+      { provider: "omp", sessionId: "o1", title: null, model: null, activityLine: null, transcriptPath: FIXTURE_PATH },
     ]).titles;
     expect(updates).toEqual([{ provider: "omp", sessionId: "o1", title: FIXTURE_TITLE }]);
   });
@@ -609,6 +660,7 @@ describe("grok summary.json facts", () => {
     sessionId: GROK_ID,
     title: null,
     model: null,
+    activityLine: null,
     transcriptPath: null,
     ...overrides,
   });
@@ -634,6 +686,7 @@ describe("grok summary.json facts", () => {
     expect(resolver.resolve([grokTarget()])).toEqual({
       titles: [{ provider: "grok", sessionId: GROK_ID, title: "Pi/OMP Ghostty Activation Spec Review" }],
       models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.6" }],
+      activities: [],
     });
   });
 
@@ -661,7 +714,11 @@ describe("grok summary.json facts", () => {
     const { resolver } = makeResolver(
       grokSeed(JSON.stringify({ generated_title: "Same", current_model_id: "grok-4.6" })),
     );
-    expect(resolver.resolve([grokTarget({ title: "Same", model: "grok-4.6" })])).toEqual({ titles: [], models: [] });
+    expect(resolver.resolve([grokTarget({ title: "Same", model: "grok-4.6" })])).toEqual({
+      titles: [],
+      models: [],
+      activities: [],
+    });
   });
 
   test("caches on (mtime, size): an unchanged summary costs one stat, no re-read", () => {
@@ -683,23 +740,24 @@ describe("grok summary.json facts", () => {
     expect(resolver.resolve([grokTarget()])).toEqual({
       titles: [{ provider: "grok", sessionId: GROK_ID, title: "After" }],
       models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.7" }],
+      activities: [],
     });
   });
 
   test("a missing session, missing summary, or malformed JSON resolves nothing and never throws", () => {
-    expect(makeResolver().resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+    expect(makeResolver().resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
     const emptyGroup = makeResolver({ grokSessionsRoot: GROK_ROOT, lists: { [GROK_ROOT]: [] } });
-    expect(emptyGroup.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+    expect(emptyGroup.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
     const malformed = makeResolver({
       ...grokSeed("not json"),
       wholes: { [GROK_SUMMARY]: "not json" },
     });
-    expect(malformed.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+    expect(malformed.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
   });
 
   test("a summary without facts proposes nothing (never clears)", () => {
     const { resolver } = makeResolver(grokSeed(JSON.stringify({ info: { id: GROK_ID } })));
-    expect(resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [] });
+    expect(resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
   });
 
   test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", () => {
@@ -709,5 +767,223 @@ describe("grok summary.json facts", () => {
     const title = resolver.resolve([grokTarget()]).titles[0]?.title ?? "";
     expect(Array.from(title)).toHaveLength(256);
     expect(title).toBe(expected);
+  });
+});
+
+describe("activity line resolution", () => {
+  const toolUseLine = (name: string, input: Record<string, unknown>): string =>
+    `${JSON.stringify({ type: "assistant", message: { model: "claude-fable-5", content: [{ type: "tool_use", name, input }] } })}\n`;
+
+  const responseItemLine = (payload: Record<string, unknown>): string =>
+    `${JSON.stringify({ type: "response_item", payload })}\n`;
+
+  test("resolves a claude title, model, and activity line from ONE tail read", () => {
+    const { resolver, fs } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: {
+        "/transcripts/s1.jsonl": `${aiTitle("Fix the widget")}${toolUseLine("Read", { file_path: "/src/core/registry.ts" })}${toolUseLine("Bash", { command: "git status --short" })}`,
+      },
+    });
+    const result = resolver.resolve([claudeTarget()]);
+    expect(result.titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Fix the widget" }]);
+    expect(result.models).toEqual([{ provider: "claude", sessionId: "s1", model: "claude-fable-5" }]);
+    // The newest assistant record's tool call wins.
+    expect(result.activities).toEqual([
+      { provider: "claude", sessionId: "s1", activityLine: "Bash git status --short" },
+    ]);
+    expect(fs.tailReads()).toBe(1);
+  });
+
+  test("prefers the last tool_use item within the newest assistant record", () => {
+    const both = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        model: "claude-fable-5",
+        content: [
+          { type: "tool_use", name: "Read", input: { file_path: "/a.ts" } },
+          { type: "tool_use", name: "Edit", input: { file_path: "/b.ts" } },
+        ],
+      },
+    })}\n`;
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": both },
+    });
+    expect(resolver.resolve([claudeTarget()]).activities).toEqual([
+      { provider: "claude", sessionId: "s1", activityLine: "Edit /b.ts" },
+    ]);
+  });
+
+  test("falls back to an older assistant record when the newest carries no tool call", () => {
+    const textOnly = `${JSON.stringify({
+      type: "assistant",
+      message: { model: "claude-fable-5", content: [{ type: "text", text: "Done." }] },
+    })}\n`;
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": `${toolUseLine("Grep", { pattern: "TODO" })}${textOnly}` },
+    });
+    expect(resolver.resolve([claudeTarget()]).activities).toEqual([
+      { provider: "claude", sessionId: "s1", activityLine: "Grep TODO" },
+    ]);
+  });
+
+  test("takes only a command's first line and truncates the target, never the tool name, to 64 code points", () => {
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": toolUseLine("Bash", { command: `${"x".repeat(100)}\necho second` }) },
+    });
+    const updates = resolver.resolve([claudeTarget()]).activities;
+    expect(updates).toHaveLength(1);
+    const line = updates[0]?.activityLine ?? "";
+    expect(Array.from(line)).toHaveLength(64);
+    expect(line.startsWith("Bash ")).toBe(true);
+    expect(line.endsWith("…")).toBe(true);
+    expect(line.includes("second")).toBe(false);
+  });
+
+  test("a tool-less transcript proposes no activity; other providers are never read", () => {
+    const { resolver, fs } = makeResolver({
+      stats: {
+        "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 },
+        "/transcripts/k1.jsonl": { mtimeMs: 100, size: 500 },
+      },
+      tails: {
+        "/transcripts/s1.jsonl": aiTitle("Only a title"),
+        "/transcripts/k1.jsonl": toolUseLine("Bash", { command: "should not be read" }),
+      },
+    });
+    const result = resolver.resolve([
+      claudeTarget(),
+      {
+        provider: "kimi",
+        sessionId: "k1",
+        title: null,
+        model: null,
+        transcriptPath: "/transcripts/k1.jsonl",
+        activityLine: null,
+      },
+    ]);
+    expect(result.activities).toEqual([]);
+    // The kimi transcript is never even read.
+    expect(fs.tailReads()).toBe(1);
+  });
+
+  test("a stored-equal activity line proposes no update", () => {
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/s1.jsonl": toolUseLine("Read", { file_path: "/src/core/registry.ts" }) },
+    });
+    expect(resolver.resolve([claudeTarget({ activityLine: "Read /src/core/registry.ts" })]).activities).toEqual([]);
+  });
+
+  test("resolves a codex function_call's name and command head from the rollout tail", () => {
+    const call = responseItemLine({
+      type: "function_call",
+      name: "shell",
+      arguments: JSON.stringify({ command: ["bash", "-lc", "git status --short"], timeout: 1000 }),
+    });
+    const { resolver, fs } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: `${JSON.stringify({ id: "c1", thread_name: "Index name" })}\n` },
+      tails: { "/rollouts/c1.jsonl": call },
+    });
+    const result = resolver.resolve([
+      {
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        model: null,
+        transcriptPath: "/rollouts/c1.jsonl",
+        activityLine: null,
+      },
+    ]);
+    expect(result.activities).toEqual([
+      { provider: "codex", sessionId: "c1", activityLine: "shell bash -lc git status --short" },
+    ]);
+    expect(fs.tailReads()).toBe(1);
+  });
+
+  test("resolves a codex local_shell_call as 'shell <argv head>'", () => {
+    const call = responseItemLine({
+      type: "local_shell_call",
+      action: { type: "exec", command: ["git", "diff", "--stat"] },
+    });
+    const { resolver } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: "" },
+      tails: { "/rollouts/c1.jsonl": call },
+    });
+    expect(
+      resolver.resolve([
+        {
+          provider: "codex",
+          sessionId: "c1",
+          title: null,
+          model: null,
+          transcriptPath: "/rollouts/c1.jsonl",
+          activityLine: null,
+        },
+      ]).activities,
+    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "shell git diff --stat" }]);
+  });
+
+  test("a codex function_call with unparseable arguments still names the tool, and non-call items are skipped", () => {
+    const truncated = responseItemLine({ type: "function_call", name: "apply_patch", arguments: '{"patch":"***' });
+    const message = responseItemLine({ type: "message", role: "assistant" });
+    const older = responseItemLine({
+      type: "function_call",
+      name: "shell",
+      arguments: JSON.stringify({ command: "ls" }),
+    });
+    const { resolver } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: "" },
+      tails: { "/rollouts/c1.jsonl": `${older}${truncated}` },
+    });
+    // The newest call wins even with unparseable arguments (name only).
+    expect(
+      resolver.resolve([
+        {
+          provider: "codex",
+          sessionId: "c1",
+          title: null,
+          model: null,
+          transcriptPath: "/rollouts/c1.jsonl",
+          activityLine: null,
+        },
+      ]).activities,
+    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "apply_patch" }]);
+
+    const { resolver: second } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c2.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: "" },
+      tails: { "/rollouts/c2.jsonl": `${older}${message}` },
+    });
+    // A non-call newest record falls through to the older function_call.
+    expect(
+      second.resolve([
+        {
+          provider: "codex",
+          sessionId: "c2",
+          title: null,
+          model: null,
+          transcriptPath: "/rollouts/c2.jsonl",
+          activityLine: null,
+        },
+      ]).activities,
+    ).toEqual([{ provider: "codex", sessionId: "c2", activityLine: "shell ls" }]);
   });
 });

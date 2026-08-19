@@ -505,26 +505,34 @@ export const listSessions = (db: Database): ActiveSession[] => {
 
 /**
  * The session-facts-resolver view: every top-level row's identity, stored
- * title, model, and transcript path. Children never carry resolvable
- * titles. Read-only.
+ * title, model, activity line, and transcript path. Children never carry
+ * resolvable titles. Read-only.
  */
 export const listTitleTargets = (db: Database): TitleTarget[] =>
   db
     .query(
-      `SELECT provider, session_id, title, model, transcript_path FROM active_sessions
+      `SELECT provider, session_id, title, model, activity_line, transcript_path FROM active_sessions
        WHERE parent_session_id IS NULL
        ORDER BY logical_slot ASC`,
     )
     .all()
     .map((row) => {
-      const { provider, session_id, title, model, transcript_path } = row as {
+      const { provider, session_id, title, model, activity_line, transcript_path } = row as {
         provider: Provider;
         session_id: string;
         title: string | null;
         model: string | null;
+        activity_line: string | null;
         transcript_path: string | null;
       };
-      return { provider, sessionId: session_id, title, model, transcriptPath: transcript_path };
+      return {
+        provider,
+        sessionId: session_id,
+        title,
+        model,
+        activityLine: activity_line,
+        transcriptPath: transcript_path,
+      };
     });
 
 /**
@@ -579,6 +587,12 @@ export type SessionModelUpdate = {
   model: string;
 };
 
+export type SessionActivityLineUpdate = {
+  provider: Provider;
+  sessionId: string;
+  activityLine: string;
+};
+
 /** The registry fields the daemon's session-facts resolver needs per top-level row. */
 export type TitleTarget = {
   provider: Provider;
@@ -586,6 +600,8 @@ export type TitleTarget = {
   title: string | null;
   /** Stored model id, for the differs-check that skips no-op write-backs. */
   model: string | null;
+  /** Stored activity line, for the differs-check that skips no-op write-backs. */
+  activityLine: string | null;
   transcriptPath: string | null;
 };
 
@@ -748,6 +764,26 @@ export const updateSessionModels = (db: Database, updates: readonly SessionModel
       const result = db.run(
         "UPDATE active_sessions SET model = ? WHERE provider = ? AND session_id = ? AND model IS NOT ?",
         [update.model, update.provider, update.sessionId, update.model],
+      );
+      changed += result.changes;
+    }
+    return changed;
+  });
+
+/**
+ * Refresh resolved activity lines in one transaction, skipping rows that
+ * already hold the value. `updated_at` deliberately stays put, matching
+ * `updateSessionTitles`/`updateSessionModels`: a daemon-side maintenance
+ * write must not extend a dead session's lease. Returns the number of rows
+ * actually changed.
+ */
+export const updateSessionActivityLines = (db: Database, updates: readonly SessionActivityLineUpdate[]): number =>
+  inWriteTransaction(db, () => {
+    let changed = 0;
+    for (const update of updates) {
+      const result = db.run(
+        "UPDATE active_sessions SET activity_line = ? WHERE provider = ? AND session_id = ? AND activity_line IS NOT ?",
+        [update.activityLine, update.provider, update.sessionId, update.activityLine],
       );
       changed += result.changes;
     }

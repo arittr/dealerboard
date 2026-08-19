@@ -440,13 +440,24 @@ describe("ProjectionDaemon maintenance", () => {
     const harness = makeHarness({
       resolveFacts: (seen) => {
         targets.push(...seen);
-        return { titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }], models: [] };
+        return {
+          titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }],
+          models: [],
+          activities: [],
+        };
       },
     });
     harness.daemon.start();
     try {
       expect(targets).toEqual([
-        { provider: "claude", sessionId: "s1", title: "Title for s1", transcriptPath: null, model: null },
+        {
+          provider: "claude",
+          sessionId: "s1",
+          title: "Title for s1",
+          transcriptPath: null,
+          model: null,
+          activityLine: null,
+        },
       ]);
       expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
       const row = (() => {
@@ -473,6 +484,7 @@ describe("ProjectionDaemon maintenance", () => {
       resolveFacts: () => ({
         titles: [],
         models: [{ provider: "claude" as const, sessionId: "s1", model: "claude-fable-5" }],
+        activities: [],
       }),
     });
     harness.daemon.start();
@@ -496,6 +508,36 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
+  test("applies resolved activity lines through updateSessionActivityLines and republishes with them", () => {
+    startSession("s1");
+    const harness = makeHarness({
+      resolveFacts: () => ({
+        titles: [],
+        models: [],
+        activities: [{ provider: "claude" as const, sessionId: "s1", activityLine: "Bash git status" }],
+      }),
+    });
+    harness.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions[0]?.activityLine).toBe("Bash git status");
+      const row = (() => {
+        const db = openRegistryDatabase(paths.database, "readonly");
+        try {
+          return db.query("SELECT activity_line, updated_at FROM active_sessions").get() as {
+            activity_line: string;
+            updated_at: string;
+          } | null;
+        } finally {
+          db.close();
+        }
+      })();
+      // The activity write leaves updated_at — the prune's aging signal — alone.
+      expect(row).toEqual({ activity_line: "Bash git status", updated_at: NOW });
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
   test("runs the titles pass on its cadence, not on every poll", () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
@@ -504,7 +546,7 @@ describe("ProjectionDaemon maintenance", () => {
       nowMs: clock.nowMs,
       resolveFacts: () => {
         resolveCalls += 1;
-        return { titles: [], models: [] };
+        return { titles: [], models: [], activities: [] };
       },
     });
     harness.daemon.start();
@@ -648,7 +690,7 @@ describe("ProjectionDaemon maintenance", () => {
       resolveFacts: () => {
         proposals += 1;
         if (proposals === 1) {
-          return { titles: [], models: [] };
+          return { titles: [], models: [], activities: [] };
         }
         return {
           titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }],
@@ -656,6 +698,7 @@ describe("ProjectionDaemon maintenance", () => {
           // so updateSessionModels throws AFTER the title write committed —
           // the two writes are separate transactions.
           models: [{ provider: "claude" as const, sessionId: "s1", model: "m".repeat(300) }],
+          activities: [],
         };
       },
     });
