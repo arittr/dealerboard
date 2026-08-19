@@ -8,6 +8,7 @@ import {
   type KeyModel,
   type LayoutSettingsV1,
   reduceLayout,
+  STRIP_GEOMETRY,
 } from "../src/plugin/layout";
 import { SnapshotCache, type SnapshotView } from "../src/plugin/snapshot-reader";
 import type { ProjectedSession, SessionSnapshotV2 } from "../src/protocol";
@@ -512,5 +513,42 @@ describe("SnapshotCache", () => {
       expect(cache.read().degraded).toBe(false);
       expect(cache.read().snapshot.sessions).toEqual([session(1)]);
     });
+  });
+});
+
+describe("reduceLayout with strip geometry", () => {
+  test("packs up to four sessions with no paging and no NEXT key", () => {
+    const result = reduceLayout(healthyView(sessionsAt(1, 2, 3)), DEFAULT_LAYOUT_SETTINGS, STRIP_GEOMETRY);
+    expect(result.keys).toHaveLength(4);
+    expect(result.pageCount).toBe(1);
+    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(1);
+    expect(result.keys[3]).toEqual({ kind: "blank", degraded: false });
+  });
+
+  test("engages paging above four sessions, emitting no NEXT key", () => {
+    const result = reduceLayout(healthyView(sessionsAt(1, 2, 3, 4, 5)), DEFAULT_LAYOUT_SETTINGS, STRIP_GEOMETRY);
+    expect(result.keys).toHaveLength(4);
+    expect(result.pageCount).toBe(2);
+    expect(result.settings).toEqual(settings(true, 0));
+    expect(result.keys.every((key) => key.kind !== "next")).toBe(true);
+  });
+
+  test("holds the latch at exactly four sessions and releases at three", () => {
+    const held = reduceLayout(healthyView(sessionsAt(1, 2, 3, 4)), settings(true, 0), STRIP_GEOMETRY);
+    expect(held.settings.overflowLatched).toBe(true);
+    const released = reduceLayout(healthyView(sessionsAt(1, 2, 3)), settings(true, 0), STRIP_GEOMETRY);
+    expect(released.settings).toEqual(settings(false, 0));
+  });
+
+  test("clamps an out-of-range page to the last page", () => {
+    const result = reduceLayout(healthyView(sessionsAt(1, 2, 3, 4, 5)), settings(true, 7), STRIP_GEOMETRY);
+    expect(result.settings.currentPage).toBe(1);
+    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(5);
+  });
+
+  test("a rail page jump via stored settings lands on the requested page", () => {
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 9))), settings(true, 2), STRIP_GEOMETRY);
+    expect(result.pageCount).toBe(3);
+    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(9);
   });
 });

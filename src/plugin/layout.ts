@@ -1,16 +1,11 @@
 /**
- * Pure paging reducer for the 5x3 Stream Deck profile.
- *
- * Maps live sessions onto fifteen physical keys in dense slot-rank order.
- * Sessions sort by their stable logical slot and pack onto keys by rank, so
- * the grid never shows holes between tiles: a session ending shifts later
- * tiles one key left, and a new session reusing a freed slot inserts at that
- * rank, shifting later tiles one key right. Without overflow, ranks 0..14
- * land on keys 0..14. Once the live count exceeds fifteen, the overflow
- * latch engages: keys 0..13 show the current page's fourteen ranks and key
- * 14 is NEXT; pages are uniform dense fourteen-rank slices. The latch holds
- * while the live count is at least fifteen and ends at fourteen or fewer. An
- * out-of-range current page clamps to the last page.
+ * Pure paging reducer: maps live sessions onto a fixed tile grid in dense
+ * slot-rank order. Geometry is parameterized: the 5x3 Stream Deck keypad is
+ * the default; the Xeneon strip pages full-density with no NEXT tile (its
+ * rail pages externally). Sessions sort by their stable logical slot and pack
+ * onto tiles by rank, so the grid never shows holes; the overflow latch
+ * engages above the geometry's unpaged capacity, holds at or above it, and
+ * releases below it. An out-of-range current page clamps to the last page.
  *
  * All page/latch state lives in this module as validated settings; the
  * reducer performs no I/O and imports no Stream Deck SDK types.
@@ -24,6 +19,31 @@ export type KeyModel =
   | { kind: "next"; page: number; pageCount: number; degraded: boolean }
   | { kind: "session"; session: ProjectedSession; label: string; degraded: boolean };
 
+export type LayoutGeometry = {
+  /** Total tiles in the grid. */
+  keyCount: number;
+  /** Session tiles per page once overflow paging engages. */
+  pageSessionKeys: number;
+  /** Overflow engages above this live count and holds at or above it. */
+  maxUnpagedSessions: number;
+  /** True: a paged grid's last tile is NEXT. False: paging is external (strip rail). */
+  nextKey: boolean;
+};
+
+export const KEYPAD_GEOMETRY: LayoutGeometry = {
+  keyCount: 15,
+  pageSessionKeys: 14,
+  maxUnpagedSessions: 15,
+  nextKey: true,
+};
+
+export const STRIP_GEOMETRY: LayoutGeometry = {
+  keyCount: 4,
+  pageSessionKeys: 4,
+  maxUnpagedSessions: 4,
+  nextKey: false,
+};
+
 export type LayoutSettingsV1 = {
   schemaVersion: 1;
   overflowLatched: boolean;
@@ -35,8 +55,10 @@ export type LayoutResult = {
   settings: LayoutSettingsV1;
   /** True only after NEXT or a validation, clamping, or latch change. */
   dirty: boolean;
-  /** Exactly fifteen models, one per physical key, row-major. */
+  /** Exactly geometry.keyCount models, one per tile, row-major. */
   keys: KeyModel[];
+  /** Total pages; 1 when unpaged. Exposed for external pagers (the strip rail). */
+  pageCount: number;
 };
 
 export const DEFAULT_LAYOUT_SETTINGS: LayoutSettingsV1 = {
@@ -45,9 +67,6 @@ export const DEFAULT_LAYOUT_SETTINGS: LayoutSettingsV1 = {
   currentPage: 0,
 };
 
-const KEY_COUNT = 15;
-const PAGE_SESSION_KEYS = 14;
-const MAX_UNPAGED_SESSIONS = 15;
 const SHORT_SESSION_ID_LENGTH = 8;
 
 const labelForSession = (session: ProjectedSession): string => {
@@ -70,24 +89,27 @@ const buildKeys = (
   degraded: boolean,
   settings: LayoutSettingsV1,
   pageCount: number,
+  geometry: LayoutGeometry,
 ): KeyModel[] => {
   const keys: KeyModel[] = [];
   if (!settings.overflowLatched) {
-    for (let key = 0; key < KEY_COUNT; key++) {
+    for (let key = 0; key < geometry.keyCount; key++) {
       keys.push(sessionKey(sessions[key], degraded));
     }
     return keys;
   }
-  const start = settings.currentPage * PAGE_SESSION_KEYS;
-  for (let key = 0; key < PAGE_SESSION_KEYS; key++) {
+  const start = settings.currentPage * geometry.pageSessionKeys;
+  for (let key = 0; key < geometry.pageSessionKeys; key++) {
     keys.push(sessionKey(sessions[start + key], degraded));
   }
-  keys.push({
-    kind: "next",
-    page: settings.currentPage + 1,
-    pageCount,
-    degraded,
-  });
+  if (geometry.nextKey) {
+    keys.push({
+      kind: "next",
+      page: settings.currentPage + 1,
+      pageCount,
+      degraded,
+    });
+  }
   return keys;
 };
 
@@ -122,65 +144,61 @@ const validateStoredSettings = (stored: unknown): ValidatedSettings => {
   return { settings: { ...DEFAULT_LAYOUT_SETTINGS }, defaulted: true };
 };
 
-type InternalLayout = LayoutResult & { pageCount: number };
-
 /** Sort defensively by logical slot even though the daemon already orders. */
 const sortedSessions = (view: SnapshotView): ProjectedSession[] =>
   [...view.snapshot.sessions].sort((a, b) => a.logicalSlot - b.logicalSlot);
 
-const reduceInternal = (view: SnapshotView, storedState: unknown): InternalLayout => {
+const reduceInternal = (view: SnapshotView, storedState: unknown, geometry: LayoutGeometry): LayoutResult => {
   const sessions = sortedSessions(view);
   const count = sessions.length;
   const { settings: restored, defaulted } = validateStoredSettings(storedState);
 
-  // The latch engages only when the live count exceeds fifteen; once engaged
-  // it holds while at least fifteen sessions remain live.
-  const overflow = restored.overflowLatched ? count >= MAX_UNPAGED_SESSIONS : count > MAX_UNPAGED_SESSIONS;
+  // The latch engages only when the live count exceeds the unpaged capacity;
+  // once engaged it holds while at least that many sessions remain live.
+  const overflow = restored.overflowLatched
+    ? count >= geometry.maxUnpagedSessions
+    : count > geometry.maxUnpagedSessions;
 
   if (!overflow) {
     const settings: LayoutSettingsV1 = { ...DEFAULT_LAYOUT_SETTINGS };
     const dirty = defaulted || restored.overflowLatched || restored.currentPage !== 0;
-    return {
-      settings,
-      dirty,
-      keys: buildKeys(sessions, view.degraded, settings, 1),
-      pageCount: 1,
-    };
+    return { settings, dirty, keys: buildKeys(sessions, view.degraded, settings, 1, geometry), pageCount: 1 };
   }
 
   // Latched pages are dense by construction, so every page in range is
   // non-empty and clamping reduces to bounding the page index.
-  const pageCount = Math.ceil(count / PAGE_SESSION_KEYS);
+  const pageCount = Math.ceil(count / geometry.pageSessionKeys);
   const currentPage = Math.min(restored.currentPage, pageCount - 1);
   const settings: LayoutSettingsV1 = { schemaVersion: 1, overflowLatched: true, currentPage };
   const dirty = defaulted || !restored.overflowLatched || restored.currentPage !== currentPage;
-  return {
-    settings,
-    dirty,
-    keys: buildKeys(sessions, view.degraded, settings, pageCount),
-    pageCount,
-  };
+  return { settings, dirty, keys: buildKeys(sessions, view.degraded, settings, pageCount, geometry), pageCount };
 };
 
-export const reduceLayout = (view: SnapshotView, storedState: unknown): LayoutResult => {
-  const { settings, dirty, keys } = reduceInternal(view, storedState);
-  return { settings, dirty, keys };
-};
+export const reduceLayout = (
+  view: SnapshotView,
+  storedState: unknown,
+  geometry: LayoutGeometry = KEYPAD_GEOMETRY,
+): LayoutResult => reduceInternal(view, storedState, geometry);
 
 /**
  * Advance to the next page, wrapping. Without overflow, or with a single
  * page, nothing moves and the base reduction's dirty flag is preserved.
  */
-export const advanceLayoutPage = (view: SnapshotView, storedState: unknown): LayoutResult => {
-  const base = reduceInternal(view, storedState);
+export const advanceLayoutPage = (
+  view: SnapshotView,
+  storedState: unknown,
+  geometry: LayoutGeometry = KEYPAD_GEOMETRY,
+): LayoutResult => {
+  const base = reduceInternal(view, storedState, geometry);
   if (!base.settings.overflowLatched || base.pageCount <= 1) {
-    return { settings: base.settings, dirty: base.dirty, keys: base.keys };
+    return base;
   }
   const currentPage = (base.settings.currentPage + 1) % base.pageCount;
   const settings: LayoutSettingsV1 = { ...base.settings, currentPage };
   return {
     settings,
     dirty: true,
-    keys: buildKeys(sortedSessions(view), view.degraded, settings, base.pageCount),
+    keys: buildKeys(sortedSessions(view), view.degraded, settings, base.pageCount, geometry),
+    pageCount: base.pageCount,
   };
 };
