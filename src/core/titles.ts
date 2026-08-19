@@ -155,6 +155,14 @@ const boundTitle = (value: string): string => Array.from(value).slice(0, MAX_TIT
 
 const ACTIVITY_TARGET_KEYS = ["file_path", "path", "command", "pattern", "query", "url"] as const;
 
+/**
+ * Codex function_call arguments carry the command under `cmd` (verified
+ * across the local rollout corpus: a plain string, never `command` — that
+ * spelling belongs to local_shell_call's argv), so exec_command's target is
+ * lifted by a Codex-specific key list.
+ */
+const CODEX_CALL_TARGET_KEYS = ["cmd", "file_path", "path", "pattern", "query", "url"] as const;
+
 /** A command's head is its first line; the rest never crosses the wire. */
 const firstLine = (value: string): string => value.split("\n", 1)[0] ?? value;
 
@@ -174,8 +182,11 @@ const stringArrayJoin = (value: unknown): string | null => {
  * input key (string, or string array joined), first line only. Never full
  * arguments — matching the payload-minimality posture.
  */
-const activityTargetFrom = (input: Record<string, unknown>): string | null => {
-  for (const key of ACTIVITY_TARGET_KEYS) {
+const activityTargetFrom = (
+  input: Record<string, unknown>,
+  keys: readonly string[] = ACTIVITY_TARGET_KEYS,
+): string | null => {
+  for (const key of keys) {
     const value = input[key];
     if (typeof value === "string" && value.length > 0) {
       return firstLine(value);
@@ -296,7 +307,7 @@ const codexArgumentsTarget = (value: unknown): string | null => {
   }
   try {
     const parsed: unknown = JSON.parse(value);
-    return isRecord(parsed) ? activityTargetFrom(parsed) : null;
+    return isRecord(parsed) ? activityTargetFrom(parsed, CODEX_CALL_TARGET_KEYS) : null;
   } catch {
     return null;
   }

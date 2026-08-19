@@ -877,11 +877,13 @@ describe("activity line resolution", () => {
     expect(resolver.resolve([claudeTarget({ activityLine: "Read /src/core/registry.ts" })]).activities).toEqual([]);
   });
 
-  test("resolves a codex function_call's name and command head from the rollout tail", () => {
+  test("resolves a codex function_call's name and cmd head from the rollout tail", () => {
+    // Shape captured from a real rollout: exec_command's arguments are
+    // stringified JSON carrying the command under `cmd` (a plain string).
     const call = responseItemLine({
       type: "function_call",
-      name: "shell",
-      arguments: JSON.stringify({ command: ["bash", "-lc", "git status --short"], timeout: 1000 }),
+      name: "exec_command",
+      arguments: JSON.stringify({ cmd: "git status --short", workdir: "/repo", max_output_tokens: 4000 }),
     });
     const { resolver, fs } = makeResolver({
       stats: {
@@ -902,9 +904,50 @@ describe("activity line resolution", () => {
       },
     ]);
     expect(result.activities).toEqual([
-      { provider: "codex", sessionId: "c1", activityLine: "shell bash -lc git status --short" },
+      { provider: "codex", sessionId: "c1", activityLine: "exec_command git status --short" },
     ]);
     expect(fs.tailReads()).toBe(1);
+  });
+
+  test("a captured exec_command emits only cmd's first line, never workdir or other arguments", () => {
+    // Captured argument keys: cmd (string), workdir, max_output_tokens,
+    // yield_time_ms — only cmd's first line may cross the wire.
+    const call = responseItemLine({
+      type: "function_call",
+      name: "exec_command",
+      arguments: JSON.stringify({
+        cmd: "sed -n '1,220p' /repo/CLAUDE.md\necho should-not-appear",
+        workdir: "/Users/you/.codex/worktrees/6e1f/brainstorm",
+        max_output_tokens: 4000,
+        yield_time_ms: 3000,
+      }),
+    });
+    const { resolver } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: "" },
+      tails: { "/rollouts/c1.jsonl": call },
+    });
+    const updates = resolver.resolve([
+      {
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        model: null,
+        transcriptPath: "/rollouts/c1.jsonl",
+        activityLine: null,
+      },
+    ]).activities;
+    expect(updates).toHaveLength(1);
+    const line = updates[0]?.activityLine ?? "";
+    expect(line).toBe("exec_command sed -n '1,220p' /repo/CLAUDE.md");
+    // The command's second line and every sibling argument stay out.
+    expect(line.includes("should-not-appear")).toBe(false);
+    expect(line.includes("worktrees")).toBe(false);
+    expect(line.includes("4000")).toBe(false);
+    expect(line.includes("3000")).toBe(false);
   });
 
   test("resolves a codex local_shell_call as 'shell <argv head>'", () => {
@@ -940,7 +983,7 @@ describe("activity line resolution", () => {
     const older = responseItemLine({
       type: "function_call",
       name: "shell",
-      arguments: JSON.stringify({ command: "ls" }),
+      arguments: JSON.stringify({ cmd: "ls" }),
     });
     const { resolver } = makeResolver({
       stats: {
