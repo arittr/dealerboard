@@ -215,7 +215,8 @@ Notes:
   `install:app` installs it into /Applications. It reads the same snapshot
   file as the plugin — the daemon and the plugin are unchanged. Strip
   geometry is a second `LayoutGeometry`, `STRIP_GEOMETRY` in
-  `src/plugin/layout.ts` (4 tiles, rail pages, no NEXT tile). Tile visuals
+  `src/plugin/layout.ts` (up to 3 tiles that flex to fill the row — columns
+  track the sessions on the page; rail pages, no NEXT tile). Tile visuals
   live in `app/styles.css` + `app/src/tiles.ts`, a web-native port of
   `render.ts` — keep the two in sync via `docs/design.md`. The window pins
   to the monitor whose model string matches "xeneon edge" or whose physical

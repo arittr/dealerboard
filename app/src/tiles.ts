@@ -64,6 +64,20 @@ const blankTile = (degraded: boolean): HTMLElement => {
   return tile;
 };
 
+/**
+ * Keys the strip actually renders: the reducer pads pages with blanks for the
+ * fixed keypad grid, but strip tiles flex to fill the row, so trailing
+ * non-session keys are dropped (columns = sessions on the page, capped by the
+ * geometry). An all-blank page keeps one blank — the degraded OFFLINE surface.
+ */
+export const visibleStripKeys = (keys: readonly KeyModel[]): readonly KeyModel[] => {
+  let last = keys.length;
+  while (last > 1 && keys[last - 1]?.kind !== "session") {
+    last -= 1;
+  }
+  return keys.slice(0, last);
+};
+
 export const renderTiles = (root: HTMLElement, keys: readonly KeyModel[]): void => {
   root.replaceChildren(
     ...keys.map((model, index) => {

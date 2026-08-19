@@ -12,7 +12,7 @@ import { ackSession, focusGhostty, openUrl, readPaseoServerId, readSnapshot } fr
 import { pressSessionTile } from "./press";
 import { renderRail } from "./rail";
 import { reduceSnapshotRead } from "./snapshot-view";
-import { renderTiles } from "./tiles";
+import { renderTiles, visibleStripKeys } from "./tiles";
 import { startStripWindowManager } from "./window";
 
 const POLL_MS = 2000;
@@ -89,12 +89,13 @@ const applyLayout = (layout: LayoutResult): void => {
   }
   currentPage = layout.settings.currentPage;
   currentPageCount = layout.pageCount;
-  currentKeys = layout.keys;
-  const signature = JSON.stringify(layout.keys);
+  const visible = visibleStripKeys(layout.keys);
+  currentKeys = visible;
+  const signature = JSON.stringify(visible);
   const root = document.querySelector<HTMLElement>("#tiles");
   if (root !== null && signature !== renderedSignature) {
     renderedSignature = signature;
-    renderTiles(root, layout.keys);
+    renderTiles(root, visible);
   }
 };
 
