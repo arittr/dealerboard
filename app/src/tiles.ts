@@ -2,13 +2,15 @@
  * DOM tile renderer for the strip: a web-native port of the Stream Deck SVG
  * tile anatomy (src/plugin/render.ts) — status frame, provider chip + model
  * label, two-line clamped title, descendant badge, Paseo origin pip, degraded
- * flag. Status color and animation live in styles.css (status-* classes);
- * this module owns structure and text only. All text goes through
- * textContent; no innerHTML anywhere.
+ * flag. Strip-only extras: unread dot, ticking status timer, activity footer
+ * (no keypad counterpart). Status color and animation live in styles.css
+ * (status-* classes); this module owns structure and text only. All text goes
+ * through textContent; no innerHTML anywhere.
  */
 
 import type { KeyModel } from "../../src/plugin/layout";
 import { modelLabel, PROVIDER_LETTERS } from "../../src/plugin/render";
+import type { ProjectedSession, SessionStatus } from "../../src/protocol";
 
 /** Strip tiles are wide enough that the keypad's badged six-point cap never applies. */
 const STRIP_MODEL_LABEL_MAX_CODE_POINTS = 10;
@@ -21,8 +23,55 @@ const appendText = (parent: HTMLElement, className: string, text: string): HTMLS
   return element;
 };
 
+/** Compact elapsed label for the status timer: 42s, 12m, 3h, 2d. */
+const elapsedLabel = (elapsedMs: number): string => {
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  return `${Math.floor(hours / 24)}d`;
+};
+
+/**
+ * The per-tile status timer text ("working 12m"), or null when the row's own
+ * status stamp is absent or unparseable — an old daemon simply shows no line.
+ */
+export const statusLineText = (status: SessionStatus, statusSince: string | null, nowMs: number): string | null => {
+  if (statusSince === null) {
+    return null;
+  }
+  const startedMs = Date.parse(statusSince);
+  if (Number.isNaN(startedMs)) {
+    return null;
+  }
+  return `${status} ${elapsedLabel(nowMs - startedMs)}`;
+};
+
+/** The strip-only tile extras derived from the session's data-surface fields. */
+export type StripTileExtras = {
+  /** Unread dot: the exact ledger flag, not the on-grid idle+error proxy. */
+  unread: boolean;
+  statusLine: string | null;
+  activityLine: string | null;
+};
+
+export const stripTileExtras = (session: ProjectedSession, nowMs: number): StripTileExtras => ({
+  unread: session.unreadSince !== null,
+  statusLine: statusLineText(session.status, session.statusSince, nowMs),
+  activityLine: session.activityLine,
+});
+
 const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, index: number): HTMLElement => {
   const { session } = model;
+  const extras = stripTileExtras(session, Date.now());
   const tile = document.createElement("div");
   tile.className = `tile session status-${session.status}`;
   tile.dataset["keyIndex"] = String(index);
@@ -34,6 +83,11 @@ const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, index: numbe
   if (session.model !== null) {
     appendText(topband, "model", modelLabel(session.model, STRIP_MODEL_LABEL_MAX_CODE_POINTS));
   }
+  if (extras.unread) {
+    const dot = document.createElement("span");
+    dot.className = "unread-dot";
+    topband.append(dot);
+  }
   if (session.descendantCount > 0) {
     appendText(topband, "badge", String(session.descendantCount));
   }
@@ -43,6 +97,16 @@ const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, index: numbe
   title.className = "title";
   title.textContent = model.label;
   tile.append(title);
+
+  if (session.statusSince !== null && extras.statusLine !== null) {
+    const line = appendText(tile, "statusline", extras.statusLine);
+    // The ticker recomputes textContent from these two dataset values.
+    line.dataset["status"] = session.status;
+    line.dataset["since"] = session.statusSince;
+  }
+  if (extras.activityLine !== null) {
+    appendText(tile, "activity", extras.activityLine);
+  }
 
   if (session.originKind === "paseo") {
     const pip = document.createElement("span");

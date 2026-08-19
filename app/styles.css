@@ -146,6 +146,14 @@ body {
   font-weight: 600;
 }
 
+.unread-dot {
+  flex: none;
+  width: 1vw;
+  height: 1vw;
+  border-radius: 50%;
+  background: #ffb020;
+}
+
 .title {
   flex: 1;
   display: -webkit-box;
@@ -158,6 +166,18 @@ body {
   text-align: center;
   font-size: 2vw;
   line-height: 1.25;
+}
+
+/* Strip-only bottom lines: status timer and activity footer. The horizontal
+   padding keeps them clear of the absolutely positioned flag/pip corners. */
+.statusline,
+.activity {
+  padding: 0 7%;
+  color: #94a3b8;
+  font-size: 1.2vw;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pip {
@@ -301,5 +321,13 @@ body {
   }
   .flag {
     font-size: 1.2vw;
+  }
+  .unread-dot {
+    width: 0.8vw;
+    height: 0.8vw;
+  }
+  .statusline,
+  .activity {
+    font-size: 0.95vw;
   }
 }

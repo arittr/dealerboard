@@ -2,17 +2,18 @@
  * App entry: poll the daemon snapshot every 2s, reduce layout with the strip
  * geometry, and re-render only when the serialized key models change (so CSS
  * status animations are never restarted by a no-op poll). Page settings
- * persist to localStorage; the reducer validates them on every read.
+ * persist to localStorage; the reducer validates them on every read. A 1s
+ * timer ticks the rail clock and the per-tile status timers in place.
  */
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
-import type { SessionSnapshotV2, SnapshotView } from "../../src/protocol";
+import type { SessionSnapshotV2, SessionStatus, SnapshotView } from "../../src/protocol";
 import { ackSession, focusGhostty, openUrl, readPaseoServerId, readSnapshot } from "./bridge";
 import { pressSessionTile } from "./press";
 import { renderRail } from "./rail";
-import { reduceSnapshotRead } from "./snapshot-view";
-import { renderTiles, stripGridLayout, visibleStripKeys } from "./tiles";
+import { countUnreadSessions, reduceSnapshotRead } from "./snapshot-view";
+import { renderTiles, statusLineText, stripGridLayout, visibleStripKeys } from "./tiles";
 import { startStripWindowManager } from "./window";
 
 const POLL_MS = 2000;
@@ -42,17 +43,6 @@ const persistSettings = (settings: unknown): void => {
   }
 };
 
-/**
- * Grid-visible unread, exact only for idle: the projection admits
- * read-and-idle rows solely off the grid, so an on-grid idle tile is unread
- * for certain. Error tiles are counted as news even though an acked error
- * row lingers on-grid until its next lifecycle event — an accepted overcount,
- * since the wire format carries no unread field; a daemon-side unread flag
- * would make this exact.
- */
-const unreadCount = (view: SnapshotView): number =>
-  view.snapshot.sessions.filter((session) => session.status === "idle" || session.status === "error").length;
-
 const jumpToPage = (page: number): void => {
   if (currentView === null) {
     return;
@@ -74,13 +64,33 @@ const renderRailNow = (): void => {
     {
       degraded: currentView.degraded,
       heartbeatAgeMs: lastReadMtimeMs === null ? null : Date.now() - lastReadMtimeMs,
-      unreadCount: unreadCount(currentView),
+      unreadCount: countUnreadSessions(currentView.snapshot),
       page: currentPage + 1,
       pageCount: currentPageCount,
       now: new Date(),
     },
     { onJumpToPage: jumpToPage },
   );
+};
+
+/**
+ * Tick every rendered status timer's textContent in place. The DOM nodes and
+ * the JSON render signature are untouched, so the renderedSignature skip and
+ * the CSS status animations are never disturbed by a tick.
+ */
+const tickStatusLines = (): void => {
+  const nowMs = Date.now();
+  for (const line of document.querySelectorAll<HTMLElement>("#tiles .statusline")) {
+    const status = line.dataset["status"];
+    const since = line.dataset["since"];
+    if (status === undefined || since === undefined) {
+      continue;
+    }
+    const text = statusLineText(status as SessionStatus, since, nowMs);
+    if (text !== null && line.textContent !== text) {
+      line.textContent = text;
+    }
+  }
 };
 
 const applyLayout = (layout: LayoutResult): void => {
@@ -138,7 +148,10 @@ const start = (): void => {
   setInterval(() => {
     void poll();
   }, POLL_MS);
-  setInterval(renderRailNow, 1000);
+  setInterval(() => {
+    renderRailNow();
+    tickStatusLines();
+  }, 1000);
 };
 
 const FLASH_MS = 320;

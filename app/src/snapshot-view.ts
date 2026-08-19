@@ -46,3 +46,11 @@ export const reduceSnapshotRead = (
   }
   return { view: { snapshot, degraded: false }, lastGood: snapshot };
 };
+
+/**
+ * Exact unread count: sessions carrying an unviewed-result stamp. Replaces
+ * the on-grid idle+error approximation — the wire now carries the ledger
+ * field, so an acked tile stops counting immediately.
+ */
+export const countUnreadSessions = (snapshot: SessionSnapshotV2): number =>
+  snapshot.sessions.filter((session) => session.unreadSince !== null).length;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { reduceSnapshotRead, type SnapshotRead } from "../app/src/snapshot-view";
-import type { SessionSnapshotV2 } from "../src/protocol";
+import { countUnreadSessions, reduceSnapshotRead, type SnapshotRead } from "../app/src/snapshot-view";
+import type { ProjectedSession, SessionSnapshotV2 } from "../src/protocol";
 
 const healthy = (sessions: SessionSnapshotV2["sessions"] = []): SessionSnapshotV2 => ({
   schemaVersion: 2,
@@ -61,5 +61,49 @@ describe("reduceSnapshotRead", () => {
     const result = reduceSnapshotRead(readOf(FRESH, unhealthy), lastGood, NOW);
     expect(result.view.degraded).toBe(true);
     expect(result.view.snapshot).toBe(lastGood);
+  });
+});
+
+const session = (overrides: Partial<ProjectedSession>): ProjectedSession => ({
+  provider: "claude",
+  sessionId: "s1",
+  status: "idle",
+  title: null,
+  project: null,
+  descendantCount: 0,
+  logicalSlot: 1,
+  ghosttyTerminalId: null,
+  model: null,
+  originKind: null,
+  originRef: null,
+  originSubagent: false,
+  unreadSince: null,
+  statusSince: null,
+  activityLine: null,
+  transcriptPath: null,
+  originParentRef: null,
+  ...overrides,
+});
+
+describe("countUnreadSessions", () => {
+  test("counts exactly the sessions carrying an unread stamp", () => {
+    const snapshot = healthy([
+      session({ sessionId: "idle-unread", unreadSince: "2026-08-19T00:00:00.000Z" }),
+      session({
+        sessionId: "working-unread",
+        status: "working",
+        unreadSince: "2026-08-19T00:01:00.000Z",
+        logicalSlot: 2,
+      }),
+      session({ sessionId: "idle-read", logicalSlot: 3 }),
+      session({ sessionId: "error-read", status: "error", logicalSlot: 4 }),
+    ]);
+    // The old approximation (on-grid idle+error) would count 3; the ledger counts 2.
+    expect(countUnreadSessions(snapshot)).toBe(2);
+  });
+
+  test("an empty or unread-free snapshot counts zero", () => {
+    expect(countUnreadSessions(healthy())).toBe(0);
+    expect(countUnreadSessions(healthy([session({})]))).toBe(0);
   });
 });

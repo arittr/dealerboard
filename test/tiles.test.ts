@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { stripGridLayout, visibleStripKeys } from "../app/src/tiles";
+import { statusLineText, stripGridLayout, stripTileExtras, visibleStripKeys } from "../app/src/tiles";
 import type { KeyModel } from "../src/plugin/layout";
+import type { ProjectedSession } from "../src/protocol";
 
-const session = (slot: number): Extract<KeyModel, { kind: "session" }> => ({
+const session = (slot: number, overrides: Partial<ProjectedSession> = {}): Extract<KeyModel, { kind: "session" }> => ({
   kind: "session",
   session: {
     provider: "claude",
@@ -14,14 +15,15 @@ const session = (slot: number): Extract<KeyModel, { kind: "session" }> => ({
     originKind: null,
     originRef: null,
     originSubagent: false,
-    ghosttyTerminalId: null,
-    descendantCount: 0,
-    logicalSlot: slot,
     unreadSince: null,
     statusSince: null,
     activityLine: null,
     transcriptPath: null,
     originParentRef: null,
+    ghosttyTerminalId: null,
+    descendantCount: 0,
+    logicalSlot: slot,
+    ...overrides,
   },
   label: `Session ${slot}`,
   degraded: false,
@@ -72,5 +74,56 @@ describe("stripGridLayout", () => {
       rowCount: 3,
       tileSize: 300,
     });
+  });
+});
+
+describe("statusLineText", () => {
+  const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
+
+  test("formats compact elapsed labels across the unit boundaries", () => {
+    expect(statusLineText("working", "2026-08-19T00:09:18.000Z", NOW_MS)).toBe("working 42s");
+    expect(statusLineText("working", "2026-08-19T00:09:00.000Z", NOW_MS)).toBe("working 1m");
+    expect(statusLineText("waiting", "2026-08-18T23:58:00.000Z", NOW_MS)).toBe("waiting 12m");
+    expect(statusLineText("error", "2026-08-18T22:10:00.000Z", NOW_MS)).toBe("error 2h");
+    expect(statusLineText("idle", "2026-08-16T00:10:00.000Z", NOW_MS)).toBe("idle 3d");
+  });
+
+  test("clamps a future stamp to 0s and returns null for a missing or unparseable one", () => {
+    expect(statusLineText("working", "2026-08-20T00:00:00.000Z", NOW_MS)).toBe("working 0s");
+    expect(statusLineText("working", null, NOW_MS)).toBeNull();
+    expect(statusLineText("working", "not a timestamp", NOW_MS)).toBeNull();
+  });
+});
+
+describe("stripTileExtras", () => {
+  const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
+
+  test("derives the extras from the session's data-surface fields", () => {
+    const withNews = session(1, {
+      unreadSince: "2026-08-19T00:05:00.000Z",
+      status: "working",
+      statusSince: "2026-08-19T00:08:00.000Z",
+      activityLine: "Bash git status",
+    });
+    expect(stripTileExtras(withNews.session, NOW_MS)).toEqual({
+      unread: true,
+      statusLine: "working 2m",
+      activityLine: "Bash git status",
+    });
+  });
+
+  test("a session without the fields shows no extras (old-daemon snapshot)", () => {
+    expect(stripTileExtras(session(2).session, NOW_MS)).toEqual({
+      unread: false,
+      statusLine: null,
+      activityLine: null,
+    });
+  });
+
+  test("the unread flag tracks the ledger stamp, not the status — an acked error tile drops it", () => {
+    const ackedError = session(3, { status: "error", unreadSince: null });
+    expect(stripTileExtras(ackedError.session, NOW_MS).unread).toBe(false);
+    const unreadError = session(4, { status: "error", unreadSince: "2026-08-19T00:01:00.000Z" });
+    expect(stripTileExtras(unreadError.session, NOW_MS).unread).toBe(true);
   });
 });
