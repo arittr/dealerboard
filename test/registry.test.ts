@@ -790,6 +790,7 @@ describe("syncPaseoStates", () => {
     isSubagent: overrides.isSubagent ?? false,
     attentionTimestamp: overrides.attentionTimestamp ?? null,
     updatedAt: overrides.updatedAt ?? null,
+    title: null,
   });
 
   test("stamps origin and mirrors attention both ways under the watermark", () => {

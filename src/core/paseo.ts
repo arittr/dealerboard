@@ -34,6 +34,7 @@ import { join } from "node:path";
 import { PROVIDER_KEYS, type Provider } from "../protocol";
 
 const MAX_STRING_CODE_POINTS = 256;
+const MAX_TITLE_CODE_POINTS = 256;
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 
 export type PaseoAgentState = {
@@ -44,6 +45,7 @@ export type PaseoAgentState = {
   isSubagent: boolean;
   attentionTimestamp: string | null;
   updatedAt: string | null;
+  title: string | null;
 };
 
 export type PaseoFileStat = { mtimeMs: number; size: number };
@@ -67,6 +69,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const boundString = (value: string): string => Array.from(value).slice(0, MAX_STRING_CODE_POINTS).join("");
+
+const boundTitle = (value: string): string => Array.from(value).slice(0, MAX_TITLE_CODE_POINTS).join("");
 
 /** A bounded, canonical UTC ISO-8601 timestamp, or null when absent, non-string, or unparseable. */
 const isoTimestampFrom = (value: unknown): string | null => {
@@ -106,6 +110,37 @@ const parentAgentIdFrom = (value: Record<string, unknown>): string | null => {
   return typeof topLevel === "string" && topLevel.length > 0 ? topLevel : null;
 };
 
+/** Extract title from a Paseo agent record, preferring the full title. */
+const titleFrom = (value: Record<string, unknown>): string | null => {
+  // Prefer runtimeInfo.extra.title or persistence.metadata.title (full titles)
+  const runtimeInfo = value["runtimeInfo"];
+  if (isRecord(runtimeInfo)) {
+    const extra = runtimeInfo["extra"];
+    if (isRecord(extra)) {
+      const extraTitle = extra["title"];
+      if (typeof extraTitle === "string" && extraTitle.length > 0) {
+        return boundTitle(extraTitle);
+      }
+    }
+  }
+  const persistence = value["persistence"];
+  if (isRecord(persistence)) {
+    const metadata = persistence["metadata"];
+    if (isRecord(metadata)) {
+      const metadataTitle = metadata["title"];
+      if (typeof metadataTitle === "string" && metadataTitle.length > 0) {
+        return boundTitle(metadataTitle);
+      }
+    }
+  }
+  // Fall back to top-level title (may be truncated)
+  const topLevelTitle = value["title"];
+  if (typeof topLevelTitle === "string" && topLevelTitle.length > 0) {
+    return boundTitle(topLevelTitle);
+  }
+  return null;
+};
+
 /** Extract one agent record's overlay facts, or null when it must be skipped. */
 const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
   if (!isRecord(value)) {
@@ -132,6 +167,7 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
     isSubagent: typeof parentAgentId === "string" && parentAgentId.length > 0,
     attentionTimestamp: isoTimestampFrom(value["attentionTimestamp"]),
     updatedAt: isoTimestampFrom(value["updatedAt"]),
+    title: titleFrom(value),
   };
 };
 

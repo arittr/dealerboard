@@ -72,6 +72,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -95,6 +96,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: "2026-08-06T00:10:00.000Z",
         updatedAt: "2026-08-06T00:12:00.000Z",
+        title: null,
       },
     ]);
   });
@@ -115,6 +117,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -142,6 +145,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: true,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -168,6 +172,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: true,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -188,6 +193,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -211,6 +217,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: "2026-08-06T00:10:00.000Z",
         updatedAt: "2026-08-06T00:12:00.000Z",
+        title: null,
       },
     ]);
   });
@@ -231,6 +238,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -274,6 +282,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -324,6 +333,7 @@ describe("createPaseoAgentStateLoader", () => {
         isSubagent: false,
         attentionTimestamp: null,
         updatedAt: null,
+        title: null,
       },
     ]);
   });
@@ -344,5 +354,140 @@ describe("createPaseoAgentStateLoader", () => {
 
     const empty = makeLoader({ dirs: { [AGENTS_DIR]: ["work"], [join(AGENTS_DIR, "work")]: [] } });
     expect(empty.loader(AGENTS_DIR)).toEqual([]);
+  });
+
+  test("extracts title from runtimeInfo.extra.title", () => {
+    const content = agentRecord({
+      runtimeInfo: {
+        sessionId: "session_abc",
+        extra: { title: "my full title from runtimeInfo" },
+      },
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+        title: "my full title from runtimeInfo",
+      },
+    ]);
+  });
+
+  test("extracts title from persistence.metadata.title as fallback", () => {
+    const content = agentRecord({
+      runtimeInfo: { sessionId: "session_abc" },
+      persistence: {
+        sessionId: "session_abc",
+        metadata: { title: "title from persistence metadata" },
+      },
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+        title: "title from persistence metadata",
+      },
+    ]);
+  });
+
+  test("falls back to top-level title when extra and metadata are missing", () => {
+    const content = agentRecord({
+      title: "top-level truncated title",
+      runtimeInfo: { sessionId: "session_abc" },
+      persistence: { sessionId: "session_abc" },
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+        title: "top-level truncated title",
+      },
+    ]);
+  });
+
+  test("bounds title to 256 code points", () => {
+    const longTitle = "a".repeat(300);
+    const content = agentRecord({
+      runtimeInfo: {
+        sessionId: "session_abc",
+        extra: { title: longTitle },
+      },
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+        title: "a".repeat(256),
+      },
+    ]);
+  });
+
+  test("prefers runtimeInfo.extra.title over persistence.metadata.title", () => {
+    const content = agentRecord({
+      runtimeInfo: {
+        sessionId: "session_abc",
+        extra: { title: "runtime title" },
+      },
+      persistence: {
+        sessionId: "session_abc",
+        metadata: { title: "persistence title" },
+      },
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)).toEqual([
+      {
+        provider: "kimi",
+        sessionId: "session_abc",
+        agentId: "agent-1",
+        requiresAttention: true,
+        isSubagent: false,
+        attentionTimestamp: null,
+        updatedAt: null,
+        title: "runtime title",
+      },
+    ]);
   });
 });

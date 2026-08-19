@@ -531,6 +531,7 @@ describe("ProjectionDaemon maintenance", () => {
                 isSubagent: false,
                 attentionTimestamp: NOW,
                 updatedAt: null,
+                title: null,
               },
             ])
           : 0,

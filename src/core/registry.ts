@@ -589,6 +589,8 @@ export type PaseoSyncState = {
   attentionTimestamp: string | null;
   /** When Paseo last wrote the record (ISO-8601 UTC), or null when unreported. */
   updatedAt: string | null;
+  /** Title from Paseo's agent record, or null when absent. */
+  title: string | null;
 };
 
 /**
@@ -620,6 +622,16 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
   inWriteTransaction(db, () => {
     let changed = 0;
     for (const state of states) {
+      // Update title when Paseo provides one and it differs from the stored value.
+      // This runs unconditionally before the attention sync so a title change
+      // counts even when attention state is unchanged.
+      if (state.title !== null) {
+        const titleResult = db.run(
+          "UPDATE active_sessions SET title = ? WHERE provider = ? AND session_id = ? AND title IS NOT ?",
+          [state.title, state.provider, state.sessionId, state.title],
+        );
+        changed += titleResult.changes;
+      }
       if (state.requiresAttention) {
         // Flagged: set unread only when currently null, to the flag time —
         // and only when the flag postdates the last ack, so a stale flag can
