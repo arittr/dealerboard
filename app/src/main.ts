@@ -5,6 +5,7 @@
  * persist to localStorage; the reducer validates them on every read.
  */
 
+import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
 import type { SessionSnapshotV2, SnapshotView } from "../../src/protocol";
 import { ackSession, focusGhostty, openUrl, readPaseoServerId, readSnapshot } from "./bridge";
@@ -12,6 +13,7 @@ import { pressSessionTile } from "./press";
 import { renderRail } from "./rail";
 import { reduceSnapshotRead } from "./snapshot-view";
 import { renderTiles } from "./tiles";
+import { startStripWindowManager } from "./window";
 
 const POLL_MS = 2000;
 const SETTINGS_KEY = "agent-strip.layout.v1";
@@ -105,7 +107,19 @@ const poll = async (): Promise<void> => {
   applyLayout(reduceLayout(reduction.view, loadStoredSettings(), STRIP_GEOMETRY));
 };
 
+const ensureAutostart = async (): Promise<void> => {
+  try {
+    if (!(await isEnabled())) {
+      await enable();
+    }
+  } catch {
+    // Login-item registration is best effort.
+  }
+};
+
 const start = (): void => {
+  void startStripWindowManager();
+  void ensureAutostart();
   wireInteraction();
   void poll();
   setInterval(() => {
