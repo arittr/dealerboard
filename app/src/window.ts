@@ -38,7 +38,16 @@ export const startStripWindowManager = async (): Promise<void> => {
       if (position === null) {
         return;
       }
-      if (position.x !== strip.position.x || position.y !== strip.position.y) {
+      const size = await window.outerSize().catch(() => null);
+      if (size === null) {
+        return;
+      }
+      if (
+        position.x !== strip.position.x ||
+        position.y !== strip.position.y ||
+        size.width !== strip.size.width ||
+        size.height !== strip.size.height
+      ) {
         await pinTo(strip).catch(() => {});
       }
     })();
