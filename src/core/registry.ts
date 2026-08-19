@@ -182,7 +182,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
     // are no longer tracked, and their late completions clear a zero flag.
     // The reuse is also a view: unread clears, and a fresh non-null origin
     // replaces the stored one (null new evidence keeps it) while resetting
-    // the subagent bit.
+    // the subagent bit and clearing the parent ref.
     // A null event model never clears the stored one (COALESCE): providers
     // that omit the field on resume must not erase what an earlier start
     // stored.
@@ -194,6 +194,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
            origin_kind = COALESCE(?, origin_kind),
            origin_ref = CASE WHEN ? IS NOT NULL THEN ? ELSE origin_ref END,
            origin_subagent = CASE WHEN ? IS NOT NULL THEN 0 ELSE origin_subagent END,
+           origin_parent_ref = CASE WHEN ? IS NOT NULL THEN NULL ELSE origin_parent_ref END,
            updated_at = ?, model = COALESCE(?, model)
        WHERE provider = ? AND session_id = ?`,
       [
@@ -205,6 +206,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
         event.origin?.kind ?? null,
         event.origin?.kind ?? null,
         event.origin?.ref ?? null,
+        event.origin?.kind ?? null,
         event.origin?.kind ?? null,
         event.observedAt,
         event.model,
@@ -264,13 +266,15 @@ const applySessionObserved = (
         `UPDATE active_sessions
          SET transcript_path = COALESCE(?, transcript_path), model = COALESCE(?, model),
              origin_kind = COALESCE(?, origin_kind), origin_ref = COALESCE(?, origin_ref),
-             origin_subagent = CASE WHEN ? IS NOT NULL THEN 0 ELSE origin_subagent END
+             origin_subagent = CASE WHEN ? IS NOT NULL THEN 0 ELSE origin_subagent END,
+             origin_parent_ref = CASE WHEN ? IS NOT NULL THEN NULL ELSE origin_parent_ref END
          WHERE provider = ? AND session_id = ?`,
         [
           event.transcriptPath,
           event.model,
           origin?.kind ?? null,
           origin?.ref ?? null,
+          origin?.kind ?? null,
           origin?.kind ?? null,
           event.provider,
           event.sessionId,
@@ -612,6 +616,8 @@ export type PaseoSyncState = {
   agentId: string;
   requiresAttention: boolean;
   isSubagent: boolean;
+  /** The dispatching Paseo agent's id, or null for a top-level agent. */
+  parentAgentId: string | null;
   /** When Paseo raised attention (ISO-8601 UTC), or null when unreported. */
   attentionTimestamp: string | null;
   /** When Paseo last wrote the record (ISO-8601 UTC), or null when unreported. */
@@ -639,11 +645,11 @@ export type PaseoSyncState = {
  *   a stale or timestamp-less record is not proof of viewing, so an older
  *   clear can never undo a newer Stop and a missing flag never clears.
  *
- * Origin stamping (kind/ref/subagent) stays unconditional for matched
- * top-level rows. A difference-guard in the WHERE — its terms mirror the
- * guarded writes exactly — keeps unchanged rows from counting (the daemon's
- * maintenance-changed signal feeds the reprojection fast-path). Never
- * creates rows and never touches updated_at.
+ * Origin stamping (kind/ref/subagent) (and now `origin_parent_ref`) stays
+ * unconditional for matched top-level rows. A difference-guard in the WHERE
+ * — its terms mirror the guarded writes exactly — keeps unchanged rows from
+ * counting (the daemon's maintenance-changed signal feeds the reprojection
+ * fast-path). Never creates rows and never touches updated_at.
  */
 export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
   inWriteTransaction(db, () => {
@@ -666,7 +672,7 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
         const flagTime = state.attentionTimestamp ?? state.updatedAt;
         const result = db.run(
           `UPDATE active_sessions
-           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?,
+           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?, origin_parent_ref = ?,
                unread_since = CASE
                  WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN COALESCE(unread_since, ?)
                  ELSE unread_since
@@ -674,11 +680,13 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND (
                origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
+               OR origin_parent_ref IS NOT ?
                OR (? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) AND unread_since IS NULL)
              )`,
           [
             state.agentId,
             state.isSubagent ? 1 : 0,
+            state.parentAgentId,
             flagTime,
             flagTime,
             flagTime,
@@ -686,6 +694,7 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
             state.sessionId,
             state.agentId,
             state.isSubagent ? 1 : 0,
+            state.parentAgentId,
             flagTime,
             flagTime,
           ],
@@ -696,22 +705,25 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
         // is fresh proof that the user viewed the session in Paseo.
         const result = db.run(
           `UPDATE active_sessions
-           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?,
+           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?, origin_parent_ref = ?,
                unread_since = CASE WHEN ? IS NOT NULL AND ? > unread_since THEN NULL ELSE unread_since END
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND (
                origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
+               OR origin_parent_ref IS NOT ?
                OR (unread_since IS NOT NULL AND ? IS NOT NULL AND ? > unread_since)
              )`,
           [
             state.agentId,
             state.isSubagent ? 1 : 0,
+            state.parentAgentId,
             state.updatedAt,
             state.updatedAt,
             state.provider,
             state.sessionId,
             state.agentId,
             state.isSubagent ? 1 : 0,
+            state.parentAgentId,
             state.updatedAt,
             state.updatedAt,
           ],

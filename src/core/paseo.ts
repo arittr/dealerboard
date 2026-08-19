@@ -16,7 +16,9 @@
  *   `unread_since`, which only works when both sides are canonical;
  * - parentage: `.labels["paseo.parent-agent-id"]` is where Paseo persists
  *   the dispatching agent's id (present → the agent is a subagent); a
- *   top-level `.parentAgentId` is honored as a fallback;
+ *   top-level `.parentAgentId` is honored as a fallback — the id itself is
+ *   carried as `parentAgentId` so the registry sync can stamp
+ *   `origin_parent_ref`;
  * - `.id` and `.provider`, the latter validated against the canonical
  *   provider keys — records naming an unknown provider are skipped.
  *
@@ -43,6 +45,8 @@ export type PaseoAgentState = {
   agentId: string;
   requiresAttention: boolean;
   isSubagent: boolean;
+  /** The dispatching agent's id (labels["paseo.parent-agent-id"], top-level parentAgentId fallback), or null. */
+  parentAgentId: string | null;
   attentionTimestamp: string | null;
   updatedAt: string | null;
   title: string | null;
@@ -164,7 +168,8 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
     sessionId: boundString(sessionId),
     agentId: boundString(id),
     requiresAttention: value["requiresAttention"] === true,
-    isSubagent: typeof parentAgentId === "string" && parentAgentId.length > 0,
+    isSubagent: parentAgentId !== null,
+    parentAgentId: parentAgentId === null ? null : boundString(parentAgentId),
     attentionTimestamp: isoTimestampFrom(value["attentionTimestamp"]),
     updatedAt: isoTimestampFrom(value["updatedAt"]),
     title: titleFrom(value),

@@ -606,6 +606,28 @@ describe("origin", () => {
     expect(getRow("s1")).toMatchObject({ origin_kind: "terminal", origin_ref: "ghostty", origin_subagent: 0 });
   });
 
+  test("fresh SessionStart origin evidence clears a stored origin_parent_ref with the subagent bit", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE provider = 'claude' AND session_id = 's1'",
+    );
+
+    applyRegistryEvents(db, [{ ...start("s1", { at: at(30) }), origin: { kind: "terminal", ref: "ghostty" } }]);
+    expect(getRow("s1")).toMatchObject({ origin_kind: "terminal", origin_subagent: 0, origin_parent_ref: null });
+  });
+
+  test("a fresh observed origin clears origin_parent_ref too", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE provider = 'claude' AND session_id = 's1'",
+    );
+
+    expect(applyRegistryEvents(db, [observedWithOrigin("s1", { kind: "terminal", ref: "ghostty" }, 2)])).toEqual([
+      "applied",
+    ]);
+    expect(getRow("s1")).toMatchObject({ origin_kind: "terminal", origin_subagent: 0, origin_parent_ref: null });
+  });
+
   test("an observed without origin evidence preserves the stored origin and is ignored", () => {
     applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "terminal", ref: "ghostty" } }]);
 
@@ -789,6 +811,7 @@ describe("syncPaseoStates", () => {
     sessionId?: string;
     requiresAttention?: boolean;
     isSubagent?: boolean;
+    parentAgentId?: string | null;
     attentionTimestamp?: string | null;
     updatedAt?: string | null;
   }) => ({
@@ -797,6 +820,7 @@ describe("syncPaseoStates", () => {
     agentId: "a1",
     requiresAttention: overrides.requiresAttention ?? true,
     isSubagent: overrides.isSubagent ?? false,
+    parentAgentId: overrides.parentAgentId ?? null,
     attentionTimestamp: overrides.attentionTimestamp ?? null,
     updatedAt: overrides.updatedAt ?? null,
     title: null,
@@ -929,6 +953,45 @@ describe("syncPaseoStates", () => {
     expect(getRow("c1")).toMatchObject({ origin_kind: null, unread_since: null });
     expect(getRow("missing")).toBeNull();
     expect(countRows()).toBe(2);
+  });
+
+  test("stamps the dispatching agent's id as origin_parent_ref and clears it when the record goes top-level", () => {
+    applyRegistryEvents(db, [start("s1")]);
+
+    expect(
+      syncPaseoStates(db, [paseoState({ isSubagent: true, parentAgentId: "agent-0", attentionTimestamp: FLAG_AT })]),
+    ).toBe(1);
+    expect(getRow("s1")).toMatchObject({ origin_subagent: 1, origin_parent_ref: "agent-0" });
+
+    // Identical state on the next pass: the difference guard covers the new column.
+    expect(
+      syncPaseoStates(db, [paseoState({ isSubagent: true, parentAgentId: "agent-0", attentionTimestamp: FLAG_AT })]),
+    ).toBe(0);
+
+    // The record loses its parent: both subagent marks clear in one write.
+    expect(syncPaseoStates(db, [paseoState({ isSubagent: false, attentionTimestamp: FLAG_AT })])).toBe(1);
+    expect(getRow("s1")).toMatchObject({ origin_subagent: 0, origin_parent_ref: null });
+  });
+
+  test("the cleared-flag branch keeps origin_parent_ref in sync too", () => {
+    applyRegistryEvents(db, [start("s1")]);
+    expect(
+      syncPaseoStates(db, [paseoState({ isSubagent: true, parentAgentId: "agent-0", attentionTimestamp: FLAG_AT })]),
+    ).toBe(1);
+
+    // Viewed in Paseo (cleared flag, fresh updatedAt): unread clears and the
+    // parent ref is re-stamped (or kept) by the other branch.
+    expect(
+      syncPaseoStates(db, [
+        paseoState({
+          requiresAttention: false,
+          isSubagent: true,
+          parentAgentId: "agent-0",
+          updatedAt: "2026-08-06T00:12:00.000Z",
+        }),
+      ]),
+    ).toBe(1);
+    expect(getRow("s1")).toMatchObject({ unread_since: null, origin_parent_ref: "agent-0" });
   });
 });
 

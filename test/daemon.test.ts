@@ -529,6 +529,7 @@ describe("ProjectionDaemon maintenance", () => {
                 agentId: "agent-1",
                 requiresAttention: true,
                 isSubagent: false,
+                parentAgentId: null,
                 attentionTimestamp: NOW,
                 updatedAt: null,
                 title: null,
