@@ -37,9 +37,9 @@ export const KEYPAD_GEOMETRY: LayoutGeometry = {
 };
 
 export const STRIP_GEOMETRY: LayoutGeometry = {
-  keyCount: 3,
-  pageSessionKeys: 3,
-  maxUnpagedSessions: 3,
+  keyCount: 15,
+  pageSessionKeys: 15,
+  maxUnpagedSessions: 15,
   nextKey: false,
 };
 

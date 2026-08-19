@@ -78,6 +78,15 @@ export const visibleStripKeys = (keys: readonly KeyModel[]): readonly KeyModel[]
   return keys.slice(0, last);
 };
 
+/**
+ * Columns for a page of N tiles: rows grow to three first (keeping tiles at
+ * the three-across width), then columns — tiles shrink past nine sessions.
+ */
+export const stripColumnCount = (count: number): number => {
+  const rows = Math.min(3, Math.ceil(count / 3));
+  return Math.max(1, Math.ceil(count / rows));
+};
+
 export const renderTiles = (root: HTMLElement, keys: readonly KeyModel[]): void => {
   root.replaceChildren(
     ...keys.map((model, index) => {

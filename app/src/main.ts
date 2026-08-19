@@ -12,7 +12,7 @@ import { ackSession, focusGhostty, openUrl, readPaseoServerId, readSnapshot } fr
 import { pressSessionTile } from "./press";
 import { renderRail } from "./rail";
 import { reduceSnapshotRead } from "./snapshot-view";
-import { renderTiles, visibleStripKeys } from "./tiles";
+import { renderTiles, stripColumnCount, visibleStripKeys } from "./tiles";
 import { startStripWindowManager } from "./window";
 
 const POLL_MS = 2000;
@@ -95,6 +95,7 @@ const applyLayout = (layout: LayoutResult): void => {
   const root = document.querySelector<HTMLElement>("#tiles");
   if (root !== null && signature !== renderedSignature) {
     renderedSignature = signature;
+    root.style.gridTemplateColumns = `repeat(${stripColumnCount(visible.length)}, minmax(0, 1fr))`;
     renderTiles(root, visible);
   }
 };

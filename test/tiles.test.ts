@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { visibleStripKeys } from "../app/src/tiles";
+import { stripColumnCount, visibleStripKeys } from "../app/src/tiles";
 import type { KeyModel } from "../src/plugin/layout";
 
 const session = (slot: number): Extract<KeyModel, { kind: "session" }> => ({
@@ -43,5 +43,28 @@ describe("visibleStripKeys", () => {
   test("an all-blank page keeps exactly one blank (the degraded OFFLINE surface)", () => {
     const degradedBlank = blank(true);
     expect(visibleStripKeys([degradedBlank, blank(true), blank(false)])).toEqual([degradedBlank]);
+  });
+});
+
+describe("stripColumnCount", () => {
+  test("one row while sessions fit across at full width", () => {
+    expect(stripColumnCount(1)).toBe(1);
+    expect(stripColumnCount(2)).toBe(2);
+    expect(stripColumnCount(3)).toBe(3);
+  });
+
+  test("grows rows before columns, never past three rows", () => {
+    expect(stripColumnCount(4)).toBe(2);
+    expect(stripColumnCount(5)).toBe(3);
+    expect(stripColumnCount(6)).toBe(3);
+    expect(stripColumnCount(7)).toBe(3);
+    expect(stripColumnCount(9)).toBe(3);
+  });
+
+  test("past nine sessions, columns grow and tiles shrink", () => {
+    expect(stripColumnCount(10)).toBe(4);
+    expect(stripColumnCount(12)).toBe(4);
+    expect(stripColumnCount(15)).toBe(5);
+    expect(stripColumnCount(18)).toBe(6);
   });
 });

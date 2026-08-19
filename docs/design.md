@@ -301,10 +301,11 @@ own visible contract.
 
 ### Geometry
 
-- Up to three session tiles that flex to fill the row — the column count
-  tracks the sessions on the page (1–3, capped by the geometry), so a sparse
-  page shows wider tiles instead of blanks — plus a fixed 24%-width rail on
-  the right.
+- Up to fifteen session tiles in at most three rows: rows grow first (1–9
+  sessions stay at the three-across tile width — the size cap, so the grid
+  never crowds the rail), then columns — past nine sessions tiles shrink as
+  a fourth/fifth column is added — plus a fixed 24%-width rail on the right.
+  Sparse pages render fewer, capped tiles rather than stretched ones.
 - Sizing is in viewport units, so the 2560×720 native mode and the 1280×360
   HiDPI mode render identically; nothing is pixel-locked to one display mode.
 

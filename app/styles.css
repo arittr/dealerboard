@@ -20,12 +20,17 @@ body {
   height: 100vh;
 }
 #tiles {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
   gap: 1.56vw;
 }
 .tile {
-  flex: 1 1 0;
   min-width: 0;
+  /* Cap: the three-across tile width — the grid never crowds the rail. */
+  max-width: calc((100% - 3.12vw) / 3);
+  margin-inline: auto;
+  container-type: size;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -261,5 +266,36 @@ body {
   }
   100% {
     box-shadow: none;
+  }
+}
+
+/* Compact tier: short tiles (two/three rows) scale their anatomy down so the
+   two-line title still fits; tall single-row tiles keep the base sizing. */
+@container (max-height: 40vh) {
+  .tile {
+    padding: 2%;
+    border-radius: 0.8vw;
+  }
+  .chip {
+    min-width: 2.2vw;
+    height: 2.2vw;
+    font-size: 1.4vw;
+  }
+  .model {
+    font-size: 1.1vw;
+  }
+  .badge {
+    font-size: 1.6vw;
+  }
+  .title {
+    font-size: 1.5vw;
+    line-height: 1.2;
+  }
+  .pip {
+    width: 1vw;
+    height: 1vw;
+  }
+  .flag {
+    font-size: 1.2vw;
   }
 }

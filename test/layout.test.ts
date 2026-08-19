@@ -517,44 +517,44 @@ describe("SnapshotCache", () => {
 });
 
 describe("reduceLayout with strip geometry", () => {
-  test("packs up to three sessions with no paging, no blanks, and no NEXT key", () => {
-    const result = reduceLayout(healthyView(sessionsAt(1, 2, 3)), DEFAULT_LAYOUT_SETTINGS, STRIP_GEOMETRY);
-    expect(result.keys).toHaveLength(3);
+  test("packs up to fifteen sessions with no paging", () => {
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 15))), DEFAULT_LAYOUT_SETTINGS, STRIP_GEOMETRY);
+    expect(result.keys).toHaveLength(15);
     expect(result.pageCount).toBe(1);
     expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(1);
-    expect(sessionKeyAt(result.keys, 2).session.logicalSlot).toBe(3);
+    expect(sessionKeyAt(result.keys, 14).session.logicalSlot).toBe(15);
   });
 
   test("pads a partial page with trailing blanks for the keypad-style grid", () => {
     const result = reduceLayout(healthyView(sessionsAt(1, 2)), DEFAULT_LAYOUT_SETTINGS, STRIP_GEOMETRY);
-    expect(result.keys).toHaveLength(3);
-    expect(result.keys[2]).toEqual({ kind: "blank", degraded: false });
+    expect(result.keys).toHaveLength(15);
+    expect(result.keys[14]).toEqual({ kind: "blank", degraded: false });
   });
 
-  test("engages paging above three sessions, emitting no NEXT key", () => {
-    const result = reduceLayout(healthyView(sessionsAt(1, 2, 3, 4, 5)), DEFAULT_LAYOUT_SETTINGS, STRIP_GEOMETRY);
-    expect(result.keys).toHaveLength(3);
+  test("engages paging above fifteen sessions, emitting no NEXT key", () => {
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 17))), DEFAULT_LAYOUT_SETTINGS, STRIP_GEOMETRY);
+    expect(result.keys).toHaveLength(15);
     expect(result.pageCount).toBe(2);
     expect(result.settings).toEqual(settings(true, 0));
     expect(result.keys.every((key) => key.kind !== "next")).toBe(true);
   });
 
-  test("holds the latch at exactly three sessions and releases at two", () => {
-    const held = reduceLayout(healthyView(sessionsAt(1, 2, 3)), settings(true, 0), STRIP_GEOMETRY);
+  test("holds the latch at exactly fifteen sessions and releases at fourteen", () => {
+    const held = reduceLayout(healthyView(sessionsAt(...range(1, 15))), settings(true, 0), STRIP_GEOMETRY);
     expect(held.settings.overflowLatched).toBe(true);
-    const released = reduceLayout(healthyView(sessionsAt(1, 2)), settings(true, 0), STRIP_GEOMETRY);
+    const released = reduceLayout(healthyView(sessionsAt(...range(1, 14))), settings(true, 0), STRIP_GEOMETRY);
     expect(released.settings).toEqual(settings(false, 0));
   });
 
   test("clamps an out-of-range page to the last page", () => {
-    const result = reduceLayout(healthyView(sessionsAt(1, 2, 3, 4, 5)), settings(true, 7), STRIP_GEOMETRY);
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 17))), settings(true, 7), STRIP_GEOMETRY);
     expect(result.settings.currentPage).toBe(1);
-    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(4);
+    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(16);
   });
 
   test("a rail page jump via stored settings lands on the requested page", () => {
-    const result = reduceLayout(healthyView(sessionsAt(...range(1, 9))), settings(true, 2), STRIP_GEOMETRY);
+    const result = reduceLayout(healthyView(sessionsAt(...range(1, 32))), settings(true, 2), STRIP_GEOMETRY);
     expect(result.pageCount).toBe(3);
-    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(7);
+    expect(sessionKeyAt(result.keys, 0).session.logicalSlot).toBe(31);
   });
 });
