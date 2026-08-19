@@ -1,0 +1,79 @@
+/**
+ * DOM tile renderer for the strip: a web-native port of the Stream Deck SVG
+ * tile anatomy (src/plugin/render.ts) — status frame, provider chip + model
+ * label, two-line clamped title, descendant badge, Paseo origin pip, degraded
+ * flag. Status color and animation live in styles.css (status-* classes);
+ * this module owns structure and text only. All text goes through
+ * textContent; no innerHTML anywhere.
+ */
+
+import type { KeyModel } from "../../src/plugin/layout";
+import { modelLabel, PROVIDER_LETTERS } from "../../src/plugin/render";
+
+/** Strip tiles are wide enough that the keypad's badged six-point cap never applies. */
+const STRIP_MODEL_LABEL_MAX_CODE_POINTS = 10;
+
+const appendText = (parent: HTMLElement, className: string, text: string): HTMLSpanElement => {
+  const element = document.createElement("span");
+  element.className = className;
+  element.textContent = text;
+  parent.append(element);
+  return element;
+};
+
+const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, index: number): HTMLElement => {
+  const { session } = model;
+  const tile = document.createElement("div");
+  tile.className = `tile session status-${session.status}`;
+  tile.dataset["keyIndex"] = String(index);
+
+  const topband = document.createElement("div");
+  topband.className = "topband";
+  const chip = appendText(topband, "chip", PROVIDER_LETTERS[session.provider]);
+  chip.dataset["provider"] = session.provider;
+  if (session.model !== null) {
+    appendText(topband, "model", modelLabel(session.model, STRIP_MODEL_LABEL_MAX_CODE_POINTS));
+  }
+  if (session.descendantCount > 0) {
+    appendText(topband, "badge", String(session.descendantCount));
+  }
+  tile.append(topband);
+
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = model.label;
+  tile.append(title);
+
+  if (session.originKind === "paseo") {
+    const pip = document.createElement("span");
+    pip.className = session.originSubagent ? "pip subagent" : "pip parent";
+    tile.append(pip);
+  }
+  if (model.degraded) {
+    appendText(tile, "flag", "!");
+  }
+  return tile;
+};
+
+const blankTile = (degraded: boolean): HTMLElement => {
+  const tile = document.createElement("div");
+  tile.className = "tile blank";
+  if (degraded) {
+    appendText(tile, "offline", "OFFLINE");
+  }
+  return tile;
+};
+
+export const renderTiles = (root: HTMLElement, keys: readonly KeyModel[]): void => {
+  root.replaceChildren(
+    ...keys.map((model, index) => {
+      switch (model.kind) {
+        case "session":
+          return sessionTile(model, index);
+        default:
+          // STRIP_GEOMETRY never emits NEXT (the rail pages); treat it as blank defensively.
+          return blankTile(model.degraded);
+      }
+    }),
+  );
+};

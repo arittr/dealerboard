@@ -63,7 +63,7 @@ const PROVIDER_COLORS: Record<Provider, string> = {
   grok: "#F472B6",
 };
 
-const PROVIDER_LETTERS: Record<Provider, string> = {
+export const PROVIDER_LETTERS: Record<Provider, string> = {
   claude: "C",
   codex: "X",
   kimi: "K",
@@ -195,7 +195,7 @@ const providerMark = (provider: Provider): string =>
  * on overflow — ten normally, six when the label must yield width to the
  * descendant badge.
  */
-const modelLabel = (model: string, maxCodePoints: number): string => {
+export const modelLabel = (model: string, maxCodePoints: number): string => {
   let label = model;
   for (const prefix of MODEL_LABEL_PREFIXES) {
     if (label.startsWith(prefix) && label.length > prefix.length) {
