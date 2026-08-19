@@ -6,8 +6,9 @@
  */
 
 import { type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
-import type { SessionSnapshotV2 } from "../../src/protocol";
+import type { SessionSnapshotV2, SnapshotView } from "../../src/protocol";
 import { readSnapshot } from "./bridge";
+import { renderRail } from "./rail";
 import { reduceSnapshotRead } from "./snapshot-view";
 import { renderTiles } from "./tiles";
 
@@ -16,6 +17,10 @@ const SETTINGS_KEY = "agent-strip.layout.v1";
 
 let lastGood: SessionSnapshotV2 | null = null;
 let renderedSignature = "";
+let currentView: SnapshotView | null = null;
+let lastReadMtimeMs: number | null = null;
+let currentPage = 0;
+let currentPageCount = 1;
 
 const loadStoredSettings = (): unknown => {
   try {
@@ -33,10 +38,51 @@ const persistSettings = (settings: unknown): void => {
   }
 };
 
+/**
+ * Grid-visible unread: the projection admits only active or unread rows, and
+ * unread is stamped exactly when a turn settles to idle or error, so an
+ * on-grid idle/error tile is an unread result. A session re-prompted back to
+ * working while still unread is not counted (prompts never mark read).
+ */
+const unreadCount = (view: SnapshotView): number =>
+  view.snapshot.sessions.filter((session) => session.status === "idle" || session.status === "error").length;
+
+const jumpToPage = (page: number): void => {
+  if (currentView === null) {
+    return;
+  }
+  applyLayout(
+    reduceLayout(currentView, { schemaVersion: 1, overflowLatched: true, currentPage: page }, STRIP_GEOMETRY),
+  );
+  // renderRailNow is declared below; referenced here only at click time.
+  renderRailNow();
+};
+
+const renderRailNow = (): void => {
+  const root = document.querySelector<HTMLElement>("#rail");
+  if (root === null || currentView === null) {
+    return;
+  }
+  renderRail(
+    root,
+    {
+      degraded: currentView.degraded,
+      heartbeatAgeMs: lastReadMtimeMs === null ? null : Date.now() - lastReadMtimeMs,
+      unreadCount: unreadCount(currentView),
+      page: currentPage + 1,
+      pageCount: currentPageCount,
+      now: new Date(),
+    },
+    { onJumpToPage: jumpToPage },
+  );
+};
+
 const applyLayout = (layout: LayoutResult): void => {
   if (layout.dirty) {
     persistSettings(layout.settings);
   }
+  currentPage = layout.settings.currentPage;
+  currentPageCount = layout.pageCount;
   const signature = JSON.stringify(layout.keys);
   const root = document.querySelector<HTMLElement>("#tiles");
   if (root !== null && signature !== renderedSignature) {
@@ -49,6 +95,8 @@ const poll = async (): Promise<void> => {
   const payload = await readSnapshot().catch(() => null);
   const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
   lastGood = reduction.lastGood;
+  currentView = reduction.view;
+  lastReadMtimeMs = payload?.mtimeMs ?? null;
   applyLayout(reduceLayout(reduction.view, loadStoredSettings(), STRIP_GEOMETRY));
 };
 
@@ -57,6 +105,7 @@ const start = (): void => {
   setInterval(() => {
     void poll();
   }, POLL_MS);
+  setInterval(renderRailNow, 1000);
 };
 
 start();

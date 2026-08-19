@@ -186,3 +186,67 @@ body {
   font-size: 1.4vw;
   letter-spacing: 0.2em;
 }
+
+#rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2vh;
+  background: #10141c;
+  border: 1px solid #232b38;
+  border-radius: 1vw;
+  padding: 3.5%;
+  color: #94a3b8;
+  font-size: 1.5vw;
+}
+
+.rail-health {
+  display: flex;
+  align-items: center;
+  gap: 0.8vw;
+}
+.dot {
+  width: 1vw;
+  height: 1vw;
+  border-radius: 50%;
+}
+.dot.ok {
+  background: #4ade80;
+}
+.dot.bad {
+  background: #ff4d67;
+}
+.offline-text {
+  color: #ff4d67;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.rail-clock {
+  color: #e8eef7;
+  font-size: 3.4vw;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-unread.active {
+  color: #ffb020;
+  font-weight: 600;
+}
+
+.rail-pager {
+  display: flex;
+  gap: 0.6vw;
+}
+.page-dot {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0.4vw;
+  color: #2a3342;
+  font-size: 1.1vw;
+  cursor: pointer;
+}
+.page-dot.current {
+  color: #94a3b8;
+}
