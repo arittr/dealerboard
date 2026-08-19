@@ -19,6 +19,7 @@
     "build:app": "bun build app/src/main.ts --outdir app/dist --target browser --minify && cp app/index.html app/styles.css app/dist/",
     "dev:app": "bun run build:app && cd app && bunx tauri dev",
     "bundle:app": "bun run build:app && cd app && bunx tauri build",
+    "install:app": "bun scripts/install-app.ts",
     "prepare": "lefthook install"
   },
   "dependencies": {

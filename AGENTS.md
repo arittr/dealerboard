@@ -208,6 +208,23 @@ Notes:
   snapshot every 5s as a heartbeat. The plugin treats a snapshot older than
   10s as a dead daemon and renders the degraded treatment (OFFLINE / "!"
   flags).
+- The Xeneon strip app is a third snapshot consumer: `app/` is the webview
+  (frontend sources plus `styles.css`) and `app/src-tauri/` is the Rust
+  crate. `bun run build:app` bundles the frontend, `dev:app` runs the Tauri
+  dev shell, `bundle:app` produces the release `.app` bundle, and
+  `install:app` installs it into /Applications. It reads the same snapshot
+  file as the plugin — the daemon and the plugin are unchanged. Strip
+  geometry is a second `LayoutGeometry`, `STRIP_GEOMETRY` in
+  `src/plugin/layout.ts` (4 tiles, rail pages, no NEXT tile). Tile visuals
+  live in `app/styles.css` + `app/src/tiles.ts`, a web-native port of
+  `render.ts` — keep the two in sync via `docs/design.md`. The window pins
+  to the monitor whose model string matches "xeneon edge" or whose physical
+  resolution is 2560×720 (physical, so a scaled 1280×360 HiDPI mode still
+  matches), re-pins on reconnect, and autostarts at login. The rail's unread
+  count is an approximation — the on-grid idle+error tiles — so an acked
+  error session lingers as counted until its next lifecycle event. Quota
+  panels are deliberately deferred; the rail is a plain section stack so
+  they slot in later.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.

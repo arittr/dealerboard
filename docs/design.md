@@ -290,3 +290,52 @@ Gate 0 does not automatically weaken or cut the product. It reports evidence. Dr
 2. Approve capability tiers that truthfully represent reduced membership, state, lineage, or activation support.
 
 Only after that choice do we revise this candidate design into an implementation contract and write the full product plan.
+
+## Strip app (Xeneon Edge)
+
+The strip is a frameless Tauri webview pinned to the Xeneon Edge touch
+display — a third snapshot consumer alongside the Stream Deck plugin. It
+renders the same projection the deck renders, so the deck remains the
+reference contract for session semantics; this section records the strip's
+own visible contract.
+
+### Geometry
+
+- Four session tiles plus a fixed 24%-width rail on the right.
+- Sizing is in viewport units, so the 2560×720 native mode and the 1280×360
+  HiDPI mode render identically; nothing is pixel-locked to one display mode.
+
+### Tile anatomy
+
+Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
+
+- The same status colors as the keypad: working `#20B8FF`, waiting
+  `#FFB020`, idle `#4ADE80`, error `#FF4D67`, with `#94A3B8` as neutral
+  chrome. The animation semantics carry over unchanged: working keeps the
+  shallow four-second wash breathing between 0.04 and 0.14 opacity behind a
+  static 30%-opacity frame, waiting keeps the four-second frame breathe
+  between 0.20 and 0.90, error keeps the two-second pulse, idle stays static.
+- The same provider chips: one-letter marks on the same hues (Claude C
+  `#D97757`, Codex X `#D946EF`, Kimi K `#3B82F6`, pi P `#0EA514`, omp O
+  `#F5F0EA`, zcode Z `#EAB308`, deepseek D `#2DD4BF`, grok G `#F472B6`).
+- The model label sits right of the chip, vendor prefix stripped, capped at
+  ten code points — the keypad's badged six-point cap does not apply; the
+  strip's tiles are wide enough for the full label.
+- The title clamps to two lines with an ellipsis (a CSS clamp, replacing the
+  keypad's manual twelve-code-point wrap).
+- The descendant badge keeps its upper-right corner; the Paseo origin pip
+  keeps the bottom-right (filled `#A78BFA` disc for a Paseo parent, hollow
+  ring for a subagent).
+- A degraded tile carries the `!` flag, and a degraded blank renders OFFLINE.
+
+### Rail
+
+- Daemon health: `daemon ok` with the heartbeat age, or OFFLINE.
+- A clock and the unread count (the on-grid idle+error tiles).
+- Page dots, one per page, tap to jump.
+
+### Interaction
+
+- A tap is the keypad's keyDown: a fire-and-forget ack, then the same
+  paseo/claude/codex/kimi routing. A failed or unroutable press flashes the
+  tile.
