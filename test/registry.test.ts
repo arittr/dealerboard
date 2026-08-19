@@ -154,7 +154,7 @@ describe("applyRegistryEvents", () => {
       origin_subagent: 0,
       unread_since: null,
       acked_at: null,
-      status_since: null,
+      status_since: at(1),
       origin_parent_ref: null,
       activity_line: null,
     });
@@ -247,7 +247,7 @@ describe("applyRegistryEvents", () => {
       origin_subagent: 0,
       unread_since: null,
       acked_at: null,
-      status_since: null,
+      status_since: at(4),
       origin_parent_ref: null,
       activity_line: null,
     });
@@ -1121,5 +1121,89 @@ describe("SessionTitleChanged", () => {
   test("is ignored when the stored title already matches", () => {
     applyRegistryEvents(db, [start("s1", { provider: "pi", title: "Same", at: at(1) })]);
     expect(applyRegistryEvents(db, [titleChanged("s1", "Same")])).toEqual(["ignored"]);
+  });
+});
+
+describe("status_since", () => {
+  test("initializes at SessionStart and restamps on each own-status transition", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) })]);
+    expect(getRow("s1")?.status_since).toBe(at(1));
+
+    applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })]);
+    expect(getRow("s1")).toMatchObject({ status: "working", status_since: at(2) });
+
+    applyRegistryEvents(db, [simple("Attention", "s1", { at: at(3) })]);
+    expect(getRow("s1")).toMatchObject({ status: "waiting", status_since: at(3) });
+
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(4) })]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(4) });
+
+    applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(5) })]);
+    expect(getRow("s1")).toMatchObject({ status: "error", status_since: at(5) });
+  });
+
+  test("a repeated same-status event moves updated_at but never status_since", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Activity", "s1", { at: at(2) })]);
+    applyRegistryEvents(db, [simple("Activity", "s1", { at: at(3) })]);
+    expect(getRow("s1")).toMatchObject({ status: "working", status_since: at(2), updated_at: at(3) });
+  });
+
+  test("BackgroundWorkStarted/Cleared never restamp status_since", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Activity", "s1", { at: at(2) })]);
+    applyRegistryEvents(db, [
+      simple("BackgroundWorkStarted", "s1", { at: at(3) }),
+      simple("BackgroundWorkCleared", "s1", { at: at(4) }),
+    ]);
+    expect(getRow("s1")).toMatchObject({ status: "working", status_since: at(2), updated_at: at(4) });
+  });
+
+  test("a Stop held working by background work does not restamp; the later idle Stop does", () => {
+    applyRegistryEvents(db, [
+      start("s1", { at: at(1) }),
+      simple("Activity", "s1", { at: at(2) }),
+      simple("BackgroundWorkStarted", "s1", { at: at(3) }),
+    ]);
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(4) })]);
+    expect(getRow("s1")).toMatchObject({ status: "working", status_since: at(2) });
+
+    applyRegistryEvents(db, [
+      simple("BackgroundWorkCleared", "s1", { at: at(5) }),
+      simple("Stop", "s1", { at: at(6) }),
+    ]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(6) });
+  });
+
+  test("a reused SessionStart restamps only when its idle-reset changes the status", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Activity", "s1", { at: at(2) })]);
+    applyRegistryEvents(db, [start("s1", { at: at(3) })]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(3) });
+
+    // Already idle: a further reuse keeps the stamp while moving updated_at.
+    applyRegistryEvents(db, [start("s1", { at: at(4) })]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(3), updated_at: at(4) });
+  });
+
+  test("a late-join SessionObserved insert initializes status_since", () => {
+    applyRegistryEvents(db, [
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        model: null,
+        observedAt: at(2),
+      },
+    ]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(2) });
+  });
+
+  test("SubagentStart initializes a child row's status_since and restamps on its idle reset", () => {
+    applyRegistryEvents(db, [start("p", { at: at(1) }), subStart("c", "p", { at: at(2) })]);
+    expect(getRow("c")?.status_since).toBe(at(2));
+
+    applyRegistryEvents(db, [simple("Activity", "c", { at: at(3) }), subStart("c", "p", { at: at(4) })]);
+    expect(getRow("c")).toMatchObject({ status: "idle", status_since: at(4) });
   });
 });

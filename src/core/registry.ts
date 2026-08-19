@@ -21,6 +21,10 @@
  * (Stop settling to idle, or StopFailure) stamps `unread_since`, and only an
  * explicit view clears it — `acknowledgeSession` or a reused SessionStart.
  * Prompts and status events never mark a session read.
+ *
+ * `status_since` records the row's own last status change: status events
+ * restamp it only when the status value changes, BackgroundWork events never
+ * do, and starts initialize it.
  */
 
 import type { Database } from "bun:sqlite";
@@ -186,6 +190,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
       `UPDATE active_sessions
        SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, transcript_path = ?,
            background_outstanding = 0, unread_since = NULL,
+           status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
            origin_kind = COALESCE(?, origin_kind),
            origin_ref = CASE WHEN ? IS NOT NULL THEN ? ELSE origin_ref END,
            origin_subagent = CASE WHEN ? IS NOT NULL THEN 0 ELSE origin_subagent END,
@@ -196,6 +201,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
         event.project,
         ghosttyTerminalId,
         event.transcriptPath,
+        event.observedAt,
         event.origin?.kind ?? null,
         event.origin?.kind ?? null,
         event.origin?.ref ?? null,
@@ -210,8 +216,8 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
   }
   db.run(
     `INSERT INTO active_sessions
-       (${COLUMNS})
-     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, NULL)`,
+       (${COLUMNS}, status_since)
+     VALUES (?, ?, NULL, 'idle', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 0, NULL, ?)`,
     [
       event.provider,
       event.sessionId,
@@ -225,6 +231,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
       event.model,
       event.origin?.kind ?? null,
       event.origin?.ref ?? null,
+      event.observedAt,
     ],
   );
   return "applied";
@@ -318,22 +325,33 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
     // Reset to idle under the validated prospective parent.
     db.run(
       `UPDATE active_sessions
-       SET parent_session_id = ?, status = 'idle', title = ?, project = ?, updated_at = ?
+       SET parent_session_id = ?, status = 'idle', title = ?, project = ?,
+           status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
+           updated_at = ?
        WHERE provider = ? AND session_id = ?`,
-      [event.parentSessionId, event.title, event.project, event.observedAt, event.provider, event.sessionId],
+      [
+        event.parentSessionId,
+        event.title,
+        event.project,
+        event.observedAt,
+        event.observedAt,
+        event.provider,
+        event.sessionId,
+      ],
     );
     return "applied";
   }
   db.run(
     `INSERT INTO active_sessions
-       (${COLUMNS})
-     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL, 0, NULL, NULL, NULL, NULL, 0, NULL)`,
+       (${COLUMNS}, status_since)
+     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL, 0, NULL, NULL, NULL, NULL, 0, NULL, ?)`,
     [
       event.provider,
       event.sessionId,
       event.parentSessionId,
       event.title,
       event.project,
+      event.observedAt,
       event.observedAt,
       event.observedAt,
     ],
@@ -350,12 +368,13 @@ type StatusEvent = Extract<
 >;
 
 const applyStatusUpdate = (db: Database, event: StatusEvent, status: SessionStatus): MutationResult => {
-  const result = db.run("UPDATE active_sessions SET status = ?, updated_at = ? WHERE provider = ? AND session_id = ?", [
-    status,
-    event.observedAt,
-    event.provider,
-    event.sessionId,
-  ]);
+  const result = db.run(
+    `UPDATE active_sessions
+     SET status = ?, updated_at = ?,
+         status_since = CASE WHEN status IS NOT ? THEN ? ELSE status_since END
+     WHERE provider = ? AND session_id = ?`,
+    [status, event.observedAt, status, event.observedAt, event.provider, event.sessionId],
+  );
   return result.changes > 0 ? "applied" : "ignored";
 };
 
@@ -371,9 +390,13 @@ const applyStop = (db: Database, event: StatusEvent): MutationResult => {
     `UPDATE active_sessions
      SET status = CASE WHEN background_outstanding = 1 THEN 'working' ELSE 'idle' END,
          unread_since = CASE WHEN background_outstanding = 1 THEN unread_since ELSE ? END,
+         status_since = CASE
+           WHEN (background_outstanding = 1 AND status IS NOT 'working')
+             OR (background_outstanding = 0 AND status IS NOT 'idle')
+           THEN ? ELSE status_since END,
          updated_at = ?
      WHERE provider = ? AND session_id = ?`,
-    [event.observedAt, event.observedAt, event.provider, event.sessionId],
+    [event.observedAt, event.observedAt, event.observedAt, event.provider, event.sessionId],
   );
   return result.changes > 0 ? "applied" : "ignored";
 };
@@ -381,8 +404,12 @@ const applyStop = (db: Database, event: StatusEvent): MutationResult => {
 /** A turn ended in failure: the error is itself an unread result. */
 const applyStopFailure = (db: Database, event: StatusEvent): MutationResult => {
   const result = db.run(
-    "UPDATE active_sessions SET status = 'error', unread_since = ?, updated_at = ? WHERE provider = ? AND session_id = ?",
-    [event.observedAt, event.observedAt, event.provider, event.sessionId],
+    `UPDATE active_sessions
+     SET status = 'error', unread_since = ?,
+         status_since = CASE WHEN status IS NOT 'error' THEN ? ELSE status_since END,
+         updated_at = ?
+     WHERE provider = ? AND session_id = ?`,
+    [event.observedAt, event.observedAt, event.observedAt, event.provider, event.sessionId],
   );
   return result.changes > 0 ? "applied" : "ignored";
 };
