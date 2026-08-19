@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 10;
+export const LATEST_SCHEMA_VERSION = 11;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -188,6 +188,30 @@ ALTER TABLE active_sessions
 `;
 
 /**
+ * v11 adds the strip's data surface: `status_since` (the row's own status
+ * transition stamp, backfilled from updated_at), `origin_parent_ref` (the
+ * dispatching Paseo agent's id, stamped by the overlay), and `activity_line`
+ * (the last tool call, resolved from transcript tails by the daemon's
+ * maintenance pass). Three plain additive ALTERs following the v6 precedent,
+ * plus the status_since backfill; they run in one of the shared migration
+ * transactions, so a retried init never dies on a duplicate column.
+ */
+const SCHEMA_VERSION_11 = `
+ALTER TABLE active_sessions
+  ADD COLUMN status_since TEXT;
+
+ALTER TABLE active_sessions
+  ADD COLUMN origin_parent_ref TEXT
+  CHECK (origin_parent_ref IS NULL OR length(origin_parent_ref) BETWEEN 1 AND 256);
+
+ALTER TABLE active_sessions
+  ADD COLUMN activity_line TEXT
+  CHECK (activity_line IS NULL OR length(activity_line) BETWEEN 1 AND 64);
+
+UPDATE active_sessions SET status_since = updated_at;
+`;
+
+/**
  * v10 widens the provider CHECK for grok. SQLite cannot alter a CHECK, so the
  * table is rebuilt following the v5 pattern: rename aside (the self-FK is
  * rewritten to the archived name by SQLite and dropped with it), create the
@@ -267,9 +291,13 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
  * transaction after it. v8 is special-cased too (`migrateToV8`): it is
  * shape-driven repair, not a static SQL string, and it is gated on
  * `version < 8` so post-v8 databases never re-enter it. Entries above v8
- * and below v10 (v9 acked_at) run in a final transaction after the repair.
- * v10 is special-cased like v5 (`migrateToV10`): a table rebuild that runs
- * strictly last.
+ * and at or below v10 (v9 acked_at) run in a third transaction after the
+ * repair; the loop's upper bound keeps v11 out of it. v10 is special-cased
+ * like v5 (`migrateToV10`): a table rebuild gated on `version < 10` so a
+ * v10-or-later database never re-enters it (its unconditional stamp would
+ * clobber user_version back to 10 mid-pipeline — the v8 bricking hazard
+ * one level up). Entries above v10 (v11) run in a final transaction after
+ * the rebuild.
  */
 const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 1, sql: SCHEMA_VERSION_1 },
@@ -279,6 +307,7 @@ const MIGRATIONS: ReadonlyArray<{ version: number; sql: string }> = [
   { version: 6, sql: SCHEMA_VERSION_6 },
   { version: 7, sql: SCHEMA_VERSION_7 },
   { version: 9, sql: SCHEMA_VERSION_9 },
+  { version: 11, sql: SCHEMA_VERSION_11 },
 ];
 
 /**
@@ -310,9 +339,9 @@ const migrateToV5 = (db: Database): void => {
 
 /**
  * The v10 rebuild manages its own BEGIN/COMMIT for the same reason v5 does:
- * `PRAGMA foreign_keys` is a no-op inside a transaction. It runs strictly
- * last in initializeDatabase, after every ALTER migration, so the archive
- * copy always starts from the final post-v9 shape.
+ * `PRAGMA foreign_keys` is a no-op inside a transaction. It runs after every
+ * pre-v10 ALTER migration and strictly before the post-v10 loop, so the
+ * archive copy always starts from the final post-v9 shape.
  */
 const migrateToV10 = (db: Database): void => {
   db.exec("PRAGMA foreign_keys = OFF");
@@ -414,20 +443,36 @@ export const initializeDatabase = (paths: AppPaths): void => {
       if (version < 8) {
         migrateToV8(db);
       }
-      // Entries above v8 (v9) run after the shape repair, whose stamp would
-      // otherwise clobber their version back to 8.
+      // Entries above v8 and below v11 (v9) run after the shape repair, whose
+      // stamp would otherwise clobber their version back to 8. v11 must wait
+      // for the v10 rebuild: the rebuild recreates the table without the v11
+      // columns.
       const migratePostV8 = db.transaction(() => {
         for (const migration of MIGRATIONS) {
-          if (migration.version > version && migration.version > 8) {
+          if (migration.version > version && migration.version > 8 && migration.version < 11) {
             db.exec(migration.sql);
             db.exec(`PRAGMA user_version = ${migration.version}`);
           }
         }
       });
       migratePostV8();
-      // The v10 rebuild runs strictly last and owns its transaction (see
-      // migrateToV10); the MIGRATIONS loop cannot contain it.
-      migrateToV10(db);
+      // The v10 rebuild owns its transaction (see migrateToV10) and is gated
+      // like v8: a v10-or-later database must never re-enter it, or its
+      // unconditional stamp clobbers user_version back to 10 mid-pipeline.
+      if (version < 10) {
+        migrateToV10(db);
+      }
+      // Entries above v10 (v11) run strictly after the rebuild, whose stamp
+      // would otherwise clobber their version back to 10.
+      const migratePostV10 = db.transaction(() => {
+        for (const migration of MIGRATIONS) {
+          if (migration.version > version && migration.version > 10) {
+            db.exec(migration.sql);
+            db.exec(`PRAGMA user_version = ${migration.version}`);
+          }
+        }
+      });
+      migratePostV10();
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
   } finally {

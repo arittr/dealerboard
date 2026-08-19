@@ -112,6 +112,9 @@ type Row = {
   origin_subagent: number;
   unread_since: string | null;
   acked_at: string | null;
+  status_since: string | null;
+  origin_parent_ref: string | null;
+  activity_line: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -151,6 +154,9 @@ describe("applyRegistryEvents", () => {
       origin_subagent: 0,
       unread_since: null,
       acked_at: null,
+      status_since: null,
+      origin_parent_ref: null,
+      activity_line: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -241,6 +247,9 @@ describe("applyRegistryEvents", () => {
       origin_subagent: 0,
       unread_since: null,
       acked_at: null,
+      status_since: null,
+      origin_parent_ref: null,
+      activity_line: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
