@@ -96,6 +96,11 @@ export type SessionSnapshotV2 = {
   sessions: ProjectedSession[];
 };
 
+export type SnapshotView = {
+  snapshot: SessionSnapshotV2;
+  degraded: boolean;
+};
+
 const MAX_STRING_CODE_POINTS = 256;
 
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);

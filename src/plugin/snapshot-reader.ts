@@ -20,15 +20,12 @@
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { parseSessionSnapshot, type SessionSnapshotV2 } from "../protocol";
+import { parseSessionSnapshot, type SessionSnapshotV2, type SnapshotView } from "../protocol";
+
+export type { SnapshotView } from "../protocol";
 
 /** Two missed daemon heartbeats mark the snapshot stale. */
 export const STALE_SNAPSHOT_AGE_MS = 10_000;
-
-export type SnapshotView = {
-  snapshot: SessionSnapshotV2;
-  degraded: boolean;
-};
 
 type FileIdentity = {
   dev: bigint;
