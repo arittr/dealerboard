@@ -60,6 +60,19 @@ describe("parseQuotaSnapshot", () => {
     expect(() => parseQuotaSnapshot(bad({ fetchedAt: 0 as unknown as null }))).toThrow("fetchedAt");
   });
 
+  test("rejects instants that are not canonical UTC ISO even though Date.parse accepts them", () => {
+    const badResetAt = (resetAt: string): unknown => ({
+      schemaVersion: 1,
+      providers: { claude: { ...claudeQuota(), resetAt } },
+    });
+    // Nonexistent date (Date.parse rolls it over to March 2).
+    expect(() => parseQuotaSnapshot(badResetAt("2026-02-30T00:00:00.000Z"))).toThrow("resetAt");
+    // Date-only form.
+    expect(() => parseQuotaSnapshot(badResetAt("2026-08-19"))).toThrow("resetAt");
+    // Valid instant, but milliseconds omitted — not the canonical shape.
+    expect(() => parseQuotaSnapshot(badResetAt("2026-08-19T22:00:00Z"))).toThrow("resetAt");
+  });
+
   test("rejects a history ring over the bound and out-of-range fractions", () => {
     const point = { fetchedAt: "2026-08-19T18:00:00.000Z", fractionRemaining: 0.5 };
     const over = { ...claudeQuota(), history: Array.from({ length: QUOTA_HISTORY_LIMIT + 1 }, () => point) };

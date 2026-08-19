@@ -51,8 +51,14 @@ const QUOTA_PROVIDERS: ReadonlySet<string> = new Set(QUOTA_PROVIDER_KEYS);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+// Canonical UTC ISO (exactly what Date#toISOString emits) only: the round-trip
+// check rejects date-only forms, omitted milliseconds, nonzero offsets, and
+// rollover dates like 2026-02-30 that Date.parse tolerates in JavaScriptCore.
 const isIsoInstant = (value: unknown): value is string =>
-  typeof value === "string" && value.length > 0 && !Number.isNaN(Date.parse(value));
+  typeof value === "string" &&
+  value.length > 0 &&
+  !Number.isNaN(Date.parse(value)) &&
+  new Date(value).toISOString() === value;
 
 const isNullableIsoInstant = (value: unknown): value is string | null => value === null || isIsoInstant(value);
 
