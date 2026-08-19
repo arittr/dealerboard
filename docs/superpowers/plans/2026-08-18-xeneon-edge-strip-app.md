@@ -1773,6 +1773,8 @@ Click (mouse or driver-translated touch) on a session tile: fire-and-forget ack,
 
 **Files:**
 - Create: `app/src/press.ts`
+- Create: `src/plugin/ghostty-focus.ts` (shared AppleScript constant — extracted, never duplicated)
+- Modify: `src/plugin/claude-session-activation.ts` (imports the shared constant)
 - Modify: `app/src/main.ts`
 - Modify: `app/styles.css`
 
@@ -1782,23 +1784,18 @@ Click (mouse or driver-translated touch) on a session tile: fire-and-forget ack,
   - `type PressDeps = { ack: (provider: Provider, sessionId: string) => Promise<void>; openUrl: (url: string) => Promise<void>; focusGhostty: (script: string, terminalId: string) => Promise<void>; readPaseoServerId: () => Promise<string>; flash: () => void }`
   - `pressSessionTile(session: ProjectedSession, deps: PressDeps): Promise<void>`
 
-- [ ] **Step 1: Implement the press handler**
+- [ ] **Step 1: Extract the shared Ghostty script, then implement the press handler**
 
-`app/src/press.ts`:
+Create `src/plugin/ghostty-focus.ts` — the AppleScript constant moved here (verbatim text) from `src/plugin/claude-session-activation.ts`, which must keep working unchanged:
 
 ```ts
 /**
- * Tile press = the Stream Deck keyDown gesture: ack fire-and-forget (a failed
- * ack only means the tile stays unread until the next lifecycle event — never
- * flash for it), then route. Routing failures flash the tile, matching the
- * plugin's activation alert.
+ * AppleScript that focuses a Ghostty terminal by its stable id. Shared by the
+ * Stream Deck plugin's Claude activation and the strip app's press routing —
+ * the plugin module itself imports node:child_process, so the constant lives
+ * in this dependency-free leaf both frontends can import.
  */
-
-import type { ProjectedSession, Provider } from "../../src/protocol";
-import { routeForSession } from "./routing";
-
-/** Ported verbatim from src/plugin/claude-session-activation.ts. */
-const FOCUS_GHOSTTY_TERMINAL_SCRIPT = `
+export const FOCUS_GHOSTTY_TERMINAL_SCRIPT = `
 on run argv
   set targetId to item 1 of argv
   if application "Ghostty" is not running then error "ghostty_not_running"
@@ -1816,6 +1813,23 @@ on run argv
     focus matchedTerminal
   end tell
 end run`;
+```
+
+In `src/plugin/claude-session-activation.ts`: delete the local `FOCUS_GHOSTTY_TERMINAL_SCRIPT` const and import it (`import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "./ghostty-focus";`). Nothing else changes; `bun test test/claude-session-activation.test.ts` must pass unmodified.
+
+Then `app/src/press.ts`:
+
+```ts
+/**
+ * Tile press = the Stream Deck keyDown gesture: ack fire-and-forget (a failed
+ * ack only means the tile stays unread until the next lifecycle event — never
+ * flash for it), then route. Routing failures flash the tile, matching the
+ * plugin's activation alert.
+ */
+
+import type { ProjectedSession, Provider } from "../../src/protocol";
+import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../../src/plugin/ghostty-focus";
+import { routeForSession } from "./routing";
 
 export type PressDeps = {
   ack: (provider: Provider, sessionId: string) => Promise<void>;
