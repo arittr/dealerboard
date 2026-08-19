@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { stripColumnCount, visibleStripKeys } from "../app/src/tiles";
+import { stripColumnCount, stripGridLayout, visibleStripKeys } from "../app/src/tiles";
 import type { KeyModel } from "../src/plugin/layout";
 
 const session = (slot: number): Extract<KeyModel, { kind: "session" }> => ({
@@ -66,5 +66,15 @@ describe("stripColumnCount", () => {
     expect(stripColumnCount(12)).toBe(4);
     expect(stripColumnCount(15)).toBe(5);
     expect(stripColumnCount(18)).toBe(6);
+  });
+});
+
+describe("stripGridLayout", () => {
+  test("caps sparse grid tracks at the three-across width", () => {
+    expect(stripGridLayout(7)).toEqual({ columnCount: 3, trackWidth: "capped" });
+  });
+
+  test("lets dense grid tracks fill and shrink after three columns", () => {
+    expect(stripGridLayout(10)).toEqual({ columnCount: 4, trackWidth: "fluid" });
   });
 });

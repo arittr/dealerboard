@@ -20,16 +20,20 @@ body {
   height: 100vh;
 }
 #tiles {
+  --tile-columns: 3;
+
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--tile-columns), minmax(0, 1fr));
   grid-auto-rows: 1fr;
   gap: 1.56vw;
 }
+#tiles[data-track-width="capped"] {
+  grid-template-columns: repeat(var(--tile-columns), minmax(0, calc((100% - 3.12vw) / 3)));
+  justify-content: center;
+}
 .tile {
+  width: 100%;
   min-width: 0;
-  /* Cap: the three-across tile width — the grid never crowds the rail. */
-  max-width: calc((100% - 3.12vw) / 3);
-  margin-inline: auto;
   container-type: size;
   position: relative;
   display: flex;

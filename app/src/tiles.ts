@@ -87,6 +87,23 @@ export const stripColumnCount = (count: number): number => {
   return Math.max(1, Math.ceil(count / rows));
 };
 
+export type StripGridLayout = {
+  readonly columnCount: number;
+  readonly trackWidth: "capped" | "fluid";
+};
+
+/**
+ * Sparse pages use tracks capped at the three-across width. Past three
+ * columns, every track shares the available width so tiles can shrink.
+ */
+export const stripGridLayout = (count: number): StripGridLayout => {
+  const columnCount = stripColumnCount(count);
+  return {
+    columnCount,
+    trackWidth: columnCount <= 3 ? "capped" : "fluid",
+  };
+};
+
 export const renderTiles = (root: HTMLElement, keys: readonly KeyModel[]): void => {
   root.replaceChildren(
     ...keys.map((model, index) => {
