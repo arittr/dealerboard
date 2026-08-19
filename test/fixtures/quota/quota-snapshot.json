@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "providers": {
+    "claude": {
+      "percentRemaining": 62.5,
+      "resetAt": "2026-08-19T22:00:00.000Z",
+      "weeklyPercentRemaining": 88,
+      "weeklyResetAt": "2026-08-24T00:00:00.000Z",
+      "unavailable": false,
+      "fetchedAt": "2026-08-19T18:00:00.000Z",
+      "history": [{ "fetchedAt": "2026-08-19T18:00:00.000Z", "fractionRemaining": 0.625 }]
+    },
+    "codex": {
+      "percentRemaining": 73,
+      "resetAt": "2026-08-19T20:00:00.000Z",
+      "weeklyPercentRemaining": 45,
+      "weeklyResetAt": "2026-08-25T00:00:00.000Z",
+      "unavailable": false,
+      "fetchedAt": "2026-08-19T18:00:00.000Z",
+      "history": []
+    }
+  }
+}
