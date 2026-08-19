@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { stripColumnCount, stripGridLayout, visibleStripKeys } from "../app/src/tiles";
+import { stripGridLayout, visibleStripKeys } from "../app/src/tiles";
 import type { KeyModel } from "../src/plugin/layout";
 
 const session = (slot: number): Extract<KeyModel, { kind: "session" }> => ({
@@ -25,7 +25,7 @@ const session = (slot: number): Extract<KeyModel, { kind: "session" }> => ({
 const blank = (degraded = false): KeyModel => ({ kind: "blank", degraded });
 
 describe("visibleStripKeys", () => {
-  test("drops trailing blanks so present sessions flex to fill the row", () => {
+  test("drops trailing blanks so only present sessions are packed", () => {
     const keys = [session(1), session(2), blank()];
     expect(visibleStripKeys(keys)).toEqual([session(1), session(2)]);
   });
@@ -46,35 +46,26 @@ describe("visibleStripKeys", () => {
   });
 });
 
-describe("stripColumnCount", () => {
-  test("one row while sessions fit across at full width", () => {
-    expect(stripColumnCount(1)).toBe(1);
-    expect(stripColumnCount(2)).toBe(2);
-    expect(stripColumnCount(3)).toBe(3);
-  });
-
-  test("grows rows before columns, never past three rows", () => {
-    expect(stripColumnCount(4)).toBe(2);
-    expect(stripColumnCount(5)).toBe(3);
-    expect(stripColumnCount(6)).toBe(3);
-    expect(stripColumnCount(7)).toBe(3);
-    expect(stripColumnCount(9)).toBe(3);
-  });
-
-  test("past nine sessions, columns grow and tiles shrink", () => {
-    expect(stripColumnCount(10)).toBe(4);
-    expect(stripColumnCount(12)).toBe(4);
-    expect(stripColumnCount(15)).toBe(5);
-    expect(stripColumnCount(18)).toBe(6);
-  });
-});
-
 describe("stripGridLayout", () => {
-  test("caps sparse grid tracks at the three-across width", () => {
-    expect(stripGridLayout(7)).toEqual({ columnCount: 3, trackWidth: "capped" });
+  const bounds = { width: 940, height: 300, gap: 20 };
+
+  test("caps sparse tiles at the three-across square size", () => {
+    expect(stripGridLayout(3, bounds)).toEqual({ columnCount: 3, rowCount: 1, tileSize: 300 });
   });
 
-  test("lets dense grid tracks fill and shrink after three columns", () => {
-    expect(stripGridLayout(10)).toEqual({ columnCount: 4, trackWidth: "fluid" });
+  test("chooses the largest square packing within three rows", () => {
+    expect(stripGridLayout(8, bounds)).toEqual({ columnCount: 4, rowCount: 2, tileSize: 140 });
+  });
+
+  test("adds columns when two rows make larger tiles than three", () => {
+    expect(stripGridLayout(15, bounds)).toEqual({ columnCount: 8, rowCount: 2, tileSize: 100 });
+  });
+
+  test("uses the third row when the measured area makes it optimal", () => {
+    expect(stripGridLayout(8, { width: 940, height: 940, gap: 20 })).toEqual({
+      columnCount: 3,
+      rowCount: 3,
+      tileSize: 300,
+    });
   });
 });

@@ -66,9 +66,9 @@ const blankTile = (degraded: boolean): HTMLElement => {
 
 /**
  * Keys the strip actually renders: the reducer pads pages with blanks for the
- * fixed keypad grid, but strip tiles flex to fill the row, so trailing
- * non-session keys are dropped (columns = sessions on the page, capped by the
- * geometry). An all-blank page keeps one blank — the degraded OFFLINE surface.
+ * fixed keypad grid, but the strip packs only present sessions, so trailing
+ * non-session keys are dropped. An all-blank page keeps one blank — the
+ * degraded OFFLINE surface.
  */
 export const visibleStripKeys = (keys: readonly KeyModel[]): readonly KeyModel[] => {
   let last = keys.length;
@@ -78,30 +78,39 @@ export const visibleStripKeys = (keys: readonly KeyModel[]): readonly KeyModel[]
   return keys.slice(0, last);
 };
 
-/**
- * Columns for a page of N tiles: rows grow to three first (keeping tiles at
- * the three-across width), then columns — tiles shrink past nine sessions.
- */
-export const stripColumnCount = (count: number): number => {
-  const rows = Math.min(3, Math.ceil(count / 3));
-  return Math.max(1, Math.ceil(count / rows));
-};
-
 export type StripGridLayout = {
   readonly columnCount: number;
-  readonly trackWidth: "capped" | "fluid";
+  readonly rowCount: number;
+  readonly tileSize: number;
+};
+
+export type StripGridBounds = {
+  readonly width: number;
+  readonly height: number;
+  readonly gap: number;
 };
 
 /**
- * Sparse pages use tracks capped at the three-across width. Past three
- * columns, every track shares the available width so tiles can shrink.
+ * Choose the one-, two-, or three-row packing that produces the largest
+ * square tiles inside the measured grid. The three-across width caps sparse
+ * pages so a small session count never overwhelms the fixed rail.
  */
-export const stripGridLayout = (count: number): StripGridLayout => {
-  const columnCount = stripColumnCount(count);
-  return {
-    columnCount,
-    trackWidth: columnCount <= 3 ? "capped" : "fluid",
-  };
+export const stripGridLayout = (count: number, bounds: StripGridBounds): StripGridLayout => {
+  const tileCount = Math.max(1, count);
+  const maxTileSize = Math.max(0, (bounds.width - 2 * bounds.gap) / 3);
+  let best: StripGridLayout = { columnCount: tileCount, rowCount: 1, tileSize: 0 };
+
+  for (let rowCount = 1; rowCount <= Math.min(3, tileCount); rowCount += 1) {
+    const columnCount = Math.ceil(tileCount / rowCount);
+    const width = (bounds.width - bounds.gap * (columnCount - 1)) / columnCount;
+    const height = (bounds.height - bounds.gap * (rowCount - 1)) / rowCount;
+    const tileSize = Math.max(0, Math.min(maxTileSize, width, height));
+    if (tileSize > best.tileSize) {
+      best = { columnCount, rowCount, tileSize };
+    }
+  }
+
+  return best;
 };
 
 export const renderTiles = (root: HTMLElement, keys: readonly KeyModel[]): void => {

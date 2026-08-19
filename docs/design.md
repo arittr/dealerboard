@@ -301,13 +301,14 @@ own visible contract.
 
 ### Geometry
 
-- Up to fifteen session tiles in at most three rows: rows grow first (1–9
-  sessions stay at the three-across tile width — the size cap, so the grid
-  never crowds the rail), then columns — past nine sessions tiles shrink as
-  a fourth/fifth column is added — plus a fixed 24%-width rail on the right.
-  Sparse pages render fewer, capped tiles rather than stretched ones.
-- Sizing is in viewport units, so the 2560×720 native mode and the 1280×360
-  HiDPI mode render identically; nothing is pixel-locked to one display mode.
+- Up to fifteen square session tiles plus a fixed 24%-width rail on the right.
+  For each page the grid chooses the one-, two-, or three-row packing that
+  produces the largest squares inside the measured tile area. Tile size is
+  capped at the three-across square width, so sparse pages never crowd the
+  rail; the completed grid is centered in both axes.
+- The packing is derived from the rendered tile-area dimensions and viewport-
+  relative gap, so the 2560×720 native mode and the 1280×360 HiDPI mode
+  scale proportionally; nothing is pixel-locked to one display mode.
 
 ### Tile anatomy
 

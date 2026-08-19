@@ -93,12 +93,21 @@ const applyLayout = (layout: LayoutResult): void => {
   currentKeys = visible;
   const signature = JSON.stringify(visible);
   const root = document.querySelector<HTMLElement>("#tiles");
-  if (root !== null && signature !== renderedSignature) {
-    renderedSignature = signature;
-    const grid = stripGridLayout(visible.length);
+  if (root !== null) {
+    const computedStyle = getComputedStyle(root);
+    const gap = Number.parseFloat(computedStyle.columnGap);
+    const grid = stripGridLayout(visible.length, {
+      width: root.clientWidth,
+      height: root.clientHeight,
+      gap: Number.isFinite(gap) ? gap : 0,
+    });
     root.style.setProperty("--tile-columns", String(grid.columnCount));
-    root.dataset["trackWidth"] = grid.trackWidth;
-    renderTiles(root, visible);
+    root.style.setProperty("--tile-rows", String(grid.rowCount));
+    root.style.setProperty("--tile-size", `${grid.tileSize}px`);
+    if (signature !== renderedSignature) {
+      renderedSignature = signature;
+      renderTiles(root, visible);
+    }
   }
 };
 
