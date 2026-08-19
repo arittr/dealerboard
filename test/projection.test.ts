@@ -29,6 +29,10 @@ const row = (
     originRef?: string | null;
     originSubagent?: number;
     unreadSince?: string | null;
+    statusSince?: string | null;
+    activityLine?: string | null;
+    transcriptPath?: string | null;
+    originParentRef?: string | null;
   } = {},
 ): ProjectionRow => {
   const parent = options.parent ?? null;
@@ -48,6 +52,10 @@ const row = (
     // Unread by default so idle roots stay visible; tests exercising the
     // visibility filter pass null explicitly (a `??` default would swallow it).
     unreadSince: options.unreadSince === undefined ? "2026-08-16T00:00:00.000Z" : options.unreadSince,
+    statusSince: options.statusSince ?? null,
+    activityLine: options.activityLine ?? null,
+    transcriptPath: options.transcriptPath ?? null,
+    originParentRef: options.originParentRef ?? null,
   };
 };
 
@@ -98,6 +106,11 @@ describe("projectRows", () => {
       originKind: null,
       originRef: null,
       originSubagent: false,
+      unreadSince: "2026-08-16T00:00:00.000Z",
+      statusSince: null,
+      activityLine: null,
+      transcriptPath: null,
+      originParentRef: null,
     });
   });
 
@@ -152,6 +165,29 @@ describe("projectRows", () => {
       row("s", { originKind: "paseo", originRef: "a1", originSubagent: 1, status: "working" }),
     ]);
     expect(sessions[0]).toMatchObject({ originKind: "paseo", originRef: "a1", originSubagent: true });
+  });
+
+  test("projects the data-surface fields from the root row", () => {
+    const sessions = projectRows([
+      row("s", {
+        status: "working",
+        unreadSince: "2026-08-19T00:02:00.000Z",
+        statusSince: "2026-08-19T00:00:00.000Z",
+        activityLine: "Bash git status",
+        transcriptPath: "/t/s1.jsonl",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+      }),
+    ]);
+    expect(sessions[0]).toMatchObject({
+      unreadSince: "2026-08-19T00:02:00.000Z",
+      statusSince: "2026-08-19T00:00:00.000Z",
+      activityLine: "Bash git status",
+      transcriptPath: "/t/s1.jsonl",
+      originParentRef: "agent-0",
+    });
   });
 
   test("an idle paseo subagent is hidden even when its result is unread", () => {
@@ -396,6 +432,11 @@ describe("readProjection", () => {
             originKind: null,
             originRef: null,
             originSubagent: false,
+            unreadSince: null,
+            statusSince: "2026-08-06T00:00:04.000Z",
+            activityLine: null,
+            transcriptPath: null,
+            originParentRef: null,
           },
         ]);
         // The snapshot satisfies the published v2 contract.
@@ -602,6 +643,57 @@ describe("readProjection", () => {
       rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  test("carries the data-surface columns through to the snapshot end to end", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "s1",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: "/transcripts/s1.jsonl",
+            model: null,
+            observedAt: "2026-08-06T00:00:01.000Z",
+          },
+          { kind: "Stop", provider: "claude", sessionId: "s1", observedAt: "2026-08-06T00:00:02.000Z" },
+        ]);
+        // activity_line and origin_parent_ref are written by the maintenance
+        // pass and the Paseo overlay, never by hook events; set them directly.
+        writer.run(
+          "UPDATE active_sessions SET activity_line = 'Bash git status', origin_parent_ref = 'agent-0' WHERE provider = 'claude' AND session_id = 's1'",
+        );
+      } finally {
+        writer.close();
+      }
+
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions[0]).toMatchObject({
+          unreadSince: "2026-08-06T00:00:02.000Z",
+          statusSince: "2026-08-06T00:00:01.000Z",
+          activityLine: "Bash git status",
+          transcriptPath: "/transcripts/s1.jsonl",
+          originParentRef: "agent-0",
+        });
+        // The snapshot satisfies the published v2 contract.
+        expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("writeSnapshotAtomically", () => {
@@ -627,6 +719,11 @@ describe("writeSnapshotAtomically", () => {
         originKind: null,
         originRef: null,
         originSubagent: false,
+        unreadSince: null,
+        statusSince: null,
+        activityLine: null,
+        transcriptPath: null,
+        originParentRef: null,
       },
     ],
   };

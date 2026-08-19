@@ -153,6 +153,11 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       originKind: null,
       originRef: null,
       originSubagent: false,
+      unreadSince: NOW,
+      statusSince: NOW,
+      activityLine: null,
+      transcriptPath: null,
+      originParentRef: null,
     },
   ],
 };
@@ -218,9 +223,10 @@ describe("ProjectionDaemon", () => {
     harness.daemon.start();
     try {
       const before = statSync(paths.snapshot).ino;
-      // Only updated_at changes: the commit bumps data_version without
-      // changing any projected column.
-      startSession("s1", LATER);
+      // BackgroundWorkStarted moves only updated_at and the (unprojected)
+      // background flag: the commit bumps data_version without changing any
+      // projected column — flag events never restamp status_since.
+      apply([{ kind: "BackgroundWorkStarted", provider: "claude", sessionId: "s1", observedAt: LATER }]);
       harness.tick();
       expect(harness.readCount()).toBe(2);
       expect(harness.writes).toHaveLength(1);

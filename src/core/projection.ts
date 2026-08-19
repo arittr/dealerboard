@@ -41,6 +41,10 @@ export type ProjectionRow = {
   originRef: string | null;
   originSubagent: number;
   unreadSince: string | null;
+  statusSince: string | null;
+  activityLine: string | null;
+  transcriptPath: string | null;
+  originParentRef: string | null;
 };
 
 export type ProjectionErrorCode =
@@ -194,6 +198,11 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
         originKind: root.originKind,
         originRef: root.originRef,
         originSubagent: root.originSubagent === 1,
+        unreadSince: root.unreadSince,
+        statusSince: root.statusSince,
+        activityLine: root.activityLine,
+        transcriptPath: root.transcriptPath,
+        originParentRef: root.originParentRef,
       });
     }
   }
@@ -220,6 +229,10 @@ type StoredRow = {
   origin_subagent: unknown;
   unread_since: unknown;
   model: unknown;
+  status_since: unknown;
+  transcript_path: unknown;
+  origin_parent_ref: unknown;
+  activity_line: unknown;
 };
 
 const isStringOrNull = (value: unknown): value is string | null => typeof value === "string" || value === null;
@@ -273,6 +286,34 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   if (!isStringOrNull(row.unread_since)) {
     throw new ProjectionError("corrupt-row");
   }
+  if (!isStringOrNull(row.status_since)) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (
+    !isStringOrNull(row.transcript_path) ||
+    !isStringOrNull(row.origin_parent_ref) ||
+    !isStringOrNull(row.activity_line)
+  ) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (
+    typeof row.transcript_path === "string" &&
+    (row.transcript_path.length === 0 || Array.from(row.transcript_path).length > 256)
+  ) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (
+    typeof row.origin_parent_ref === "string" &&
+    (row.origin_parent_ref.length === 0 || Array.from(row.origin_parent_ref).length > 256)
+  ) {
+    throw new ProjectionError("corrupt-row");
+  }
+  if (
+    typeof row.activity_line === "string" &&
+    (row.activity_line.length === 0 || Array.from(row.activity_line).length > 64)
+  ) {
+    throw new ProjectionError("corrupt-row");
+  }
   return {
     provider: row.provider as Provider,
     sessionId: row.session_id,
@@ -287,11 +328,15 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     originRef: row.origin_ref,
     originSubagent: row.origin_subagent,
     unreadSince: row.unread_since,
+    statusSince: row.status_since,
+    activityLine: row.activity_line,
+    transcriptPath: row.transcript_path,
+    originParentRef: row.origin_parent_ref,
   };
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, origin_kind, origin_ref, origin_subagent, unread_since";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, origin_kind, origin_ref, origin_subagent, unread_since, status_since, activity_line, transcript_path, origin_parent_ref";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:

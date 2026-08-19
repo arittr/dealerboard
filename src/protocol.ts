@@ -83,6 +83,16 @@ export type ProjectedSession = {
   originKind: SessionOriginKind | null;
   originRef: string | null;
   originSubagent: boolean;
+  /** ISO-8601 UTC when the latest unviewed result landed; null when nothing is unread. */
+  unreadSince: string | null;
+  /** ISO-8601 UTC of the row's own last status change (subtree lifts never restamp); null when never stamped. */
+  statusSince: string | null;
+  /** The last tool call as "Tool target" (≤64 code points; claude/codex only); null otherwise. */
+  activityLine: string | null;
+  /** The provider transcript path when the registry knows it; null otherwise. */
+  transcriptPath: string | null;
+  /** The dispatching Paseo agent's id for a paseo subagent; null otherwise. */
+  originParentRef: string | null;
 };
 
 export type SnapshotHealth = {
@@ -196,6 +206,29 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (value["originSubagent"] !== undefined && typeof value["originSubagent"] !== "boolean") {
     return invalid("session.originSubagent must be a boolean");
   }
+  // The data-surface fields follow the model precedent exactly: a missing key
+  // is tolerated as null (snapshots written before they existed stay
+  // parseable); a present undefined is an invalid value, not a missing key.
+  const unreadSince = "unreadSince" in value ? value["unreadSince"] : null;
+  if (!isNullableBoundedString(unreadSince)) {
+    return invalid("session.unreadSince must be null or a bounded string");
+  }
+  const statusSince = "statusSince" in value ? value["statusSince"] : null;
+  if (!isNullableBoundedString(statusSince)) {
+    return invalid("session.statusSince must be null or a bounded string");
+  }
+  const activityLine = "activityLine" in value ? value["activityLine"] : null;
+  if (!isNullableBoundedString(activityLine)) {
+    return invalid("session.activityLine must be null or a bounded string");
+  }
+  const transcriptPath = "transcriptPath" in value ? value["transcriptPath"] : null;
+  if (!isNullableBoundedString(transcriptPath)) {
+    return invalid("session.transcriptPath must be null or a bounded string");
+  }
+  const originParentRef = "originParentRef" in value ? value["originParentRef"] : null;
+  if (!isNullableBoundedString(originParentRef)) {
+    return invalid("session.originParentRef must be null or a bounded string");
+  }
   return {
     provider: value["provider"] as Provider,
     sessionId: value["sessionId"],
@@ -209,6 +242,11 @@ const parseSession = (value: unknown): ProjectedSession => {
     originKind: value["originKind"] === undefined ? null : (value["originKind"] as SessionOriginKind | null),
     originRef: value["originRef"] === undefined ? null : (value["originRef"] as string | null),
     originSubagent: value["originSubagent"] === undefined ? false : (value["originSubagent"] as boolean),
+    unreadSince,
+    statusSince,
+    activityLine,
+    transcriptPath,
+    originParentRef,
   };
 };
 

@@ -20,6 +20,11 @@ const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {})
   originKind: null,
   originRef: null,
   originSubagent: false,
+  unreadSince: null,
+  statusSince: null,
+  activityLine: null,
+  transcriptPath: null,
+  originParentRef: null,
   ...overrides,
 });
 

@@ -26,6 +26,11 @@ const valid: SessionSnapshotV2 = {
       originKind: null,
       originRef: null,
       originSubagent: false,
+      unreadSince: null,
+      statusSince: null,
+      activityLine: null,
+      transcriptPath: null,
+      originParentRef: null,
     },
   ],
 };
@@ -270,6 +275,56 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot(withSession({ provider: "vscode" as never }))).toThrow(
       "session.provider is not a known provider",
     );
+  });
+
+  test("defaults the five data-surface fields to null when absent (old daemon snapshot still parses)", () => {
+    // Cross-version tolerance, same precedent as model/originKind: a snapshot
+    // written before these fields existed parses to nulls.
+    const session = { ...firstSession() } as Partial<ProjectedSession>;
+    delete session.unreadSince;
+    delete session.statusSince;
+    delete session.activityLine;
+    delete session.transcriptPath;
+    delete session.originParentRef;
+    expect(parseSessionSnapshot({ ...valid, sessions: [session] }).sessions[0]).toMatchObject({
+      unreadSince: null,
+      statusSince: null,
+      activityLine: null,
+      transcriptPath: null,
+      originParentRef: null,
+    });
+  });
+
+  test("plugin compat: a snapshot carrying the five fields parses with values intact", () => {
+    // The installed Stream Deck plugin parses the same snapshot-v2.json with
+    // this exact parser: new-daemon output must round-trip with values, and
+    // old-daemon output must default (the previous test) — old-plugin/new-
+    // daemon and new-app/old-daemon interoperate.
+    const parsed = parseSessionSnapshot(
+      withSession({
+        unreadSince: "2026-08-19T00:00:00.000Z",
+        statusSince: "2026-08-19T00:01:00.000Z",
+        activityLine: "Bash git status",
+        transcriptPath: "/Users/drew/.claude/projects/p/s1.jsonl",
+        originParentRef: "agent-0",
+      }),
+    );
+    expect(parsed.sessions[0]).toMatchObject({
+      unreadSince: "2026-08-19T00:00:00.000Z",
+      statusSince: "2026-08-19T00:01:00.000Z",
+      activityLine: "Bash git status",
+      transcriptPath: "/Users/drew/.claude/projects/p/s1.jsonl",
+      originParentRef: "agent-0",
+    });
+  });
+
+  test("rejects wrongly typed or oversized data-surface fields", () => {
+    expect(() => parseSessionSnapshot(withSession({ unreadSince: 7 as unknown as string }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ statusSince: false as unknown as string }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ activityLine: "x".repeat(257) }))).toThrow();
+    expect(() => parseSessionSnapshot(withSession({ transcriptPath: 0 as unknown as string }))).toThrow();
+    // A present undefined is an invalid value, not a missing key.
+    expect(() => parseSessionSnapshot(withSession({ originParentRef: undefined as unknown as string }))).toThrow();
   });
 });
 
