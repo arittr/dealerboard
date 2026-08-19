@@ -93,7 +93,7 @@ off the grid until its next Activity or unread output.
 
 Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. As implemented, the lease is uniform: the daemon prunes any top-level session whose last hook is older than 24 hours, and a still-live session pruned by mistake reappears at its next prompt (every provider late-joins on `UserPromptSubmit`). The daemon also rewrites the snapshot every five seconds as a heartbeat; the plugin treats a file older than ten seconds as a dead daemon and degrades instead of rendering stale tiles as live.
 
-Membership is also attention-scoped: a tile exists if and only if the session is active (working, waiting, or error) or unread — idle with an unviewed result. One refinement: an idle Paseo subagent (hollow-ring origin) is never admitted, even when unread — a finished subagent's result is consumed by the orchestrating parent agent, not by the user pressing tiles, so completed subagent runs never pile up on the grid. Active subagents still show with their ring. Unread is a per-session ledger (`unread_since`, added in schema v7; the current schema is v10 (v10 widens the provider CHECK for grok) — v8 repaired pre-merge v7 databases missing the `model` column, v9 adds the `acked_at` ack watermark). A turn ending — a Stop that settles to idle, or StopFailure — stamps it, because a result landed; only an explicit view clears it: a tile press acks through the daemon (`sessions ack`, the plugin's sole write path), the Paseo overlay reports the agent viewed in Paseo, or a `SessionStart` reuses the session. The ack is timestamped in `acked_at`, so a Paseo attention flag raised before the view can never resurrect the tile afterwards. Prompting again does not mark the earlier result read. A read-and-idle row persists in the registry — subject to the ordinary prune — but is not projected onto the grid, so on the grid idle implies unread. No separate dismiss action exists: viewing the result retires the tile.
+Membership is also attention-scoped: a tile exists if and only if the session is active (working, waiting, or error) or unread — idle with an unviewed result. One refinement: an idle Paseo subagent (hollow-ring origin) is never admitted, even when unread — a finished subagent's result is consumed by the orchestrating parent agent, not by the user pressing tiles, so completed subagent runs never pile up on the grid. Active subagents still show with their ring. Unread is a per-session ledger (`unread_since`, added in schema v7; the current schema is v11 — v8 repaired pre-merge v7 databases missing the `model` column, v9 added the `acked_at` ack watermark, v10 widened the provider CHECK for grok, and v11 added `status_since`, `origin_parent_ref`, and `activity_line` for the strip's data surface). A turn ending — a Stop that settles to idle, or StopFailure — stamps it, because a result landed; only an explicit view clears it: a tile press acks through the daemon (`sessions ack`, the plugin's sole write path), the Paseo overlay reports the agent viewed in Paseo, or a `SessionStart` reuses the session. The ack is timestamped in `acked_at`, so a Paseo attention flag raised before the view can never resurrect the tile afterwards. Prompting again does not mark the earlier result read. A read-and-idle row persists in the registry — subject to the ordinary prune — but is not projected onto the grid, so on the grid idle implies unread. No separate dismiss action exists: viewing the result retires the tile.
 
 The previous proposal equated unarchived App/Web tasks with active tasks. That is rejected: on 2026-08-05 this host had 288 unarchived top-level Codex threads, which would turn the deck into a historical inbox.
 
@@ -331,12 +331,23 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
 - The descendant badge keeps its upper-right corner; the Paseo origin pip
   keeps the bottom-right (filled `#A78BFA` disc for a Paseo parent, hollow
   ring for a subagent).
+- Strip-only marks, with no keypad counterpart (`src/plugin/render.ts` is
+  unchanged): an amber `#FFB020` unread dot in the topband whenever the
+  session carries an unviewed-result stamp (the exact `unreadSince` ledger
+  field, not a status proxy); a neutral-chrome status timer line at the tile
+  bottom ("working 12m" — compact s/m/h/d elapsed against `statusSince`, the
+  row's own status stamp, ticking once a second by in-place `textContent`
+  updates so the render-signature skip and CSS animations are never
+  disturbed); and a neutral-chrome activity footer naming the agent's last
+  tool call ("Bash git status" — ≤64 code points, tool name plus a
+  path/command head, never full arguments; claude and codex sessions only).
 - A degraded tile carries the `!` flag, and a degraded blank renders OFFLINE.
 
 ### Rail
 
 - Daemon health: `daemon ok` with the heartbeat age, or OFFLINE.
-- A clock and the unread count (the on-grid idle+error tiles).
+- A clock and the exact unread count (tiles whose session carries an
+  `unreadSince` stamp).
 - Page dots, one per page, tap to jump.
 
 ### Interaction

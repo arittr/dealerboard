@@ -125,11 +125,18 @@ Notes:
   session-teardown observe fire and is dropped — `SessionEnd` owns removal.
   A tile's effective status is the max (`error > waiting > working > idle`)
   over its whole subtree, and any live subagent row lifts it to at least
-  `working` (`src/core/projection.ts`).
+  `working` (`src/core/projection.ts`). `status_since` (schema v11) records
+  the row's own last status transition: Activity/Attention/Stop/StopFailure
+  restamp it only when the status value actually changes, BackgroundWork
+  events never restamp it, starts initialize it, and the projection's
+  subtree-lifted effective status never touches it — a parent held working
+  by live children shows its own timer.
 - Unread ledger and grid visibility: a turn ending — a Stop that settles to
   idle, or StopFailure — stamps `unread_since` (added in schema v7; v8 was a
-  shape-repair stamp; the current latest, v10, widens
-  the provider CHECK for grok (v9 added the `acked_at` watermark));
+  shape-repair stamp; the current latest, v11, adds `status_since`
+  (backfilled from `updated_at`), `origin_parent_ref`, and `activity_line`;
+  v10 widened the provider CHECK for grok (v9 added the `acked_at`
+  watermark));
   a result landed.
   Only viewing clears it: a tile press acks via `sessions ack` (the plugin's
   sole plugin→daemon write, executed against the installed binary), the Paseo
@@ -149,10 +156,10 @@ Notes:
   `persistence.sessionId` (fallback `runtimeInfo.sessionId`), stamps origin
   plus the subagent bit (Paseo persists the dispatching agent as
   `labels["paseo.parent-agent-id"]`; a top-level `parentAgentId` is honored
-  as a fallback), and mirrors
-  `requiresAttention` both ways — false clears unread (viewed in Paseo), true
-  sets it without moving the first-news timestamp and subject to the
-  `acked_at` watermark; a difference-guard keeps
+  as a fallback) and the dispatching agent's id as `origin_parent_ref`, and
+  mirrors `requiresAttention` both ways — false clears unread (viewed in
+  Paseo), true sets it without moving the first-news timestamp and subject
+  to the `acked_at` watermark; a difference-guard keeps
   unchanged rows from dirtying the maintenance signal. The loader normalizes
   record timestamps to canonical UTC (`Date.parse` + `toISOString`,
   unparseable → null) so the watermark's string comparisons stay
@@ -197,17 +204,20 @@ Notes:
   row's `transcript_path` (cached on `(mtime, size)`, safe because omp
   rewrites the slot in place on the otherwise append-only file) via
   `createSessionFactsResolver` in `src/core/titles.ts` — wired in `cli.ts`
-  and driven by the daemon's 2s maintenance pass, it resolves model ids
-  alongside titles. zcode's database is re-queried per pass, never
+  and driven by the daemon's 2s maintenance pass, it resolves model ids and
+  the strip's activity line alongside titles (claude/codex only: the last
+  tool call in the transcript tail as `Tool target`, ≤64 code points, name
+  plus a path/command head — never full arguments; written back only on
+  change). zcode's database is re-queried per pass, never
   stat-cached (WAL means committed titles can live in `db.sqlite-wal`
-  without changing the main file's stat). Titles and models are written back
-  without touching `updated_at` (the prune's aging signal). Titles word-wrap
-  to two 12-code-point lines with an ellipsis on overflow.
-- The daemon is no longer read-only: it owns maintenance (titles and models
-  every 2s, the Paseo overlay every 2s, prune every 60s) and rewrites the
-  snapshot every 5s as a heartbeat. The plugin treats a snapshot older than
-  10s as a dead daemon and renders the degraded treatment (OFFLINE / "!"
-  flags).
+  without changing the main file's stat). Titles, models, and activity lines
+  are written back without touching `updated_at` (the prune's aging signal).
+  Titles word-wrap to two 12-code-point lines with an ellipsis on overflow.
+- The daemon is no longer read-only: it owns maintenance (titles, models,
+  and activity lines every 2s, the Paseo overlay every 2s, prune every 60s)
+  and rewrites the snapshot every 5s as a heartbeat. The plugin treats a
+  snapshot older than 10s as a dead daemon and renders the degraded
+  treatment (OFFLINE / "!" flags).
 - The Xeneon strip app is a third snapshot consumer: `app/` is the webview
   (frontend sources plus `styles.css`) and `app/src-tauri/` is the Rust
   crate. `bun run build:app` bundles the frontend, `dev:app` runs the Tauri
@@ -219,14 +229,17 @@ Notes:
   area chooses the largest packing across at most 3 rows, capped at the
   three-across square size; rail pages, no NEXT tile). Tile visuals
   live in `app/styles.css` + `app/src/tiles.ts`, a web-native port of
-  `render.ts` — keep the two in sync via `docs/design.md`. The window pins
-  to the monitor whose model string matches "xeneon edge" or whose physical
-  resolution is 2560×720 (physical, so a scaled 1280×360 HiDPI mode still
-  matches), re-pins on reconnect, and autostarts at login. The rail's unread
-  count is an approximation — the on-grid idle+error tiles — so an acked
-  error session lingers as counted until its next lifecycle event. Quota
-  panels are deliberately deferred; the rail is a plain section stack so
-  they slot in later.
+  `render.ts` — keep the two in sync via `docs/design.md`. Strip-only tile
+  extras (no keypad counterpart): an amber unread dot (the exact
+  `unreadSince` ledger flag), a ticking `statusSince` timer line, and an
+  `activityLine` footer; the timer rewrites `textContent` in place on the
+  1s rail cadence so the `renderedSignature` skip is never disturbed. The
+  window pins to the monitor whose model string matches "xeneon edge" or
+  whose physical resolution is 2560×720 (physical, so a scaled 1280×360
+  HiDPI mode still matches), re-pins on reconnect, and autostarts at login.
+  The rail's unread count is exact: sessions with a non-null `unreadSince`.
+  Quota panels are deliberately deferred; the rail is a plain section stack
+  so they slot in later.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.
