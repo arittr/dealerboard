@@ -68,6 +68,11 @@ describe("reduceQuotaRead", () => {
     )[0];
     expect(panel).toMatchObject({ provider: "codex", state: "unavailable", fetchedAtMs: null, resetAtMs: null });
   });
+
+  test("panels follow the contract provider order across all four providers", () => {
+    const panels = reduceQuotaRead(read({ zai: quota(), kimi: quota(), codex: quota(), claude: quota() }), NOW);
+    expect(panels.map((panel) => panel.provider)).toEqual(["claude", "codex", "kimi", "zai"]);
+  });
 });
 
 describe("formatResetCountdown", () => {

@@ -315,6 +315,12 @@ body {
 .quota-chip[data-provider="codex"] {
   background: #d946ef;
 }
+.quota-chip[data-provider="kimi"] {
+  background: #3b82f6;
+}
+.quota-chip[data-provider="zai"] {
+  background: #2dd4bf;
+}
 .quota-pct {
   margin-left: auto;
   color: #e8eef7;

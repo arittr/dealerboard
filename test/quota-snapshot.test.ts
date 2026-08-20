@@ -34,9 +34,21 @@ describe("parseQuotaSnapshot", () => {
   });
 
   test("ignores unknown provider keys so a newer daemon never breaks an older app", () => {
-    const parsed = parseQuotaSnapshot({ schemaVersion: 1, providers: { kimi: claudeQuota(), claude: claudeQuota() } });
+    const parsed = parseQuotaSnapshot({
+      schemaVersion: 1,
+      providers: { futureprovider: claudeQuota(), claude: claudeQuota() },
+    });
     expect(parsed.providers["claude"]).toEqual(claudeQuota());
     expect(Object.keys(parsed.providers)).toEqual(["claude"]);
+  });
+
+  test("parses the kimi and zai provider keys", () => {
+    const parsed = parseQuotaSnapshot({
+      schemaVersion: 1,
+      providers: { kimi: claudeQuota(), zai: claudeQuota() },
+    });
+    expect(parsed.providers["kimi"]).toEqual(claudeQuota());
+    expect(parsed.providers["zai"]).toEqual(claudeQuota());
   });
 
   test("rejects a non-object, a wrong schemaVersion, and a non-object providers", () => {

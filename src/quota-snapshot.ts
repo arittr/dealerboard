@@ -13,7 +13,7 @@ export const QUOTA_SNAPSHOT_SCHEMA_VERSION = 1;
 /** Per-provider sample cap: at the 120s poll cadence, 128 samples cover ~4.3 hours. */
 export const QUOTA_HISTORY_LIMIT = 128;
 
-export const QUOTA_PROVIDER_KEYS = ["claude", "codex"] as const;
+export const QUOTA_PROVIDER_KEYS = ["claude", "codex", "kimi", "zai"] as const;
 
 export type QuotaProviderKey = (typeof QUOTA_PROVIDER_KEYS)[number];
 

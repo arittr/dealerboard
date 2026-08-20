@@ -33,8 +33,18 @@ export type RailActions = {
 
 const pad2 = (value: number): string => String(value).padStart(2, "0");
 
-const PROVIDER_LABELS: Record<QuotaPanelModel["provider"], string> = { claude: "Claude", codex: "Codex" };
-const PROVIDER_CHIP_LETTERS: Record<QuotaPanelModel["provider"], string> = { claude: "C", codex: "X" };
+const PROVIDER_LABELS: Record<QuotaPanelModel["provider"], string> = {
+  claude: "Claude",
+  codex: "Codex",
+  kimi: "Kimi",
+  zai: "GLM",
+};
+const PROVIDER_CHIP_LETTERS: Record<QuotaPanelModel["provider"], string> = {
+  claude: "C",
+  codex: "X",
+  kimi: "K",
+  zai: "G",
+};
 
 const healthSection = (model: RailModel): HTMLElement => {
   const section = document.createElement("section");

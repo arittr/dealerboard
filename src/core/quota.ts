@@ -308,7 +308,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         "anthropic-beta": "oauth-2025-04-20",
         "User-Agent": "claude-code/2.1.0",
       };
-    } else {
+    } else if (provider === "codex") {
       const contents = readFile(dependencies.codexAuthPath);
       const auth = contents === null ? null : parseCodexAuth(contents);
       if (auth === null) {
@@ -323,6 +323,10 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
       if (auth.accountId !== null) {
         headers["ChatGPT-Account-Id"] = auth.accountId;
       }
+    } else {
+      // kimi and zai have no direct HTTP fetcher — omit them (the panel
+      // disappears) until the codexbar exec rewrite owns their probes.
+      return { kind: "absent" };
     }
     let response: QuotaFetchResponse;
     try {
