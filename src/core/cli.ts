@@ -30,6 +30,7 @@ import { detectOrigin } from "./origin";
 import { createPaseoAgentStateLoader, isKnownProviderState } from "./paseo";
 import { type AppPaths, resolveAppPaths } from "./paths";
 import { decodeNativeHook } from "./providers";
+import { createQuotaCollector } from "./quota";
 import {
   acknowledgeSession,
   applyRegistryEvents,
@@ -409,6 +410,13 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
     const grokRoot = environment["GROK_HOME"] ?? join(daemonPaths.home, ".grok");
+    const codexRoot = environment["CODEX_HOME"] ?? join(daemonPaths.home, ".codex");
+    const quotaCollector = createQuotaCollector({
+      claudeCredentialsPath: join(daemonPaths.home, ".claude/.credentials.json"),
+      codexAuthPath: join(codexRoot, "auth.json"),
+      quotaSnapshotPath: daemonPaths.quotaSnapshot,
+      diagnostics,
+    });
     const resolveFacts = createSessionFactsResolver({
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
@@ -422,6 +430,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     const syncPaseo = (db: Database) => syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState));
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
+    quotaCollector.start();
     return new Promise<number>(() => {
       // launchd owns the daemon lifetime; the poll timer keeps the process alive.
     });
