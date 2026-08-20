@@ -10,6 +10,9 @@ export const readSnapshot = (): Promise<SnapshotPayload> => invoke<SnapshotPaylo
 
 export const readQuotaSnapshot = (): Promise<SnapshotPayload> => invoke<SnapshotPayload>("read_quota_snapshot");
 
+export const readTokenUsageSnapshot = (): Promise<SnapshotPayload> =>
+  invoke<SnapshotPayload>("read_token_usage_snapshot");
+
 export const readPaseoServerId = (): Promise<string> => invoke<string>("read_paseo_server_id");
 
 export const ackSession = (provider: Provider, sessionId: string): Promise<void> =>

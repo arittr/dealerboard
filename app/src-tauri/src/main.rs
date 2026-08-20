@@ -107,6 +107,29 @@ async fn read_quota_snapshot() -> Result<SnapshotPayload, String> {
     Ok(SnapshotPayload { mtime_ms, contents })
 }
 
+/// The token-usage snapshot lives next to the session snapshot but is owned by
+/// the daemon's token-usage collector; a missing file simply means "no token
+/// data yet" and is reported as a fixed error string the frontend can branch on.
+#[tauri::command]
+async fn read_token_usage_snapshot() -> Result<SnapshotPayload, String> {
+    let path = app_support_root()?.join("token-usage-snapshot.json");
+    let metadata = std::fs::metadata(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "token_usage_snapshot_missing".to_string()
+        } else {
+            error.to_string()
+        }
+    })?;
+    let mtime_ms = metadata
+        .modified()
+        .map_err(|error| error.to_string())?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis() as u64;
+    let contents = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    Ok(SnapshotPayload { mtime_ms, contents })
+}
+
 #[tauri::command]
 async fn read_paseo_server_id() -> Result<String, String> {
     let home = std::env::var("HOME").map_err(|error| error.to_string())?;
@@ -239,6 +262,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             read_snapshot,
             read_quota_snapshot,
+            read_token_usage_snapshot,
             read_paseo_server_id,
             ack_session,
             reveal_transcript,
