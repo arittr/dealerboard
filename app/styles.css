@@ -254,11 +254,29 @@ body {
   letter-spacing: 0.15em;
 }
 
-.rail-clock {
-  color: #e8eef7;
-  font-size: 3.4vw;
-  font-weight: 650;
+.rail-tokens {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4vh;
   font-variant-numeric: tabular-nums;
+}
+.rail-tokens[data-state="stale"] {
+  opacity: 0.45;
+}
+.tokens-today {
+  color: #e8eef7;
+  font-size: 1.8vw;
+  font-weight: 650;
+}
+.tokens-rate {
+  color: #94a3b8;
+  font-size: 1.4vw;
+}
+.tokens-rate[data-trend="up"] {
+  color: #4ade80;
+}
+.tokens-rate[data-trend="down"] {
+  color: #ff4d67;
 }
 
 .rail-unread.active {

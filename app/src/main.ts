@@ -12,7 +12,7 @@
  * geometry and re-renders only when the serialized key models change (so
  * CSS status animations are never restarted). Page settings persist to
  * localStorage; the reducer validates them on every read. A 1s timer ticks
- * the rail clock and the per-tile status timers in place.
+ * the per-tile status timers in place.
  */
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -38,6 +38,7 @@ import {
   readPaseoServerId,
   readQuotaSnapshot,
   readSnapshot,
+  readTokenUsageSnapshot,
   revealTranscript,
   type SnapshotPayload,
 } from "./bridge";
@@ -56,6 +57,7 @@ import { renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
 import { identityOf, resolveSessionTile, type SessionIdentity } from "./tile-identity";
 import { renderTiles, statusLineText, stripGridLayout, visibleStripKeys } from "./tiles";
+import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
 import { startStripWindowManager } from "./window";
 
 const SLOW_PASS_MS = 10_000;
@@ -67,6 +69,7 @@ let currentView: SnapshotView | null = null;
 let lastReadMtimeMs: number | null = null;
 let lastPayload: SnapshotPayload | null = null;
 let currentQuota: QuotaPanelModel[] = [];
+let currentTokenUsage: TokenUsageRailModel = { state: "hidden" };
 let stalenessTimer: ReturnType<typeof setTimeout> | null = null;
 let currentPage = 0;
 let currentPageCount = 1;
@@ -136,6 +139,7 @@ const renderRailNow = (): void => {
       heartbeatAgeMs: lastReadMtimeMs === null ? null : Date.now() - lastReadMtimeMs,
       unreadCount: countUnreadSessions(currentView.snapshot),
       quota: currentQuota,
+      tokens: currentTokenUsage,
       page: currentPage + 1,
       pageCount: currentPageCount,
       now: new Date(),
@@ -262,12 +266,14 @@ const readAndIngest = async (): Promise<void> => {
  * The slow degraded-recovery pass (the push stream is the healthy update
  * path): while degraded it retries a real read, self-healing a missed event
  * or a late-starting daemon; while healthy it touches no snapshot state —
- * the expiry check owns the OFFLINE flip. The quota snapshot also rides
- * this pass — the watch pushes snapshot-v2.json only, that file changes at
- * most every 120s, and a rejection is a missing file, i.e. "no data yet".
+ * the expiry check owns the OFFLINE flip. The quota and token-usage
+ * snapshots also ride this pass — the watch pushes snapshot-v2.json only,
+ * those files change at most every 120s, and a rejection is a missing
+ * file, i.e. "no data yet".
  */
 const slowPass = async (): Promise<void> => {
   currentQuota = reduceQuotaRead(await readQuotaSnapshot().catch(() => null), Date.now());
+  currentTokenUsage = reduceTokenUsageRead(await readTokenUsageSnapshot().catch(() => null), Date.now());
   if (lastPayload !== null && currentView !== null && !currentView.degraded) {
     return;
   }

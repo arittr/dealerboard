@@ -1,6 +1,7 @@
 /**
- * The strip's fixed right rail: daemon health (with heartbeat age), clock,
- * unread count, per-provider quota panels, and page dots. Rebuilt wholesale on
+ * The strip's fixed right rail: daemon health (with heartbeat age), token
+ * usage (today's total with rolling /hr and /10m rates), unread count,
+ * per-provider quota panels, and page dots. Rebuilt wholesale on
  * each render — the rail is small and has no CSS animations to disturb.
  */
 
@@ -13,6 +14,7 @@ import {
   quotaStatusText,
   sparklinePoints,
 } from "./quota";
+import { formatTokensCompact, type TokenUsageRailModel, type TokenUsageRateLine } from "./token-usage";
 
 export type RailModel = {
   degraded: boolean;
@@ -20,6 +22,7 @@ export type RailModel = {
   heartbeatAgeMs: number | null;
   unreadCount: number;
   quota: readonly QuotaPanelModel[];
+  tokens: TokenUsageRailModel;
   /** 1-based current page. */
   page: number;
   pageCount: number;
@@ -30,8 +33,6 @@ export type RailActions = {
   /** Jump to a 0-based page; the layout reducer validates and clamps it. */
   onJumpToPage: (page: number) => void;
 };
-
-const pad2 = (value: number): string => String(value).padStart(2, "0");
 
 const PROVIDER_LABELS: Record<QuotaPanelModel["provider"], string> = {
   claude: "Claude",
@@ -61,6 +62,29 @@ const healthSection = (model: RailModel): HTMLElement => {
     text.textContent = ageSeconds === null ? "daemon ok" : `daemon ok · ${ageSeconds}s ago`;
   }
   section.append(text);
+  return section;
+};
+
+const rateLineElement = (line: TokenUsageRateLine, unit: string): HTMLElement => {
+  const row = document.createElement("div");
+  row.className = "tokens-rate";
+  row.dataset["trend"] = line.trend;
+  const arrow = line.trend === "up" ? "↑" : line.trend === "down" ? "↓" : "→";
+  row.textContent = `${arrow} ${formatTokensCompact(line.tokens)}/${unit}`;
+  return row;
+};
+
+const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
+  if (model.state === "hidden") {
+    return null;
+  }
+  const section = document.createElement("section");
+  section.className = "rail-tokens";
+  section.dataset["state"] = model.state;
+  const today = document.createElement("div");
+  today.className = "tokens-today";
+  today.textContent = `${formatTokensCompact(model.totalTokens)} today`;
+  section.append(today, rateLineElement(model.hour, "hr"), rateLineElement(model.tenMin, "10m"));
   return section;
 };
 
@@ -162,9 +186,7 @@ const drawSparkline = (section: HTMLElement, history: readonly QuotaHistoryPoint
 };
 
 export const renderRail = (root: HTMLElement, model: RailModel, actions: RailActions): void => {
-  const clock = document.createElement("section");
-  clock.className = "rail-clock";
-  clock.textContent = `${pad2(model.now.getHours())}:${pad2(model.now.getMinutes())}`;
+  const tokens = tokensSection(model.tokens);
 
   const unread = document.createElement("section");
   unread.className = model.unreadCount > 0 ? "rail-unread active" : "rail-unread";
@@ -173,7 +195,12 @@ export const renderRail = (root: HTMLElement, model: RailModel, actions: RailAct
   const nowMs = model.now.getTime();
   const quotaSections = model.quota.map((quota) => quotaSection(quota, nowMs));
 
-  root.replaceChildren(healthSection(model), clock, unread, ...quotaSections, pagerSection(model, actions));
+  const sections = [healthSection(model)];
+  if (tokens !== null) {
+    sections.push(tokens);
+  }
+  sections.push(unread, ...quotaSections, pagerSection(model, actions));
+  root.replaceChildren(...sections);
   // Canvases only have layout once attached; draw after replaceChildren.
   for (let index = 0; index < quotaSections.length; index += 1) {
     const section = quotaSections[index];
