@@ -607,6 +607,19 @@ const onStripClickCapture = (event: MouseEvent): void => {
   swallowSuppressedClick(clickSuppression, event);
 };
 
+/**
+ * macOS delivers a Xeneon touch-and-hold as a synthesized secondary click,
+ * and an uncanceled contextmenu event makes WKWebView answer with its native
+ * fallback menu (the lone "Refresh" item) — a native menu opening warps the
+ * cursor onto the strip display. The pointer must never be moved to the
+ * panel, so every context menu in this window is suppressed at the document
+ * root, whatever its source (touch hold, mouse right-click). Debug builds
+ * keep inspection: Safari's Develop menu attaches to the webview directly.
+ */
+const onContextMenu = (event: MouseEvent): void => {
+  event.preventDefault();
+};
+
 const wireInteraction = (): void => {
   document.querySelector<HTMLElement>("#tiles")?.addEventListener("click", onTilesClick);
   const strip = document.querySelector<HTMLElement>("#strip");
@@ -615,6 +628,7 @@ const wireInteraction = (): void => {
   strip?.addEventListener("pointerup", onStripPointerUp);
   strip?.addEventListener("pointercancel", onStripPointerCancel);
   strip?.addEventListener("click", onStripClickCapture, true);
+  document.addEventListener("contextmenu", onContextMenu);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       dismissActionSheet();

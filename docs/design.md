@@ -389,3 +389,9 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   but matched no gesture swallows its trailing click, keeping taps, holds,
   and drags unambiguous. There is deliberately no swipe-to-ack: only viewing
   clears unread.
+- The webview's native context menu is suppressed outright — every
+  `contextmenu` event is canceled at the document root. macOS delivers a
+  touch-and-hold as a synthesized secondary click, and the native menu that
+  answers it (a lone "Refresh") warps the cursor onto the strip display; the
+  pointer must never be moved to the panel. The long-press action sheet
+  above remains the strip's only hold surface.
