@@ -1,15 +1,29 @@
 /**
- * App entry: poll the daemon snapshot every 2s, reduce layout with the strip
- * geometry, and re-render only when the serialized key models change (so CSS
- * status animations are never restarted by a no-op poll). Page settings
- * persist to localStorage; the reducer validates them on every read. A 1s
- * timer ticks the rail clock and the per-tile status timers in place.
+ * App entry: one initial snapshot read, then daemon pushes via the Rust
+ * host's file watch (snapshot-changed events). A slow 10s timer only
+ * re-checks staleness (a dead daemon's heartbeat stops, rendering OFFLINE)
+ * and retries real reads while degraded, so a missed event or a
+ * late-starting daemon self-heals; it also carries the quota read, whose
+ * file the watch does not cover. Layout reduces with the strip geometry
+ * and re-renders only when the serialized key models change (so CSS status
+ * animations are never restarted). Page settings persist to localStorage;
+ * the reducer validates them on every read. A 1s timer ticks the rail
+ * clock and the per-tile status timers in place.
  */
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
 import type { SessionSnapshotV2, SessionStatus, SnapshotView } from "../../src/protocol";
-import { ackSession, focusGhostty, openUrl, readPaseoServerId, readQuotaSnapshot, readSnapshot } from "./bridge";
+import {
+  ackSession,
+  focusGhostty,
+  onSnapshotChanged,
+  openUrl,
+  readPaseoServerId,
+  readQuotaSnapshot,
+  readSnapshot,
+  type SnapshotPayload,
+} from "./bridge";
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
@@ -17,13 +31,14 @@ import { countUnreadSessions, reduceSnapshotRead } from "./snapshot-view";
 import { renderTiles, statusLineText, stripGridLayout, visibleStripKeys } from "./tiles";
 import { startStripWindowManager } from "./window";
 
-const POLL_MS = 2000;
+const STALENESS_CHECK_MS = 10_000;
 const SETTINGS_KEY = "agent-strip.layout.v1";
 
 let lastGood: SessionSnapshotV2 | null = null;
 let renderedSignature = "";
 let currentView: SnapshotView | null = null;
 let lastReadMtimeMs: number | null = null;
+let lastPayload: SnapshotPayload | null = null;
 let currentQuota: QuotaPanelModel[] = [];
 let currentPage = 0;
 let currentPageCount = 1;
@@ -41,7 +56,7 @@ const persistSettings = (settings: unknown): void => {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch {
-    // Best effort: a dropped page preference re-derives on the next poll.
+    // Best effort: a dropped page preference re-derives on the next ingest.
   }
 };
 
@@ -124,18 +139,34 @@ const applyLayout = (layout: LayoutResult): void => {
   }
 };
 
-const poll = async (): Promise<void> => {
-  const payload = await readSnapshot().catch(() => null);
-  // The quota file changes at most every 120s; riding the existing poll keeps
-  // one code path and one failure path — a rejection is a missing file, i.e.
-  // "no data yet".
-  const quotaRead = await readQuotaSnapshot().catch(() => null);
-  currentQuota = reduceQuotaRead(quotaRead, Date.now());
+const ingest = (payload: SnapshotPayload | null): void => {
+  lastPayload = payload;
+  lastReadMtimeMs = payload === null ? null : payload.mtimeMs;
   const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
   lastGood = reduction.lastGood;
   currentView = reduction.view;
-  lastReadMtimeMs = payload?.mtimeMs ?? null;
   applyLayout(reduceLayout(reduction.view, loadStoredSettings(), STRIP_GEOMETRY));
+};
+
+const readAndIngest = async (): Promise<void> => {
+  ingest(await readSnapshot().catch(() => null));
+};
+
+/**
+ * The staleness half of the old 2s poll: a healthy view only needs its file
+ * age re-evaluated against the last payload (no snapshot I/O); a degraded
+ * view retries a real read so a missed event or a late-starting daemon
+ * self-heals. The quota snapshot rides this timer — the watch pushes
+ * snapshot-v2.json only, that file changes at most every 120s, and a
+ * rejection is a missing file, i.e. "no data yet".
+ */
+const checkStaleness = async (): Promise<void> => {
+  currentQuota = reduceQuotaRead(await readQuotaSnapshot().catch(() => null), Date.now());
+  if (lastPayload !== null && currentView !== null && !currentView.degraded) {
+    ingest(lastPayload);
+    return;
+  }
+  await readAndIngest();
 };
 
 const ensureAutostart = async (): Promise<void> => {
@@ -152,10 +183,13 @@ const start = (): void => {
   void startStripWindowManager();
   void ensureAutostart();
   wireInteraction();
-  void poll();
+  // The first staleness run doubles as the initial read: with no payload yet
+  // it falls through to readAndIngest (and rides the quota read).
+  void checkStaleness();
+  void onSnapshotChanged(ingest);
   setInterval(() => {
-    void poll();
-  }, POLL_MS);
+    void checkStaleness();
+  }, STALENESS_CHECK_MS);
   setInterval(() => {
     renderRailNow();
     tickStatusLines();
