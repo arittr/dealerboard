@@ -2,13 +2,21 @@
 
 use notify::{Event, RecursiveMode, Watcher};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
 const SNAPSHOT_FILE_NAME: &str = "snapshot-v2.json";
 const SNAPSHOT_CHANGED_EVENT: &str = "snapshot-changed";
+/// One atomic publish surfaces as a burst of matching events on the target
+/// (two rename, one create, one metadata, one content on macOS FSEvents)
+/// delivered together; admit at most one per window so a publication emits
+/// exactly one event. 250ms is orders of magnitude above the observed burst
+/// spread and well below the daemon's 2s minimum publish interval — and the
+/// daemon's 5s heartbeat re-publishes the same content, so a swallowed
+/// straggler self-heals.
+const SNAPSHOT_COALESCE_WINDOW_MS: u64 = 250;
 
 #[derive(Serialize, Clone)]
 struct SnapshotPayload {
@@ -22,8 +30,31 @@ fn app_support_root() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join("Library/Application Support/com.drewritter.stream-deck-agents"))
 }
 
-fn read_snapshot_payload() -> Result<SnapshotPayload, String> {
-    let path = app_support_root()?.join(SNAPSHOT_FILE_NAME);
+fn current_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// The daemon's atomic rename never writes the target in place, but it also
+/// never publishes under any other name: matching on the file name alone
+/// admits every event of a publish burst while excluding its temporary
+/// sibling (`.snapshot-v2.json-<pid>-<uuid>.tmp`) and unrelated files such
+/// as `quota-snapshot.json` in the same directory.
+fn event_touches_snapshot(event: &Event) -> bool {
+    event
+        .paths
+        .iter()
+        .any(|path| path.file_name().and_then(|name| name.to_str()) == Some(SNAPSHOT_FILE_NAME))
+}
+
+fn within_coalesce_window(last_emit_ms: Option<u64>, now_ms: u64) -> bool {
+    last_emit_ms.is_some_and(|last| now_ms.saturating_sub(last) < SNAPSHOT_COALESCE_WINDOW_MS)
+}
+
+fn read_snapshot_in(directory: &Path) -> Result<SnapshotPayload, String> {
+    let path = directory.join(SNAPSHOT_FILE_NAME);
     let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
     let mtime_ms = metadata
         .modified()
@@ -33,6 +64,10 @@ fn read_snapshot_payload() -> Result<SnapshotPayload, String> {
         .as_millis() as u64;
     let contents = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
     Ok(SnapshotPayload { mtime_ms, contents })
+}
+
+fn read_snapshot_payload() -> Result<SnapshotPayload, String> {
+    read_snapshot_in(&app_support_root()?)
 }
 
 #[tauri::command]
@@ -105,38 +140,53 @@ async fn focus_ghostty(script: &str, terminal_id: &str) -> Result<(), String> {
     run("/usr/bin/osascript", &["-e", script, "--", terminal_id])
 }
 
-/// Watch the app-support directory — not the file, because the daemon
-/// publishes by atomic rename, which swaps the file's inode — and push every
-/// snapshot-v2.json change to the webview with the same payload shape as
-/// `read_snapshot`.
-fn watch_snapshot(app: &tauri::App) -> Result<(), String> {
-    let directory = app_support_root()?;
-    let handle = app.handle().clone();
+/// Watch the directory — not the file, because the daemon publishes by
+/// atomic rename, which swaps the file's inode — and push every
+/// snapshot-v2.json publication to the webview with the same payload shape
+/// as `read_snapshot`. Each publication surfaces as a burst of matching
+/// events; the coalescing window admits only the first, so exactly one
+/// event per publication reaches the webview.
+fn watch_snapshot_directory(
+    directory: &Path,
+    on_change: impl Fn(SnapshotPayload) + Send + 'static,
+) -> Result<(), String> {
+    let watched_directory = directory.to_path_buf();
+    let mut last_emit_ms: Option<u64> = None;
     let mut watcher = notify::recommended_watcher(move |result: Result<Event, notify::Error>| {
         let Ok(event) = result else {
             return;
         };
-        let touches_snapshot = event
-            .paths
-            .iter()
-            .any(|path| path.file_name().and_then(|name| name.to_str()) == Some(SNAPSHOT_FILE_NAME));
-        if !touches_snapshot {
+        if !event_touches_snapshot(&event) {
             return;
         }
-        // Read fresh rather than trusting the event: a burst of events for one
-        // publish collapses into identical payloads, which the webview skips.
-        if let Ok(payload) = read_snapshot_payload() {
-            let _ = handle.emit(SNAPSHOT_CHANGED_EVENT, payload);
+        let now_ms = current_time_ms();
+        if within_coalesce_window(last_emit_ms, now_ms) {
+            return;
+        }
+        // Read fresh rather than trusting the event kind, and stamp only on
+        // a successful emit so a transient read failure retries on a later
+        // event of the same burst instead of burning the window.
+        if let Ok(payload) = read_snapshot_in(&watched_directory) {
+            last_emit_ms = Some(now_ms);
+            on_change(payload);
         }
     })
     .map_err(|error| error.to_string())?;
     watcher
-        .watch(&directory, RecursiveMode::NonRecursive)
+        .watch(directory, RecursiveMode::NonRecursive)
         .map_err(|error| error.to_string())?;
     // Process-lifetime resource: dropping the watcher would stop delivery, so
     // it is deliberately leaked once the watch is live.
     std::mem::forget(watcher);
     Ok(())
+}
+
+fn watch_snapshot(app: &tauri::App) -> Result<(), String> {
+    let directory = app_support_root()?;
+    let handle = app.handle().clone();
+    watch_snapshot_directory(&directory, move |payload| {
+        let _ = handle.emit(SNAPSHOT_CHANGED_EVENT, payload);
+    })
 }
 
 fn main() {
@@ -162,4 +212,100 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent-strip");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{CreateKind, EventKind};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn event_for(kind: EventKind, path: PathBuf) -> Event {
+        Event {
+            kind,
+            paths: vec![path],
+            attrs: Default::default(),
+        }
+    }
+
+    #[test]
+    fn event_filter_matches_only_the_target_file() {
+        let create = |name: &str| {
+            event_for(
+                EventKind::Create(CreateKind::File),
+                std::env::temp_dir().join(name),
+            )
+        };
+        assert!(event_touches_snapshot(&create("snapshot-v2.json")));
+        // Same directory, wrong file: the quota snapshot and the daemon's
+        // temporary sibling never match.
+        assert!(!event_touches_snapshot(&create("quota-snapshot.json")));
+        assert!(!event_touches_snapshot(&create(".snapshot-v2.json-48158-uuid.tmp")));
+        // Directory-level events carry no matching file name.
+        assert!(!event_touches_snapshot(&event_for(
+            EventKind::Create(CreateKind::Folder),
+            std::env::temp_dir(),
+        )));
+    }
+
+    #[test]
+    fn coalesce_window_admits_one_event_per_burst() {
+        // No prior emit: the first event of a burst is always admitted.
+        assert!(!within_coalesce_window(None, 1_000));
+        // Everything else the burst delivers inside the window is suppressed…
+        assert!(within_coalesce_window(Some(1_000), 1_000));
+        assert!(within_coalesce_window(
+            Some(1_000),
+            1_000 + SNAPSHOT_COALESCE_WINDOW_MS - 1
+        ));
+        // …and the window boundary re-arms for the next publication.
+        assert!(!within_coalesce_window(
+            Some(1_000),
+            1_000 + SNAPSHOT_COALESCE_WINDOW_MS
+        ));
+    }
+
+    /// One daemon publication — temporary sibling written, then renamed over
+    /// the target — against the real watcher: exactly one emitted payload,
+    /// with the quota snapshot and temp-file churn excluded, and a later
+    /// publication emitting again once the window has expired.
+    #[test]
+    fn one_publication_emits_exactly_one_event() {
+        let directory = std::env::temp_dir().join(format!("agent-strip-watch-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        watch_snapshot_directory(&directory, move |payload| {
+            let _ = sender.send(payload);
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(200)); // let the FSEvents stream arm
+
+        // Neighboring-file noise first: a quota snapshot write must not emit.
+        std::fs::write(directory.join("quota-snapshot.json"), "{}").unwrap();
+        // Then the daemon's exact publish shape: temp sibling, rename over.
+        let temp = directory.join(".snapshot-v2.json-48158-test.tmp");
+        std::fs::write(&temp, r#"{"n":1}"#).unwrap();
+        std::fs::rename(&temp, directory.join(SNAPSHOT_FILE_NAME)).unwrap();
+
+        let mut payloads = Vec::new();
+        while let Ok(payload) = receiver.recv_timeout(Duration::from_millis(600)) {
+            payloads.push(payload);
+        }
+        assert_eq!(payloads.len(), 1, "one publication must emit exactly one event");
+        assert_eq!(payloads[0].contents, r#"{"n":1}"#);
+
+        // A publication after the window expires emits again.
+        let temp = directory.join(".snapshot-v2.json-48158-test2.tmp");
+        std::fs::write(&temp, r#"{"n":2}"#).unwrap();
+        std::fs::rename(&temp, directory.join(SNAPSHOT_FILE_NAME)).unwrap();
+        let second = receiver
+            .recv_timeout(Duration::from_millis(600))
+            .expect("second publication emits once the window expired");
+        assert_eq!(second.contents, r#"{"n":2}"#);
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
 }
