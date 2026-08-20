@@ -11,6 +11,7 @@ import { readProjection } from "../src/core/projection";
 import type { QuotaCollector } from "../src/core/quota";
 import { applyRegistryEvents, listSessions } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
+import type { TokenUsageCollector } from "../src/core/token-usage";
 import type { RegistryEvent } from "../src/protocol";
 
 const NOW = "2026-08-06T00:00:00.000Z";
@@ -1294,19 +1295,26 @@ describe("daemon command", () => {
   });
 });
 
+const collectorStub = (overrides: Partial<QuotaCollector> = {}): QuotaCollector => ({
+  start: () => {},
+  stop: () => {},
+  pollNow: () => Promise.resolve(),
+  ...overrides,
+});
+
+const tokenCollectorStub = (overrides: Partial<TokenUsageCollector> = {}): TokenUsageCollector => ({
+  start: () => {},
+  stop: () => {},
+  pollNow: () => Promise.resolve(),
+  ...overrides,
+});
+
 describe("daemon quota collector boundary", () => {
   // The default runDaemon closure starts a real ProjectionDaemon against the
   // temp registry, so its promise never resolves; the race proves the closure
   // neither throws nor rejects. Bun exits with the daemon's interval armed.
   const stillRunning = (ms: number): Promise<string> =>
     new Promise((resolve) => setTimeout(() => resolve("still running"), ms));
-
-  const collectorStub = (overrides: Partial<QuotaCollector> = {}): QuotaCollector => ({
-    start: () => {},
-    stop: () => {},
-    pollNow: () => Promise.resolve(),
-    ...overrides,
-  });
 
   test("starts the quota collector only after the daemon has published", async () => {
     initRegistry();
@@ -1320,6 +1328,7 @@ describe("daemon quota collector boundary", () => {
             snapshotExistedAtStart = existsSync(paths.snapshot);
           },
         }),
+      createTokenUsageCollector: () => tokenCollectorStub(),
     });
     const outcome = runCli(["daemon"], harness.deps);
     expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
@@ -1335,6 +1344,7 @@ describe("daemon quota collector boundary", () => {
       createQuotaCollector: () => {
         throw new Error("collector factory exploded");
       },
+      createTokenUsageCollector: () => tokenCollectorStub(),
     });
     const outcome = runCli(["daemon"], harness.deps);
     expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
@@ -1358,6 +1368,7 @@ describe("daemon quota collector boundary", () => {
             throw new Error("collector start exploded");
           },
         }),
+      createTokenUsageCollector: () => tokenCollectorStub(),
     });
     const outcome = runCli(["daemon"], harness.deps);
     expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
@@ -1368,6 +1379,89 @@ describe("daemon quota collector boundary", () => {
       throw new Error("expected one boundary diagnostic");
     }
     expect(record).toMatchObject({ component: "cli", code: "quota_collector_failed" });
+    expect(record.provider).toBeUndefined();
+    expect(Object.keys(record).every((key) => DIAGNOSTIC_KEYS.has(key))).toBe(true);
+  });
+});
+
+describe("daemon token-usage collector boundary", () => {
+  // The default runDaemon closure starts a real ProjectionDaemon against the
+  // temp registry, so its promise never resolves; the race proves the closure
+  // neither throws nor rejects. Bun exits with the daemon's interval armed.
+  const stillRunning = (ms: number): Promise<string> =>
+    new Promise((resolve) => setTimeout(() => resolve("still running"), ms));
+
+  test("starts the token-usage collector only after the daemon has published", async () => {
+    initRegistry();
+    let starts = 0;
+    let snapshotExistedAtStart = false;
+    const order: string[] = [];
+    const harness = makeHarness({
+      createQuotaCollector: () =>
+        collectorStub({
+          start: () => {
+            order.push("quota");
+          },
+        }),
+      createTokenUsageCollector: () =>
+        tokenCollectorStub({
+          start: () => {
+            starts += 1;
+            order.push("token");
+            snapshotExistedAtStart = existsSync(paths.snapshot);
+          },
+        }),
+    });
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(starts).toBe(1);
+    expect(snapshotExistedAtStart).toBe(true);
+    expect(order).toEqual(["quota", "token"]);
+    expect(harness.diagnostics).toEqual([]);
+  });
+
+  test("contains a collector construction failure and still starts the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      createQuotaCollector: () => collectorStub(),
+      createTokenUsageCollector: () => {
+        throw new Error("collector factory exploded");
+      },
+    });
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(harness.diagnostics.length).toBe(1);
+    const record = harness.diagnostics[0];
+    if (record === undefined) {
+      throw new Error("expected one boundary diagnostic");
+    }
+    expect(record).toMatchObject({ component: "token-usage", code: "token_usage_collector_failed" });
+    expect(record.provider).toBeUndefined();
+    expect(Object.keys(record).every((key) => DIAGNOSTIC_KEYS.has(key))).toBe(true);
+  });
+
+  test("contains a collector start failure and still starts the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      createQuotaCollector: () => collectorStub(),
+      createTokenUsageCollector: () =>
+        tokenCollectorStub({
+          start: () => {
+            throw new Error("collector start exploded");
+          },
+        }),
+    });
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(harness.diagnostics.length).toBe(1);
+    const record = harness.diagnostics[0];
+    if (record === undefined) {
+      throw new Error("expected one boundary diagnostic");
+    }
+    expect(record).toMatchObject({ component: "token-usage", code: "token_usage_collector_failed" });
     expect(record.provider).toBeUndefined();
     expect(Object.keys(record).every((key) => DIAGNOSTIC_KEYS.has(key))).toBe(true);
   });
