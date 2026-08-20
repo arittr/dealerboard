@@ -426,6 +426,11 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.sheet-error {
+  padding: 0.2vh 0.6vw 0.4vh;
+  color: #ff4d67;
+  font-size: 1.2vw;
+}
 .sheet-item {
   appearance: none;
   border: none;

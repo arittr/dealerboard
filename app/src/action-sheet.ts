@@ -19,6 +19,8 @@ export type SheetItem = {
 
 export type SheetModel = {
   title: string;
+  /** Inline failure notice for the last action; null when the sheet is clean. */
+  error: string | null;
   items: SheetItem[];
 };
 
@@ -27,6 +29,8 @@ export type SheetOptions = {
   title: string;
   clipboardAvailable: boolean;
   clearArmed: boolean;
+  /** Inline failure notice to render; omitted/null renders nothing. */
+  error?: string | null;
 };
 
 /**
@@ -42,6 +46,7 @@ export const transcriptPathOf = (session: ProjectedSession): string | null => {
 
 export const buildSheetModel = (session: ProjectedSession, options: SheetOptions): SheetModel => ({
   title: options.title,
+  error: options.error ?? null,
   items: [
     { id: "open", label: "Open", enabled: true, confirming: false },
     { id: "ack", label: "Ack", enabled: true, confirming: false },
@@ -73,9 +78,11 @@ export type SheetHandlers = {
 };
 
 /**
- * Full-window overlay carrying the sheet; the caller appends it to the body
- * and positions the `.action-sheet` element. A pointer-down landing on the
- * backdrop (not the sheet) dismisses.
+ * Full-window overlay carrying the sheet; the caller appends it to the body,
+ * positions the `.action-sheet` element, and moves focus into it. The sheet
+ * carries dialog semantics (role/aria-modal/aria-label from the title) so
+ * keyboard and assistive-tech focus stay with it, not behind the backdrop.
+ * A pointer-down landing on the backdrop (not the sheet) dismisses.
  */
 export const buildSheetOverlay = (model: SheetModel, handlers: SheetHandlers): HTMLElement => {
   const overlay = document.createElement("div");
@@ -87,10 +94,19 @@ export const buildSheetOverlay = (model: SheetModel, handlers: SheetHandlers): H
   });
   const sheet = document.createElement("div");
   sheet.className = "action-sheet";
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-label", model.title);
   const title = document.createElement("div");
   title.className = "sheet-title";
   title.textContent = model.title;
   sheet.append(title);
+  if (model.error !== null) {
+    const error = document.createElement("div");
+    error.className = "sheet-error";
+    error.textContent = model.error;
+    sheet.append(error);
+  }
   for (const item of model.items) {
     const button = document.createElement("button");
     button.type = "button";

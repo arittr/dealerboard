@@ -98,3 +98,20 @@ describe("reduceSheetSelection", () => {
     expect(reduceSheetSelection(false, "open")).toEqual({ clearArmed: false, fire: true });
   });
 });
+
+describe("sheet error state", () => {
+  test("carries an inline error message into the model", () => {
+    const model = buildSheetModel(session(), {
+      title: "t",
+      clipboardAvailable: true,
+      clearArmed: false,
+      error: "Clear failed",
+    });
+    expect(model.error).toBe("Clear failed");
+  });
+
+  test("normalizes an absent error to null", () => {
+    const model = buildSheetModel(session(), { title: "t", clipboardAvailable: true, clearArmed: false });
+    expect(model.error).toBeNull();
+  });
+});

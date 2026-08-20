@@ -79,6 +79,7 @@ type SheetContext = {
 
 let sheetOverlay: HTMLElement | null = null;
 let sheetClearArmed = false;
+let sheetRestoreFocus: HTMLElement | null = null;
 
 const loadStoredSettings = (): unknown => {
   try {
@@ -318,22 +319,34 @@ const tileFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
 };
 
 const dismissActionSheet = (): void => {
-  sheetOverlay?.remove();
-  sheetOverlay = null;
+  if (sheetOverlay !== null) {
+    sheetOverlay.remove();
+    sheetOverlay = null;
+    sheetRestoreFocus?.focus();
+    sheetRestoreFocus = null;
+  }
   sheetClearArmed = false;
 };
 
 const clipboardAvailable = (): boolean => "clipboard" in navigator;
 
-const openActionSheet = (context: SheetContext): void => {
+const openActionSheet = (context: SheetContext, error: string | null = null): void => {
+  // Only the first open of a sheet session captures the focus to restore;
+  // re-renders (armed clear, error retry) must keep the original capture.
+  if (sheetOverlay === null) {
+    sheetRestoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
   sheetOverlay?.remove(); // re-render path keeps sheetClearArmed; real dismissals reset it
   const model = buildSheetModel(context.session, {
     title: context.label,
     clipboardAvailable: clipboardAvailable(),
     clearArmed: sheetClearArmed,
+    error,
   });
   const overlay = buildSheetOverlay(model, {
-    onAction: (id) => runSheetAction(context, id),
+    onAction: (id) => {
+      void runSheetAction(context, id);
+    },
     onDismiss: dismissActionSheet,
   });
   document.body.append(overlay);
@@ -347,20 +360,36 @@ const openActionSheet = (context: SheetContext): void => {
     sheet.style.left = `${x - sheet.offsetWidth / 2}px`;
     sheet.style.top = `${y - sheet.offsetHeight}px`; // above the finger
   }
+  // Move focus into the dialog: keyboard and assistive tech land on its
+  // first actionable item instead of staying behind the modal backdrop.
+  overlay.querySelector<HTMLElement>("button.sheet-item:not(:disabled)")?.focus();
   sheetOverlay = overlay;
 };
 
-const runSheetAction = (context: SheetContext, id: SheetActionId): void => {
+/**
+ * Only success dismisses: a failed action re-opens the sheet with an inline
+ * error, keeping the retry surface open — above all for Clear, whose
+ * destructive miss must never look accepted.
+ */
+const settleSheetAction = (action: Promise<void>, context: SheetContext, failure: string): Promise<void> =>
+  action.then(
+    () => dismissActionSheet(),
+    () => openActionSheet(context, failure),
+  );
+
+const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise<void> => {
   const selection = reduceSheetSelection(sheetClearArmed, id);
   sheetClearArmed = selection.clearArmed;
   if (!selection.fire) {
     openActionSheet(context); // re-render with the armed "Confirm clear" label
     return;
   }
-  dismissActionSheet();
   const { session, tile } = context;
   switch (id) {
     case "open":
+      // Routing failures already surface through pressSessionTile's tile
+      // flash; the sheet's job is done either way.
+      dismissActionSheet();
       void pressSessionTile(session, {
         ack: ackSession,
         openUrl,
@@ -370,23 +399,23 @@ const runSheetAction = (context: SheetContext, id: SheetActionId): void => {
       });
       return;
     case "ack":
-      void ackSession(session.provider, session.sessionId).catch(() => {});
-      return;
+      return settleSheetAction(ackSession(session.provider, session.sessionId), context, "Ack failed");
     case "reveal": {
       const path = transcriptPathOf(session);
-      if (path !== null) {
-        void revealTranscript(path).catch(() => {});
+      if (path === null) {
+        dismissActionSheet(); // disabled-button drift: nothing to reveal
+        return;
       }
-      return;
+      return settleSheetAction(revealTranscript(path), context, "Reveal failed");
     }
     case "copy":
-      if (clipboardAvailable()) {
-        void navigator.clipboard.writeText(session.sessionId).catch(() => {});
+      if (!clipboardAvailable()) {
+        dismissActionSheet(); // disabled-button drift: nothing to copy
+        return;
       }
-      return;
+      return settleSheetAction(navigator.clipboard.writeText(session.sessionId), context, "Copy failed");
     case "clear":
-      void clearSession(session.provider, session.sessionId).catch(() => {});
-      return;
+      return settleSheetAction(clearSession(session.provider, session.sessionId), context, "Clear failed");
   }
 };
 
@@ -399,14 +428,30 @@ const openActionSheetFor = (pending: PendingLongPress): void => {
   openActionSheet({ point: pending.point, session: model.session, label: model.label, tile: pending.tile });
 };
 
+/**
+ * Installing the overlay steals this stroke's release: a mouse pointer
+ * carries no implicit capture, so the physical up retargets to the sheet
+ * and never reaches #strip — leaving the recognizer holding a live stroke
+ * whose stale up would eat the next tap. Close the stroke here,
+ * deterministically; its emitted suppress-click keeps this stroke's
+ * trailing click swallowed (Task 3's stroke-scoped contract).
+ */
+const settleLongPressStroke = (point: GesturePoint): void => {
+  handleGestureIntents(gestures.feed({ kind: "up", point, now: Date.now() }));
+};
+
 const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
   for (const intent of intents) {
     switch (intent.kind) {
-      case "longpress":
-        if (pendingLongPress !== null) {
-          openActionSheetFor(pendingLongPress);
+      case "longpress": {
+        const pending = pendingLongPress;
+        if (pending !== null) {
+          pendingLongPress = null;
+          settleLongPressStroke(pending.point); // before the overlay takes the pointer
+          openActionSheetFor(pending);
         }
         break;
+      }
       case "suppress-click":
         clickSuppression.arm();
         break;
