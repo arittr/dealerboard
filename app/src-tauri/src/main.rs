@@ -125,6 +125,23 @@ async fn ack_session(provider: &str, session_id: &str) -> Result<(), String> {
     run(&path, &["sessions", "ack", provider, session_id])
 }
 
+/// Reveal a session transcript in Finder: `/usr/bin/open -R <path>`, fixed
+/// argv, no shell. The path comes from the daemon's own snapshot field.
+#[tauri::command]
+async fn reveal_transcript(path: &str) -> Result<(), String> {
+    run("/usr/bin/open", &["-R", path])
+}
+
+/// Destructive session delete via the installed binary, mirroring
+/// `ack_session`'s fixed-argv invocation (`sessions clear <provider> <id>`,
+/// validated in src/core/cli.ts). The webview gates this behind a confirm.
+#[tauri::command]
+async fn clear_session(provider: &str, session_id: &str) -> Result<(), String> {
+    let executable = app_support_root()?.join("bin/stream-deck-agents");
+    let path = executable.to_string_lossy().to_string();
+    run(&path, &["sessions", "clear", provider, session_id])
+}
+
 #[tauri::command]
 async fn open_url(url: &str) -> Result<(), String> {
     run("/usr/bin/open", &["-u", url])
@@ -206,6 +223,8 @@ fn main() {
             read_quota_snapshot,
             read_paseo_server_id,
             ack_session,
+            reveal_transcript,
+            clear_session,
             open_url,
             focus_ghostty
         ])

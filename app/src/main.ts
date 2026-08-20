@@ -15,15 +15,24 @@
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
-import type { SessionSnapshotV2, SessionStatus, SnapshotView } from "../../src/protocol";
+import type { ProjectedSession, SessionSnapshotV2, SessionStatus, SnapshotView } from "../../src/protocol";
+import {
+  buildSheetModel,
+  buildSheetOverlay,
+  reduceSheetSelection,
+  type SheetActionId,
+  transcriptPathOf,
+} from "./action-sheet";
 import {
   ackSession,
+  clearSession,
   focusGhostty,
   onSnapshotChanged,
   openUrl,
   readPaseoServerId,
   readQuotaSnapshot,
   readSnapshot,
+  revealTranscript,
   type SnapshotPayload,
 } from "./bridge";
 import {
@@ -60,6 +69,16 @@ const gestures = createGestureRecognizer();
 const clickSuppression = createClickSuppression();
 let gestureTimer: number | null = null;
 let pendingLongPress: PendingLongPress | null = null;
+
+type SheetContext = {
+  point: GesturePoint;
+  session: ProjectedSession;
+  label: string;
+  tile: HTMLElement;
+};
+
+let sheetOverlay: HTMLElement | null = null;
+let sheetClearArmed = false;
 
 const loadStoredSettings = (): unknown => {
   try {
@@ -298,12 +317,94 @@ const tileFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
   return { index, tile, point: { x: event.clientX, y: event.clientY } };
 };
 
+const dismissActionSheet = (): void => {
+  sheetOverlay?.remove();
+  sheetOverlay = null;
+  sheetClearArmed = false;
+};
+
+const clipboardAvailable = (): boolean => "clipboard" in navigator;
+
+const openActionSheet = (context: SheetContext): void => {
+  sheetOverlay?.remove(); // re-render path keeps sheetClearArmed; real dismissals reset it
+  const model = buildSheetModel(context.session, {
+    title: context.label,
+    clipboardAvailable: clipboardAvailable(),
+    clearArmed: sheetClearArmed,
+  });
+  const overlay = buildSheetOverlay(model, {
+    onAction: (id) => runSheetAction(context, id),
+    onDismiss: dismissActionSheet,
+  });
+  document.body.append(overlay);
+  const sheet = overlay.querySelector<HTMLElement>(".action-sheet");
+  if (sheet !== null) {
+    const x = Math.min(
+      Math.max(context.point.x, sheet.offsetWidth / 2 + 8),
+      window.innerWidth - sheet.offsetWidth / 2 - 8,
+    );
+    const y = Math.min(Math.max(context.point.y, sheet.offsetHeight + 8), window.innerHeight - 8);
+    sheet.style.left = `${x - sheet.offsetWidth / 2}px`;
+    sheet.style.top = `${y - sheet.offsetHeight}px`; // above the finger
+  }
+  sheetOverlay = overlay;
+};
+
+const runSheetAction = (context: SheetContext, id: SheetActionId): void => {
+  const selection = reduceSheetSelection(sheetClearArmed, id);
+  sheetClearArmed = selection.clearArmed;
+  if (!selection.fire) {
+    openActionSheet(context); // re-render with the armed "Confirm clear" label
+    return;
+  }
+  dismissActionSheet();
+  const { session, tile } = context;
+  switch (id) {
+    case "open":
+      void pressSessionTile(session, {
+        ack: ackSession,
+        openUrl,
+        focusGhostty,
+        readPaseoServerId,
+        flash: () => flashTile(tile),
+      });
+      return;
+    case "ack":
+      void ackSession(session.provider, session.sessionId).catch(() => {});
+      return;
+    case "reveal": {
+      const path = transcriptPathOf(session);
+      if (path !== null) {
+        void revealTranscript(path).catch(() => {});
+      }
+      return;
+    }
+    case "copy":
+      if (clipboardAvailable()) {
+        void navigator.clipboard.writeText(session.sessionId).catch(() => {});
+      }
+      return;
+    case "clear":
+      void clearSession(session.provider, session.sessionId).catch(() => {});
+      return;
+  }
+};
+
+const openActionSheetFor = (pending: PendingLongPress): void => {
+  const model = currentKeys[pending.index];
+  if (model === undefined || model.kind !== "session") {
+    return;
+  }
+  sheetClearArmed = false;
+  openActionSheet({ point: pending.point, session: model.session, label: model.label, tile: pending.tile });
+};
+
 const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
   for (const intent of intents) {
     switch (intent.kind) {
       case "longpress":
         if (pendingLongPress !== null) {
-          flashTile(pendingLongPress.tile); // Task 4 replaces the flash with the action sheet.
+          openActionSheetFor(pendingLongPress);
         }
         break;
       case "suppress-click":
@@ -390,6 +491,11 @@ const wireInteraction = (): void => {
   strip?.addEventListener("pointerup", onStripPointerUp);
   strip?.addEventListener("pointercancel", onStripPointerCancel);
   strip?.addEventListener("click", onStripClick);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      dismissActionSheet();
+    }
+  });
 };
 
 start();

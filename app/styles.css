@@ -395,3 +395,56 @@ body {
     font-size: 0.95vw;
   }
 }
+
+/* Long-press action sheet. The overlay covers the window; the sheet is
+   positioned by main.ts at the touch point. */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgb(0 0 0 / 0.25);
+}
+.action-sheet {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6vh;
+  min-width: 16vw;
+  padding: 1.2vh 0.8vw;
+  background: #1a2230;
+  border: 1px solid #2a3342;
+  border-radius: 0.8vw;
+  box-shadow: 0 1vh 4vh rgb(0 0 0 / 0.5);
+}
+.sheet-title {
+  max-width: 22vw;
+  padding: 0 0.6vw 0.8vh;
+  border-bottom: 1px solid #2a3342;
+  color: #94a3b8;
+  font-size: 1.3vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-item {
+  appearance: none;
+  border: none;
+  border-radius: 0.5vw;
+  background: none;
+  color: #e8eef7;
+  font-size: 1.6vw;
+  padding: 1.2vh 0.8vw;
+  text-align: left;
+  cursor: pointer;
+}
+.sheet-item:active {
+  background: #232b38;
+}
+.sheet-item:disabled {
+  color: #4a5568;
+  cursor: default;
+}
+.sheet-item.confirming {
+  color: #ff4d67;
+  font-weight: 700;
+}

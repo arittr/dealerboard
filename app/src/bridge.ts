@@ -15,6 +15,12 @@ export const readPaseoServerId = (): Promise<string> => invoke<string>("read_pas
 export const ackSession = (provider: Provider, sessionId: string): Promise<void> =>
   invoke<void>("ack_session", { provider, sessionId });
 
+export const revealTranscript = (path: string): Promise<void> => invoke<void>("reveal_transcript", { path });
+
+/** Destructive: deletes the session row. The action sheet confirms before calling this. */
+export const clearSession = (provider: Provider, sessionId: string): Promise<void> =>
+  invoke<void>("clear_session", { provider, sessionId });
+
 export const openUrl = (url: string): Promise<void> => invoke<void>("open_url", { url });
 
 export const focusGhostty = (script: string, terminalId: string): Promise<void> =>
