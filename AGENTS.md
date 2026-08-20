@@ -239,15 +239,23 @@ Notes:
   whose physical resolution is 2560×720 (physical, so a scaled 1280×360
   HiDPI mode still matches), re-pins on reconnect, and autostarts at login.
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
-  Quota panels (claude + codex) ship in the rail: the daemon's quota collector
-  (`src/core/quota.ts`, started from `cli.ts` and polls on its own 120s
-  cadence, 10-minute 429 cooldown) reads the providers' local OAuth
-  credential files and publishes `quota-snapshot.json` (own `schemaVersion`,
-  bounded history ring; contract in `src/quota-snapshot.ts`) via the
+- Quota panels (claude, codex, kimi, GLM/zai) ship in the rail: the daemon's
+  quota collector (`src/core/quota.ts`, started from `cli.ts`, own 120s
+  cadence) shells out to the locally installed CodexBar CLI for every
+  provider (`codexbar usage --provider <key> --format json`, binary resolved
+  per pass from `CODEXBAR_BINARY_CANDIDATES`, serialized spawns), classifies
+  the returned windows by `windowMinutes` — weekly = the longest window of at
+  least a day, session = the shortest under a day, with
+  `usage.extraRateWindows` scanned when the main trio has no session window
+  (codex reports `primary: null`, Spark windows live there) — and publishes
+  `quota-snapshot.json` (own `schemaVersion`, bounded history ring of
+  session-window samples; contract in `src/quota-snapshot.ts`) via the
   `writeFileAtomically` primitive; the strip reads it through the
   `read_quota_snapshot` Tauri command and renders from the pure view-model in
-  `app/src/quota.ts`. `snapshot-v2.json` and `src/protocol.ts` stay
-  untouched, and no token or response body is ever logged or persisted.
+  `app/src/quota.ts`. A missing CodexBar binary or a provider disabled in the
+  CodexBar app omits that provider entirely. `snapshot-v2.json` and
+  `src/protocol.ts` stay untouched, and nothing CodexBar prints is ever
+  logged or persisted.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.
