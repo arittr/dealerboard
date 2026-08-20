@@ -232,6 +232,8 @@ describe("createQuotaCollector", () => {
     expect(claudeFetch?.headers["Authorization"]).toBe("Bearer sk-ant-oat01-FAKE");
     const codexFetch = harness.fetches.find((entry) => entry.url.includes("chatgpt"));
     expect(codexFetch?.headers["ChatGPT-Account-Id"]).toBe("acct_fake");
+    // The researched contract prescribes a fixed UA; the runtime default is "Bun/<version>".
+    expect(codexFetch?.headers["User-Agent"]).toBe("stream-deck-agents");
   });
 
   test("a failed fetch keeps last-good data, marks unavailable, and logs only the transition", async () => {
@@ -358,11 +360,12 @@ describe("createQuotaCollector", () => {
     expect(disarmed).toEqual([1, 2]);
   });
 
-  test("an unexpected poll rejection is contained at both detached call sites with one fixed diagnostic", async () => {
+  test("an unexpected poll exception is contained at both detached call sites with one fixed diagnostic", async () => {
     const ticks: Array<() => void> = [];
     const harness = makeHarness(credsFiles(), {
       // A throwing reader escapes probe's failure mapping, so the whole pass
-      // rejects — the exact shape the detached call sites must contain.
+      // throws — the exact shape pollNow itself must contain (the detached
+      // call sites merely fire it).
       readFile: (path) => {
         if (path === claudeCredsPath) {
           throw new Error("credentials read exploded");
@@ -391,6 +394,27 @@ describe("createQuotaCollector", () => {
     for (const record of passFailures) {
       expect(Object.keys(record).sort()).toEqual(["code", "component", "timestamp"]);
     }
+  });
+
+  test("a direct pollNow with a throwing dependency resolves and emits the fixed providerless diagnostic", async () => {
+    const harness = makeHarness(credsFiles(), {
+      // A throwing reader escapes probe's failure mapping, so the whole pass
+      // throws — pollNow's exported contract says it must never reject.
+      readFile: (path) => {
+        if (path === claudeCredsPath) {
+          throw new Error("credentials read exploded");
+        }
+        return credsFiles()[path] ?? null;
+      },
+    });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow(); // direct invocation — resolves instead of rejecting
+    expect(harness.writes().length).toBe(0); // the aborted pass publishes nothing
+    const failures = harness.diagnostics.filter(
+      (record) => record.code === "quota_failed" && record.provider === undefined,
+    );
+    expect(failures.length).toBe(1);
+    expect(Object.keys(failures[0] ?? {}).sort()).toEqual(["code", "component", "timestamp"]);
   });
 
   test("writes happen only when the snapshot changes", async () => {

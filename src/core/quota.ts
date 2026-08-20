@@ -11,7 +11,8 @@
  *   rotation and the file is re-read every pass.
  * - codex: GET https://chatgpt.com/backend-api/wham/usage with the OAuth access
  *   token from ($CODEX_HOME ?? ~/.codex)/auth.json (tokens.access_token, plus a
- *   ChatGPT-Account-Id header when tokens.account_id is present). Windows:
+ *   ChatGPT-Account-Id header when tokens.account_id is present) and the fixed
+ *   `User-Agent: stream-deck-agents` the researched contract prescribes. Windows:
  *   rate_limit.primary_window / secondary_window, each { used_percent (0..100),
  *   reset_at (epoch seconds) }. An auth.json holding only OPENAI_API_KEY has no
  *   quota surface and is treated as absent.
@@ -314,7 +315,11 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         return { kind: "absent" };
       }
       url = CODEX_USAGE_URL;
-      headers = { Authorization: `Bearer ${auth.accessToken}`, Accept: "application/json" };
+      headers = {
+        Authorization: `Bearer ${auth.accessToken}`,
+        Accept: "application/json",
+        "User-Agent": "stream-deck-agents",
+      };
       if (auth.accountId !== null) {
         headers["ChatGPT-Account-Id"] = auth.accountId;
       }
@@ -401,22 +406,24 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
           // A publication I/O failure retries on the next pass.
         }
       }
-    } finally {
-      polling = false;
-    }
-  };
-
-  // Detached polls are the collector's fire-and-forget surface: an unexpected
-  // rejection is contained here — one provider-less fixed diagnostic, never an
-  // unhandled rejection — and the next pass retries.
-  const pollQuietly = (): void => {
-    void pollNow().catch(() => {
+    } catch {
+      // The exported contract promises pollNow never throws. An unexpected
+      // dependency/runtime exception is contained here — one provider-less
+      // fixed diagnostic, never error text — and the next pass retries.
       try {
         diagnostics({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "quota_failed" });
       } catch {
         // Diagnostics must never break the collector.
       }
-    });
+    } finally {
+      polling = false;
+    }
+  };
+
+  // Detached polls rely on pollNow's containment: it never rejects, so a
+  // fire-and-forget call can never become an unhandled rejection.
+  const pollQuietly = (): void => {
+    void pollNow();
   };
 
   return {
