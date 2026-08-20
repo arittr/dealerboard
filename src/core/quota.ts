@@ -145,7 +145,14 @@ export const parseCodexbarUsage = (body: string): CodexbarUsageParse => {
 
 /** Quota windows move slowly; CodexBar itself polls providers on a similar cadence. */
 export const QUOTA_POLL_INTERVAL_MS = 120_000;
-export const QUOTA_EXEC_TIMEOUT_MS = 15_000;
+/**
+ * CodexBarCLI's own per-provider timeout is ~60s, and its slower runs (notably
+ * kimi) legitimately exceed a shorter kill while still producing valid results
+ * — our kill must sit comfortably above its timeout so it never discards good
+ * data. Worst case a serialized pass stretches past the 120s cadence, which
+ * pollNow's reentrancy guard absorbs (the next tick skips while a pass runs).
+ */
+export const QUOTA_EXEC_TIMEOUT_MS = 90_000;
 
 export const CODEXBAR_BINARY_CANDIDATES = [
   "/opt/homebrew/bin/codexbar",
