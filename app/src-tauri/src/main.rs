@@ -4,7 +4,7 @@ use notify::{Event, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::Emitter;
 
 const SNAPSHOT_FILE_NAME: &str = "snapshot-v2.json";
@@ -12,11 +12,13 @@ const SNAPSHOT_CHANGED_EVENT: &str = "snapshot-changed";
 /// One atomic publish surfaces as a burst of matching events on the target
 /// (two rename, one create, one metadata, one content on macOS FSEvents)
 /// delivered together; admit at most one per window so a publication emits
-/// exactly one event. 250ms is orders of magnitude above the observed burst
-/// spread and well below the daemon's 2s minimum publish interval — and the
-/// daemon's 5s heartbeat re-publishes the same content, so a swallowed
-/// straggler self-heals.
-const SNAPSHOT_COALESCE_WINDOW_MS: u64 = 250;
+/// exactly one event. The window is measured on the monotonic clock — a
+/// backward wall-clock correction must never stretch it into suppressing
+/// genuine publications. 250ms is orders of magnitude above the observed
+/// burst spread and well below the daemon's 2s minimum publish interval —
+/// and the daemon's 5s heartbeat re-publishes the same content, so a
+/// swallowed straggler self-heals.
+const SNAPSHOT_COALESCE_WINDOW: Duration = Duration::from_millis(250);
 
 #[derive(Serialize, Clone)]
 struct SnapshotPayload {
@@ -28,13 +30,6 @@ struct SnapshotPayload {
 fn app_support_root() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|error| error.to_string())?;
     Ok(PathBuf::from(home).join("Library/Application Support/com.drewritter.stream-deck-agents"))
-}
-
-fn current_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// The daemon's atomic rename never writes the target in place, but it also
@@ -49,8 +44,8 @@ fn event_touches_snapshot(event: &Event) -> bool {
         .any(|path| path.file_name().and_then(|name| name.to_str()) == Some(SNAPSHOT_FILE_NAME))
 }
 
-fn within_coalesce_window(last_emit_ms: Option<u64>, now_ms: u64) -> bool {
-    last_emit_ms.is_some_and(|last| now_ms.saturating_sub(last) < SNAPSHOT_COALESCE_WINDOW_MS)
+fn within_coalesce_window(elapsed_since_last_emit: Duration) -> bool {
+    elapsed_since_last_emit < SNAPSHOT_COALESCE_WINDOW
 }
 
 fn read_snapshot_in(directory: &Path) -> Result<SnapshotPayload, String> {
@@ -144,14 +139,15 @@ async fn focus_ghostty(script: &str, terminal_id: &str) -> Result<(), String> {
 /// atomic rename, which swaps the file's inode — and push every
 /// snapshot-v2.json publication to the webview with the same payload shape
 /// as `read_snapshot`. Each publication surfaces as a burst of matching
-/// events; the coalescing window admits only the first, so exactly one
-/// event per publication reaches the webview.
+/// events; the coalescing window admits only the first successful emit, so
+/// exactly one event per publication reaches the webview — and a sink that
+/// fails does not burn the window: a later event of the same burst retries.
 fn watch_snapshot_directory(
     directory: &Path,
-    on_change: impl Fn(SnapshotPayload) + Send + 'static,
+    mut on_change: impl FnMut(SnapshotPayload) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
     let watched_directory = directory.to_path_buf();
-    let mut last_emit_ms: Option<u64> = None;
+    let mut last_emit: Option<Instant> = None;
     let mut watcher = notify::recommended_watcher(move |result: Result<Event, notify::Error>| {
         let Ok(event) = result else {
             return;
@@ -159,16 +155,18 @@ fn watch_snapshot_directory(
         if !event_touches_snapshot(&event) {
             return;
         }
-        let now_ms = current_time_ms();
-        if within_coalesce_window(last_emit_ms, now_ms) {
+        let arrived_at = Instant::now();
+        if last_emit.is_some_and(|last| within_coalesce_window(last.elapsed())) {
             return;
         }
-        // Read fresh rather than trusting the event kind, and stamp only on
-        // a successful emit so a transient read failure retries on a later
-        // event of the same burst instead of burning the window.
+        // Read fresh rather than trusting the event kind, and stamp the
+        // window only once the sink reports success: a failed emit (or a
+        // transient read failure) retries on a later event of the same
+        // burst instead of suppressing the publication.
         if let Ok(payload) = read_snapshot_in(&watched_directory) {
-            last_emit_ms = Some(now_ms);
-            on_change(payload);
+            if on_change(payload).is_ok() {
+                last_emit = Some(arrived_at);
+            }
         }
     })
     .map_err(|error| error.to_string())?;
@@ -185,7 +183,9 @@ fn watch_snapshot(app: &tauri::App) -> Result<(), String> {
     let directory = app_support_root()?;
     let handle = app.handle().clone();
     watch_snapshot_directory(&directory, move |payload| {
-        let _ = handle.emit(SNAPSHOT_CHANGED_EVENT, payload);
+        handle
+            .emit(SNAPSHOT_CHANGED_EVENT, payload)
+            .map_err(|error| error.to_string())
     })
 }
 
@@ -251,19 +251,16 @@ mod tests {
 
     #[test]
     fn coalesce_window_admits_one_event_per_burst() {
-        // No prior emit: the first event of a burst is always admitted.
-        assert!(!within_coalesce_window(None, 1_000));
-        // Everything else the burst delivers inside the window is suppressed…
-        assert!(within_coalesce_window(Some(1_000), 1_000));
+        // The gate consumes monotonic elapsed time only, so wall-clock
+        // values — including a backward clock correction — cannot re-arm
+        // suppression. A burst's events land far inside the window…
+        assert!(within_coalesce_window(Duration::ZERO));
         assert!(within_coalesce_window(
-            Some(1_000),
-            1_000 + SNAPSHOT_COALESCE_WINDOW_MS - 1
+            SNAPSHOT_COALESCE_WINDOW - Duration::from_millis(1)
         ));
         // …and the window boundary re-arms for the next publication.
-        assert!(!within_coalesce_window(
-            Some(1_000),
-            1_000 + SNAPSHOT_COALESCE_WINDOW_MS
-        ));
+        assert!(!within_coalesce_window(SNAPSHOT_COALESCE_WINDOW));
+        assert!(!within_coalesce_window(SNAPSHOT_COALESCE_WINDOW * 10));
     }
 
     /// One daemon publication — temporary sibling written, then renamed over
@@ -279,6 +276,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         watch_snapshot_directory(&directory, move |payload| {
             let _ = sender.send(payload);
+            Ok(())
         })
         .unwrap();
         std::thread::sleep(Duration::from_millis(200)); // let the FSEvents stream arm
@@ -305,6 +303,45 @@ mod tests {
             .recv_timeout(Duration::from_millis(600))
             .expect("second publication emits once the window expired");
         assert_eq!(second.contents, r#"{"n":2}"#);
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// A sink that fails must not burn the window: the stamp lands only on
+    /// success, so a later event of the same publication burst (macOS
+    /// FSEvents delivers several matching events per publish) retries the
+    /// emit and the publication still delivers exactly once.
+    #[test]
+    fn failed_emit_retries_on_a_later_burst_event() {
+        let directory = std::env::temp_dir().join(format!("agent-strip-retry-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        let mut calls = 0;
+        watch_snapshot_directory(&directory, move |payload| {
+            calls += 1;
+            if calls == 1 {
+                return Err("simulated emit failure".to_string());
+            }
+            let _ = sender.send(payload);
+            Ok(())
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(200)); // let the FSEvents stream arm
+
+        let temp = directory.join(".snapshot-v2.json-48158-retry.tmp");
+        std::fs::write(&temp, r#"{"n":1}"#).unwrap();
+        std::fs::rename(&temp, directory.join(SNAPSHOT_FILE_NAME)).unwrap();
+
+        let first = receiver
+            .recv_timeout(Duration::from_millis(600))
+            .expect("the burst retries after the first emit fails, so the publication delivers");
+        assert_eq!(first.contents, r#"{"n":1}"#);
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(50)).is_err(),
+            "after the successful retry the window suppresses the burst's remaining events"
+        );
 
         std::fs::remove_dir_all(&directory).ok();
     }
