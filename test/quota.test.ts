@@ -358,6 +358,41 @@ describe("createQuotaCollector", () => {
     expect(disarmed).toEqual([1, 2]);
   });
 
+  test("an unexpected poll rejection is contained at both detached call sites with one fixed diagnostic", async () => {
+    const ticks: Array<() => void> = [];
+    const harness = makeHarness(credsFiles(), {
+      // A throwing reader escapes probe's failure mapping, so the whole pass
+      // rejects — the exact shape the detached call sites must contain.
+      readFile: (path) => {
+        if (path === claudeCredsPath) {
+          throw new Error("credentials read exploded");
+        }
+        return credsFiles()[path] ?? null;
+      },
+      schedule: (tick) => {
+        ticks.push(tick);
+        return () => {};
+      },
+    });
+    const collector = createQuotaCollector(harness.deps);
+    collector.start(); // the immediate detached poll
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const scheduledTick = ticks[0];
+    if (scheduledTick === undefined) {
+      throw new Error("schedule was never armed");
+    }
+    scheduledTick(); // the scheduled detached poll
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    collector.stop();
+    const passFailures = harness.diagnostics.filter(
+      (record) => record.code === "quota_failed" && record.provider === undefined,
+    );
+    expect(passFailures.length).toBe(2);
+    for (const record of passFailures) {
+      expect(Object.keys(record).sort()).toEqual(["code", "component", "timestamp"]);
+    }
+  });
+
   test("writes happen only when the snapshot changes", async () => {
     const harness = makeHarness(credsFiles());
     const collector = createQuotaCollector(harness.deps);

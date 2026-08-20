@@ -406,15 +406,28 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     }
   };
 
+  // Detached polls are the collector's fire-and-forget surface: an unexpected
+  // rejection is contained here — one provider-less fixed diagnostic, never an
+  // unhandled rejection — and the next pass retries.
+  const pollQuietly = (): void => {
+    void pollNow().catch(() => {
+      try {
+        diagnostics({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "quota_failed" });
+      } catch {
+        // Diagnostics must never break the collector.
+      }
+    });
+  };
+
   return {
     start: () => {
       if (started) {
         return;
       }
       started = true;
-      void pollNow();
+      pollQuietly();
       cancelSchedule = schedule(() => {
-        void pollNow();
+        pollQuietly();
       }, QUOTA_POLL_INTERVAL_MS);
     },
     stop: () => {

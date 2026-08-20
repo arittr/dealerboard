@@ -60,6 +60,7 @@ export type CliDependencies = {
   discoverClaudeGhosttyTerminal?: DiscoverClaudeGhosttyTerminal;
   environment?: Readonly<Record<string, string | undefined>>;
   parentPid?: number;
+  createQuotaCollector?: typeof createQuotaCollector;
   runDaemon?: (paths: AppPaths, diagnostics: (record: DiagnosticRecord) => void) => number | Promise<number>;
 };
 
@@ -406,17 +407,12 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   discoverClaudeGhosttyTerminal,
   environment: process.env,
   parentPid: process.ppid,
+  createQuotaCollector,
   runDaemon: (daemonPaths, diagnostics) => {
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
     const grokRoot = environment["GROK_HOME"] ?? join(daemonPaths.home, ".grok");
     const codexRoot = environment["CODEX_HOME"] ?? join(daemonPaths.home, ".codex");
-    const quotaCollector = createQuotaCollector({
-      claudeCredentialsPath: join(daemonPaths.home, ".claude/.credentials.json"),
-      codexAuthPath: join(codexRoot, "auth.json"),
-      quotaSnapshotPath: daemonPaths.quotaSnapshot,
-      diagnostics,
-    });
     const resolveFacts = createSessionFactsResolver({
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
@@ -430,7 +426,30 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     const syncPaseo = (db: Database) => syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState));
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
-    quotaCollector.start();
+    // The collector is optional telemetry on its own scheduler: it comes up
+    // only after the daemon is publishing, and any failure here is contained
+    // to one fixed diagnostic so it can never prevent or unwind session
+    // publication.
+    try {
+      const createCollector = dependencies.createQuotaCollector ?? createQuotaCollector;
+      const quotaCollector = createCollector({
+        claudeCredentialsPath: join(daemonPaths.home, ".claude/.credentials.json"),
+        codexAuthPath: join(codexRoot, "auth.json"),
+        quotaSnapshotPath: daemonPaths.quotaSnapshot,
+        diagnostics,
+      });
+      quotaCollector.start();
+    } catch {
+      try {
+        diagnostics({
+          timestamp: new Date().toISOString(),
+          component: DIAGNOSTIC_COMPONENT,
+          code: "quota_collector_failed",
+        });
+      } catch {
+        // A failing sink must never break daemon startup.
+      }
+    }
     return new Promise<number>(() => {
       // launchd owns the daemon lifetime; the poll timer keeps the process alive.
     });

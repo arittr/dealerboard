@@ -8,6 +8,7 @@ import { type CliDependencies, MAX_STDIN_BYTES, runCli } from "../src/core/cli";
 import { createFileDiagnostics, type DiagnosticRecord } from "../src/core/diagnostics";
 import { type AppPaths, resolveAppPaths } from "../src/core/paths";
 import { readProjection } from "../src/core/projection";
+import type { QuotaCollector } from "../src/core/quota";
 import { applyRegistryEvents, listSessions } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { RegistryEvent } from "../src/protocol";
@@ -1290,6 +1291,85 @@ describe("daemon command", () => {
     expect(started).toBe(false);
     expect(harness.stdout()).toBe("");
     expect(harness.stderr()).not.toBe("");
+  });
+});
+
+describe("daemon quota collector boundary", () => {
+  // The default runDaemon closure starts a real ProjectionDaemon against the
+  // temp registry, so its promise never resolves; the race proves the closure
+  // neither throws nor rejects. Bun exits with the daemon's interval armed.
+  const stillRunning = (ms: number): Promise<string> =>
+    new Promise((resolve) => setTimeout(() => resolve("still running"), ms));
+
+  const collectorStub = (overrides: Partial<QuotaCollector> = {}): QuotaCollector => ({
+    start: () => {},
+    stop: () => {},
+    pollNow: () => Promise.resolve(),
+    ...overrides,
+  });
+
+  test("starts the quota collector only after the daemon has published", async () => {
+    initRegistry();
+    let starts = 0;
+    let snapshotExistedAtStart = false;
+    const harness = makeHarness({
+      createQuotaCollector: () =>
+        collectorStub({
+          start: () => {
+            starts += 1;
+            snapshotExistedAtStart = existsSync(paths.snapshot);
+          },
+        }),
+    });
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(starts).toBe(1);
+    expect(snapshotExistedAtStart).toBe(true);
+    expect(harness.diagnostics).toEqual([]);
+  });
+
+  test("contains a collector construction failure and still starts the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      createQuotaCollector: () => {
+        throw new Error("collector factory exploded");
+      },
+    });
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(harness.diagnostics.length).toBe(1);
+    const record = harness.diagnostics[0];
+    if (record === undefined) {
+      throw new Error("expected one boundary diagnostic");
+    }
+    expect(record).toMatchObject({ component: "cli", code: "quota_collector_failed" });
+    expect(record.provider).toBeUndefined();
+    expect(Object.keys(record).every((key) => DIAGNOSTIC_KEYS.has(key))).toBe(true);
+  });
+
+  test("contains a collector start failure and still starts the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      createQuotaCollector: () =>
+        collectorStub({
+          start: () => {
+            throw new Error("collector start exploded");
+          },
+        }),
+    });
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(harness.diagnostics.length).toBe(1);
+    const record = harness.diagnostics[0];
+    if (record === undefined) {
+      throw new Error("expected one boundary diagnostic");
+    }
+    expect(record).toMatchObject({ component: "cli", code: "quota_collector_failed" });
+    expect(record.provider).toBeUndefined();
+    expect(Object.keys(record).every((key) => DIAGNOSTIC_KEYS.has(key))).toBe(true);
   });
 });
 
