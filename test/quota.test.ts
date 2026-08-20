@@ -1,7 +1,19 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeClaudeUsage, normalizeCodexUsage, parseClaudeCredentials, parseCodexAuth } from "../src/core/quota";
+import type { DiagnosticRecord } from "../src/core/diagnostics";
+import {
+  createQuotaCollector,
+  normalizeClaudeUsage,
+  normalizeCodexUsage,
+  parseClaudeCredentials,
+  parseCodexAuth,
+  QUOTA_RATE_LIMIT_COOLDOWN_MS,
+  type QuotaCollectorDependencies,
+  type QuotaFetch,
+} from "../src/core/quota";
+import { parseQuotaSnapshot } from "../src/quota-snapshot";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures", "quota", name), "utf8");
 
@@ -116,5 +128,217 @@ describe("normalizeCodexUsage", () => {
       session: { percentRemaining: 90, resetAt: new Date(1_787_169_600 * 1000).toISOString() },
       weekly: { percentRemaining: 75, resetAt: null },
     });
+  });
+});
+
+const NOW = "2026-08-19T18:00:00.000Z";
+const NOW_MS = Date.parse(NOW);
+
+describe("createQuotaCollector", () => {
+  let tempDir: string;
+  let quotaPath: string;
+  let claudeCredsPath: string;
+  let codexAuthPath: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "stream-deck-agents-quota-"));
+    quotaPath = join(tempDir, "quota-snapshot.json");
+    claudeCredsPath = join(tempDir, "claude-credentials.json");
+    codexAuthPath = join(tempDir, "codex-auth.json");
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  type Harness = {
+    deps: QuotaCollectorDependencies;
+    fetches: { url: string; headers: Record<string, string> }[];
+    diagnostics: DiagnosticRecord[];
+    respond: (status: number, body: string) => void;
+    fail: () => void;
+    writes: () => string[];
+  };
+
+  const makeHarness = (files: Record<string, string>, overrides: Partial<QuotaCollectorDependencies> = {}): Harness => {
+    const fetches: { url: string; headers: Record<string, string> }[] = [];
+    const diagnostics: DiagnosticRecord[] = [];
+    const writes: string[] = [];
+    let status = 200;
+    let body = "{}";
+    let throws = false;
+    const fetchSpy: QuotaFetch = async (url, headers) => {
+      fetches.push({ url, headers });
+      if (throws) {
+        throw new Error("network down");
+      }
+      const fixtureBody = url.includes("anthropic") ? fixture("claude-usage.json") : fixture("codex-usage.json");
+      return { status, body: body === "{}" ? fixtureBody : body };
+    };
+    return {
+      deps: {
+        claudeCredentialsPath: claudeCredsPath,
+        codexAuthPath: codexAuthPath,
+        quotaSnapshotPath: quotaPath,
+        fetch: fetchSpy,
+        readFile: (path) => files[path] ?? null,
+        now: () => NOW,
+        nowMs: () => NOW_MS,
+        writeFile: (_path, payload) => {
+          writes.push(payload);
+        },
+        diagnostics: (record) => {
+          diagnostics.push(record);
+        },
+        ...overrides,
+      },
+      fetches,
+      diagnostics,
+      respond: (nextStatus, nextBody) => {
+        status = nextStatus;
+        body = nextBody;
+        throws = false;
+      },
+      fail: () => {
+        throws = true;
+      },
+      writes: () => writes,
+    };
+  };
+
+  const credsFiles = (): Record<string, string> => ({
+    [claudeCredsPath]: fixture("claude-credentials.json"),
+    [codexAuthPath]: fixture("codex-auth.json"),
+  });
+
+  test("publishes both providers after successful fetches", async () => {
+    const harness = makeHarness(credsFiles());
+    await createQuotaCollector(harness.deps).pollNow();
+    const writes = harness.writes();
+    expect(writes.length).toBe(1);
+    const snapshot = parseQuotaSnapshot(JSON.parse(writes[0] ?? ""));
+    expect(snapshot.providers["claude"]).toMatchObject({
+      percentRemaining: 62.5,
+      resetAt: "2026-08-19T22:00:00.000Z",
+      weeklyPercentRemaining: 88,
+      unavailable: false,
+      fetchedAt: NOW,
+    });
+    expect(snapshot.providers["claude"]?.history).toEqual([{ fetchedAt: NOW, fractionRemaining: 0.625 }]);
+    expect(snapshot.providers["codex"]).toMatchObject({ percentRemaining: 73, weeklyPercentRemaining: 45 });
+    const claudeFetch = harness.fetches.find((entry) => entry.url.includes("anthropic"));
+    expect(claudeFetch?.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
+    expect(claudeFetch?.headers["Authorization"]).toBe("Bearer sk-ant-oat01-FAKE");
+    const codexFetch = harness.fetches.find((entry) => entry.url.includes("chatgpt"));
+    expect(codexFetch?.headers["ChatGPT-Account-Id"]).toBe("acct_fake");
+  });
+
+  test("a failed fetch keeps last-good data, marks unavailable, and logs only the transition", async () => {
+    const harness = makeHarness(credsFiles());
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    harness.respond(500, "server error");
+    await collector.pollNow();
+    await collector.pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
+    expect(snapshot.providers["claude"]).toMatchObject({
+      percentRemaining: 62.5,
+      unavailable: true,
+      fetchedAt: NOW,
+    });
+    expect(snapshot.providers["claude"]?.history.length).toBe(1);
+    const failures = harness.diagnostics.filter((record) => record.code === "quota_failed");
+    expect(failures.length).toBe(2); // one per provider, on the false→true transition only
+    expect(failures.every((record) => record.component === "quota")).toBe(true);
+  });
+
+  test("a network throw degrades the same way and never escapes pollNow", async () => {
+    const harness = makeHarness(credsFiles());
+    harness.fail();
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["claude"]?.unavailable).toBe(true);
+    expect(snapshot.providers["claude"]?.percentRemaining).toBeNull();
+  });
+
+  test("missing credential files omit the provider entirely", async () => {
+    const harness = makeHarness({});
+    await createQuotaCollector(harness.deps).pollNow();
+    expect(harness.fetches.length).toBe(0);
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? "")).providers).toEqual({});
+  });
+
+  test("an api-key-only codex auth.json is omitted; an expired claude token is unavailable without a fetch", async () => {
+    const harness = makeHarness({
+      [claudeCredsPath]: JSON.stringify({
+        claudeAiOauth: { accessToken: "tok", expiresAt: NOW_MS - 1, scopes: ["user:profile"] },
+      }),
+      [codexAuthPath]: JSON.stringify({ OPENAI_API_KEY: "sk-fake" }),
+    });
+    await createQuotaCollector(harness.deps).pollNow();
+    expect(harness.fetches.length).toBe(0);
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["claude"]?.unavailable).toBe(true);
+    expect(snapshot.providers["codex"]).toBeUndefined();
+  });
+
+  test("a 429 arms the cooldown and the next pass skips the fetch", async () => {
+    const harness = makeHarness(credsFiles());
+    const collector = createQuotaCollector(harness.deps);
+    harness.respond(429, "rate limited");
+    await collector.pollNow();
+    expect(harness.fetches.length).toBe(2);
+    await collector.pollNow();
+    expect(harness.fetches.length).toBe(2); // both providers in cooldown, no new fetches
+  });
+
+  test("concurrent pollNow calls collapse into one pass", async () => {
+    const harness = makeHarness(credsFiles());
+    const collector = createQuotaCollector(harness.deps);
+    await Promise.all([collector.pollNow(), collector.pollNow()]);
+    expect(harness.fetches.length).toBe(2);
+  });
+
+  test("writes happen only when the snapshot changes", async () => {
+    const harness = makeHarness(credsFiles());
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    await collector.pollNow(); // history appends each success, so this differs
+    const writesAfterTwo = harness.writes().length;
+    expect(writesAfterTwo).toBe(2);
+    // A failing pass after a failure writes nothing new once state has converged:
+    harness.fail();
+    await collector.pollNow();
+    const afterFailure = harness.writes().length;
+    await collector.pollNow();
+    expect(harness.writes().length).toBe(afterFailure);
+  });
+
+  test("seeding from an existing file preserves last-good data across a restart", async () => {
+    const seeded = JSON.stringify({
+      schemaVersion: 1,
+      providers: {
+        claude: {
+          percentRemaining: 62.5,
+          resetAt: "2026-08-19T22:00:00.000Z",
+          weeklyPercentRemaining: 88,
+          weeklyResetAt: "2026-08-24T00:00:00.000Z",
+          unavailable: false,
+          fetchedAt: "2026-08-19T17:00:00.000Z",
+          history: [{ fetchedAt: "2026-08-19T17:00:00.000Z", fractionRemaining: 0.625 }],
+        },
+      },
+    });
+    const harness = makeHarness(credsFiles(), {
+      readFile: (path) => (path === quotaPath ? seeded : (credsFiles()[path] ?? null)),
+    });
+    harness.fail();
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["claude"]).toMatchObject({ percentRemaining: 62.5, unavailable: true });
+  });
+
+  test("the cooldown constant is ten minutes", () => {
+    expect(QUOTA_RATE_LIMIT_COOLDOWN_MS).toBe(600_000);
   });
 });

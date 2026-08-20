@@ -25,7 +25,8 @@ export type DiagnosticCode =
   | "wake_up"
   | "set_image_failed"
   | "clock_jump"
-  | "maintenance_failed";
+  | "maintenance_failed"
+  | "quota_failed";
 
 export type DiagnosticRecord = {
   timestamp: string;
