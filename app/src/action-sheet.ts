@@ -29,6 +29,8 @@ export type SheetOptions = {
   title: string;
   clipboardAvailable: boolean;
   clearArmed: boolean;
+  /** The action whose settlement is in flight; when set, every action is disabled. */
+  pendingAction?: SheetActionId | null;
   /** Inline failure notice to render; omitted/null renders nothing. */
   error?: string | null;
 };
@@ -44,22 +46,35 @@ export const transcriptPathOf = (session: ProjectedSession): string | null => {
   return typeof value === "string" && value.length > 0 ? value : null;
 };
 
-export const buildSheetModel = (session: ProjectedSession, options: SheetOptions): SheetModel => ({
-  title: options.title,
-  error: options.error ?? null,
-  items: [
-    { id: "open", label: "Open", enabled: true, confirming: false },
-    { id: "ack", label: "Ack", enabled: true, confirming: false },
-    { id: "reveal", label: "Reveal transcript", enabled: transcriptPathOf(session) !== null, confirming: false },
-    { id: "copy", label: "Copy session ID", enabled: options.clipboardAvailable, confirming: false },
-    {
-      id: "clear",
-      label: options.clearArmed ? "Confirm clear" : "Clear session",
-      enabled: true,
-      confirming: options.clearArmed,
-    },
-  ],
-});
+export const buildSheetModel = (session: ProjectedSession, options: SheetOptions): SheetModel => {
+  const actionsLocked = options.pendingAction != null;
+  return {
+    title: options.title,
+    error: options.error ?? null,
+    items: [
+      { id: "open", label: "Open", enabled: !actionsLocked, confirming: false },
+      { id: "ack", label: "Ack", enabled: !actionsLocked, confirming: false },
+      {
+        id: "reveal",
+        label: "Reveal transcript",
+        enabled: !actionsLocked && transcriptPathOf(session) !== null,
+        confirming: false,
+      },
+      {
+        id: "copy",
+        label: "Copy session ID",
+        enabled: !actionsLocked && options.clipboardAvailable,
+        confirming: false,
+      },
+      {
+        id: "clear",
+        label: options.clearArmed ? "Confirm clear" : "Clear session",
+        enabled: !actionsLocked,
+        confirming: options.clearArmed,
+      },
+    ],
+  };
+};
 
 /** Inline confirm for the destructive action: Clear must be tapped twice. */
 export const reduceSheetSelection = (
@@ -70,6 +85,82 @@ export const reduceSheetSelection = (
     return { clearArmed: true, fire: false };
   }
   return { clearArmed: false, fire: true };
+};
+
+/**
+ * Firing state for sheet actions. Actions are async invocations whose
+ * settlements land later, so the sheet needs two guards: a pending flag
+ * (buttons stay disabled, duplicate calls are blocked while one is in
+ * flight) and a generation identifying the sheet instance a settlement
+ * belongs to — a late settlement must not dismiss whatever sheet is open
+ * now, nor resurrect its own context after the user dismissed it.
+ */
+export type SheetActionState = {
+  /** Identifies the open sheet instance; advanced on every dismissal and fresh open. */
+  generation: number;
+  clearArmed: boolean;
+  /** The action whose settlement is in flight; null when idle. */
+  pendingAction: SheetActionId | null;
+};
+
+export const initialSheetActionState = (): SheetActionState => ({
+  generation: 0,
+  clearArmed: false,
+  pendingAction: null,
+});
+
+/** End the sheet instance: clears the arm and any pending action and makes every in-flight settlement stale. */
+export const advanceSheetGeneration = (state: SheetActionState): SheetActionState => ({
+  generation: state.generation + 1,
+  clearArmed: false,
+  pendingAction: null,
+});
+
+export type SheetActionBegin = { state: SheetActionState; fire: boolean };
+
+/** Decide a sheet button tap: blocked while an action is pending, the first
+ * clear tap only arms, anything else fires and goes pending. */
+export const beginSheetAction = (state: SheetActionState, id: SheetActionId): SheetActionBegin => {
+  if (state.pendingAction !== null) {
+    return { state, fire: false };
+  }
+  const selection = reduceSheetSelection(state.clearArmed, id);
+  if (!selection.fire) {
+    return { state: { ...state, clearArmed: selection.clearArmed }, fire: false };
+  }
+  return { state: { ...state, clearArmed: false, pendingAction: id }, fire: true };
+};
+
+export type SheetActionSettlement = {
+  state: SheetActionState;
+  /** Remove the sheet from the DOM — the action completed successfully. */
+  dismissed: boolean;
+  /** Re-render the sheet with an inline error — the action failed. */
+  reopen: boolean;
+};
+
+/**
+ * Settle a fired action against the state captured when it fired. A stale
+ * generation — the user dismissed the sheet, or a newer instance opened —
+ * is a no-op: user dismissal always wins, and a late settlement never
+ * dismisses or resurrects a sheet it no longer owns.
+ */
+export const settleSheetAction = (
+  state: SheetActionState,
+  firedAtGeneration: number,
+  succeeded: boolean,
+): SheetActionSettlement => {
+  if (firedAtGeneration !== state.generation) {
+    return { state, dismissed: false, reopen: false };
+  }
+  if (succeeded) {
+    return {
+      state: { generation: state.generation + 1, clearArmed: false, pendingAction: null },
+      dismissed: true,
+      reopen: false,
+    };
+  }
+  return { state: { ...state, pendingAction: null }, dismissed: false, reopen: true };
 };
 
 export type SheetHandlers = {

@@ -19,10 +19,14 @@ import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
 import type { ProjectedSession, SessionSnapshotV2, SessionStatus, SnapshotView } from "../../src/protocol";
 import {
+  advanceSheetGeneration,
+  beginSheetAction,
   buildSheetModel,
   buildSheetOverlay,
-  reduceSheetSelection,
+  initialSheetActionState,
   type SheetActionId,
+  type SheetActionState,
+  settleSheetAction,
   transcriptPathOf,
 } from "./action-sheet";
 import {
@@ -89,7 +93,7 @@ type SheetContext = {
 };
 
 let sheetOverlay: HTMLElement | null = null;
-let sheetClearArmed = false;
+let sheetActions: SheetActionState = initialSheetActionState();
 let sheetRestoreFocus: HTMLElement | null = null;
 
 const loadStoredSettings = (): unknown => {
@@ -351,29 +355,40 @@ const tileFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
   return { identity: identityOf(model.session), point: { x: event.clientX, y: event.clientY } };
 };
 
-const dismissActionSheet = (): void => {
+const removeSheetOverlay = (): void => {
   if (sheetOverlay !== null) {
     sheetOverlay.remove();
     sheetOverlay = null;
     sheetRestoreFocus?.focus();
     sheetRestoreFocus = null;
   }
-  sheetClearArmed = false;
+};
+
+/**
+ * User dismissal (backdrop, Escape, the Open action) always wins: it ends
+ * the sheet instance, so any action settlement still in flight becomes a
+ * stale no-op.
+ */
+const dismissActionSheet = (): void => {
+  sheetActions = advanceSheetGeneration(sheetActions);
+  removeSheetOverlay();
 };
 
 const clipboardAvailable = (): boolean => "clipboard" in navigator;
 
 const openActionSheet = (context: SheetContext, error: string | null = null): void => {
   // Only the first open of a sheet session captures the focus to restore;
-  // re-renders (armed clear, error retry) must keep the original capture.
+  // re-renders (armed clear, in-flight disable, error retry) must keep the
+  // original capture.
   if (sheetOverlay === null) {
     sheetRestoreFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   }
-  sheetOverlay?.remove(); // re-render path keeps sheetClearArmed; real dismissals reset it
+  sheetOverlay?.remove(); // re-render path keeps the sheet-action state
   const model = buildSheetModel(context.session, {
     title: context.label,
     clipboardAvailable: clipboardAvailable(),
-    clearArmed: sheetClearArmed,
+    clearArmed: sheetActions.clearArmed,
+    pendingAction: sheetActions.pendingAction,
     error,
   });
   const overlay = buildSheetOverlay(model, {
@@ -400,23 +415,39 @@ const openActionSheet = (context: SheetContext, error: string | null = null): vo
 };
 
 /**
- * Only success dismisses: a failed action re-opens the sheet with an inline
+ * Only success dismisses: a failure re-renders the sheet with an inline
  * error, keeping the retry surface open — above all for Clear, whose
- * destructive miss must never look accepted.
+ * destructive miss must never look accepted. Each settlement is bound to
+ * the sheet instance (generation) it was fired from; a stale generation is
+ * a no-op — user dismissal wins.
  */
-const settleSheetAction = (action: Promise<void>, context: SheetContext, failure: string): Promise<void> =>
-  action.then(
-    () => dismissActionSheet(),
-    () => openActionSheet(context, failure),
+const applySheetSettlement = (succeeded: boolean, context: SheetContext, generation: number, failure: string): void => {
+  const outcome = settleSheetAction(sheetActions, generation, succeeded);
+  sheetActions = outcome.state;
+  if (outcome.dismissed) {
+    removeSheetOverlay();
+  } else if (outcome.reopen) {
+    openActionSheet(context, failure);
+  }
+};
+
+const trackSheetAction = (action: Promise<void>, context: SheetContext, generation: number, failure: string): void => {
+  void action.then(
+    () => applySheetSettlement(true, context, generation, failure),
+    () => applySheetSettlement(false, context, generation, failure),
   );
+};
 
 const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise<void> => {
-  const selection = reduceSheetSelection(sheetClearArmed, id);
-  sheetClearArmed = selection.clearArmed;
-  if (!selection.fire) {
-    openActionSheet(context); // re-render with the armed "Confirm clear" label
+  const begin = beginSheetAction(sheetActions, id);
+  sheetActions = begin.state;
+  if (!begin.fire) {
+    openActionSheet(context); // armed "Confirm clear" (or a blocked duplicate tap): re-render
     return;
   }
+  // Re-render with every action disabled while the settlement is in flight.
+  openActionSheet(context);
+  const generation = sheetActions.generation;
   const { session, tile } = context;
   switch (id) {
     case "open":
@@ -432,23 +463,23 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
       });
       return;
     case "ack":
-      return settleSheetAction(ackSession(session.provider, session.sessionId), context, "Ack failed");
+      return trackSheetAction(ackSession(session.provider, session.sessionId), context, generation, "Ack failed");
     case "reveal": {
       const path = transcriptPathOf(session);
       if (path === null) {
         dismissActionSheet(); // disabled-button drift: nothing to reveal
         return;
       }
-      return settleSheetAction(revealTranscript(path), context, "Reveal failed");
+      return trackSheetAction(revealTranscript(path), context, generation, "Reveal failed");
     }
     case "copy":
       if (!clipboardAvailable()) {
         dismissActionSheet(); // disabled-button drift: nothing to copy
         return;
       }
-      return settleSheetAction(navigator.clipboard.writeText(session.sessionId), context, "Copy failed");
+      return trackSheetAction(navigator.clipboard.writeText(session.sessionId), context, generation, "Copy failed");
     case "clear":
-      return settleSheetAction(clearSession(session.provider, session.sessionId), context, "Clear failed");
+      return trackSheetAction(clearSession(session.provider, session.sessionId), context, generation, "Clear failed");
   }
 };
 
@@ -464,7 +495,7 @@ const openActionSheetFor = (pending: PendingLongPress): void => {
   if (tile === null) {
     return;
   }
-  sheetClearArmed = false;
+  sheetActions = advanceSheetGeneration(sheetActions);
   openActionSheet({ point: pending.point, session: ref.session, label: ref.label, tile });
 };
 
