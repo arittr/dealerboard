@@ -70,6 +70,18 @@ describe("normalizeAgentsviewDaily", () => {
     ).toBeNull();
   });
 
+  test("finite fields whose sum overflows are a failed poll, never Infinity", () => {
+    // Each field passes the finite check, but the sum is Infinity — which
+    // JSON.stringify would publish as null — so the row is rejected whole.
+    const overflow = report({
+      input: Number.MAX_VALUE,
+      output: Number.MAX_VALUE,
+      cacheCreation: Number.MAX_VALUE,
+      cacheRead: Number.MAX_VALUE,
+    });
+    expect(normalizeAgentsviewDaily(overflow, DAY)).toBeNull();
+  });
+
   test("a valid non-matching row is skipped without field validation", () => {
     const foreign = JSON.stringify({ schema_version: 4, daily: [{ date: "2026-08-19", inputTokens: "junk" }] });
     expect(normalizeAgentsviewDaily(foreign, DAY)).toBe(0);

@@ -5,7 +5,9 @@
  * staleness threshold, re-armed per healthy ingest), so a dead daemon
  * renders OFFLINE within one threshold of its last publish; a slow 10s
  * pass retries real reads while degraded (self-healing a missed event or
- * a late-starting daemon) and carries the quota read, whose file the watch
+ * a late-starting daemon) and carries the quota and token-usage sidecar
+ * reads (quota-snapshot.json, republished at most every 120s;
+ * token-usage-snapshot.json, every 30s), whose files the watch
  * does not cover. Reads and pushes order through an ingest gate, so an
  * asynchronous read that completes after a newer push — or a newer read —
  * is dropped instead of regressing the view. Layout reduces with the strip
@@ -268,8 +270,8 @@ const readAndIngest = async (): Promise<void> => {
  * or a late-starting daemon; while healthy it touches no snapshot state —
  * the expiry check owns the OFFLINE flip. The quota and token-usage
  * snapshots also ride this pass — the watch pushes snapshot-v2.json only,
- * those files change at most every 120s, and a rejection is a missing
- * file, i.e. "no data yet".
+ * those files change at most every 120s (quota) and 30s (token-usage), and
+ * a rejection is a missing file, i.e. "no data yet".
  */
 const slowPass = async (): Promise<void> => {
   currentQuota = reduceQuotaRead(await readQuotaSnapshot().catch(() => null), Date.now());

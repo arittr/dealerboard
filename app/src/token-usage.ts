@@ -50,8 +50,16 @@ const rateLine = (samples: readonly NumberedSample[], anchorMs: number, windowMs
   const current = Math.max(0, newest - totalAsOf(samples, anchorMs - windowMs));
   const previous = Math.max(0, totalAsOf(samples, anchorMs - windowMs) - totalAsOf(samples, anchorMs - 2 * windowMs));
   const threshold = Math.max(1000, 0.1 * previous);
-  const trend: TokenUsageTrend =
-    current > previous + threshold ? "up" : current < previous - threshold ? "down" : "flat";
+  // Warm-up guard: without a sample at or before the previous window's start,
+  // the comparison is against an unmeasured window — report flat, per spec.
+  const covered = samples[0] !== undefined && samples[0].atMs <= anchorMs - 2 * windowMs;
+  const trend: TokenUsageTrend = !covered
+    ? "flat"
+    : current > previous + threshold
+      ? "up"
+      : current < previous - threshold
+        ? "down"
+        : "flat";
   return { tokens: current, trend };
 };
 

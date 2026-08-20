@@ -133,7 +133,10 @@ export const normalizeAgentsviewDaily = (body: string, providerDay: string): num
     if (input === null || output === null || cacheCreation === null || cacheRead === null) {
       return null;
     }
-    return input + output + cacheCreation + cacheRead;
+    const total = input + output + cacheCreation + cacheRead;
+    // Fail closed on an overflowing sum: four finite maxima add to Infinity,
+    // which JSON.stringify would publish as a contract-invalid null.
+    return Number.isFinite(total) ? total : null;
   }
   return 0;
 };

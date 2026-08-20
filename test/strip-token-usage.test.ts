@@ -97,6 +97,35 @@ describe("reduceTokenUsageRead", () => {
     expect(trendFor(500, 800)).toBe("flat"); // +300 is under the 1,000-token floor
   });
 
+  test("warm-up windows report flat trends until the previous window is covered by real samples", () => {
+    // ~5 minutes of 30s samples, +2k per sample: with no sample at/before the
+    // previous window's start, its rate computes as ~0 and a busy partial
+    // current window would read as a false "up" — the spec says flat.
+    const samples: TokenUsageSample[] = [];
+    let total = 0;
+    for (let index = 0; index <= 10; index += 1) {
+      total += 2000;
+      samples.push(sampleAt(NOW - (10 - index) * 30_000, total));
+    }
+    const model = reduceTokenUsageRead(read(snapshot({ totalTokens: total, samples })), NOW);
+    if (model.state === "hidden") {
+      throw new Error("expected a rendered model");
+    }
+    expect(model.tenMin.trend).toBe("flat");
+    expect(model.hour.trend).toBe("flat");
+  });
+
+  test("a sample exactly at the previous window's start counts as coverage", () => {
+    // The first sample sits at anchor − 2×10m exactly: the guard's ≤ keeps
+    // the trend computed, and the clearly rising series reads "up".
+    const samples = [sampleAt(NOW - 20 * 60_000, 0), sampleAt(NOW - 10 * 60_000, 2000), sampleAt(NOW, 20_000)];
+    const model = reduceTokenUsageRead(read(snapshot({ totalTokens: 20_000, samples })), NOW);
+    if (model.state === "hidden") {
+      throw new Error("expected a rendered model");
+    }
+    expect(model.tenMin.trend).toBe("up");
+  });
+
   test("the LA-midnight rollover never yields negative rates", () => {
     const yesterday = "2026-08-19";
     const samples = [
