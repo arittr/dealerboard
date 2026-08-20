@@ -7,6 +7,8 @@ export type SnapshotPayload = { mtimeMs: number; contents: string };
 
 export const readSnapshot = (): Promise<SnapshotPayload> => invoke<SnapshotPayload>("read_snapshot");
 
+export const readQuotaSnapshot = (): Promise<SnapshotPayload> => invoke<SnapshotPayload>("read_quota_snapshot");
+
 export const readPaseoServerId = (): Promise<string> => invoke<string>("read_paseo_server_id");
 
 export const ackSession = (provider: Provider, sessionId: string): Promise<void> =>
