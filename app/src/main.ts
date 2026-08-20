@@ -26,7 +26,13 @@ import {
   readSnapshot,
   type SnapshotPayload,
 } from "./bridge";
-import { createGestureRecognizer, type GestureInput, type GestureIntent, type GesturePoint } from "./gestures";
+import {
+  createClickSuppression,
+  createGestureRecognizer,
+  type GestureInput,
+  type GestureIntent,
+  type GesturePoint,
+} from "./gestures";
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
@@ -51,9 +57,9 @@ let currentKeys: readonly KeyModel[] = [];
 type PendingLongPress = { index: number; tile: HTMLElement; point: GesturePoint };
 
 const gestures = createGestureRecognizer();
+const clickSuppression = createClickSuppression();
 let gestureTimer: number | null = null;
 let pendingLongPress: PendingLongPress | null = null;
-let suppressNextClick = false;
 
 const loadStoredSettings = (): unknown => {
   try {
@@ -252,8 +258,7 @@ const flashTile = (tile: HTMLElement): void => {
 };
 
 const onTilesClick = (event: MouseEvent): void => {
-  if (suppressNextClick) {
-    suppressNextClick = false;
+  if (clickSuppression.consumeClick()) {
     return;
   }
   if (!(event.target instanceof HTMLElement)) {
@@ -302,7 +307,7 @@ const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
         }
         break;
       case "suppress-click":
-        suppressNextClick = true;
+        clickSuppression.arm();
         break;
     }
   }
@@ -334,6 +339,10 @@ const onStripPointerDown = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
+  // Suppression belongs to one stroke, and a touch drag fires no trailing
+  // click at all — so any still-unconsumed suppression from the last stroke
+  // dies here rather than eating this stroke's taps.
+  clickSuppression.beginStroke();
   pendingLongPress = tileFromPointerEvent(event);
   feedPointer({ kind: "down", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
@@ -361,6 +370,18 @@ const onStripPointerCancel = (event: PointerEvent): void => {
   pendingLongPress = null;
 };
 
+/**
+ * Consume suppression on the strip-wide click, not just in #tiles: a stroke
+ * released over non-tile chrome (the rail) fires its trailing click on the
+ * common ancestor #strip, bypassing the #tiles consumer entirely — without
+ * this backstop that suppression would survive into the next tap. For tile
+ * clicks the #tiles handler runs first (child before parent in the bubble
+ * phase), so it swallows before this reset sees the click.
+ */
+const onStripClick = (): void => {
+  clickSuppression.consumeClick();
+};
+
 const wireInteraction = (): void => {
   document.querySelector<HTMLElement>("#tiles")?.addEventListener("click", onTilesClick);
   const strip = document.querySelector<HTMLElement>("#strip");
@@ -368,6 +389,7 @@ const wireInteraction = (): void => {
   strip?.addEventListener("pointermove", onStripPointerMove);
   strip?.addEventListener("pointerup", onStripPointerUp);
   strip?.addEventListener("pointercancel", onStripPointerCancel);
+  strip?.addEventListener("click", onStripClick);
 };
 
 start();

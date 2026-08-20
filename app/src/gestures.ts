@@ -85,3 +85,42 @@ export const createGestureRecognizer = (): GestureRecognizer => {
 
   return { feed, longPressDueAt };
 };
+
+/**
+ * Stroke-scoped click suppression: the wiring-side counterpart of the
+ * "suppress-click" intent. A stroke's trailing click can bubble through
+ * #tiles (a tile-to-tile release) or through #strip only (a drag released
+ * over the rail fires its click on the common ancestor, bypassing #tiles)
+ * — and a touch drag fires no click at all. Suppression is therefore bound
+ * to the stroke: armed by its release, consumed by the first click after it
+ * wherever that click lands, and dropped when the next stroke begins, so it
+ * can never be carried forward to eat an innocent tap.
+ */
+export type ClickSuppression = {
+  /** Arm for the stroke that just ended: its trailing click must be swallowed. */
+  arm: () => void;
+  /** Begin a new stroke: any still-unconsumed suppression from the last one is dropped. */
+  beginStroke: () => void;
+  /**
+   * Consume on a click; true when this click must be swallowed. One-shot:
+   * the first click after arming consumes it, later clicks pass untouched.
+   */
+  consumeClick: () => boolean;
+};
+
+export const createClickSuppression = (): ClickSuppression => {
+  let armed = false;
+  return {
+    arm: () => {
+      armed = true;
+    },
+    beginStroke: () => {
+      armed = false;
+    },
+    consumeClick: () => {
+      const swallow = armed;
+      armed = false;
+      return swallow;
+    },
+  };
+};

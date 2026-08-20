@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createGestureRecognizer, type GestureInput, LONG_PRESS_MS, MOVE_SLOP_PX } from "../app/src/gestures";
+import {
+  createClickSuppression,
+  createGestureRecognizer,
+  type GestureInput,
+  LONG_PRESS_MS,
+  MOVE_SLOP_PX,
+} from "../app/src/gestures";
 
 const down = (x: number, y: number, now: number): GestureInput => ({ kind: "down", point: { x, y }, now });
 const move = (x: number, y: number, now: number): GestureInput => ({ kind: "move", point: { x, y }, now });
@@ -73,5 +79,38 @@ describe("createGestureRecognizer", () => {
     recognizer.feed(tick(LONG_PRESS_MS));
     recognizer.feed(move(400, 100, LONG_PRESS_MS + 100));
     expect(recognizer.feed(up(400, 100, LONG_PRESS_MS + 200))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("a moved stroke's suppression does not bleed into the next clean tap", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(100, 100, 0));
+    recognizer.feed(move(140, 100, 200));
+    expect(recognizer.feed(up(140, 100, 300))).toEqual([{ kind: "suppress-click" }]);
+    recognizer.feed(down(200, 200, 1000));
+    expect(recognizer.feed(up(200, 200, 1080))).toEqual([]);
+  });
+});
+
+describe("createClickSuppression", () => {
+  test("swallows exactly the first click after arming", () => {
+    const suppression = createClickSuppression();
+    suppression.arm();
+    expect(suppression.consumeClick()).toBe(true);
+    expect(suppression.consumeClick()).toBe(false);
+  });
+
+  test("a stroke's suppression never survives into the next stroke", () => {
+    const suppression = createClickSuppression();
+    suppression.arm();
+    // A touch drag fires no trailing click at all; the next stroke must not
+    // inherit the old stroke's suppression.
+    suppression.beginStroke();
+    expect(suppression.consumeClick()).toBe(false);
+  });
+
+  test("a click for a clean stroke is never swallowed", () => {
+    const suppression = createClickSuppression();
+    suppression.beginStroke();
+    expect(suppression.consumeClick()).toBe(false);
   });
 });
