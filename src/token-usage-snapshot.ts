@@ -51,8 +51,16 @@ const isIsoInstant = (value: unknown): value is string =>
 
 const isNullableIsoInstant = (value: unknown): value is string | null => value === null || isIsoInstant(value);
 
-const isProviderDay = (value: unknown): value is string =>
-  typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value);
+// A real calendar date in YYYY-MM-DD form only: Date parsing of a date-only
+// string tolerates rollover (2026-02-30 becomes March 2), so anchor to a UTC
+// midnight instant and compare the serialized form back against the input.
+const isProviderDay = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    return false;
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value);
+};
 
 const isTokenCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;

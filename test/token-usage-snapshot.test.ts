@@ -49,12 +49,17 @@ describe("parseTokenUsageSnapshot", () => {
     ).toThrow("totalTokens");
   });
 
-  test("rejects non-canonical instants and bad providerDay strings", () => {
+  test("rejects non-canonical instants, bad providerDay strings, and impossible calendar dates", () => {
     expect(() => parseTokenUsageSnapshot(snapshot({ fetchedAt: "2026-08-20" }))).toThrow("fetchedAt");
     expect(() => parseTokenUsageSnapshot(snapshot({ providerDay: "08/20/2026" }))).toThrow("providerDay");
     expect(() => parseTokenUsageSnapshot(snapshot({ samples: [sample({ fetchedAt: "yesterday" })] }))).toThrow(
       "fetchedAt",
     );
+    expect(() => parseTokenUsageSnapshot(snapshot({ providerDay: "2026-02-30" }))).toThrow("providerDay");
+    expect(() => parseTokenUsageSnapshot(snapshot({ samples: [sample({ providerDay: "2026-02-30" })] }))).toThrow(
+      "providerDay",
+    );
+    expect(() => parseTokenUsageSnapshot(snapshot({ samples: [sample({ providerDay: "2028-02-29" })] }))).not.toThrow();
   });
 
   test("rejects negative or non-finite totals and an over-limit ring", () => {
