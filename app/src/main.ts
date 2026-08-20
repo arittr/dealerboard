@@ -440,9 +440,20 @@ const settleLongPressStroke = (point: GesturePoint): void => {
   handleGestureIntents(gestures.feed({ kind: "up", point, now: Date.now() }));
 };
 
+const onSwipe = (direction: "previous" | "next"): void => {
+  if (currentView === null || currentPageCount <= 1) {
+    return;
+  }
+  const delta = direction === "next" ? 1 : -1;
+  jumpToPage(Math.min(Math.max(currentPage + delta, 0), currentPageCount - 1));
+};
+
 const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
   for (const intent of intents) {
     switch (intent.kind) {
+      case "swipe":
+        onSwipe(intent.direction);
+        break;
       case "longpress": {
         const pending = pendingLongPress;
         if (pending !== null) {

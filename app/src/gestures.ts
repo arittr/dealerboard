@@ -2,8 +2,8 @@
  * Pointer-gesture classification for the strip: a pure state machine fed
  * pointer events (plus a long-press deadline tick) by main.ts, emitting
  * intents. Tap routing stays with the existing click handler; the recognizer
- * only decides when a stroke was something else (long-press, and in a later
- * task, swipe) and when the trailing click must be swallowed. No DOM, no
+ * only decides when a stroke was something else (long-press or swipe) and
+ * when the trailing click must be swallowed. No DOM, no
  * timers — the caller maps Date.now() and setTimeout onto tick/dueAt.
  */
 
@@ -18,10 +18,13 @@ export type GestureInput =
 
 export type GestureIntent =
   | { readonly kind: "longpress"; readonly point: GesturePoint }
+  | { readonly kind: "swipe"; readonly direction: "previous" | "next" }
   | { readonly kind: "suppress-click" };
 
 export const LONG_PRESS_MS = 500;
 export const MOVE_SLOP_PX = 12;
+export const SWIPE_MIN_HORIZONTAL_PX = 80;
+export const SWIPE_MAX_VERTICAL_PX = 48;
 
 type Stroke = {
   readonly start: GesturePoint;
@@ -74,7 +77,15 @@ export const createGestureRecognizer = (): GestureRecognizer => {
         }
         const finished = stroke;
         stroke = null;
-        return finished.longPressed || finished.moved ? [{ kind: "suppress-click" }] : [];
+        if (finished.longPressed) {
+          return [{ kind: "suppress-click" }];
+        }
+        const dx = input.point.x - finished.start.x;
+        const dy = input.point.y - finished.start.y;
+        if (Math.abs(dx) >= SWIPE_MIN_HORIZONTAL_PX && Math.abs(dy) <= SWIPE_MAX_VERTICAL_PX) {
+          return [{ kind: "swipe", direction: dx < 0 ? "next" : "previous" }, { kind: "suppress-click" }];
+        }
+        return finished.moved ? [{ kind: "suppress-click" }] : [];
       }
       case "cancel": {
         stroke = null;

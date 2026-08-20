@@ -5,6 +5,7 @@ import {
   type GestureInput,
   LONG_PRESS_MS,
   MOVE_SLOP_PX,
+  SWIPE_MIN_HORIZONTAL_PX,
 } from "../app/src/gestures";
 
 const down = (x: number, y: number, now: number): GestureInput => ({ kind: "down", point: { x, y }, now });
@@ -88,6 +89,50 @@ describe("createGestureRecognizer", () => {
     expect(recognizer.feed(up(140, 100, 300))).toEqual([{ kind: "suppress-click" }]);
     recognizer.feed(down(200, 200, 1000));
     expect(recognizer.feed(up(200, 200, 1080))).toEqual([]);
+  });
+});
+
+describe("swipe classification", () => {
+  test("a leftward fling pages next and suppresses the click", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(400 - SWIPE_MIN_HORIZONTAL_PX - 40, 320, 120));
+    expect(recognizer.feed(up(280, 320, 200))).toEqual([
+      { kind: "swipe", direction: "next" },
+      { kind: "suppress-click" },
+    ]);
+  });
+
+  test("a rightward fling pages previous", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(100, 300, 0));
+    recognizer.feed(move(100 + SWIPE_MIN_HORIZONTAL_PX + 40, 310, 150));
+    expect(recognizer.feed(up(220, 310, 250))).toEqual([
+      { kind: "swipe", direction: "previous" },
+      { kind: "suppress-click" },
+    ]);
+  });
+
+  test("a vertical-dominant drag is not a swipe but still swallows the click", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 100, 0));
+    recognizer.feed(move(430, 400, 200));
+    expect(recognizer.feed(up(430, 400, 250))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("a short horizontal drag below the threshold is not a swipe", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(400 + SWIPE_MIN_HORIZONTAL_PX - 20, 305, 150));
+    expect(recognizer.feed(up(400 + SWIPE_MIN_HORIZONTAL_PX - 20, 305, 200))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("a stroke that long-pressed never becomes a swipe", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(tick(LONG_PRESS_MS));
+    recognizer.feed(move(100, 300, LONG_PRESS_MS + 100));
+    expect(recognizer.feed(up(100, 300, LONG_PRESS_MS + 200))).toEqual([{ kind: "suppress-click" }]);
   });
 });
 
