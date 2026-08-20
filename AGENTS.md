@@ -19,9 +19,10 @@
   autofix / format. `bun run check` is the full gate (`biome ci . && bun run
   build && bun test`); run it before considering work done.
 - Biome (pinned, see devDependencies) lints and formats `src/`, `test/`,
-  `scripts/`, and root `*.json`/`*.mjs` only — the `.sdPlugin` directory is
-  deliberately excluded. Style: 2 spaces, double quotes, semicolons, 120
-  columns. Strict rules include `noExplicitAny`, `noEvolvingTypes`,
+  `scripts/`, `extensions/`, and `app/` (minus `app/src-tauri`), plus root
+  `*.json`/`*.mjs` — the `.sdPlugin` directory is deliberately excluded.
+  Style: 2 spaces, double quotes, semicolons, 120 columns. Strict rules
+  include `noExplicitAny`, `noEvolvingTypes`,
   `noConsole`, `noProcessEnv` (env enters via `src/core/cli.ts` DI only),
   `noDefaultExport`, `noNonNullAssertion` (relaxed in `test/**`), and
   nursery `noFloatingPromises`; `useLiteralKeys` stays off because
@@ -238,8 +239,15 @@ Notes:
   whose physical resolution is 2560×720 (physical, so a scaled 1280×360
   HiDPI mode still matches), re-pins on reconnect, and autostarts at login.
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
-  Quota panels are deliberately deferred; the rail is a plain section stack
-  so they slot in later.
+  Quota panels (claude + codex) ship in the rail: the daemon's quota collector
+  (`src/core/quota.ts`, started from `cli.ts` and polls on its own 120s
+  cadence, 10-minute 429 cooldown) reads the providers' local OAuth
+  credential files and publishes `quota-snapshot.json` (own `schemaVersion`,
+  bounded history ring; contract in `src/quota-snapshot.ts`) via the
+  `writeFileAtomically` primitive; the strip reads it through the
+  `read_quota_snapshot` Tauri command and renders from the pure view-model in
+  `app/src/quota.ts`. `snapshot-v2.json` and `src/protocol.ts` stay
+  untouched, and no token or response body is ever logged or persisted.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.

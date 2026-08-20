@@ -349,6 +349,17 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
 - A clock and the exact unread count (tiles whose session carries an
   `unreadSince` stamp).
 - Page dots, one per page, tap to jump.
+- Quota panels (strip-only; there is no keypad equivalent): one section per
+  quota provider (claude, codex) with the provider chip, the session-window
+  percent remaining, a bar filled on the status palette (green `#4ADE80`
+  above 25% remaining, amber `#FFB020` from 10%, red `#FF4D67` below), a
+  reset countdown ticking on the rail's 1s cadence, a sparkline of the
+  daemon-recorded session-window history ring, and a weekly-window summary
+  line. Data comes from `quota-snapshot.json` via the `read_quota_snapshot`
+  Tauri command — a separate file with its own `schemaVersion`, never the
+  session snapshot. A provider whose last fetch failed keeps its last-good
+  numbers dimmed with a last-updated age; a provider with no credentials is
+  omitted; a missing file renders no panels.
 
 ### Interaction
 
