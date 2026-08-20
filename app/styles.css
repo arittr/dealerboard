@@ -18,6 +18,8 @@ body {
   gap: 1.56vw;
   padding: 8.33vh 1.56vw;
   height: 100vh;
+  touch-action: none;
+  -webkit-touch-callout: none;
 }
 #tiles {
   --tile-columns: 1;

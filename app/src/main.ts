@@ -26,6 +26,7 @@ import {
   readSnapshot,
   type SnapshotPayload,
 } from "./bridge";
+import { createGestureRecognizer, type GestureInput, type GestureIntent, type GesturePoint } from "./gestures";
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
@@ -46,6 +47,13 @@ let stalenessTimer: ReturnType<typeof setTimeout> | null = null;
 let currentPage = 0;
 let currentPageCount = 1;
 let currentKeys: readonly KeyModel[] = [];
+
+type PendingLongPress = { index: number; tile: HTMLElement; point: GesturePoint };
+
+const gestures = createGestureRecognizer();
+let gestureTimer: number | null = null;
+let pendingLongPress: PendingLongPress | null = null;
+let suppressNextClick = false;
 
 const loadStoredSettings = (): unknown => {
   try {
@@ -244,6 +252,10 @@ const flashTile = (tile: HTMLElement): void => {
 };
 
 const onTilesClick = (event: MouseEvent): void => {
+  if (suppressNextClick) {
+    suppressNextClick = false;
+    return;
+  }
   if (!(event.target instanceof HTMLElement)) {
     return;
   }
@@ -265,8 +277,97 @@ const onTilesClick = (event: MouseEvent): void => {
   });
 };
 
+const tileFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
+  if (!(event.target instanceof HTMLElement)) {
+    return null;
+  }
+  const tile = event.target.closest<HTMLElement>("[data-key-index]");
+  if (tile === null) {
+    return null;
+  }
+  const index = Number(tile.dataset["keyIndex"]);
+  const model = currentKeys[index];
+  if (model === undefined || model.kind !== "session") {
+    return null;
+  }
+  return { index, tile, point: { x: event.clientX, y: event.clientY } };
+};
+
+const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
+  for (const intent of intents) {
+    switch (intent.kind) {
+      case "longpress":
+        if (pendingLongPress !== null) {
+          flashTile(pendingLongPress.tile); // Task 4 replaces the flash with the action sheet.
+        }
+        break;
+      case "suppress-click":
+        suppressNextClick = true;
+        break;
+    }
+  }
+};
+
+const scheduleLongPressTimer = (): void => {
+  if (gestureTimer !== null) {
+    clearTimeout(gestureTimer);
+    gestureTimer = null;
+  }
+  const dueAt = gestures.longPressDueAt();
+  if (dueAt !== null) {
+    gestureTimer = setTimeout(
+      () => {
+        gestureTimer = null;
+        handleGestureIntents(gestures.feed({ kind: "tick", now: Date.now() }));
+      },
+      Math.max(0, dueAt - Date.now()),
+    );
+  }
+};
+
+const feedPointer = (input: GestureInput): void => {
+  handleGestureIntents(gestures.feed(input));
+  scheduleLongPressTimer();
+};
+
+const onStripPointerDown = (event: PointerEvent): void => {
+  if (!event.isPrimary) {
+    return;
+  }
+  pendingLongPress = tileFromPointerEvent(event);
+  feedPointer({ kind: "down", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
+};
+
+const onStripPointerMove = (event: PointerEvent): void => {
+  if (!event.isPrimary) {
+    return;
+  }
+  feedPointer({ kind: "move", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
+};
+
+const onStripPointerUp = (event: PointerEvent): void => {
+  if (!event.isPrimary) {
+    return;
+  }
+  feedPointer({ kind: "up", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
+  pendingLongPress = null;
+};
+
+const onStripPointerCancel = (event: PointerEvent): void => {
+  if (!event.isPrimary) {
+    return;
+  }
+  feedPointer({ kind: "cancel", now: Date.now() });
+  pendingLongPress = null;
+};
+
 const wireInteraction = (): void => {
   document.querySelector<HTMLElement>("#tiles")?.addEventListener("click", onTilesClick);
+  const strip = document.querySelector<HTMLElement>("#strip");
+  strip?.addEventListener("pointerdown", onStripPointerDown);
+  strip?.addEventListener("pointermove", onStripPointerMove);
+  strip?.addEventListener("pointerup", onStripPointerUp);
+  strip?.addEventListener("pointercancel", onStripPointerCancel);
 };
 
 start();
