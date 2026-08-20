@@ -2,23 +2,32 @@
 
 use notify::{Event, RecursiveMode, Watcher};
 use serde::Serialize;
+use std::fs::File;
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use tauri::Emitter;
 
 const SNAPSHOT_FILE_NAME: &str = "snapshot-v2.json";
 const SNAPSHOT_CHANGED_EVENT: &str = "snapshot-changed";
-/// One atomic publish surfaces as a burst of matching events on the target
-/// (two rename, one create, one metadata, one content on macOS FSEvents)
-/// delivered together; admit at most one per window so a publication emits
-/// exactly one event. The window is measured on the monotonic clock — a
-/// backward wall-clock correction must never stretch it into suppressing
-/// genuine publications. 250ms is orders of magnitude above the observed
-/// burst spread and well below the daemon's 2s minimum publish interval —
-/// and the daemon's 5s heartbeat re-publishes the same content, so a
-/// swallowed straggler self-heals.
-const SNAPSHOT_COALESCE_WINDOW: Duration = Duration::from_millis(250);
+
+/// One publication's file identity: the inode and nanosecond mtime of the
+/// same open file the contents were read from. The daemon publishes by
+/// atomic rename, so every publication is a fresh inode; even an in-place
+/// rewrite would move the nanosecond mtime. Two matching events therefore
+/// belong to the same publication exactly when they read the same
+/// generation — and to no fixed time window at all: the daemon's 250ms
+/// poll can publish external database commits back to back, so a window
+/// could swallow a distinct publication's whole burst, delaying the final
+/// state until an unrelated later event or the heartbeat.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FileGeneration {
+    inode: u64,
+    mtime_sec: i64,
+    mtime_nsec: i64,
+}
 
 #[derive(Serialize, Clone)]
 struct SnapshotPayload {
@@ -44,25 +53,30 @@ fn event_touches_snapshot(event: &Event) -> bool {
         .any(|path| path.file_name().and_then(|name| name.to_str()) == Some(SNAPSHOT_FILE_NAME))
 }
 
-fn within_coalesce_window(elapsed_since_last_emit: Duration) -> bool {
-    elapsed_since_last_emit < SNAPSHOT_COALESCE_WINDOW
-}
-
-fn read_snapshot_in(directory: &Path) -> Result<SnapshotPayload, String> {
+fn read_snapshot_in(directory: &Path) -> Result<(SnapshotPayload, FileGeneration), String> {
     let path = directory.join(SNAPSHOT_FILE_NAME);
-    let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
-    let mtime_ms = metadata
-        .modified()
-        .map_err(|error| error.to_string())?
+    // Open once and read everything from the same handle: the fstat
+    // identity and the contents always describe one file, never a
+    // publication that swapped in between a stat and a read.
+    let mut file = File::open(&path).map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let system_time = metadata.modified().map_err(|error| error.to_string())?;
+    let mtime_ms = system_time
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_millis() as u64;
-    let contents = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    Ok(SnapshotPayload { mtime_ms, contents })
+    let generation = FileGeneration {
+        inode: metadata.ino(),
+        mtime_sec: metadata.mtime(),
+        mtime_nsec: metadata.mtime_nsec(),
+    };
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).map_err(|error| error.to_string())?;
+    Ok((SnapshotPayload { mtime_ms, contents }, generation))
 }
 
 fn read_snapshot_payload() -> Result<SnapshotPayload, String> {
-    read_snapshot_in(&app_support_root()?)
+    read_snapshot_in(&app_support_root()?).map(|(payload, _generation)| payload)
 }
 
 #[tauri::command]
@@ -156,15 +170,17 @@ async fn focus_ghostty(script: &str, terminal_id: &str) -> Result<(), String> {
 /// atomic rename, which swaps the file's inode — and push every
 /// snapshot-v2.json publication to the webview with the same payload shape
 /// as `read_snapshot`. Each publication surfaces as a burst of matching
-/// events; the coalescing window admits only the first successful emit, so
-/// exactly one event per publication reaches the webview — and a sink that
-/// fails does not burn the window: a later event of the same burst retries.
+/// events; coalescing is by file generation, so exactly one event per
+/// publication reaches the webview no matter how closely publications
+/// follow, while repeated events for the last successfully emitted
+/// generation stay suppressed. A sink that fails does not stamp the
+/// generation: a later event of the same burst retries.
 fn watch_snapshot_directory(
     directory: &Path,
     mut on_change: impl FnMut(SnapshotPayload) -> Result<(), String> + Send + 'static,
 ) -> Result<(), String> {
     let watched_directory = directory.to_path_buf();
-    let mut last_emit: Option<Instant> = None;
+    let mut last_emit: Option<FileGeneration> = None;
     let mut watcher = notify::recommended_watcher(move |result: Result<Event, notify::Error>| {
         let Ok(event) = result else {
             return;
@@ -172,17 +188,19 @@ fn watch_snapshot_directory(
         if !event_touches_snapshot(&event) {
             return;
         }
-        if last_emit.is_some_and(|last| within_coalesce_window(last.elapsed())) {
+        // Read fresh rather than trusting the event kind: the identity and
+        // the contents come from one open file, and the generation is
+        // compared against the last emitted one — only repeats of it are
+        // suppressed. The generation is stamped after the sink returns Ok,
+        // so a failed emit retries on a later burst event.
+        let Ok((payload, generation)) = read_snapshot_in(&watched_directory) else {
+            return;
+        };
+        if last_emit == Some(generation) {
             return;
         }
-        // Read fresh rather than trusting the event kind, and stamp the
-        // window only after the sink returns Ok — a failed emit retries on a
-        // later burst event, and a slow successful one pins the window to
-        // emit time so queued burst events stay suppressed.
-        if let Ok(payload) = read_snapshot_in(&watched_directory) {
-            if on_change(payload).is_ok() {
-                last_emit = Some(Instant::now());
-            }
+        if on_change(payload).is_ok() {
+            last_emit = Some(generation);
         }
     })
     .map_err(|error| error.to_string())?;
@@ -245,7 +263,7 @@ mod tests {
     // a test's seed can emit spuriously. Every real-watcher test therefore
     // arms its sink only after the stream has settled: while disarmed the
     // sink refuses, and a refused sink neither sends nor stamps the
-    // coalescing window (the stamp-on-success invariant under test).
+    // coalescing stamp (the stamp-on-success invariant under test).
     const STREAM_SETTLE_MS: u64 = 200;
 
     fn event_for(kind: EventKind, path: PathBuf) -> Event {
@@ -277,23 +295,35 @@ mod tests {
     }
 
     #[test]
-    fn coalesce_window_admits_one_event_per_burst() {
-        // The gate consumes monotonic elapsed time only, so wall-clock
-        // values — including a backward clock correction — cannot re-arm
-        // suppression. A burst's events land far inside the window…
-        assert!(within_coalesce_window(Duration::ZERO));
-        assert!(within_coalesce_window(
-            SNAPSHOT_COALESCE_WINDOW - Duration::from_millis(1)
-        ));
-        // …and the window boundary re-arms for the next publication.
-        assert!(!within_coalesce_window(SNAPSHOT_COALESCE_WINDOW));
-        assert!(!within_coalesce_window(SNAPSHOT_COALESCE_WINDOW * 10));
+    fn generation_identity_tracks_publications() {
+        let directory =
+            std::env::temp_dir().join(format!("agent-strip-generation-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
+
+        // The same unchanged file reads as the same generation, twice.
+        let (first_payload, first) = read_snapshot_in(&directory).unwrap();
+        let (second_payload, second) = read_snapshot_in(&directory).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first_payload.contents, second_payload.contents);
+
+        // A new publication (temp sibling renamed over the target) is a
+        // distinct generation even though the path is unchanged: the temp
+        // file's inode is freshly allocated while the old target still
+        // exists, so the inode necessarily differs.
+        let temp = directory.join(".snapshot-v2.json-48158-generation.tmp");
+        std::fs::write(&temp, r#"{"n":1}"#).unwrap();
+        std::fs::rename(&temp, directory.join(SNAPSHOT_FILE_NAME)).unwrap();
+        let (_, third) = read_snapshot_in(&directory).unwrap();
+        assert_ne!(first, third);
+
+        std::fs::remove_dir_all(&directory).ok();
     }
 
     /// One daemon publication — temporary sibling written, then renamed over
     /// the target — against the real watcher: exactly one emitted payload,
     /// with the quota snapshot and temp-file churn excluded, and a later
-    /// publication emitting again once the window has expired.
+    /// publication emitting again as its own generation.
     #[test]
     fn one_publication_emits_exactly_one_event() {
         let directory = std::env::temp_dir().join(format!("agent-strip-watch-{}", std::process::id()));
@@ -328,20 +358,74 @@ mod tests {
         assert_eq!(payloads.len(), 1, "one publication must emit exactly one event");
         assert_eq!(payloads[0].contents, r#"{"n":1}"#);
 
-        // A publication after the window expires emits again.
+        // A later publication emits again: a distinct generation is never
+        // suppressed, no matter how soon it follows.
         let temp = directory.join(".snapshot-v2.json-48158-test2.tmp");
         std::fs::write(&temp, r#"{"n":2}"#).unwrap();
         std::fs::rename(&temp, directory.join(SNAPSHOT_FILE_NAME)).unwrap();
         let second = receiver
             .recv_timeout(Duration::from_millis(600))
-            .expect("second publication emits once the window expired");
+            .expect("a second publication emits as its own generation");
         assert_eq!(second.contents, r#"{"n":2}"#);
 
         std::fs::remove_dir_all(&directory).ok();
     }
 
-    /// A sink that fails must not burn the window: the stamp lands only on
-    /// success, so a later event of the same publication burst (macOS
+    /// The daemon's poll loop can publish on an external database commit
+    /// every 250ms, so a genuine publication can follow the previous one well
+    /// inside any fixed coalescing window. The second publication here lands
+    /// immediately after the first payload was received — inside the 250ms
+    /// window a time-based gate would still hold — yet must still emit, or
+    /// the final state never arrives until an unrelated later event.
+    #[test]
+    fn two_distinct_publications_inside_the_coalesce_window_both_emit() {
+        let directory =
+            std::env::temp_dir().join(format!("agent-strip-two-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        let armed = Arc::new(AtomicBool::new(false));
+        let armed_flag = armed.clone();
+        watch_snapshot_directory(&directory, move |payload| {
+            if !armed_flag.load(Ordering::SeqCst) {
+                return Err("disarmed: replayed pre-watch event".to_string());
+            }
+            let _ = sender.send(payload);
+            Ok(())
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(STREAM_SETTLE_MS));
+        armed.store(true, Ordering::SeqCst);
+
+        let publish = |contents: &str, suffix: &str| {
+            let temp = directory.join(format!(".snapshot-v2.json-48158-{suffix}.tmp"));
+            std::fs::write(&temp, contents).unwrap();
+            std::fs::rename(&temp, directory.join(SNAPSHOT_FILE_NAME)).unwrap();
+        };
+
+        publish(r#"{"n":1}"#, "a");
+        let first = receiver
+            .recv_timeout(Duration::from_millis(600))
+            .expect("the first publication emits");
+        assert_eq!(first.contents, r#"{"n":1}"#);
+
+        // Distinct generation, issued the instant the first payload landed
+        // — inside the 250ms window the old time gate burned on emit.
+        publish(r#"{"n":2}"#, "b");
+        let second = receiver
+            .recv_timeout(Duration::from_millis(600))
+            .expect("a distinct generation inside the window must still emit");
+        assert_eq!(second.contents, r#"{"n":2}"#);
+
+        // The second publication's burst still coalesces to that one event.
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// A sink that fails must not stamp the generation: the stamp lands only
+    /// on success, so a later event of the same publication burst (macOS
     /// FSEvents delivers several matching events per publish) retries the
     /// emit and the publication still delivers exactly once.
     #[test]
@@ -379,16 +463,16 @@ mod tests {
         assert_eq!(first.contents, r#"{"n":1}"#);
         assert!(
             receiver.recv_timeout(Duration::from_millis(50)).is_err(),
-            "after the successful retry the window suppresses the burst's remaining events"
+            "after the successful retry the emitted generation suppresses the burst's remaining events"
         );
 
         std::fs::remove_dir_all(&directory).ok();
     }
 
-    /// A sink that succeeds only after outlasting the window must not re-arm
-    /// the gate for the same burst's queued events: the stamp is taken when
-    /// the sink returns Ok, not when its event arrived. Under a pre-call
-    /// stamp this test double-emits.
+    /// A sink that succeeds only after a long delay must not let the same
+    /// burst emit twice: the generation is stamped when the sink returns Ok,
+    /// and the burst's later events re-read the same (unchanged) file, so
+    /// the emitted generation still suppresses them regardless of timing.
     #[test]
     fn slow_successful_sink_does_not_double_emit() {
         let directory = std::env::temp_dir().join(format!("agent-strip-slow-{}", std::process::id()));
@@ -405,8 +489,9 @@ mod tests {
             }
             calls += 1;
             if calls == 1 {
-                // Outlast the coalescing window before reporting success.
-                std::thread::sleep(SNAPSHOT_COALESCE_WINDOW * 2);
+                // Outlast far beyond any plausible burst spread before
+                // reporting success.
+                std::thread::sleep(Duration::from_millis(500));
             }
             let _ = sender.send(payload);
             Ok(())
