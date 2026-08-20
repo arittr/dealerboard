@@ -47,6 +47,7 @@ import {
   type GestureInput,
   type GestureIntent,
   type GesturePoint,
+  swallowSuppressedClick,
 } from "./gestures";
 import { createIngestGate } from "./ingest-gate";
 import { pressSessionTile } from "./press";
@@ -315,9 +316,6 @@ const flashTile = (tile: HTMLElement): void => {
 };
 
 const onTilesClick = (event: MouseEvent): void => {
-  if (clickSuppression.consumeClick()) {
-    return;
-  }
   if (!(event.target instanceof HTMLElement)) {
     return;
   }
@@ -599,15 +597,14 @@ const onStripPointerCancel = (event: PointerEvent): void => {
 };
 
 /**
- * Consume suppression on the strip-wide click, not just in #tiles: a stroke
- * released over non-tile chrome (the rail) fires its trailing click on the
- * common ancestor #strip, bypassing the #tiles consumer entirely — without
- * this backstop that suppression would survive into the next tap. For tile
- * clicks the #tiles handler runs first (child before parent in the bubble
- * phase), so it swallows before this reset sees the click.
+ * Consume suppression in the capture phase on #strip — before the click
+ * reaches any target: a moved stroke released on a page dot would
+ * otherwise page-jump, because the dot's own listener fires in the target
+ * phase, ahead of any bubble-phase consumer on an ancestor. A suppressed
+ * click is prevented and stopped outright; clean clicks pass untouched.
  */
-const onStripClick = (): void => {
-  clickSuppression.consumeClick();
+const onStripClickCapture = (event: MouseEvent): void => {
+  swallowSuppressedClick(clickSuppression, event);
 };
 
 const wireInteraction = (): void => {
@@ -617,7 +614,7 @@ const wireInteraction = (): void => {
   strip?.addEventListener("pointermove", onStripPointerMove);
   strip?.addEventListener("pointerup", onStripPointerUp);
   strip?.addEventListener("pointercancel", onStripPointerCancel);
-  strip?.addEventListener("click", onStripClick);
+  strip?.addEventListener("click", onStripClickCapture, true);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       dismissActionSheet();

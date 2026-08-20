@@ -6,6 +6,7 @@ import {
   LONG_PRESS_MS,
   MOVE_SLOP_PX,
   SWIPE_MIN_HORIZONTAL_PX,
+  swallowSuppressedClick,
 } from "../app/src/gestures";
 
 const down = (x: number, y: number, now: number): GestureInput => ({ kind: "down", point: { x, y }, now });
@@ -82,6 +83,15 @@ describe("createGestureRecognizer", () => {
     expect(recognizer.feed(up(400, 100, LONG_PRESS_MS + 200))).toEqual([{ kind: "suppress-click" }]);
   });
 
+  test("a release past the slop suppresses the click even without a move sample", () => {
+    // Pointermove delivery is not guaranteed (coalesced or dropped): the
+    // final position alone must decide, so a sub-swipe release beyond the
+    // slop is never treated as a clean tap.
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(100, 100, 0));
+    expect(recognizer.feed(up(100 + MOVE_SLOP_PX + 10, 100, 300))).toEqual([{ kind: "suppress-click" }]);
+  });
+
   test("a moved stroke's suppression does not bleed into the next clean tap", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
@@ -133,6 +143,44 @@ describe("swipe classification", () => {
     recognizer.feed(tick(LONG_PRESS_MS));
     recognizer.feed(move(100, 300, LONG_PRESS_MS + 100));
     expect(recognizer.feed(up(100, 300, LONG_PRESS_MS + 200))).toEqual([{ kind: "suppress-click" }]);
+  });
+});
+
+describe("swallowSuppressedClick", () => {
+  const recordingEvent = () => {
+    const calls: string[] = [];
+    return {
+      calls,
+      event: {
+        preventDefault: () => calls.push("preventDefault"),
+        stopPropagation: () => calls.push("stopPropagation"),
+      },
+    };
+  };
+
+  test("an armed click is consumed and stopped before any handler sees it", () => {
+    const suppression = createClickSuppression();
+    suppression.arm();
+    const { calls, event } = recordingEvent();
+    expect(swallowSuppressedClick(suppression, event)).toBe(true);
+    expect(calls).toEqual(["preventDefault", "stopPropagation"]);
+  });
+
+  test("a clean click is left untouched for normal routing", () => {
+    const suppression = createClickSuppression();
+    suppression.beginStroke();
+    const { calls, event } = recordingEvent();
+    expect(swallowSuppressedClick(suppression, event)).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  test("swallowing is one-shot: the next click passes", () => {
+    const suppression = createClickSuppression();
+    suppression.arm();
+    swallowSuppressedClick(suppression, recordingEvent().event);
+    const { calls, event } = recordingEvent();
+    expect(swallowSuppressedClick(suppression, event)).toBe(false);
+    expect(calls).toEqual([]);
   });
 });
 

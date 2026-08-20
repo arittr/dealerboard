@@ -82,10 +82,14 @@ export const createGestureRecognizer = (): GestureRecognizer => {
         }
         const dx = input.point.x - finished.start.x;
         const dy = input.point.y - finished.start.y;
+        // Recompute the slop from the release position: pointermove delivery
+        // is not guaranteed (samples can be coalesced or dropped), so a
+        // release beyond the slop must never be treated as a clean tap.
+        const moved = finished.moved || Math.hypot(dx, dy) > MOVE_SLOP_PX;
         if (Math.abs(dx) >= SWIPE_MIN_HORIZONTAL_PX && Math.abs(dy) <= SWIPE_MAX_VERTICAL_PX) {
           return [{ kind: "swipe", direction: dx < 0 ? "next" : "previous" }, { kind: "suppress-click" }];
         }
-        return finished.moved ? [{ kind: "suppress-click" }] : [];
+        return moved ? [{ kind: "suppress-click" }] : [];
       }
       case "cancel": {
         stroke = null;
@@ -134,4 +138,26 @@ export const createClickSuppression = (): ClickSuppression => {
       return swallow;
     },
   };
+};
+
+/** The minimal event surface a swallowed click needs. */
+export type SwallowableClick = {
+  preventDefault: () => void;
+  stopPropagation: () => void;
+};
+
+/**
+ * Consume an armed suppression and stop the click outright. The strip
+ * installs this in the capture phase: a moved stroke released on a page
+ * dot would otherwise page-jump first — the dot's own listener fires in the
+ * target phase, before any bubble-phase consumer on an ancestor could
+ * swallow the click.
+ */
+export const swallowSuppressedClick = (suppression: ClickSuppression, event: SwallowableClick): boolean => {
+  if (!suppression.consumeClick()) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
 };
