@@ -1,14 +1,16 @@
 /**
  * App entry: one initial snapshot read, then daemon pushes via the Rust
- * host's file watch (snapshot-changed events). A slow 10s timer only
- * re-checks staleness (a dead daemon's heartbeat stops, rendering OFFLINE)
- * and retries real reads while degraded, so a missed event or a
- * late-starting daemon self-heals; it also carries the quota read, whose
- * file the watch does not cover. Layout reduces with the strip geometry
- * and re-renders only when the serialized key models change (so CSS status
- * animations are never restarted). Page settings persist to localStorage;
- * the reducer validates them on every read. A 1s timer ticks the rail
- * clock and the per-tile status timers in place.
+ * host's file watch (snapshot-changed events). The OFFLINE check is a
+ * one-shot timer scheduled at the payload's actual expiry (mtime + the
+ * staleness threshold, re-armed per healthy ingest), so a dead daemon
+ * renders OFFLINE within one threshold of its last publish; a slow 10s
+ * pass retries real reads while degraded (self-healing a missed event or
+ * a late-starting daemon) and carries the quota read, whose file the watch
+ * does not cover. Layout reduces with the strip geometry and re-renders
+ * only when the serialized key models change (so CSS status animations are
+ * never restarted). Page settings persist to localStorage; the reducer
+ * validates them on every read. A 1s timer ticks the rail clock and the
+ * per-tile status timers in place.
  */
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -27,11 +29,11 @@ import {
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
-import { countUnreadSessions, reduceSnapshotRead } from "./snapshot-view";
+import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
 import { renderTiles, statusLineText, stripGridLayout, visibleStripKeys } from "./tiles";
 import { startStripWindowManager } from "./window";
 
-const STALENESS_CHECK_MS = 10_000;
+const SLOW_PASS_MS = 10_000;
 const SETTINGS_KEY = "agent-strip.layout.v1";
 
 let lastGood: SessionSnapshotV2 | null = null;
@@ -40,6 +42,7 @@ let currentView: SnapshotView | null = null;
 let lastReadMtimeMs: number | null = null;
 let lastPayload: SnapshotPayload | null = null;
 let currentQuota: QuotaPanelModel[] = [];
+let stalenessTimer: ReturnType<typeof setTimeout> | null = null;
 let currentPage = 0;
 let currentPageCount = 1;
 let currentKeys: readonly KeyModel[] = [];
@@ -139,6 +142,37 @@ const applyLayout = (layout: LayoutResult): void => {
   }
 };
 
+const clearExpiryCheck = (): void => {
+  if (stalenessTimer !== null) {
+    clearTimeout(stalenessTimer);
+    stalenessTimer = null;
+  }
+};
+
+/**
+ * The OFFLINE flip, scheduled at the payload's actual expiry rather than on
+ * a fixed cadence: a periodic check can straddle the staleness boundary and
+ * hold a healthy verdict for a full extra period (OFFLINE up to twice the
+ * threshold after death), while a check fired at mtime + threshold flips it
+ * within one threshold. Exactly one timer exists — each healthy ingest
+ * reschedules it, so a live daemon's 5s heartbeat keeps pushing it out and
+ * it only ever fires after the daemon stops publishing.
+ */
+const scheduleExpiryCheck = (payload: SnapshotPayload): void => {
+  clearExpiryCheck();
+  const delay = msUntilStale(payload, Date.now());
+  if (delay === null) {
+    return;
+  }
+  stalenessTimer = setTimeout(() => {
+    stalenessTimer = null;
+    // At expiry the last payload is past the threshold, so a re-read either
+    // degrades to OFFLINE (dead daemon, same old mtime) or recovers
+    // instantly when only the push event was missed and the file is fresh.
+    void readAndIngest();
+  }, delay);
+};
+
 const ingest = (payload: SnapshotPayload | null): void => {
   lastPayload = payload;
   lastReadMtimeMs = payload === null ? null : payload.mtimeMs;
@@ -146,6 +180,13 @@ const ingest = (payload: SnapshotPayload | null): void => {
   lastGood = reduction.lastGood;
   currentView = reduction.view;
   applyLayout(reduceLayout(reduction.view, loadStoredSettings(), STRIP_GEOMETRY));
+  // A healthy view arms the one-shot expiry check; a degraded one disarms it
+  // — the slow pass owns re-reads until a fresh payload re-arms it.
+  if (payload !== null && !reduction.view.degraded) {
+    scheduleExpiryCheck(payload);
+  } else {
+    clearExpiryCheck();
+  }
 };
 
 const readAndIngest = async (): Promise<void> => {
@@ -153,17 +194,16 @@ const readAndIngest = async (): Promise<void> => {
 };
 
 /**
- * The staleness half of the old 2s poll: a healthy view only needs its file
- * age re-evaluated against the last payload (no snapshot I/O); a degraded
- * view retries a real read so a missed event or a late-starting daemon
- * self-heals. The quota snapshot rides this timer — the watch pushes
- * snapshot-v2.json only, that file changes at most every 120s, and a
- * rejection is a missing file, i.e. "no data yet".
+ * The slow degraded-recovery pass (the push stream is the healthy update
+ * path): while degraded it retries a real read, self-healing a missed event
+ * or a late-starting daemon; while healthy it touches no snapshot state —
+ * the expiry check owns the OFFLINE flip. The quota snapshot also rides
+ * this pass — the watch pushes snapshot-v2.json only, that file changes at
+ * most every 120s, and a rejection is a missing file, i.e. "no data yet".
  */
-const checkStaleness = async (): Promise<void> => {
+const slowPass = async (): Promise<void> => {
   currentQuota = reduceQuotaRead(await readQuotaSnapshot().catch(() => null), Date.now());
   if (lastPayload !== null && currentView !== null && !currentView.degraded) {
-    ingest(lastPayload);
     return;
   }
   await readAndIngest();
@@ -183,13 +223,13 @@ const start = (): void => {
   void startStripWindowManager();
   void ensureAutostart();
   wireInteraction();
-  // The first staleness run doubles as the initial read: with no payload yet
-  // it falls through to readAndIngest (and rides the quota read).
-  void checkStaleness();
+  // The first slow pass doubles as the initial read: with no payload yet it
+  // falls through to readAndIngest (and rides the quota read).
+  void slowPass();
   void onSnapshotChanged(ingest);
   setInterval(() => {
-    void checkStaleness();
-  }, STALENESS_CHECK_MS);
+    void slowPass();
+  }, SLOW_PASS_MS);
   setInterval(() => {
     renderRailNow();
     tickStatusLines();

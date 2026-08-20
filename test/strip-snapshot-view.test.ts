@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { countUnreadSessions, reduceSnapshotRead, type SnapshotRead } from "../app/src/snapshot-view";
+import {
+  countUnreadSessions,
+  msUntilStale,
+  reduceSnapshotRead,
+  type SnapshotRead,
+  STALE_SNAPSHOT_AGE_MS,
+} from "../app/src/snapshot-view";
 import type { ProjectedSession, SessionSnapshotV2 } from "../src/protocol";
 
 const healthy = (sessions: SessionSnapshotV2["sessions"] = []): SessionSnapshotV2 => ({
@@ -83,6 +89,34 @@ const session = (overrides: Partial<ProjectedSession>): ProjectedSession => ({
   transcriptPath: null,
   originParentRef: null,
   ...overrides,
+});
+
+describe("msUntilStale", () => {
+  test("a fresh read expires exactly one staleness threshold later", () => {
+    expect(msUntilStale(readOf(FRESH, healthy()), NOW)).toBe(5_000);
+    expect(msUntilStale(readOf(NOW, healthy()), NOW)).toBe(STALE_SNAPSHOT_AGE_MS);
+  });
+
+  test("a read at or past the threshold checks immediately, never negatively", () => {
+    // At-threshold is still healthy (the reducer's staleness test is strict),
+    // so the clamped zero just re-arms one macrotask later.
+    expect(msUntilStale(readOf(FRESH, healthy()), FRESH + STALE_SNAPSHOT_AGE_MS)).toBe(0);
+    expect(msUntilStale(readOf(FRESH, healthy()), FRESH + STALE_SNAPSHOT_AGE_MS + 1)).toBe(0);
+    expect(msUntilStale(readOf(FRESH, healthy()), FRESH + 60_000)).toBe(0);
+  });
+
+  test("no payload never expires", () => {
+    expect(msUntilStale(null, NOW)).toBeNull();
+  });
+
+  test("expiry and the reducer agree: a zero delay means the next tick degrades", () => {
+    const read = readOf(FRESH, healthy());
+    const expiry = FRESH + STALE_SNAPSHOT_AGE_MS;
+    expect(msUntilStale(read, expiry)).toBe(0);
+    // The scheduled check runs no earlier than the expiry instant — by then
+    // the strictly-greater test holds, so the re-read renders degraded.
+    expect(reduceSnapshotRead(read, null, expiry + 1).view.degraded).toBe(true);
+  });
 });
 
 describe("countUnreadSessions", () => {

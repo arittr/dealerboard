@@ -48,6 +48,18 @@ export const reduceSnapshotRead = (
 };
 
 /**
+ * Milliseconds from `now` until the read crosses the stale threshold — the
+ * exact moment a staleness re-check matters. Zero for a payload already at
+ * or past expiry (check immediately; the reducer's strictly-greater test
+ * makes an at-threshold check healthy, so a zero delay simply re-arms);
+ * null when there is no payload to expire. Scheduling the OFFLINE check
+ * here rather than on a fixed cadence bounds detection to one threshold
+ * after the daemon's last publish instead of up to two.
+ */
+export const msUntilStale = (read: SnapshotRead | null, now: number): number | null =>
+  read === null ? null : Math.max(0, read.mtimeMs + STALE_SNAPSHOT_AGE_MS - now);
+
+/**
  * Exact unread count: sessions carrying an unviewed-result stamp. Replaces
  * the on-grid idle+error approximation — the wire now carries the ledger
  * field, so an acked tile stops counting immediately.
