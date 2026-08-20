@@ -86,6 +86,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isTokenCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
+const AGENTSVIEW_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
+
 const tokenCount = (row: Record<string, unknown>, key: string): number | null => {
   const value = row[key];
   return isTokenCount(value) ? value : null;
@@ -93,10 +95,12 @@ const tokenCount = (row: Record<string, unknown>, key: string): number | null =>
 
 /**
  * Parse one agentsview `usage daily --json` report down to the providerDay
- * row's tokenmaxxing_total_v1. A report with no row for the day is a
- * legitimate zero (nothing burned yet); any contract violation — wrong
- * schema, malformed JSON, a present row with bad fields — is null (a failed
- * poll).
+ * row's tokenmaxxing_total_v1. Every `daily` element must be a well-formed
+ * schema-v4 row (a record whose date is YYYY-MM-DD) — a broken reporter is a
+ * failed poll, never a zero. Rows for other days are skipped without field
+ * validation; a report with no row for the day is a legitimate zero
+ * (nothing burned yet). Any other contract violation — wrong schema,
+ * malformed JSON, a present today-row with bad fields — is null.
  */
 export const normalizeAgentsviewDaily = (body: string, providerDay: string): number | null => {
   let parsed: unknown;
@@ -109,7 +113,11 @@ export const normalizeAgentsviewDaily = (body: string, providerDay: string): num
     return null;
   }
   for (const entry of parsed["daily"]) {
-    if (!isRecord(entry) || entry["date"] !== providerDay) {
+    const date = isRecord(entry) ? entry["date"] : undefined;
+    if (typeof date !== "string" || !AGENTSVIEW_DATE_PATTERN.test(date)) {
+      return null;
+    }
+    if (date !== providerDay) {
       continue;
     }
     const input = tokenCount(entry, "inputTokens");
@@ -173,18 +181,23 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
   const schedule = dependencies.schedule ?? defaultSchedule;
   const diagnostics = dependencies.diagnostics ?? (() => {});
 
-  let state: CollectorState = { snapshot: emptySnapshot(laProviderDay(new Date(nowMs()))), failed: false };
+  let state: CollectorState = { snapshot: emptySnapshot(laProviderDay(new Date(nowMs()))), failed: true };
   let lastWrittenJson: string | null = null;
   let polling = false;
   let started = false;
   let cancelSchedule: (() => void) | null = null;
 
-  const reportFailure = (): void => {
-    try {
-      diagnostics({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "token_usage_failed" });
-    } catch {
-      // Diagnostics must never break the collector.
+  // Every failure routes through here: log only a good→failed transition — a
+  // cold start was never good, so it stays silent — then mark unavailable.
+  const markFailed = (): void => {
+    if (!state.failed) {
+      try {
+        diagnostics({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "token_usage_failed" });
+      } catch {
+        // Diagnostics must never break the collector.
+      }
     }
+    state = { snapshot: { ...state.snapshot, unavailable: true }, failed: true };
   };
 
   // Seed last-good state from the previous publication so a daemon restart
@@ -221,10 +234,7 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
         total = null;
       }
       if (total === null) {
-        if (!state.failed) {
-          reportFailure();
-        }
-        state = { snapshot: { ...state.snapshot, unavailable: true }, failed: true };
+        markFailed();
       } else {
         const fetchedAt = now();
         const samples = [...state.snapshot.samples, { fetchedAt, totalTokens: total, providerDay }].slice(
@@ -246,9 +256,9 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
       }
     } catch {
       // The exported contract promises pollNow never throws. An unexpected
-      // dependency/runtime exception is contained here — one fixed diagnostic,
-      // never error text — and the next pass retries.
-      reportFailure();
+      // dependency/runtime exception is contained here — the same transition
+      // gate as a poll failure, never error text — and the next pass retries.
+      markFailed();
     } finally {
       polling = false;
     }

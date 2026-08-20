@@ -54,6 +54,19 @@ describe("normalizeAgentsviewDaily", () => {
     const badRow = JSON.stringify({ schema_version: 4, daily: [{ date: DAY, inputTokens: -1 }] });
     expect(normalizeAgentsviewDaily(badRow, DAY)).toBeNull();
   });
+
+  test("a malformed daily entry is a failed poll, never a legitimate zero", () => {
+    expect(normalizeAgentsviewDaily(JSON.stringify({ schema_version: 4, daily: [null] }), DAY)).toBeNull();
+    expect(normalizeAgentsviewDaily(JSON.stringify({ schema_version: 4, daily: [{ date: 123 }] }), DAY)).toBeNull();
+    expect(
+      normalizeAgentsviewDaily(JSON.stringify({ schema_version: 4, daily: [{ date: "garbage" }] }), DAY),
+    ).toBeNull();
+  });
+
+  test("a valid non-matching row is skipped without field validation", () => {
+    const foreign = JSON.stringify({ schema_version: 4, daily: [{ date: "2026-08-19", inputTokens: "junk" }] });
+    expect(normalizeAgentsviewDaily(foreign, DAY)).toBe(0);
+  });
 });
 
 describe("resolveAgentsviewBin", () => {
@@ -151,12 +164,18 @@ describe("createTokenUsageCollector", () => {
     const collector = createTokenUsageCollector(harness.deps);
     harness.fail();
     await collector.pollNow();
+    await collector.pollNow(); // a cold failure never logs — there was no good state to leave
     const cold = parseTokenUsageSnapshot(JSON.parse(harness.writes.at(-1) ?? ""));
     expect(cold).toMatchObject({ totalTokens: 0, unavailable: true, fetchedAt: null, samples: [] });
+    expect(harness.diagnostics.filter((record) => record.code === "token_usage_failed").length).toBe(0);
     harness.respond(FULL);
     await collector.pollNow();
     const recovered = parseTokenUsageSnapshot(JSON.parse(harness.writes.at(-1) ?? ""));
     expect(recovered).toMatchObject({ totalTokens: 1000, unavailable: false, fetchedAt: NOW });
+    harness.fail();
+    await collector.pollNow();
+    const failures = harness.diagnostics.filter((record) => record.code === "token_usage_failed");
+    expect(failures.length).toBe(1); // the first good→failed transition only
   });
 
   test("the ring is capped and seeds from the previous publication", async () => {
