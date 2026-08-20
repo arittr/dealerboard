@@ -49,6 +49,7 @@ import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
+import { identityOf, resolveSessionTile, type SessionIdentity } from "./tile-identity";
 import { renderTiles, statusLineText, stripGridLayout, visibleStripKeys } from "./tiles";
 import { startStripWindowManager } from "./window";
 
@@ -67,7 +68,13 @@ let currentPageCount = 1;
 let currentKeys: readonly KeyModel[] = [];
 const ingestGate = createIngestGate();
 
-type PendingLongPress = { index: number; tile: HTMLElement; point: GesturePoint };
+/**
+ * A pending long-press is bound to the pressed session's identity, never to
+ * a dense tile index: a pushed snapshot can re-render the grid during the
+ * 500ms hold, and an index captured at press time may already point at a
+ * different session when the sheet opens.
+ */
+type PendingLongPress = { identity: SessionIdentity; point: GesturePoint };
 
 const gestures = createGestureRecognizer();
 const clickSuppression = createClickSuppression();
@@ -341,7 +348,7 @@ const tileFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
   if (model === undefined || model.kind !== "session") {
     return null;
   }
-  return { index, tile, point: { x: event.clientX, y: event.clientY } };
+  return { identity: identityOf(model.session), point: { x: event.clientX, y: event.clientY } };
 };
 
 const dismissActionSheet = (): void => {
@@ -446,12 +453,19 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
 };
 
 const openActionSheetFor = (pending: PendingLongPress): void => {
-  const model = currentKeys[pending.index];
-  if (model === undefined || model.kind !== "session") {
+  // Resolve by identity against the current keys: if the pressed session
+  // left the grid during the hold, cancel — never retarget the sheet (and
+  // its Clear action) at whichever session shifted into the old index.
+  const ref = resolveSessionTile(currentKeys, pending.identity);
+  if (ref === null) {
+    return;
+  }
+  const tile = document.querySelector<HTMLElement>(`#tiles [data-key-index="${ref.index}"]`);
+  if (tile === null) {
     return;
   }
   sheetClearArmed = false;
-  openActionSheet({ point: pending.point, session: model.session, label: model.label, tile: pending.tile });
+  openActionSheet({ point: pending.point, session: ref.session, label: ref.label, tile });
 };
 
 /**
