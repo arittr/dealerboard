@@ -123,6 +123,9 @@ export const quotaStatusText = (model: QuotaPanelModel, now: number): string => 
   if (model.resetAtMs === null) {
     return "";
   }
+  if (model.resetAtMs <= now) {
+    return "resetting…";
+  }
   return `resets in ${formatResetCountdown(model.resetAtMs, now)}`;
 };
 

@@ -117,6 +117,13 @@ describe("quotaStatusText", () => {
       "unavailable",
     );
   });
+
+  test("ok panels at or past the reset say resetting, not resets in resetting", () => {
+    const resetAtMs = NOW + 4 * 3_600_000;
+    const exact = model({ resetAtMs });
+    expect(quotaStatusText(exact, resetAtMs)).toBe("resetting…");
+    expect(quotaStatusText(exact, resetAtMs + 1)).toBe("resetting…");
+  });
 });
 
 describe("sparklinePoints", () => {
