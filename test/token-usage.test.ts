@@ -61,6 +61,13 @@ describe("normalizeAgentsviewDaily", () => {
     expect(
       normalizeAgentsviewDaily(JSON.stringify({ schema_version: 4, daily: [{ date: "garbage" }] }), DAY),
     ).toBeNull();
+    const validToday = { date: DAY, inputTokens: 1, outputTokens: 2, cacheCreationTokens: 3, cacheReadTokens: 4 };
+    // A malformed entry after the matching row is still validated — the
+    // total is never accepted from a partially well-formed report.
+    expect(normalizeAgentsviewDaily(JSON.stringify({ schema_version: 4, daily: [validToday, null] }), DAY)).toBeNull();
+    expect(
+      normalizeAgentsviewDaily(JSON.stringify({ schema_version: 4, daily: [validToday, { date: "garbage" }] }), DAY),
+    ).toBeNull();
   });
 
   test("a valid non-matching row is skipped without field validation", () => {

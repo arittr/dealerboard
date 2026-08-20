@@ -88,6 +88,9 @@ const isTokenCount = (value: unknown): value is number =>
 
 const AGENTSVIEW_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
+const isDatedRow = (value: unknown): value is Record<string, unknown> & { date: string } =>
+  isRecord(value) && typeof value["date"] === "string" && AGENTSVIEW_DATE_PATTERN.test(value["date"]);
+
 const tokenCount = (row: Record<string, unknown>, key: string): number | null => {
   const value = row[key];
   return isTokenCount(value) ? value : null;
@@ -95,12 +98,13 @@ const tokenCount = (row: Record<string, unknown>, key: string): number | null =>
 
 /**
  * Parse one agentsview `usage daily --json` report down to the providerDay
- * row's tokenmaxxing_total_v1. Every `daily` element must be a well-formed
- * schema-v4 row (a record whose date is YYYY-MM-DD) — a broken reporter is a
- * failed poll, never a zero. Rows for other days are skipped without field
- * validation; a report with no row for the day is a legitimate zero
- * (nothing burned yet). Any other contract violation — wrong schema,
- * malformed JSON, a present today-row with bad fields — is null.
+ * row's tokenmaxxing_total_v1. Every `daily` element is validated for
+ * shape before any total is accepted — a well-formed today row followed by
+ * a broken entry is still a failed poll, never a partial read. Each element
+ * must be a record whose date is YYYY-MM-DD; rows for other days are
+ * skipped without field validation; a report with no row for the day is a
+ * legitimate zero (nothing burned yet). Any other contract violation —
+ * wrong schema, malformed JSON, a present today-row with bad fields — is null.
  */
 export const normalizeAgentsviewDaily = (body: string, providerDay: string): number | null => {
   let parsed: unknown;
@@ -112,12 +116,14 @@ export const normalizeAgentsviewDaily = (body: string, providerDay: string): num
   if (!isRecord(parsed) || parsed["schema_version"] !== 4 || !Array.isArray(parsed["daily"])) {
     return null;
   }
+  // Pass one: every element must be a record with a YYYY-MM-DD date, no
+  // matter where it sits relative to the matching row.
+  if (!parsed["daily"].every(isDatedRow)) {
+    return null;
+  }
+  // Pass two: only today's row is field-validated.
   for (const entry of parsed["daily"]) {
-    const date = isRecord(entry) ? entry["date"] : undefined;
-    if (typeof date !== "string" || !AGENTSVIEW_DATE_PATTERN.test(date)) {
-      return null;
-    }
-    if (date !== providerDay) {
+    if (entry["date"] !== providerDay) {
       continue;
     }
     const input = tokenCount(entry, "inputTokens");
