@@ -366,3 +366,25 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
 - A tap is the keypad's keyDown: a fire-and-forget ack, then the same
   paseo/claude/codex/kimi routing. A failed or unroutable press flashes the
   tile.
+- Snapshot delivery is push, not poll: the Rust host watches the app-support
+  directory (the daemon publishes by atomic rename, which swaps the file's
+  inode, so the watch targets the directory) and emits a `snapshot-changed`
+  event carrying the same `{ mtimeMs, contents }` payload as `read_snapshot`.
+  The webview does one initial read and then ingests events; the OFFLINE
+  check is a one-shot timer at the payload's actual expiry (a dead daemon's
+  5s heartbeat stops re-arming it, so the flip lands one 10s threshold
+  after the last publish), while a slow 10s pass retries real reads only
+  while degraded, so a missed event or a late-starting daemon self-heals.
+- A long-press (~500ms without drifting past a 12px slop) on a session tile
+  opens an action sheet anchored at the touch point: Open (the tap's ack +
+  routing), Ack, Reveal transcript (`/usr/bin/open -R`; disabled until the
+  snapshot carries `transcriptPath`), Copy session ID, and Clear session —
+  the destructive action sits behind an inline two-tap confirm ("Confirm
+  clear") and runs the installed binary's `sessions clear`. The sheet
+  dismisses on a pointer-down outside it or on Escape.
+- A horizontal fling (≥80px of travel with ≤48px of vertical drift) pages
+  the tile grid — left for next, right for previous — reusing the rail's
+  page jump, so the dots follow and the page persists. A stroke that moved
+  but matched no gesture swallows its trailing click, keeping taps, holds,
+  and drags unambiguous. There is deliberately no swipe-to-ack: only viewing
+  clears unread.
