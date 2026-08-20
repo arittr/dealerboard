@@ -6,11 +6,13 @@
  * renders OFFLINE within one threshold of its last publish; a slow 10s
  * pass retries real reads while degraded (self-healing a missed event or
  * a late-starting daemon) and carries the quota read, whose file the watch
- * does not cover. Layout reduces with the strip geometry and re-renders
- * only when the serialized key models change (so CSS status animations are
- * never restarted). Page settings persist to localStorage; the reducer
- * validates them on every read. A 1s timer ticks the rail clock and the
- * per-tile status timers in place.
+ * does not cover. Reads and pushes order through an ingest gate, so an
+ * asynchronous read that completes after a newer push — or a newer read —
+ * is dropped instead of regressing the view. Layout reduces with the strip
+ * geometry and re-renders only when the serialized key models change (so
+ * CSS status animations are never restarted). Page settings persist to
+ * localStorage; the reducer validates them on every read. A 1s timer ticks
+ * the rail clock and the per-tile status timers in place.
  */
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
@@ -42,6 +44,7 @@ import {
   type GestureIntent,
   type GesturePoint,
 } from "./gestures";
+import { createIngestGate } from "./ingest-gate";
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
@@ -62,6 +65,7 @@ let stalenessTimer: ReturnType<typeof setTimeout> | null = null;
 let currentPage = 0;
 let currentPageCount = 1;
 let currentKeys: readonly KeyModel[] = [];
+const ingestGate = createIngestGate();
 
 type PendingLongPress = { index: number; tile: HTMLElement; point: GesturePoint };
 
@@ -223,8 +227,23 @@ const ingest = (payload: SnapshotPayload | null): void => {
   }
 };
 
+/** Pushes are handled synchronously, so a push is the freshest source by
+ * construction: it claims the newest slot, invalidating any read that is
+ * still outstanding. */
+const ingestPush = (payload: SnapshotPayload): void => {
+  ingestGate.next();
+  ingest(payload);
+};
+
 const readAndIngest = async (): Promise<void> => {
-  ingest(await readSnapshot().catch(() => null));
+  const token = ingestGate.next();
+  const payload = await readSnapshot().catch(() => null);
+  if (!ingestGate.isCurrent(token)) {
+    // A newer push or read won while this one was in flight: its older
+    // payload — or its failed-read null — must not regress the view.
+    return;
+  }
+  ingest(payload);
 };
 
 /**
@@ -253,14 +272,21 @@ const ensureAutostart = async (): Promise<void> => {
   }
 };
 
-const start = (): void => {
+const start = async (): Promise<void> => {
   void startStripWindowManager();
   void ensureAutostart();
   wireInteraction();
+  // Arm the push subscription before the first read so no publication can
+  // land in the gap between the two; both sources order through the gate.
+  try {
+    await onSnapshotChanged(ingestPush);
+  } catch {
+    // A failed subscription falls back to the read paths (slow pass,
+    // expiry re-check); push delivery only narrows their latency.
+  }
   // The first slow pass doubles as the initial read: with no payload yet it
   // falls through to readAndIngest (and rides the quota read).
   void slowPass();
-  void onSnapshotChanged(ingest);
   setInterval(() => {
     void slowPass();
   }, SLOW_PASS_MS);
@@ -554,4 +580,4 @@ const wireInteraction = (): void => {
   });
 };
 
-start();
+void start();
