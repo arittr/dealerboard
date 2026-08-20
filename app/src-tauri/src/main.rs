@@ -155,17 +155,16 @@ fn watch_snapshot_directory(
         if !event_touches_snapshot(&event) {
             return;
         }
-        let arrived_at = Instant::now();
         if last_emit.is_some_and(|last| within_coalesce_window(last.elapsed())) {
             return;
         }
         // Read fresh rather than trusting the event kind, and stamp the
-        // window only once the sink reports success: a failed emit (or a
-        // transient read failure) retries on a later event of the same
-        // burst instead of suppressing the publication.
+        // window only after the sink returns Ok — a failed emit retries on a
+        // later burst event, and a slow successful one pins the window to
+        // emit time so queued burst events stay suppressed.
         if let Ok(payload) = read_snapshot_in(&watched_directory) {
             if on_change(payload).is_ok() {
-                last_emit = Some(arrived_at);
+                last_emit = Some(Instant::now());
             }
         }
     })
@@ -218,8 +217,17 @@ fn main() {
 mod tests {
     use super::*;
     use notify::event::{CreateKind, EventKind};
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
     use std::time::Duration;
+
+    // macOS FSEvents replays recent pre-watch events (the directory's
+    // creation, the seeded target write) right after the stream starts, so
+    // a test's seed can emit spuriously. Every real-watcher test therefore
+    // arms its sink only after the stream has settled: while disarmed the
+    // sink refuses, and a refused sink neither sends nor stamps the
+    // coalescing window (the stamp-on-success invariant under test).
+    const STREAM_SETTLE_MS: u64 = 200;
 
     fn event_for(kind: EventKind, path: PathBuf) -> Event {
         Event {
@@ -274,12 +282,18 @@ mod tests {
         std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
 
         let (sender, receiver) = mpsc::channel();
+        let armed = Arc::new(AtomicBool::new(false));
+        let armed_flag = armed.clone();
         watch_snapshot_directory(&directory, move |payload| {
+            if !armed_flag.load(Ordering::SeqCst) {
+                return Err("disarmed: replayed pre-watch event".to_string());
+            }
             let _ = sender.send(payload);
             Ok(())
         })
         .unwrap();
-        std::thread::sleep(Duration::from_millis(200)); // let the FSEvents stream arm
+        std::thread::sleep(Duration::from_millis(STREAM_SETTLE_MS));
+        armed.store(true, Ordering::SeqCst);
 
         // Neighboring-file noise first: a quota snapshot write must not emit.
         std::fs::write(directory.join("quota-snapshot.json"), "{}").unwrap();
@@ -318,8 +332,13 @@ mod tests {
         std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
 
         let (sender, receiver) = mpsc::channel();
+        let armed = Arc::new(AtomicBool::new(false));
+        let armed_flag = armed.clone();
         let mut calls = 0;
         watch_snapshot_directory(&directory, move |payload| {
+            if !armed_flag.load(Ordering::SeqCst) {
+                return Err("disarmed: replayed pre-watch event".to_string());
+            }
             calls += 1;
             if calls == 1 {
                 return Err("simulated emit failure".to_string());
@@ -328,7 +347,8 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        std::thread::sleep(Duration::from_millis(200)); // let the FSEvents stream arm
+        std::thread::sleep(Duration::from_millis(STREAM_SETTLE_MS));
+        armed.store(true, Ordering::SeqCst);
 
         let temp = directory.join(".snapshot-v2.json-48158-retry.tmp");
         std::fs::write(&temp, r#"{"n":1}"#).unwrap();
@@ -342,6 +362,54 @@ mod tests {
             receiver.recv_timeout(Duration::from_millis(50)).is_err(),
             "after the successful retry the window suppresses the burst's remaining events"
         );
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// A sink that succeeds only after outlasting the window must not re-arm
+    /// the gate for the same burst's queued events: the stamp is taken when
+    /// the sink returns Ok, not when its event arrived. Under a pre-call
+    /// stamp this test double-emits.
+    #[test]
+    fn slow_successful_sink_does_not_double_emit() {
+        let directory = std::env::temp_dir().join(format!("agent-strip-slow-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
+
+        let (sender, receiver) = mpsc::channel();
+        let armed = Arc::new(AtomicBool::new(false));
+        let armed_flag = armed.clone();
+        let mut calls = 0;
+        watch_snapshot_directory(&directory, move |payload| {
+            if !armed_flag.load(Ordering::SeqCst) {
+                return Err("disarmed: replayed pre-watch event".to_string());
+            }
+            calls += 1;
+            if calls == 1 {
+                // Outlast the coalescing window before reporting success.
+                std::thread::sleep(SNAPSHOT_COALESCE_WINDOW * 2);
+            }
+            let _ = sender.send(payload);
+            Ok(())
+        })
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(STREAM_SETTLE_MS));
+        armed.store(true, Ordering::SeqCst);
+
+        let temp = directory.join(".snapshot-v2.json-48158-slow.tmp");
+        std::fs::write(&temp, r#"{"n":1}"#).unwrap();
+        std::fs::rename(&temp, directory.join(SNAPSHOT_FILE_NAME)).unwrap();
+
+        let mut payloads = Vec::new();
+        while let Ok(payload) = receiver.recv_timeout(Duration::from_millis(600)) {
+            payloads.push(payload);
+        }
+        assert_eq!(
+            payloads.len(),
+            1,
+            "a slow successful sink must not let the same burst emit twice"
+        );
+        assert_eq!(payloads[0].contents, r#"{"n":1}"#);
 
         std::fs::remove_dir_all(&directory).ok();
     }
