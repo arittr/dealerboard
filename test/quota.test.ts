@@ -91,4 +91,30 @@ describe("normalizeCodexUsage", () => {
     const body = JSON.stringify({ rate_limit: { primary_window: { used_percent: 0, reset_at: 0 } } });
     expect(normalizeCodexUsage(body)).toEqual({ session: { percentRemaining: 100, resetAt: null }, weekly: null });
   });
+
+  test("an out-of-range primary reset_at degrades to null instead of throwing", () => {
+    const body = JSON.stringify({
+      rate_limit: {
+        primary_window: { used_percent: 10, reset_at: Number.MAX_VALUE },
+        secondary_window: { used_percent: 25, reset_at: 1_787_616_000 },
+      },
+    });
+    expect(normalizeCodexUsage(body)).toEqual({
+      session: { percentRemaining: 90, resetAt: null },
+      weekly: { percentRemaining: 75, resetAt: new Date(1_787_616_000 * 1000).toISOString() },
+    });
+  });
+
+  test("an out-of-range secondary reset_at degrades to null instead of throwing", () => {
+    const body = JSON.stringify({
+      rate_limit: {
+        primary_window: { used_percent: 10, reset_at: 1_787_169_600 },
+        secondary_window: { used_percent: 25, reset_at: 1e300 },
+      },
+    });
+    expect(normalizeCodexUsage(body)).toEqual({
+      session: { percentRemaining: 90, resetAt: new Date(1_787_169_600 * 1000).toISOString() },
+      weekly: { percentRemaining: 75, resetAt: null },
+    });
+  });
 });

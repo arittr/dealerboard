@@ -52,7 +52,14 @@ const epochSecondsOrNull = (value: unknown): string | null => {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return null;
   }
-  return new Date(value * 1000).toISOString();
+  // TimeClip maps any ms beyond ±8.64e15 to NaN (ECMA-262), so a non-finite
+  // getTime() covers both overflow modes (multiplication to Infinity and
+  // finite-but-out-of-range) — and toISOString() would throw on it.
+  const date = new Date(value * 1000);
+  if (!Number.isFinite(date.getTime())) {
+    return null;
+  }
+  return date.toISOString();
 };
 
 export const parseClaudeCredentials = (contents: string): ClaudeCredentials | null => {
