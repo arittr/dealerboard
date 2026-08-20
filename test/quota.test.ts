@@ -9,6 +9,7 @@ import {
   normalizeCodexUsage,
   parseClaudeCredentials,
   parseCodexAuth,
+  QUOTA_POLL_INTERVAL_MS,
   QUOTA_RATE_LIMIT_COOLDOWN_MS,
   type QuotaCollectorDependencies,
   type QuotaFetch,
@@ -252,6 +253,23 @@ describe("createQuotaCollector", () => {
     expect(failures.every((record) => record.component === "quota")).toBe(true);
   });
 
+  test("a cold-start failure emits quota_failed once per provider, not per pass, and again after recovery", async () => {
+    const harness = makeHarness(credsFiles());
+    const collector = createQuotaCollector(harness.deps);
+    const failures = () => harness.diagnostics.filter((record) => record.code === "quota_failed");
+    harness.fail();
+    await collector.pollNow(); // first pass from cold start
+    await collector.pollNow(); // repeated failure — no new records
+    expect(failures().length).toBe(2);
+    expect(new Set(failures().map((record) => record.provider))).toEqual(new Set(["claude", "codex"]));
+    harness.respond(200, "{}"); // recovery; the "{}" body falls back to the fixtures
+    await collector.pollNow();
+    expect(failures().length).toBe(2); // success emits nothing
+    harness.fail();
+    await collector.pollNow(); // recovery → failure is a new transition
+    expect(failures().length).toBe(4);
+  });
+
   test("a network throw degrades the same way and never escapes pollNow", async () => {
     const harness = makeHarness(credsFiles());
     harness.fail();
@@ -292,11 +310,52 @@ describe("createQuotaCollector", () => {
     expect(harness.fetches.length).toBe(2); // both providers in cooldown, no new fetches
   });
 
+  test("a second 429 after cooldown expiry re-arms the cooldown", async () => {
+    let clockMs = NOW_MS;
+    const harness = makeHarness(credsFiles(), { nowMs: () => clockMs });
+    const collector = createQuotaCollector(harness.deps);
+    harness.respond(429, "rate limited");
+    await collector.pollNow();
+    expect(harness.fetches.length).toBe(2); // both providers 429 and arm their cooldowns
+    clockMs += QUOTA_RATE_LIMIT_COOLDOWN_MS + 1; // cooldown expires
+    await collector.pollNow();
+    expect(harness.fetches.length).toBe(4); // a real fetch, which 429s again — re-armed
+    await collector.pollNow();
+    expect(harness.fetches.length).toBe(4); // suppressed by the new cooldown
+  });
+
   test("concurrent pollNow calls collapse into one pass", async () => {
     const harness = makeHarness(credsFiles());
     const collector = createQuotaCollector(harness.deps);
     await Promise.all([collector.pollNow(), collector.pollNow()]);
     expect(harness.fetches.length).toBe(2);
+  });
+
+  test("start is idempotent, stop disarms the one interval, and start-after-stop works", () => {
+    const armed: number[] = [];
+    const disarmed: number[] = [];
+    let nextHandle = 0;
+    const harness = makeHarness(credsFiles(), {
+      schedule: (_tick, intervalMs) => {
+        const handle = ++nextHandle;
+        armed.push(handle);
+        expect(intervalMs).toBe(QUOTA_POLL_INTERVAL_MS);
+        return () => {
+          disarmed.push(handle);
+        };
+      },
+    });
+    const collector = createQuotaCollector(harness.deps);
+    collector.start();
+    collector.start(); // idempotent — no second interval
+    expect(armed.length).toBe(1);
+    expect(disarmed.length).toBe(0);
+    collector.stop();
+    expect(disarmed).toEqual([1]);
+    collector.start(); // re-arms after stop
+    expect(armed.length).toBe(2);
+    collector.stop();
+    expect(disarmed).toEqual([1, 2]);
   });
 
   test("writes happen only when the snapshot changes", async () => {

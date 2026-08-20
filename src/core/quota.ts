@@ -201,7 +201,7 @@ export type QuotaCollectorDependencies = {
 };
 
 export type QuotaCollector = {
-  /** Poll immediately, then arm the interval. */
+  /** Poll immediately, then arm the interval. Idempotent while started. */
   start: () => void;
   /** Disarm the interval; an in-flight fetch settles on its own. */
   stop: () => void;
@@ -215,7 +215,7 @@ type FetchOutcome =
   | { kind: "absent" }
   | { kind: "failed"; rateLimited: boolean };
 
-type ProviderState = { quota: ProviderQuota; cooldownUntilMs: number | null };
+type ProviderState = { quota: ProviderQuota; cooldownUntilMs: number | null; failed: boolean };
 
 const emptyQuota = (): ProviderQuota => ({
   percentRemaining: null,
@@ -257,6 +257,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
   const states = new Map<QuotaProviderKey, ProviderState>();
   let lastWrittenJson: string | null = null;
   let polling = false;
+  let started = false;
   let cancelSchedule: (() => void) | null = null;
 
   const reportFailure = (provider: QuotaProviderKey): void => {
@@ -276,7 +277,9 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
       for (const key of QUOTA_PROVIDER_KEYS) {
         const quota = seeded.providers[key];
         if (quota !== undefined) {
-          states.set(key, { quota, cooldownUntilMs: null });
+          // A seeded unavailable row is already in the failed state — its
+          // continuation must not re-log, only a good→failed transition may.
+          states.set(key, { quota, cooldownUntilMs: null, failed: quota.unavailable });
         }
       }
       lastWrittenJson = `${JSON.stringify(seeded)}\n`;
@@ -333,7 +336,9 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
   };
 
   const pollProvider = async (provider: QuotaProviderKey): Promise<ProviderQuota | null> => {
-    const state = states.get(provider) ?? { quota: emptyQuota(), cooldownUntilMs: null };
+    // A fresh row displays unavailable (never fetched) but has not yet failed —
+    // `failed` tracks the diagnostic transition, separately from that display.
+    const state = states.get(provider) ?? { quota: emptyQuota(), cooldownUntilMs: null, failed: false };
     const inCooldown = state.cooldownUntilMs !== null && nowMs() < state.cooldownUntilMs;
     const outcome = inCooldown ? ({ kind: "failed", rateLimited: true } as const) : await probe(provider);
     if (outcome.kind === "absent") {
@@ -355,16 +360,19 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         fetchedAt,
         history,
       };
-      states.set(provider, { quota, cooldownUntilMs: null });
+      states.set(provider, { quota, cooldownUntilMs: null, failed: false });
       return quota;
     }
-    if (outcome.rateLimited && state.cooldownUntilMs === null) {
+    if (outcome.rateLimited && !inCooldown) {
+      // Re-arm only on a 429 from a real fetch — a synthetic cooldown skip
+      // must not extend the cooldown.
       state.cooldownUntilMs = nowMs() + QUOTA_RATE_LIMIT_COOLDOWN_MS;
     }
-    if (!state.quota.unavailable) {
+    if (!state.failed) {
       // Log the transition into failure only — never per pass, never error text.
       reportFailure(provider);
     }
+    state.failed = true;
     state.quota = { ...state.quota, unavailable: true };
     states.set(provider, state);
     return state.quota;
@@ -400,12 +408,17 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
 
   return {
     start: () => {
+      if (started) {
+        return;
+      }
+      started = true;
       void pollNow();
       cancelSchedule = schedule(() => {
         void pollNow();
       }, QUOTA_POLL_INTERVAL_MS);
     },
     stop: () => {
+      started = false;
       cancelSchedule?.();
       cancelSchedule = null;
     },
