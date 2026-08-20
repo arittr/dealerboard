@@ -9,8 +9,9 @@
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
 import type { SessionSnapshotV2, SessionStatus, SnapshotView } from "../../src/protocol";
-import { ackSession, focusGhostty, openUrl, readPaseoServerId, readSnapshot } from "./bridge";
+import { ackSession, focusGhostty, openUrl, readPaseoServerId, readQuotaSnapshot, readSnapshot } from "./bridge";
 import { pressSessionTile } from "./press";
+import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
 import { countUnreadSessions, reduceSnapshotRead } from "./snapshot-view";
 import { renderTiles, statusLineText, stripGridLayout, visibleStripKeys } from "./tiles";
@@ -23,6 +24,7 @@ let lastGood: SessionSnapshotV2 | null = null;
 let renderedSignature = "";
 let currentView: SnapshotView | null = null;
 let lastReadMtimeMs: number | null = null;
+let currentQuota: QuotaPanelModel[] = [];
 let currentPage = 0;
 let currentPageCount = 1;
 let currentKeys: readonly KeyModel[] = [];
@@ -65,6 +67,7 @@ const renderRailNow = (): void => {
       degraded: currentView.degraded,
       heartbeatAgeMs: lastReadMtimeMs === null ? null : Date.now() - lastReadMtimeMs,
       unreadCount: countUnreadSessions(currentView.snapshot),
+      quota: currentQuota,
       page: currentPage + 1,
       pageCount: currentPageCount,
       now: new Date(),
@@ -123,6 +126,11 @@ const applyLayout = (layout: LayoutResult): void => {
 
 const poll = async (): Promise<void> => {
   const payload = await readSnapshot().catch(() => null);
+  // The quota file changes at most every 120s; riding the existing poll keeps
+  // one code path and one failure path — a rejection is a missing file, i.e.
+  // "no data yet".
+  const quotaRead = await readQuotaSnapshot().catch(() => null);
+  currentQuota = reduceQuotaRead(quotaRead, Date.now());
   const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
   lastGood = reduction.lastGood;
   currentView = reduction.view;

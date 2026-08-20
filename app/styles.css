@@ -281,6 +281,68 @@ body {
   color: #94a3b8;
 }
 
+/* Quota panels (strip-only; there is no keypad equivalent). */
+.rail-quota {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6vh;
+}
+.rail-quota[data-state="stale"],
+.rail-quota[data-state="unavailable"] {
+  opacity: 0.45;
+}
+.quota-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+}
+.quota-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6vw;
+  height: 1.6vw;
+  border-radius: 22%;
+  color: #10151c;
+  font-size: 1vw;
+  font-weight: 700;
+}
+.quota-chip[data-provider="claude"] {
+  background: #d97757;
+}
+.quota-chip[data-provider="codex"] {
+  background: #d946ef;
+}
+.quota-pct {
+  margin-left: auto;
+  color: #e8eef7;
+  font-variant-numeric: tabular-nums;
+}
+.quota-bar {
+  height: 0.8vh;
+  border-radius: 0.4vh;
+  background: #232b38;
+  overflow: hidden;
+}
+.quota-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+.quota-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6vw;
+  font-size: 1.2vw;
+}
+.quota-spark {
+  width: 6vw;
+  height: 2.4vh;
+}
+.quota-weekly {
+  font-size: 1.1vw;
+}
+
 .tile.flash {
   animation: flashblink 0.32s ease-out;
 }
