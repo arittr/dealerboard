@@ -42,6 +42,7 @@ import {
 } from "./registry";
 import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { createSessionFactsResolver } from "./titles";
+import { createTokenUsageCollector, resolveAgentsviewBin } from "./token-usage";
 
 export const MAX_STDIN_BYTES = 65_536;
 const RETRY_DELAY_MS = 25;
@@ -61,6 +62,7 @@ export type CliDependencies = {
   environment?: Readonly<Record<string, string | undefined>>;
   parentPid?: number;
   createQuotaCollector?: typeof createQuotaCollector;
+  createTokenUsageCollector?: typeof createTokenUsageCollector;
   runDaemon?: (paths: AppPaths, diagnostics: (record: DiagnosticRecord) => void) => number | Promise<number>;
 };
 
@@ -408,6 +410,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   environment: process.env,
   parentPid: process.ppid,
   createQuotaCollector,
+  createTokenUsageCollector,
   runDaemon: (daemonPaths, diagnostics) => {
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
@@ -442,6 +445,27 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
           timestamp: new Date().toISOString(),
           component: DIAGNOSTIC_COMPONENT,
           code: "quota_collector_failed",
+        });
+      } catch {
+        // A failing sink must never break daemon startup.
+      }
+    }
+    // The token-usage collector is optional telemetry on its own scheduler,
+    // contained exactly like the quota collector above.
+    try {
+      const createCollector = dependencies.createTokenUsageCollector ?? createTokenUsageCollector;
+      const tokenUsageCollector = createCollector({
+        agentsviewBin: resolveAgentsviewBin(environment),
+        tokenUsageSnapshotPath: daemonPaths.tokenUsageSnapshot,
+        diagnostics,
+      });
+      tokenUsageCollector.start();
+    } catch {
+      try {
+        diagnostics({
+          timestamp: new Date().toISOString(),
+          component: "token-usage",
+          code: "token_usage_collector_failed",
         });
       } catch {
         // A failing sink must never break daemon startup.

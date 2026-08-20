@@ -17,6 +17,7 @@ export type AppPaths = {
   database: string;
   snapshot: string;
   quotaSnapshot: string;
+  tokenUsageSnapshot: string;
   logsDirectory: string;
   launchAgent: string;
 };
@@ -34,6 +35,7 @@ export const resolveAppPaths = (home: string = homedir()): AppPaths => {
     database: join(root, "registry.sqlite3"),
     snapshot: join(root, "snapshot-v2.json"),
     quotaSnapshot: join(root, "quota-snapshot.json"),
+    tokenUsageSnapshot: join(root, "token-usage-snapshot.json"),
     logsDirectory: join(root, "logs"),
     launchAgent: join(home, "Library/LaunchAgents/com.drewritter.stream-deck-agents.plist"),
   };
