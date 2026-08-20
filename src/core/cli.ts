@@ -412,7 +412,6 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
     const grokRoot = environment["GROK_HOME"] ?? join(daemonPaths.home, ".grok");
-    const codexRoot = environment["CODEX_HOME"] ?? join(daemonPaths.home, ".codex");
     const resolveFacts = createSessionFactsResolver({
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
@@ -433,8 +432,6 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     try {
       const createCollector = dependencies.createQuotaCollector ?? createQuotaCollector;
       const quotaCollector = createCollector({
-        claudeCredentialsPath: join(daemonPaths.home, ".claude/.credentials.json"),
-        codexAuthPath: join(codexRoot, "auth.json"),
         quotaSnapshotPath: daemonPaths.quotaSnapshot,
         diagnostics,
       });

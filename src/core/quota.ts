@@ -1,26 +1,23 @@
 /**
- * Quota collection for the strip's rail panels (codex + claude).
+ * Quota collection for the strip's rail panels (claude, codex, kimi, GLM/zai).
  *
- * Endpoint contract (researched from CodexBar's source — docs/superpowers/plans/
- * 2026-08-19-xeneon-strip-quota.md records the citations):
- * - claude: GET https://api.anthropic.com/api/oauth/usage with the OAuth access
- *   token from ~/.claude/.credentials.json (claudeAiOauth.accessToken), headers
- *   `anthropic-beta: oauth-2025-04-20` and a claude-code User-Agent. Windows:
- *   five_hour / seven_day, each { utilization (percent used 0..100), resets_at
- *   (ISO) }. Tokens are never refreshed or written back — Claude Code owns
- *   rotation and the file is re-read every pass.
- * - codex: GET https://chatgpt.com/backend-api/wham/usage with the OAuth access
- *   token from ($CODEX_HOME ?? ~/.codex)/auth.json (tokens.access_token, plus a
- *   ChatGPT-Account-Id header when tokens.account_id is present) and the fixed
- *   `User-Agent: stream-deck-agents` the researched contract prescribes. Windows:
- *   rate_limit.primary_window / secondary_window, each { used_percent (0..100),
- *   reset_at (epoch seconds) }. An auth.json holding only OPENAI_API_KEY has no
- *   quota surface and is treated as absent.
+ * All four providers are read through the locally installed CodexBar CLI:
+ * `codexbar usage --provider <key> --format json --log-level critical`, spawned
+ * once per provider per pass (serialized — CodexBar's app-support directory
+ * carries lock files). The binary resolves per pass from
+ * CODEXBAR_BINARY_CANDIDATES; a missing binary omits every provider. CodexBar's
+ * primary/secondary labels are not positional (kimi reports the weekly window
+ * as primary), so windows are classified by windowMinutes: weekly = the longest
+ * window of at least a day, session = the shortest window under a day, and
+ * usage.extraRateWindows is scanned when the main trio yields no session window
+ * (codex reports primary: null with the Spark windows there). A provider
+ * disabled in the CodexBar app prints an empty array and is omitted.
  *
- * No token, response body, or error text is ever logged or written anywhere.
+ * Nothing the process prints is ever logged or persisted beyond the derived
+ * numbers in the published snapshot.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   type ProviderQuota,
   parseQuotaSnapshot,
@@ -31,16 +28,6 @@ import {
 } from "../quota-snapshot";
 import type { DiagnosticRecord } from "./diagnostics";
 import { writeFileAtomically } from "./snapshot";
-
-export type ClaudeCredentials = {
-  accessToken: string;
-  /** claudeAiOauth.expiresAt, epoch milliseconds; null when absent. */
-  expiresAtMs: number | null;
-  /** The usage endpoint requires the user:profile scope (inference-only tokens get 403s). */
-  hasProfileScope: boolean;
-};
-
-export type CodexAuth = { accessToken: string; accountId: string | null };
 
 export type QuotaWindowReading = { percentRemaining: number; resetAt: string | null };
 
@@ -69,112 +56,6 @@ const isoOrNull = (value: unknown): string | null => {
   }
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
-};
-
-const epochSecondsOrNull = (value: unknown): string | null => {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return null;
-  }
-  // TimeClip maps any ms beyond ±8.64e15 to NaN (ECMA-262), so a non-finite
-  // getTime() covers both overflow modes (multiplication to Infinity and
-  // finite-but-out-of-range) — and toISOString() would throw on it.
-  const date = new Date(value * 1000);
-  if (!Number.isFinite(date.getTime())) {
-    return null;
-  }
-  return date.toISOString();
-};
-
-export const parseClaudeCredentials = (contents: string): ClaudeCredentials | null => {
-  try {
-    const parsed: unknown = JSON.parse(contents);
-    if (!isRecord(parsed) || !isRecord(parsed["claudeAiOauth"])) {
-      return null;
-    }
-    const oauth = parsed["claudeAiOauth"];
-    if (typeof oauth["accessToken"] !== "string" || oauth["accessToken"].length === 0) {
-      return null;
-    }
-    const expiresAt = oauth["expiresAt"];
-    const scopes = oauth["scopes"];
-    return {
-      accessToken: oauth["accessToken"],
-      expiresAtMs: typeof expiresAt === "number" && Number.isFinite(expiresAt) ? expiresAt : null,
-      hasProfileScope: Array.isArray(scopes) && scopes.includes("user:profile"),
-    };
-  } catch {
-    return null;
-  }
-};
-
-export const parseCodexAuth = (contents: string): CodexAuth | null => {
-  try {
-    const parsed: unknown = JSON.parse(contents);
-    if (!isRecord(parsed) || !isRecord(parsed["tokens"])) {
-      return null;
-    }
-    const tokens = parsed["tokens"];
-    const accessToken = tokens["access_token"] ?? tokens["accessToken"];
-    if (typeof accessToken !== "string" || accessToken.length === 0) {
-      return null;
-    }
-    const accountId = tokens["account_id"] ?? tokens["accountId"];
-    return {
-      accessToken,
-      accountId: typeof accountId === "string" && accountId.length > 0 ? accountId : null,
-    };
-  } catch {
-    return null;
-  }
-};
-
-export const normalizeClaudeUsage = (body: string): ProviderQuotaReading | null => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed) || !isRecord(parsed["five_hour"]) || !isPercentUsed(parsed["five_hour"]["utilization"])) {
-    return null;
-  }
-  const session: QuotaWindowReading = {
-    percentRemaining: 100 - parsed["five_hour"]["utilization"],
-    resetAt: isoOrNull(parsed["five_hour"]["resets_at"]),
-  };
-  let weekly: QuotaWindowReading | null = null;
-  const sevenDay = parsed["seven_day"];
-  if (isRecord(sevenDay) && isPercentUsed(sevenDay["utilization"])) {
-    weekly = { percentRemaining: 100 - sevenDay["utilization"], resetAt: isoOrNull(sevenDay["resets_at"]) };
-  }
-  return { session, weekly };
-};
-
-export const normalizeCodexUsage = (body: string): ProviderQuotaReading | null => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed) || !isRecord(parsed["rate_limit"])) {
-    return null;
-  }
-  const rateLimit = parsed["rate_limit"];
-  const primary = rateLimit["primary_window"];
-  if (!isRecord(primary) || !isPercentUsed(primary["used_percent"])) {
-    return null;
-  }
-  const session: QuotaWindowReading = {
-    percentRemaining: 100 - primary["used_percent"],
-    resetAt: epochSecondsOrNull(primary["reset_at"]),
-  };
-  let weekly: QuotaWindowReading | null = null;
-  const secondary = rateLimit["secondary_window"];
-  if (isRecord(secondary) && isPercentUsed(secondary["used_percent"])) {
-    weekly = { percentRemaining: 100 - secondary["used_percent"], resetAt: epochSecondsOrNull(secondary["reset_at"]) };
-  }
-  return { session, weekly };
 };
 
 /** CodexBar window lengths at or above this classify as the weekly window. */
@@ -262,35 +143,32 @@ export const parseCodexbarUsage = (body: string): CodexbarUsageParse => {
   return reading === null ? { kind: "invalid" } : { kind: "ok", reading };
 };
 
-/** Quota endpoints rate-limit (Anthropic 429s aggressive pollers) and the windows move slowly. */
+/** Quota windows move slowly; CodexBar itself polls providers on a similar cadence. */
 export const QUOTA_POLL_INTERVAL_MS = 120_000;
-/** After a 429, skip that provider for this long before retrying. */
-export const QUOTA_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
-export const QUOTA_FETCH_TIMEOUT_MS = 15_000;
+export const QUOTA_EXEC_TIMEOUT_MS = 15_000;
 
-const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+export const CODEXBAR_BINARY_CANDIDATES = [
+  "/opt/homebrew/bin/codexbar",
+  "/usr/local/bin/codexbar",
+  "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
+] as const;
+
 const DIAGNOSTIC_COMPONENT = "quota";
 
-export type QuotaFetchResponse = { status: number; body: string };
+export type QuotaExecResult = { exitCode: number; stdout: string };
 
-export type QuotaFetch = (
-  url: string,
-  headers: Record<string, string>,
-  timeoutMs: number,
-) => Promise<QuotaFetchResponse>;
+/** Resolves instead of rejecting: spawn failure and timeout surface as a nonzero exit code. */
+export type QuotaExec = (args: string[], timeoutMs: number) => Promise<QuotaExecResult>;
 
 /** Same shape as the daemon's DaemonScheduler: arms a recurring tick, returns a disarm callback. */
 export type QuotaScheduler = (tick: () => void, intervalMs: number) => () => void;
 
 export type QuotaCollectorDependencies = {
-  claudeCredentialsPath: string;
-  codexAuthPath: string;
   quotaSnapshotPath: string;
-  fetch?: QuotaFetch;
+  exec?: QuotaExec;
+  fileExists?: (path: string) => boolean;
   readFile?: (path: string) => string | null;
   now?: () => string;
-  nowMs?: () => number;
   writeFile?: (path: string, payload: string) => void;
   schedule?: QuotaScheduler;
   diagnostics?: (record: DiagnosticRecord) => void;
@@ -299,7 +177,7 @@ export type QuotaCollectorDependencies = {
 export type QuotaCollector = {
   /** Poll immediately, then arm the interval. Idempotent while started. */
   start: () => void;
-  /** Disarm the interval; an in-flight fetch settles on its own. */
+  /** Disarm the interval; an in-flight exec settles on its own. */
   stop: () => void;
   /** One collection pass; reentrancy-guarded, never throws. */
   pollNow: () => Promise<void>;
@@ -307,11 +185,11 @@ export type QuotaCollector = {
 
 type FetchOutcome =
   | { kind: "ok"; reading: ProviderQuotaReading }
-  /** No usable credentials on disk — the provider is omitted (the panel disappears). */
+  /** Binary missing or provider disabled in CodexBar — the panel disappears. */
   | { kind: "absent" }
-  | { kind: "failed"; rateLimited: boolean };
+  | { kind: "failed" };
 
-type ProviderState = { quota: ProviderQuota; cooldownUntilMs: number | null; failed: boolean };
+type ProviderState = { quota: ProviderQuota; failed: boolean };
 
 const emptyQuota = (): ProviderQuota => ({
   percentRemaining: null,
@@ -331,10 +209,36 @@ const defaultReadFile = (path: string): string | null => {
   }
 };
 
-const defaultFetch: QuotaFetch = async (url, headers, timeoutMs) => {
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
-  return { status: response.status, body: await response.text() };
-};
+const codexbarArgs = (provider: QuotaProviderKey): string[] => [
+  "usage",
+  "--provider",
+  provider,
+  "--format",
+  "json",
+  "--log-level",
+  "critical",
+];
+
+const spawnExec =
+  (binaryPath: string): QuotaExec =>
+  async (args, timeoutMs) => {
+    try {
+      const process = Bun.spawn([binaryPath, ...args], { stdout: "pipe", stderr: "ignore" });
+      const timer = setTimeout(() => {
+        process.kill();
+      }, timeoutMs);
+      try {
+        const stream = process.stdout;
+        const stdout = stream === null ? "" : await new Response(stream).text();
+        const exitCode = await process.exited;
+        return { exitCode, stdout };
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return { exitCode: -1, stdout: "" };
+    }
+  };
 
 const defaultSchedule: QuotaScheduler = (tick, intervalMs) => {
   const timer = setInterval(tick, intervalMs);
@@ -342,10 +246,9 @@ const defaultSchedule: QuotaScheduler = (tick, intervalMs) => {
 };
 
 export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): QuotaCollector => {
-  const doFetch = dependencies.fetch ?? defaultFetch;
+  const fileExists = dependencies.fileExists ?? ((path: string): boolean => existsSync(path));
   const readFile = dependencies.readFile ?? defaultReadFile;
   const now = dependencies.now ?? (() => new Date().toISOString());
-  const nowMs = dependencies.nowMs ?? (() => Date.now());
   const writeFile = dependencies.writeFile ?? writeFileAtomically;
   const schedule = dependencies.schedule ?? defaultSchedule;
   const diagnostics = dependencies.diagnostics ?? (() => {});
@@ -375,7 +278,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         if (quota !== undefined) {
           // A seeded unavailable row is already in the failed state — its
           // continuation must not re-log, only a good→failed transition may.
-          states.set(key, { quota, cooldownUntilMs: null, failed: quota.unavailable });
+          states.set(key, { quota, failed: quota.unavailable });
         }
       }
       lastWrittenJson = `${JSON.stringify(seeded)}\n`;
@@ -384,67 +287,38 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     // An unreadable or unparseable file is simply rewritten on the first pass.
   }
 
-  const probe = async (provider: QuotaProviderKey): Promise<FetchOutcome> => {
-    let url: string;
-    let headers: Record<string, string>;
-    if (provider === "claude") {
-      const contents = readFile(dependencies.claudeCredentialsPath);
-      const credentials = contents === null ? null : parseClaudeCredentials(contents);
-      if (credentials === null) {
-        return { kind: "absent" };
-      }
-      if ((credentials.expiresAtMs !== null && credentials.expiresAtMs <= nowMs()) || !credentials.hasProfileScope) {
-        return { kind: "failed", rateLimited: false };
-      }
-      url = CLAUDE_USAGE_URL;
-      headers = {
-        Authorization: `Bearer ${credentials.accessToken}`,
-        Accept: "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-code/2.1.0",
-      };
-    } else if (provider === "codex") {
-      const contents = readFile(dependencies.codexAuthPath);
-      const auth = contents === null ? null : parseCodexAuth(contents);
-      if (auth === null) {
-        return { kind: "absent" };
-      }
-      url = CODEX_USAGE_URL;
-      headers = {
-        Authorization: `Bearer ${auth.accessToken}`,
-        Accept: "application/json",
-        "User-Agent": "stream-deck-agents",
-      };
-      if (auth.accountId !== null) {
-        headers["ChatGPT-Account-Id"] = auth.accountId;
-      }
-    } else {
-      // kimi and zai have no direct HTTP fetcher — omit them (the panel
-      // disappears) until the codexbar exec rewrite owns their probes.
-      return { kind: "absent" };
+  // Resolved per pass so installing or removing CodexBar never needs a daemon
+  // restart. An injected exec skips resolution entirely (tests never spawn).
+  const resolveExec = (): QuotaExec | null => {
+    if (dependencies.exec !== undefined) {
+      return dependencies.exec;
     }
-    let response: QuotaFetchResponse;
-    try {
-      response = await doFetch(url, headers, QUOTA_FETCH_TIMEOUT_MS);
-    } catch {
-      return { kind: "failed", rateLimited: false };
-    }
-    if (response.status === 429) {
-      return { kind: "failed", rateLimited: true };
-    }
-    if (response.status !== 200) {
-      return { kind: "failed", rateLimited: false };
-    }
-    const reading = provider === "claude" ? normalizeClaudeUsage(response.body) : normalizeCodexUsage(response.body);
-    return reading === null ? { kind: "failed", rateLimited: false } : { kind: "ok", reading };
+    const binaryPath = CODEXBAR_BINARY_CANDIDATES.find((path) => fileExists(path));
+    return binaryPath === undefined ? null : spawnExec(binaryPath);
   };
 
-  const pollProvider = async (provider: QuotaProviderKey): Promise<ProviderQuota | null> => {
+  const probe = async (exec: QuotaExec, provider: QuotaProviderKey): Promise<FetchOutcome> => {
+    let result: QuotaExecResult;
+    try {
+      result = await exec(codexbarArgs(provider), QUOTA_EXEC_TIMEOUT_MS);
+    } catch {
+      return { kind: "failed" };
+    }
+    if (result.exitCode !== 0) {
+      return { kind: "failed" };
+    }
+    const parsed = parseCodexbarUsage(result.stdout);
+    if (parsed.kind === "absent") {
+      return { kind: "absent" };
+    }
+    return parsed.kind === "ok" ? { kind: "ok", reading: parsed.reading } : { kind: "failed" };
+  };
+
+  const pollProvider = async (exec: QuotaExec | null, provider: QuotaProviderKey): Promise<ProviderQuota | null> => {
     // A fresh row displays unavailable (never fetched) but has not yet failed —
     // `failed` tracks the diagnostic transition, separately from that display.
-    const state = states.get(provider) ?? { quota: emptyQuota(), cooldownUntilMs: null, failed: false };
-    const inCooldown = state.cooldownUntilMs !== null && nowMs() < state.cooldownUntilMs;
-    const outcome = inCooldown ? ({ kind: "failed", rateLimited: true } as const) : await probe(provider);
+    const state = states.get(provider) ?? { quota: emptyQuota(), failed: false };
+    const outcome = exec === null ? ({ kind: "absent" } as const) : await probe(exec, provider);
     if (outcome.kind === "absent") {
       states.delete(provider);
       return null;
@@ -469,16 +343,11 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         fetchedAt,
         history,
       };
-      states.set(provider, { quota, cooldownUntilMs: null, failed: false });
+      states.set(provider, { quota, failed: false });
       return quota;
     }
-    if (outcome.rateLimited && !inCooldown) {
-      // Re-arm only on a 429 from a real fetch — a synthetic cooldown skip
-      // must not extend the cooldown.
-      state.cooldownUntilMs = nowMs() + QUOTA_RATE_LIMIT_COOLDOWN_MS;
-    }
     if (!state.failed) {
-      // Log the transition into failure only — never per pass, never error text.
+      // Log the transition into failure only — never per pass, never output text.
       reportFailure(provider);
     }
     state.failed = true;
@@ -493,9 +362,10 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     }
     polling = true;
     try {
+      const exec = resolveExec();
       const providers: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
       for (const provider of QUOTA_PROVIDER_KEYS) {
-        const quota = await pollProvider(provider);
+        const quota = await pollProvider(exec, provider);
         if (quota !== null) {
           providers[provider] = quota;
         }
@@ -513,7 +383,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     } catch {
       // The exported contract promises pollNow never throws. An unexpected
       // dependency/runtime exception is contained here — one provider-less
-      // fixed diagnostic, never error text — and the next pass retries.
+      // fixed diagnostic, never output text — and the next pass retries.
       try {
         diagnostics({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "quota_failed" });
       } catch {
