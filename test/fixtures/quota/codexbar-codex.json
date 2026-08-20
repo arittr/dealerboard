@@ -1,0 +1,40 @@
+[
+  {
+    "provider": "codex",
+    "source": "oauth",
+    "usage": {
+      "updatedAt": "2026-08-20T06:04:44Z",
+      "identity": { "providerID": "codex", "accountEmail": "drew@example.com", "loginMethod": "pro" },
+      "primary": null,
+      "secondary": {
+        "windowMinutes": 10080,
+        "usedPercent": 25,
+        "resetsAt": "2026-08-27T06:03:05Z",
+        "resetDescription": "Aug 26 at 11:03 PM"
+      },
+      "tertiary": null,
+      "extraRateWindows": [
+        {
+          "title": "Codex Spark 5-hour",
+          "id": "codex-spark",
+          "window": {
+            "windowMinutes": 300,
+            "usedPercent": 40,
+            "resetsAt": "2026-08-20T11:04:44Z",
+            "resetDescription": "tomorrow, 4:04 AM"
+          }
+        },
+        {
+          "title": "Codex Spark Weekly",
+          "id": "codex-spark-weekly",
+          "window": {
+            "windowMinutes": 10080,
+            "usedPercent": 10,
+            "resetsAt": "2026-08-27T06:04:44Z",
+            "resetDescription": "Aug 26 at 11:04 PM"
+          }
+        }
+      ]
+    }
+  }
+]

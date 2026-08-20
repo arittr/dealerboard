@@ -1,0 +1,23 @@
+[
+  {
+    "provider": "kimi",
+    "source": "Kimi Code CLI",
+    "usage": {
+      "updatedAt": "2026-08-20T06:03:52Z",
+      "identity": { "providerID": "kimi" },
+      "primary": {
+        "windowMinutes": 10080,
+        "usedPercent": 12,
+        "resetsAt": "2026-08-26T20:27:06Z",
+        "resetDescription": "12/100 requests"
+      },
+      "secondary": {
+        "windowMinutes": 300,
+        "usedPercent": 16,
+        "resetsAt": "2026-08-20T07:27:06Z",
+        "resetDescription": "Rate: 16/100 per 5 hours"
+      },
+      "tertiary": null
+    }
+  }
+]

@@ -44,7 +44,17 @@ export type CodexAuth = { accessToken: string; accountId: string | null };
 
 export type QuotaWindowReading = { percentRemaining: number; resetAt: string | null };
 
-export type ProviderQuotaReading = { session: QuotaWindowReading; weekly: QuotaWindowReading | null };
+export type ProviderQuotaReading = {
+  /** Null when the provider reports no session-class window (e.g. codex weekly-only). */
+  session: QuotaWindowReading | null;
+  weekly: QuotaWindowReading | null;
+};
+
+export type CodexbarUsageParse =
+  | { kind: "ok"; reading: ProviderQuotaReading }
+  /** Valid JSON with no accounts — the provider is disabled in CodexBar. */
+  | { kind: "absent" }
+  | { kind: "invalid" };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -165,6 +175,91 @@ export const normalizeCodexUsage = (body: string): ProviderQuotaReading | null =
     weekly = { percentRemaining: 100 - secondary["used_percent"], resetAt: epochSecondsOrNull(secondary["reset_at"]) };
   }
   return { session, weekly };
+};
+
+/** CodexBar window lengths at or above this classify as the weekly window. */
+const DAY_WINDOW_MINUTES = 1440;
+
+type RawCodexbarWindow = { windowMinutes: number; usedPercent: number; resetsAt: string | null };
+
+const parseCodexbarWindow = (value: unknown): RawCodexbarWindow | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const minutes = value["windowMinutes"];
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
+    return null;
+  }
+  if (!isPercentUsed(value["usedPercent"])) {
+    return null;
+  }
+  return { windowMinutes: minutes, usedPercent: value["usedPercent"], resetsAt: isoOrNull(value["resetsAt"]) };
+};
+
+const toWindowReading = (window: RawCodexbarWindow): QuotaWindowReading => ({
+  percentRemaining: 100 - window.usedPercent,
+  resetAt: window.resetsAt,
+});
+
+const classifyCodexbarWindows = (windows: readonly RawCodexbarWindow[]): ProviderQuotaReading | null => {
+  let weekly: RawCodexbarWindow | null = null;
+  let session: RawCodexbarWindow | null = null;
+  for (const window of windows) {
+    if (window.windowMinutes >= DAY_WINDOW_MINUTES) {
+      if (weekly === null || window.windowMinutes > weekly.windowMinutes) {
+        weekly = window;
+      }
+    } else if (session === null || window.windowMinutes < session.windowMinutes) {
+      session = window;
+    }
+  }
+  if (session === null && weekly === null) {
+    return null;
+  }
+  return {
+    session: session === null ? null : toWindowReading(session),
+    weekly: weekly === null ? null : toWindowReading(weekly),
+  };
+};
+
+export const parseCodexbarUsage = (body: string): CodexbarUsageParse => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (!Array.isArray(parsed)) {
+    return { kind: "invalid" };
+  }
+  if (parsed.length === 0) {
+    return { kind: "absent" };
+  }
+  const entry: unknown = parsed[0];
+  if (!isRecord(entry) || !isRecord(entry["usage"])) {
+    return { kind: "invalid" };
+  }
+  const usage = entry["usage"];
+  const windows: RawCodexbarWindow[] = [];
+  for (const key of ["primary", "secondary", "tertiary"] as const) {
+    const window = parseCodexbarWindow(usage[key]);
+    if (window !== null) {
+      windows.push(window);
+    }
+  }
+  let reading = classifyCodexbarWindows(windows);
+  // Codex can report primary: null with the 5-hour data under extraRateWindows.
+  if (reading !== null && reading.session === null && Array.isArray(usage["extraRateWindows"])) {
+    const extras: RawCodexbarWindow[] = [];
+    for (const extra of usage["extraRateWindows"]) {
+      const window = parseCodexbarWindow(isRecord(extra) ? extra["window"] : null);
+      if (window !== null) {
+        extras.push(window);
+      }
+    }
+    reading = classifyCodexbarWindows([...windows, ...extras]);
+  }
+  return reading === null ? { kind: "invalid" } : { kind: "ok", reading };
 };
 
 /** Quota endpoints rate-limit (Anthropic 429s aggressive pollers) and the windows move slowly. */
@@ -356,13 +451,18 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     }
     if (outcome.kind === "ok") {
       const fetchedAt = now();
-      const history = [
-        ...state.quota.history,
-        { fetchedAt, fractionRemaining: outcome.reading.session.percentRemaining / 100 },
-      ].slice(-QUOTA_HISTORY_LIMIT);
+      // The history ring records the session window only — a weekly-only
+      // reading leaves the ring untouched.
+      const history =
+        outcome.reading.session === null
+          ? state.quota.history
+          : [
+              ...state.quota.history,
+              { fetchedAt, fractionRemaining: outcome.reading.session.percentRemaining / 100 },
+            ].slice(-QUOTA_HISTORY_LIMIT);
       const quota: ProviderQuota = {
-        percentRemaining: outcome.reading.session.percentRemaining,
-        resetAt: outcome.reading.session.resetAt,
+        percentRemaining: outcome.reading.session?.percentRemaining ?? null,
+        resetAt: outcome.reading.session?.resetAt ?? null,
         weeklyPercentRemaining: outcome.reading.weekly?.percentRemaining ?? null,
         weeklyResetAt: outcome.reading.weekly?.resetAt ?? null,
         unavailable: false,

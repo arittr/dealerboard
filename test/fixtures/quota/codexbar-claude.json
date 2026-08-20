@@ -1,0 +1,24 @@
+[
+  {
+    "provider": "claude",
+    "source": "claude",
+    "usage": {
+      "updatedAt": "2026-08-20T06:04:43Z",
+      "identity": { "providerID": "claude" },
+      "primary": {
+        "windowMinutes": 300,
+        "usedPercent": 2,
+        "resetsAt": "2026-08-20T07:00:00Z",
+        "resetDescription": "Resets 12am (America/Los_Angeles)"
+      },
+      "secondary": {
+        "windowMinutes": 10080,
+        "usedPercent": 63,
+        "resetsAt": "2026-08-21T01:00:00Z",
+        "resetDescription": "Resets Aug 20 at 6pm (America/Los_Angeles)"
+      },
+      "tertiary": null,
+      "dataConfidence": "percentOnly"
+    }
+  }
+]
