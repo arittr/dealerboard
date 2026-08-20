@@ -346,8 +346,19 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
 ### Rail
 
 - Daemon health: `daemon ok` with the heartbeat age, or OFFLINE.
-- A clock and the exact unread count (tiles whose session carries an
-  `unreadSince` stamp).
+- A token-usage block and the exact unread count (tiles whose session carries
+  an `unreadSince` stamp). The block shows today's aggregate token total
+  (input + output + cache-creation + cache-read across every agent the local
+  `agentsview` helper reports, on the America/Los_Angeles calendar day), plus
+  rolling tokens/hour and tokens/10-minute rates differenced from the
+  daemon-recorded cumulative-sample ring, with trend arrows against the
+  previous equal-width window (↑ green `#4ADE80`, ↓ red `#FF4D67`, → neutral
+  `#94A3B8`; deadband the larger of 1,000 tokens or 10% of the previous
+  window). Data comes from `token-usage-snapshot.json` via the
+  `read_token_usage_snapshot` Tauri command — a separate file with its own
+  `schemaVersion`, never the session snapshot. A failed poll keeps last-good
+  numbers dimmed; a missing file or a never-successful collector hides the
+  block.
 - Page dots, one per page, tap to jump.
 - Quota panels (strip-only; there is no keypad equivalent): one section per
   quota provider (claude, codex, kimi, GLM/zai) with the provider chip, the

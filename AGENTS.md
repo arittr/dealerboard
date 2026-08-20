@@ -256,6 +256,19 @@ Notes:
   CodexBar app omits that provider entirely. `snapshot-v2.json` and
   `src/protocol.ts` stay untouched, and nothing CodexBar prints is ever
   logged or persisted.
+- A token-usage block ships in the rail in place of the old clock: the
+  daemon's token-usage collector (`src/core/token-usage.ts`, started from
+  `cli.ts`, 30s cadence, 15s run timeout) shells out to the local
+  `agentsview` helper (`AGENTSVIEW_BIN` override, else /opt/homebrew/bin,
+  else PATH) for the America/Los_Angeles day's cumulative total — input +
+  output + cacheCreation + cacheRead across all agents — keeps a 288-sample
+  ring (~2.4h), and publishes `token-usage-snapshot.json` (own
+  `schemaVersion`; contract in `src/token-usage-snapshot.ts`); the strip
+  reads it through the `read_token_usage_snapshot` Tauri command and renders
+  today's total plus rolling /hr and /10m rates with trend arrows
+  (deadband max(1000, 10% of the previous window)) from the pure view-model
+  in `app/src/token-usage.ts`. agentsview output is never logged or
+  persisted.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.
