@@ -97,7 +97,7 @@ off the grid until its next Activity or unread output.
 
 Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. As implemented, the lease is uniform: the daemon prunes any top-level session whose last hook is older than 24 hours, and a still-live session pruned by mistake reappears at its next prompt (every provider late-joins on `UserPromptSubmit`). The daemon also rewrites the snapshot every five seconds as a heartbeat; the plugin treats a file older than ten seconds as a dead daemon and degrades instead of rendering stale tiles as live.
 
-Membership is also attention-scoped: a tile exists if and only if the session is active (working, waiting, or error) or unread — idle with an unviewed result. One refinement: an idle Paseo subagent (hollow-ring origin) is never admitted, even when unread — a finished subagent's result is consumed by the orchestrating parent agent, not by the user pressing tiles, so completed subagent runs never pile up on the grid. Active subagents still show with their ring. Unread is a per-session ledger (`unread_since`, added in schema v7; the current schema is v11 — v8 repaired pre-merge v7 databases missing the `model` column, v9 added the `acked_at` ack watermark, v10 widened the provider CHECK for grok, and v11 added `status_since`, `origin_parent_ref`, and `activity_line` for the strip's data surface). A turn ending — a Stop that settles to idle, or StopFailure — stamps it, because a result landed; only an explicit view clears it: a tile press acks through the daemon (`sessions ack`, the plugin's sole write path), the Paseo overlay reports the agent viewed in Paseo, or a `SessionStart` reuses the session. The ack is timestamped in `acked_at`, so a Paseo attention flag raised before the view can never resurrect the tile afterwards. Prompting again does not mark the earlier result read. A read-and-idle row persists in the registry — subject to the ordinary prune — but is not projected onto the grid, so on the grid idle implies unread. No separate dismiss action exists: viewing the result retires the tile.
+Membership is also attention-scoped: a tile exists if and only if the session is active (working, waiting, or error) or unread — idle with an unviewed result. One refinement: an idle Paseo subagent (hollow-ring origin) is never admitted, even when unread — a finished subagent's result is consumed by the orchestrating parent agent, not by the user pressing tiles, so completed subagent runs never pile up on the grid. Active subagents still show with their ring. Unread is a per-session ledger (`unread_since`, added in schema v7; the current schema is v11 — v8 repaired pre-merge v7 databases missing the `model` column, v9 added the `acked_at` ack watermark, v10 widened the provider CHECK for grok, and v11 added `status_since`, `origin_parent_ref`, and `activity_line` for the strip's data surface). A turn ending — a Stop that settles to idle, or StopFailure — stamps it, because a result landed; only an explicit view clears it: a tile press acks through the daemon (`sessions ack`, the plugin's sole write path), the Paseo overlay reports the agent viewed in Paseo, or a `SessionStart` reuses the session. The ack is timestamped in `acked_at`, so a Paseo attention flag raised before the view can never resurrect the tile afterwards. Prompting again does not mark the earlier result read. A read-and-idle row persists in the registry — subject to the ordinary prune — and is not projected onto the grid (so on the grid idle implies unread), with one exception: a Paseo ancestor stays projected with its effective status lifted while any Paseo descendant is active, its stored status and unread ledger untouched (the lineage rule in the strip section below). No separate dismiss action exists: viewing the result retires the tile.
 
 The previous proposal equated unarchived App/Web tasks with active tasks. That is rejected: on 2026-08-05 this host had 288 unarchived top-level Codex threads, which would turn the deck into a historical inbox.
 
@@ -343,6 +343,19 @@ The board replaces flat slot order with grouped order:
   one atomic tail block strictly after every group, in slot order; the tail
   never backfills ahead of groups.
 
+Paseo lineage carries status as well as grouping: `originParentRef` resolves
+to a parent root's unique Paseo `originRef` — separate from the
+provider-native `parent_session_id` tree — and every effectively active
+Paseo subagent rolls its status up that ancestry with the same
+`error > waiting > working > idle` priority, across nested chains and
+provider boundaries. A done/read ancestor therefore stays on the board with
+a lifted effective status (at least `working`) while any descendant is
+active; its stored status, `unreadSince`, and own `statusSince` timer are
+untouched, and ordinary visibility resumes as soon as the last active
+descendant ends. A missing link, an ambiguous duplicate ref, or a cycle
+stops the walk safely — no snapshot failure — leaving those active
+subagents to the orphan tail.
+
 ### Packing and paging
 
 Pages fill group-atomically in grouped order (a lone primary is a group of
@@ -416,8 +429,10 @@ once stamped, is immutable for the session's lifetime.
   flush) under their parent, connected by a 2px violet spine from the
   parent's bottom edge with an elbow into each subagent card; orphans keep
   the dimmed treatment and pill at full 1012px width, no indent or spine.
-  The idle-subagent admission rule is unchanged: idle Paseo subagents are
-  never projected, so grouped subagents are always active.
+  The idle-subagent admission rule is unchanged: an idle Paseo subagent
+  with no active descendant is never projected — one retained by an active
+  descendant projects as effectively active — so grouped subagent cards are
+  always active.
 - A degraded card keeps the `!` flag; an all-blank page renders OFFLINE.
 
 ### Rail

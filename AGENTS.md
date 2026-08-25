@@ -132,7 +132,16 @@ Notes:
   session-teardown observe fire and is dropped — `SessionEnd` owns removal.
   A tile's effective status is the max (`error > waiting > working > idle`)
   over its whole subtree, and any live subagent row lifts it to at least
-  `working` (`src/core/projection.ts`). `status_since` (schema v11) records
+  `working` (`src/core/projection.ts`). The max also rolls up across
+  separate top-level rows through Paseo lineage: every effectively active
+  Paseo subagent aggregates its status upward along unique
+  `originRef`/`originParentRef` ancestry (nested chains and cross-provider
+  links included), so a done/read Paseo ancestor stays projected with a
+  lifted effective status while any descendant is active — its stored
+  status, `unread_since`, and own `status_since` timer unchanged — and
+  ordinary visibility resumes once the last active descendant ends;
+  missing, ambiguous, or cyclic lineage stops the walk safely, leaving
+  those active subagents as orphans. `status_since` (schema v11) records
   the row's own last status transition: Activity/Attention/Stop/StopFailure
   restamp it only when the status value actually changes, BackgroundWork
   events never restamp it, starts initialize it, and the projection's
@@ -154,7 +163,11 @@ Notes:
   active or unread — except that an idle Paseo subagent is never admitted
   (its result is the orchestrating parent's to report, not the user's to
   ack) — so a read-and-idle row stays in the registry (the prune is
-  storage hygiene, not visibility) and on the grid idle ⟺ unread.
+  storage hygiene, not visibility) and on the grid idle ⟺ unread; the
+  Paseo lineage roll-up (see the status rule) is the one exception — a
+  done/read Paseo ancestor, subagent or not, stays admitted with a lifted,
+  never-idle effective status while any descendant is active, its
+  `unread_since` untouched.
 - Origin (added in schema v7): hooks detect it at ingest (`src/core/origin.ts` —
   `PASEO_AGENT_ID` → paseo with the agent id as `origin_ref`, `TERM_PROGRAM`
   → terminal, else null) into `origin_kind`/`origin_ref`/`origin_subagent`.
