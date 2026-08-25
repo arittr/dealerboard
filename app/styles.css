@@ -584,7 +584,7 @@ body {
 .quota-bar {
   position: relative;
   height: 1.111vh;
-  border-radius: 0.4vh;
+  border-radius: 0.556vh;
   background: #232b38;
   overflow: hidden;
 }
