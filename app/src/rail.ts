@@ -1,18 +1,20 @@
 /**
  * The strip's fixed right rail: token usage (today's total with rolling /hr
  * and /10m rates), the unread count carrying the daemon-health dot (red plus
- * OFFLINE when degraded), per-provider quota panels, and page dots. Rebuilt
+ * OFFLINE when degraded), per-provider quota panels (binding window, tag
+ * pill, bar ticks), and page dots. Rebuilt
  * wholesale on each render — the rail is small and has no CSS animations to
  * disturb.
  */
 
 import {
-  formatSessionNote,
-  formatSessionPercent,
-  formatWeeklySummary,
-  headlinePercent,
+  bindingWindow,
+  formatBindingNote,
+  formatBindingPercent,
+  formatBindingTag,
   type QuotaPanelModel,
   quotaBarColor,
+  tickPercents,
 } from "./quota";
 import { formatTokensCompact, type TokenUsageRailModel, type TokenUsageRateLine } from "./token-usage";
 
@@ -66,13 +68,12 @@ const unreadSection = (model: RailModel): HTMLElement => {
   return section;
 };
 
-const rateLineElement = (line: TokenUsageRateLine, unit: string): HTMLElement => {
-  const row = document.createElement("div");
-  row.className = "tokens-rate";
-  row.dataset["trend"] = line.trend;
+const rateSpan = (line: TokenUsageRateLine, unit: string): HTMLSpanElement => {
+  const span = document.createElement("span");
+  span.dataset["trend"] = line.trend;
   const arrow = line.trend === "up" ? "↑" : line.trend === "down" ? "↓" : "→";
-  row.textContent = `${arrow} ${formatTokensCompact(line.tokens)}/${unit}`;
-  return row;
+  span.textContent = `${arrow} ${formatTokensCompact(line.tokens)}/${unit}`;
+  return span;
 };
 
 const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
@@ -85,7 +86,13 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   const today = document.createElement("div");
   today.className = "tokens-today";
   today.textContent = `${formatTokensCompact(model.totalTokens)} today`;
-  section.append(today, rateLineElement(model.hour, "hr"), rateLineElement(model.tenMin, "10m"));
+  const rates = document.createElement("div");
+  rates.className = "tokens-rate";
+  const separator = document.createElement("span");
+  separator.className = "tokens-rate-sep";
+  separator.textContent = "·";
+  rates.append(rateSpan(model.hour, "hr"), separator, rateSpan(model.tenMin, "10m"));
+  section.append(today, rates);
   return section;
 };
 
@@ -104,7 +111,7 @@ const pagerSection = (model: RailModel, actions: RailActions): HTMLElement => {
   return section;
 };
 
-/** Two-line compact panel: head (chip, label, weekly summary, percent + note) over a bare bar. */
+/** Two-line compact panel: head (chip, label, binding-window tag, percent + note) over a bar that fills to the binding window and ticks every other window. */
 const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
   const section = document.createElement("section");
   section.className = "rail-quota";
@@ -120,30 +127,26 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
   const name = document.createElement("span");
   name.textContent = PROVIDER_LABELS[model.provider];
   head.append(chip, name);
-  // Weekly-only providers headline the weekly window, so the summary would
-  // just repeat the headline; show it only beside a session headline.
-  if (model.percentRemaining !== null) {
-    const weekly = formatWeeklySummary(model.weeklyPercentRemaining, model.weeklyResetAtMs, nowMs);
-    if (weekly !== null) {
-      const week = document.createElement("span");
-      week.className = "quota-weekly";
-      week.textContent = weekly;
-      head.append(week);
-    }
+  const tag = formatBindingTag(model);
+  if (tag !== null) {
+    const pill = document.createElement("span");
+    pill.className = "quota-tag";
+    pill.textContent = tag;
+    head.append(pill);
   }
   const right = document.createElement("span");
   right.className = "quota-right";
   if (model.state === "unavailable") {
     const note = document.createElement("span");
     note.className = "quota-note";
-    note.textContent = formatSessionNote(model, nowMs);
+    note.textContent = formatBindingNote(model, nowMs);
     right.append(note);
   } else {
     const pct = document.createElement("span");
     pct.className = "quota-pct";
-    pct.textContent = formatSessionPercent(model);
+    pct.textContent = formatBindingPercent(model);
     right.append(pct);
-    const note = formatSessionNote(model, nowMs);
+    const note = formatBindingNote(model, nowMs);
     if (note !== "") {
       const noteSpan = document.createElement("span");
       noteSpan.className = "quota-note";
@@ -155,15 +158,20 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
 
   const bar = document.createElement("div");
   bar.className = "quota-bar";
-  const fill = document.createElement("div");
-  fill.className = "quota-bar-fill";
-  const headline = headlinePercent(model);
-  if (headline !== null) {
-    fill.style.width = `${Math.max(0, Math.min(100, headline))}%`;
-    fill.style.background = quotaBarColor(headline);
+  const binding = bindingWindow(model);
+  if (binding !== null) {
+    const fill = document.createElement("div");
+    fill.className = "quota-bar-fill";
+    fill.style.width = `${Math.max(0, Math.min(100, binding.percentRemaining))}%`;
+    fill.style.background = quotaBarColor(binding.percentRemaining);
+    bar.append(fill);
+    for (const percent of tickPercents(model)) {
+      const tick = document.createElement("span");
+      tick.className = "quota-tick";
+      tick.style.left = `${Math.max(0, Math.min(100, percent))}%`;
+      bar.append(tick);
+    }
   }
-  bar.append(fill);
-
   section.append(head, bar);
   return section;
 };

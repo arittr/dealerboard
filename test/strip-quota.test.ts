@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  bindingWindow,
+  formatBindingNote,
+  formatBindingPercent,
+  formatBindingTag,
   formatPercentRemaining,
   formatResetCountdown,
-  formatSessionNote,
-  formatSessionPercent,
-  formatWeeklySummary,
   type QuotaPanelModel,
+  type QuotaWindowModel,
   quotaBarColor,
   reduceQuotaRead,
   STALE_QUOTA_AGE_MS,
+  selectBindingIndex,
+  tickPercents,
 } from "../app/src/quota";
 import type { ProviderQuota } from "../src/quota-snapshot";
 
@@ -31,12 +35,19 @@ const read = (providers: Record<string, ProviderQuota>): { mtimeMs: number; cont
   contents: JSON.stringify({ schemaVersion: 1, providers }),
 });
 
+const windowModel = (tag: string, percentRemaining: number, resetAtMs: number | null = null): QuotaWindowModel => ({
+  tag,
+  percentRemaining,
+  resetAtMs,
+});
+
 const model = (overrides: Partial<QuotaPanelModel> = {}): QuotaPanelModel => ({
   provider: "claude",
-  percentRemaining: 62.5,
-  resetAtMs: Date.parse("2026-08-19T22:00:00.000Z"),
-  weeklyPercentRemaining: 88,
-  weeklyResetAtMs: Date.parse("2026-08-24T00:00:00.000Z"),
+  windows: [
+    windowModel("session", 62.5, Date.parse("2026-08-19T22:00:00.000Z")),
+    windowModel("weekly", 88, Date.parse("2026-08-24T00:00:00.000Z")),
+  ],
+  bindingIndex: 0,
   state: "ok",
   fetchedAtMs: NOW,
   history: [],
@@ -49,11 +60,37 @@ describe("reduceQuotaRead", () => {
     expect(reduceQuotaRead({ mtimeMs: NOW, contents: "junk" }, NOW)).toEqual([]);
   });
 
-  test("providers present map to ok panels with parsed instants", () => {
+  test("providers present map to ok panels with parsed windows in contract order", () => {
     const panels = reduceQuotaRead(read({ claude: quota() }), NOW);
     expect(panels.length).toBe(1);
-    expect(panels[0]).toMatchObject({ provider: "claude", state: "ok", percentRemaining: 62.5 });
-    expect(panels[0]?.resetAtMs).toBe(Date.parse("2026-08-19T22:00:00.000Z"));
+    expect(panels[0]).toMatchObject({ provider: "claude", state: "ok", bindingIndex: 0 });
+    expect(panels[0]?.windows).toEqual([
+      { tag: "session", percentRemaining: 62.5, resetAtMs: Date.parse("2026-08-19T22:00:00.000Z") },
+      { tag: "weekly", percentRemaining: 88, resetAtMs: Date.parse("2026-08-24T00:00:00.000Z") },
+    ]);
+  });
+
+  test("a v2 read maps extra windows after session and weekly, and the minimum binds", () => {
+    const contents = JSON.stringify({
+      schemaVersion: 2,
+      providers: {
+        claude: quota({
+          percentRemaining: 96,
+          weeklyPercentRemaining: 49,
+          extraWindows: [
+            {
+              id: "claude-weekly-scoped-fable",
+              label: "Fable only",
+              percentRemaining: 99,
+              resetAt: "2026-08-28T01:00:00.000Z",
+            },
+          ],
+        }),
+      },
+    });
+    const panels = reduceQuotaRead({ mtimeMs: NOW, contents }, NOW);
+    expect(panels[0]?.windows.map((entry) => entry.tag)).toEqual(["session", "weekly", "Fable only"]);
+    expect(panels[0]?.bindingIndex).toBe(1);
   });
 
   test("a failed provider with last-good data is unavailable; an old success is stale", () => {
@@ -62,12 +99,22 @@ describe("reduceQuotaRead", () => {
     expect(reduceQuotaRead(read({ claude: quota({ fetchedAt: oldFetch }) }), NOW)[0]?.state).toBe("stale");
   });
 
-  test("a provider that never fetched is unavailable with null instants", () => {
+  test("a provider that never fetched is unavailable with no windows", () => {
     const panel = reduceQuotaRead(
-      read({ codex: quota({ percentRemaining: null, resetAt: null, fetchedAt: null, unavailable: true }) }),
+      read({
+        codex: quota({
+          percentRemaining: null,
+          resetAt: null,
+          weeklyPercentRemaining: null,
+          weeklyResetAt: null,
+          fetchedAt: null,
+          unavailable: true,
+        }),
+      }),
       NOW,
     )[0];
-    expect(panel).toMatchObject({ provider: "codex", state: "unavailable", fetchedAtMs: null, resetAtMs: null });
+    expect(panel).toMatchObject({ provider: "codex", state: "unavailable", fetchedAtMs: null, bindingIndex: null });
+    expect(panel?.windows).toEqual([]);
   });
 
   test("panels follow the contract provider order across all five providers", () => {
@@ -76,6 +123,80 @@ describe("reduceQuotaRead", () => {
       NOW,
     );
     expect(panels.map((panel) => panel.provider)).toEqual(["claude", "codex", "kimi", "zai", "qwen"]);
+  });
+});
+
+describe("selectBindingIndex", () => {
+  test("the lowest percent binds and ties keep the earlier window", () => {
+    const windows = [windowModel("session", 88), windowModel("weekly", 62.5), windowModel("Fable only", 62.5)];
+    expect(selectBindingIndex(windows)).toBe(1);
+    expect(selectBindingIndex([windowModel("weekly", 5)])).toBe(0);
+    expect(selectBindingIndex([])).toBeNull();
+  });
+});
+
+describe("formatBindingTag", () => {
+  test("several windows say which binds; a single window is a bare name; none is null", () => {
+    expect(formatBindingTag(model())).toBe("session binds");
+    expect(formatBindingTag(model({ windows: [windowModel("weekly", 88)], bindingIndex: 0 }))).toBe("weekly");
+    expect(formatBindingTag(model({ windows: [], bindingIndex: null }))).toBeNull();
+  });
+});
+
+describe("formatBindingPercent and formatBindingNote", () => {
+  test("ok panels show the binding percent and its countdown", () => {
+    expect(formatBindingPercent(model())).toBe("63%");
+    expect(formatBindingNote(model(), NOW)).toBe("4h");
+  });
+
+  test("no windows render an em dash and no note", () => {
+    const bare = model({ windows: [], bindingIndex: null });
+    expect(formatBindingPercent(bare)).toBe("—");
+    expect(formatBindingNote(bare, NOW)).toBe("");
+  });
+
+  test("the binding window drives both texts", () => {
+    const bound = model({
+      windows: [windowModel("session", 96, NOW + 35 * 60_000), windowModel("weekly", 49, NOW + 42 * 3_600_000)],
+      bindingIndex: 1,
+    });
+    expect(formatBindingPercent(bound)).toBe("49%");
+    // 42h formats as days from 24h out (bd64136); the brief's "42h" predates that landed fix.
+    expect(formatBindingNote(bound, NOW)).toBe("2d");
+    expect(bindingWindow(bound)?.tag).toBe("weekly");
+  });
+
+  test("unavailable panels with last-good data show the last-update age", () => {
+    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe(
+      "updated 12m ago",
+    );
+  });
+
+  test("unavailable panels without data say so", () => {
+    expect(
+      formatBindingNote(model({ state: "unavailable", fetchedAtMs: null, windows: [], bindingIndex: null }), NOW),
+    ).toBe("unavailable");
+  });
+
+  test("a binding window without a reset instant has no note; past reset says resetting", () => {
+    const noReset = model({ windows: [windowModel("session", 100)], bindingIndex: 0 });
+    expect(formatBindingNote(noReset, NOW)).toBe("");
+    const resetAtMs = NOW + 4 * 3_600_000;
+    const resetting = model({ windows: [windowModel("session", 10, resetAtMs)], bindingIndex: 0 });
+    expect(formatBindingNote(resetting, resetAtMs)).toBe("resetting…");
+    expect(formatBindingNote(resetting, resetAtMs + 1)).toBe("resetting…");
+  });
+});
+
+describe("tickPercents", () => {
+  test("every non-binding window ticks; single and empty lists tick nothing", () => {
+    const multi = model({
+      windows: [windowModel("session", 97), windowModel("weekly", 93), windowModel("Fable only", 99)],
+      bindingIndex: 1,
+    });
+    expect(tickPercents(multi)).toEqual([97, 99]);
+    expect(tickPercents(model({ windows: [windowModel("weekly", 5)], bindingIndex: 0 }))).toEqual([]);
+    expect(tickPercents(model({ windows: [], bindingIndex: null }))).toEqual([]);
   });
 });
 
@@ -93,65 +214,11 @@ describe("formatResetCountdown", () => {
   });
 });
 
-describe("formatWeeklySummary and formatPercentRemaining", () => {
-  test("weekly summary combines percent and countdown, or is null without data", () => {
-    expect(formatWeeklySummary(88, NOW + 4 * 86_400_000, NOW)).toBe("wk 88% · 4d");
-    expect(formatWeeklySummary(88, null, NOW)).toBe("wk 88%");
-    expect(formatWeeklySummary(null, null, NOW)).toBeNull();
-  });
-
+describe("formatPercentRemaining and quotaBarColor", () => {
   test("percent rounds to a whole number", () => {
     expect(formatPercentRemaining(62.5)).toBe("63%");
   });
-});
 
-describe("formatSessionPercent and formatSessionNote", () => {
-  test("ok panels show the rounded percent and the bare countdown", () => {
-    expect(formatSessionPercent(model())).toBe("63%");
-    expect(formatSessionNote(model(), NOW)).toBe("4h");
-  });
-
-  test("no windows at all render an em dash and no note", () => {
-    const bare = model({
-      percentRemaining: null,
-      resetAtMs: null,
-      weeklyPercentRemaining: null,
-      weeklyResetAtMs: null,
-    });
-    expect(formatSessionPercent(bare)).toBe("—");
-    expect(formatSessionNote(bare, NOW)).toBe("");
-  });
-
-  test("weekly-only panels headline the weekly window and its countdown", () => {
-    const weeklyOnly = model({
-      percentRemaining: null,
-      resetAtMs: null,
-      weeklyPercentRemaining: 88,
-      weeklyResetAtMs: NOW + 4 * 86_400_000,
-    });
-    expect(formatSessionPercent(weeklyOnly)).toBe("88%");
-    expect(formatSessionNote(weeklyOnly, NOW)).toBe("4d");
-  });
-
-  test("unavailable panels with last-good data show the last-update age", () => {
-    const staleModel = model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 });
-    expect(formatSessionNote(staleModel, NOW)).toBe("updated 12m ago");
-  });
-
-  test("unavailable panels without data say so", () => {
-    expect(formatSessionNote(model({ state: "unavailable", fetchedAtMs: null, percentRemaining: null }), NOW)).toBe(
-      "unavailable",
-    );
-  });
-
-  test("ok panels at or past the reset say resetting", () => {
-    const resetAtMs = NOW + 4 * 3_600_000;
-    expect(formatSessionNote(model({ resetAtMs }), resetAtMs)).toBe("resetting…");
-    expect(formatSessionNote(model({ resetAtMs }), resetAtMs + 1)).toBe("resetting…");
-  });
-});
-
-describe("quotaBarColor", () => {
   test("green above 25, amber from 10, red below 10", () => {
     expect(quotaBarColor(26)).toBe("#4ade80");
     expect(quotaBarColor(25)).toBe("#ffb020");

@@ -1,8 +1,9 @@
 /**
  * Pure view-model for the rail's quota panels: reduce the quota-snapshot read
- * to per-provider panel models, plus the formatting and sparkline geometry.
- * Kept DOM-free so the logic is unit-testable; the rendering layer is
- * app/src/rail.ts.
+ * to per-provider window lists (session, weekly, extras), pick the binding
+ * window (the lowest percent remaining), and derive the tag pill, headline
+ * texts, and bar ticks. Kept DOM-free so the logic is unit-testable; the
+ * rendering layer is app/src/rail.ts.
  */
 
 import {
@@ -20,13 +21,19 @@ export const STALE_QUOTA_AGE_MS = 3 * 120_000;
 
 export type QuotaPanelState = "ok" | "stale" | "unavailable";
 
+export type QuotaWindowModel = {
+  /** Pill tag: "session", "weekly", or an extra window's published label. */
+  tag: string;
+  percentRemaining: number;
+  resetAtMs: number | null;
+};
+
 export type QuotaPanelModel = {
   provider: QuotaProviderKey;
-  /** Session-window percent remaining (last-good when unavailable); null when never fetched. */
-  percentRemaining: number | null;
-  resetAtMs: number | null;
-  weeklyPercentRemaining: number | null;
-  weeklyResetAtMs: number | null;
+  /** Session, weekly, then extras in published order; empty when never fetched. */
+  windows: readonly QuotaWindowModel[];
+  /** Index of the binding (lowest-percent) window; null when windows is empty. */
+  bindingIndex: number | null;
   state: QuotaPanelState;
   fetchedAtMs: number | null;
   history: readonly QuotaHistoryPoint[];
@@ -41,14 +48,41 @@ const panelState = (quota: ProviderQuota, fetchedAtMs: number | null, now: numbe
   return now - fetchedAtMs > STALE_QUOTA_AGE_MS ? "stale" : "ok";
 };
 
+/** The lowest percent remaining binds; ties keep the earlier window (session > weekly > extras). */
+export const selectBindingIndex = (windows: readonly QuotaWindowModel[]): number | null => {
+  let best: number | null = null;
+  for (const [index, entry] of windows.entries()) {
+    if (best === null || entry.percentRemaining < (windows[best]?.percentRemaining ?? Number.POSITIVE_INFINITY)) {
+      best = index;
+    }
+  }
+  return best;
+};
+
 const panelModel = (provider: QuotaProviderKey, quota: ProviderQuota, now: number): QuotaPanelModel => {
   const fetchedAtMs = parseInstant(quota.fetchedAt);
+  const windows: QuotaWindowModel[] = [];
+  if (quota.percentRemaining !== null) {
+    windows.push({ tag: "session", percentRemaining: quota.percentRemaining, resetAtMs: parseInstant(quota.resetAt) });
+  }
+  if (quota.weeklyPercentRemaining !== null) {
+    windows.push({
+      tag: "weekly",
+      percentRemaining: quota.weeklyPercentRemaining,
+      resetAtMs: parseInstant(quota.weeklyResetAt),
+    });
+  }
+  for (const extra of quota.extraWindows) {
+    windows.push({
+      tag: extra.label,
+      percentRemaining: extra.percentRemaining,
+      resetAtMs: parseInstant(extra.resetAt),
+    });
+  }
   return {
     provider,
-    percentRemaining: quota.percentRemaining,
-    resetAtMs: parseInstant(quota.resetAt),
-    weeklyPercentRemaining: quota.weeklyPercentRemaining,
-    weeklyResetAtMs: parseInstant(quota.weeklyResetAt),
+    windows,
+    bindingIndex: selectBindingIndex(windows),
     state: panelState(quota, fetchedAtMs, now),
     fetchedAtMs,
     history: quota.history,
@@ -93,49 +127,50 @@ export const formatResetCountdown = (resetAtMs: number, now: number): string => 
   return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`;
 };
 
-/**
- * The headline window is the session window when present, else the weekly
- * window (qwen's Token Plan reports only a 7-day window).
- */
-export const headlinePercent = (model: QuotaPanelModel): number | null =>
-  model.percentRemaining ?? model.weeklyPercentRemaining;
+/** The binding window, or null when the provider has never fetched. */
+export const bindingWindow = (model: QuotaPanelModel): QuotaWindowModel | null =>
+  model.bindingIndex === null ? null : (model.windows[model.bindingIndex] ?? null);
 
-/** The reset instant of the headline window. */
-export const headlineResetAtMs = (model: QuotaPanelModel): number | null =>
-  model.percentRemaining === null ? model.weeklyResetAtMs : model.resetAtMs;
-
-/** Bright right text of the head line: last-good headline percent, em dash when never fetched. */
-export const formatSessionPercent = (model: QuotaPanelModel): string => {
-  const percent = headlinePercent(model);
-  return percent === null ? "—" : formatPercentRemaining(percent);
+/** Pill text: "<name> binds" when several windows compete, the bare name otherwise, null when no data. */
+export const formatBindingTag = (model: QuotaPanelModel): string | null => {
+  const binding = bindingWindow(model);
+  if (binding === null) {
+    return null;
+  }
+  return model.windows.length > 1 ? `${binding.tag} binds` : binding.tag;
 };
 
-/** Muted right text of the head line: unavailable age, headline reset countdown, or empty. */
-export const formatSessionNote = (model: QuotaPanelModel, now: number): string => {
+/** Bright right text of the head line: binding percent, em dash when never fetched. */
+export const formatBindingPercent = (model: QuotaPanelModel): string => {
+  const binding = bindingWindow(model);
+  return binding === null ? "—" : formatPercentRemaining(binding.percentRemaining);
+};
+
+/** Muted right text of the head line: unavailable age, binding reset countdown, or empty. */
+export const formatBindingNote = (model: QuotaPanelModel, now: number): string => {
+  const binding = bindingWindow(model);
   if (model.state === "unavailable") {
-    if (model.fetchedAtMs === null || headlinePercent(model) === null) {
+    if (model.fetchedAtMs === null || binding === null) {
       return "unavailable";
     }
     const ageMinutes = Math.max(0, Math.round((now - model.fetchedAtMs) / 60_000));
     return ageMinutes < 1 ? "updated just now" : `updated ${ageMinutes}m ago`;
   }
-  const resetAtMs = headlineResetAtMs(model);
-  if (resetAtMs === null) {
+  if (binding === null || binding.resetAtMs === null) {
     return "";
   }
-  if (resetAtMs <= now) {
+  if (binding.resetAtMs <= now) {
     return "resetting…";
   }
-  return formatResetCountdown(resetAtMs, now);
+  return formatResetCountdown(binding.resetAtMs, now);
 };
 
-/** Muted weekly summary right of the bar; null when the provider reports no weekly window. */
-export const formatWeeklySummary = (percent: number | null, resetAtMs: number | null, now: number): string | null => {
-  if (percent === null) {
-    return null;
+/** Percents of the non-binding windows, drawn as ticks on the bar. */
+export const tickPercents = (model: QuotaPanelModel): number[] => {
+  if (model.bindingIndex === null) {
+    return [];
   }
-  const base = `wk ${Math.round(percent)}%`;
-  return resetAtMs === null ? base : `${base} · ${formatResetCountdown(resetAtMs, now)}`;
+  return model.windows.filter((_, index) => index !== model.bindingIndex).map((entry) => entry.percentRemaining);
 };
 
 /** Fill hue follows remaining headroom on the strip's existing status palette. */
