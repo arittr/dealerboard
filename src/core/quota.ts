@@ -133,7 +133,11 @@ const extraWindowLabel = (title: string, codexbarProvider: string): string => {
   if (codePoints.length <= EXTRA_WINDOW_LABEL_MAX_CODE_POINTS) {
     return source;
   }
-  return `${codePoints.slice(0, EXTRA_WINDOW_LABEL_MAX_CODE_POINTS).join("").trimEnd()}…`;
+  // The ellipsis is the 14th code point, so the slice leaves room for it.
+  return `${codePoints
+    .slice(0, EXTRA_WINDOW_LABEL_MAX_CODE_POINTS - 1)
+    .join("")
+    .trimEnd()}…`;
 };
 
 type WindowSelection = { session: RawCodexbarWindow | null; weekly: RawCodexbarWindow | null };

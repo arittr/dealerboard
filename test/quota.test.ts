@@ -476,4 +476,34 @@ describe("createQuotaCollector", () => {
       { id: "kimi-bonus", label: "Bonus Context…", percentRemaining: 50, resetAt: "2026-08-20T18:00:00.000Z" },
     ]);
   });
+
+  test("an extra label whose cut lands mid-word is 14 code points including the ellipsis", async () => {
+    const harness = makeHarness();
+    harness.respondRaw("kimi", {
+      exitCode: 0,
+      stdout: JSON.stringify([
+        {
+          provider: "kimi",
+          usage: {
+            primary: { windowMinutes: 300, usedPercent: 16, resetsAt: "2026-08-19T19:00:00Z" },
+            secondary: { windowMinutes: 10080, usedPercent: 12, resetsAt: "2026-08-26T18:00:00Z" },
+            tertiary: null,
+            extraRateWindows: [
+              {
+                id: "kimi-long",
+                title: "Kimi LongBonusWindow",
+                window: { windowMinutes: 1440, usedPercent: 50, resetsAt: "2026-08-20T18:00:00Z" },
+              },
+            ],
+          },
+        },
+      ]),
+    });
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    // "LongBonusWindow" has no whitespace at the 14th code point — the ellipsis must be the 14th.
+    const label = snapshot.providers["kimi"]?.extraWindows[0]?.label ?? "";
+    expect(label).toBe("LongBonusWind…");
+    expect([...label].length).toBe(14);
+  });
 });
