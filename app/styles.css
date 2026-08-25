@@ -498,6 +498,31 @@ body {
   color: #4a5568;
 }
 
+/* d6's day-over-day sparkline: a 436x80-native block under the rates — dim
+   yesterday line, bright today line, endpoint dot at the current position.
+   The yda micro-label is HTML (not stretched by the SVG's non-uniform
+   viewBox) and sits right-aligned below yesterday's end, as in the mockup
+   (native px converted at 2560x720: px / 25.6 = vw, px / 7.2 = vh). */
+.rail-sparkline {
+  position: relative;
+  margin-top: 0.547vw; /* 14px native */
+  height: 11.111vh; /* 80px native */
+  overflow: visible; /* the endpoint dot sits at the plot edge */
+}
+.rail-sparkline svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.spark-yda {
+  position: absolute;
+  top: 37.5%; /* d6: baseline y=30 of the 80px box */
+  right: 0;
+  color: #94a3b8;
+  font-size: 0.781vw; /* 20px native */
+}
+
 .rail-unread {
   display: flex;
   align-items: center;

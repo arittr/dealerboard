@@ -15,7 +15,13 @@ import {
   type QuotaPanelModel,
   quotaBarColor,
 } from "./quota";
-import { formatTokensCompact, type TokenUsageRailModel, type TokenUsageRateLine } from "./token-usage";
+import {
+  formatTokensCompact,
+  type SparklineModel,
+  type SparklinePoint,
+  type TokenUsageRailModel,
+  type TokenUsageRateLine,
+} from "./token-usage";
 
 export type RailModel = {
   degraded: boolean;
@@ -75,6 +81,54 @@ const rateSpan = (line: TokenUsageRateLine, unit: string): HTMLSpanElement => {
   return span;
 };
 
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+/** Model point → viewBox "0 0 100 28" coordinate: x spans the full day, y rides 27 (0) to 1 (1). */
+const sparkCoordinate = (point: SparklinePoint): string =>
+  `${(point.x * 100).toFixed(2)},${(27 - point.y * 26).toFixed(2)}`;
+
+const sparkPolyline = (points: readonly SparklinePoint[], stroke: string, opacity: string): SVGElement => {
+  const polyline = document.createElementNS(SVG_NAMESPACE, "polyline");
+  polyline.setAttribute("fill", "none");
+  polyline.setAttribute("points", points.map(sparkCoordinate).join(" "));
+  polyline.setAttribute("stroke", stroke);
+  polyline.setAttribute("stroke-opacity", opacity);
+  polyline.setAttribute("stroke-width", "2");
+  polyline.setAttribute("stroke-linejoin", "round");
+  polyline.setAttribute("vector-effect", "non-scaling-stroke");
+  return polyline;
+};
+
+/** d6's day-over-day sparkline: dim yesterday line with its yda micro-label, bright today line, endpoint dot. */
+const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
+  const block = document.createElement("div");
+  block.className = "rail-sparkline";
+  const svg = document.createElementNS(SVG_NAMESPACE, "svg");
+  svg.setAttribute("viewBox", "0 0 100 28");
+  svg.setAttribute("preserveAspectRatio", "none");
+  if (sparkline.yesterday !== null) {
+    svg.append(sparkPolyline(sparkline.yesterday.points, "#94A3B8", "0.6"));
+  }
+  svg.append(sparkPolyline(sparkline.today.points, "#E8EEF7", "1"));
+  const last = sparkline.today.points.at(-1);
+  if (last !== undefined) {
+    const dot = document.createElementNS(SVG_NAMESPACE, "circle");
+    dot.setAttribute("cx", (last.x * 100).toFixed(2));
+    dot.setAttribute("cy", (27 - last.y * 26).toFixed(2));
+    dot.setAttribute("r", "1.2");
+    dot.setAttribute("fill", "#E8EEF7");
+    svg.append(dot);
+  }
+  block.append(svg);
+  if (sparkline.yesterday !== null) {
+    const label = document.createElement("span");
+    label.className = "spark-yda";
+    label.textContent = sparkline.yesterday.label;
+    block.append(label);
+  }
+  return block;
+};
+
 const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   if (model.state === "hidden") {
     return null;
@@ -92,6 +146,9 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   separator.textContent = "·";
   rates.append(rateSpan(model.hour, "hr"), separator, rateSpan(model.tenMin, "10m"));
   section.append(today, rates);
+  if (model.sparkline !== null) {
+    section.append(sparklineBlock(model.sparkline));
+  }
   return section;
 };
 

@@ -1,12 +1,16 @@
 /**
  * Pure view-model for the rail's token-usage block: reduce the token-usage
  * snapshot read to a rail model — today's total plus rolling /hr and /10m
- * rates with glorp-style trend arrows — plus the compact token formatting.
- * Kept DOM-free so the logic is unit-testable; the rendering layer is
- * app/src/rail.ts.
+ * rates with glorp-style trend arrows, the day-over-day sparkline, and the
+ * compact token formatting. Kept DOM-free so the logic is unit-testable; the
+ * rendering layer is app/src/rail.ts.
  */
 
-import { parseTokenUsageSnapshot, type TokenUsageSnapshot } from "../../src/token-usage-snapshot";
+import {
+  parseTokenUsageSnapshot,
+  type TokenUsageDayCurve,
+  type TokenUsageSnapshot,
+} from "../../src/token-usage-snapshot";
 import type { SnapshotPayload } from "./bridge";
 
 /** Three missed 30s collector passes without a success marks the block stale. */
@@ -21,7 +25,13 @@ export type TokenUsageRateLine = { tokens: number; trend: TokenUsageTrend };
 
 export type TokenUsageRailModel =
   | { state: "hidden" }
-  | { state: "ok" | "stale"; totalTokens: number; hour: TokenUsageRateLine; tenMin: TokenUsageRateLine };
+  | {
+      state: "ok" | "stale";
+      totalTokens: number;
+      hour: TokenUsageRateLine;
+      tenMin: TokenUsageRateLine;
+      sparkline: SparklineModel | null;
+    };
 
 type NumberedSample = { atMs: number; totalTokens: number };
 
@@ -65,6 +75,52 @@ const rateLine = (samples: readonly NumberedSample[], anchorMs: number, windowMs
 
 const formatScaled = (scaled: number, suffix: string): string => `${scaled.toFixed(1).replace(/\.0$/u, "")}${suffix}`;
 
+const LA_TIME_ZONE = "America/Los_Angeles";
+
+const laWallClockFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: LA_TIME_ZONE,
+  hour12: false,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+/** Offset of LA wall clock from UTC at an instant, in ms (negative west of UTC). */
+const laOffsetMs = (atMs: number): number => {
+  const parts = laWallClockFormat.formatToParts(new Date(atMs));
+  const field = (type: string): number => Number(parts.find((part) => part.type === type)?.value ?? "0");
+  const asUtc = Date.UTC(
+    field("year"),
+    field("month") - 1,
+    field("day"),
+    field("hour") % 24,
+    field("minute"),
+    field("second"),
+  );
+  return asUtc - Math.floor(atMs / 1000) * 1000;
+};
+
+/** Epoch of LA midnight for a YYYY-MM-DD day; the second pass settles DST transitions. */
+const laMidnightMs = (day: string): number => {
+  const guess = Date.parse(`${day}T00:00:00.000Z`);
+  const once = guess - laOffsetMs(guess);
+  return guess - laOffsetMs(once);
+};
+
+const nextProviderDay = (day: string): string =>
+  new Date(Date.parse(`${day}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+
+const previousProviderDay = (day: string): string =>
+  new Date(Date.parse(`${day}T00:00:00.000Z`) - 86_400_000).toISOString().slice(0, 10);
+
+export const laDayBoundsMs = (day: string): { startMs: number; endMs: number } => ({
+  startMs: laMidnightMs(day),
+  endMs: laMidnightMs(nextProviderDay(day)),
+});
+
 /** glorp's compact token formatting: one decimal, a trailing .0 stripped, k/M/B suffixes (1000.0k rolls up to 1M). */
 export const formatTokensCompact = (value: number): string => {
   const tokens = Math.max(0, value);
@@ -78,6 +134,49 @@ export const formatTokensCompact = (value: number): string => {
     return formatScaled(tokens / 1e6, "M");
   }
   return formatScaled(tokens / 1e9, "B");
+};
+
+export type SparklinePoint = { x: number; y: number };
+export type SparklineModel = {
+  today: { points: SparklinePoint[] };
+  yesterday: { points: SparklinePoint[]; label: string } | null;
+};
+
+const curveLine = (curve: TokenUsageDayCurve, yMax: number): SparklinePoint[] => {
+  const { startMs, endMs } = laDayBoundsMs(curve.providerDay);
+  const span = Math.max(1, endMs - startMs);
+  return curve.points.map((point) => ({
+    x: Math.min(1, Math.max(0, (Date.parse(point.fetchedAt) - startMs) / span)),
+    y: Math.min(1, Math.max(0, point.totalTokens / yMax)),
+  }));
+};
+
+/** Spec "Day-over-day sparkline": adjacent-yesterday only, shared zero-based y-scale, elapsed-fraction x. */
+export const reduceSparkline = (snapshot: TokenUsageSnapshot): SparklineModel | null => {
+  const curves = snapshot.dayCurves;
+  if (curves === undefined) {
+    return null;
+  }
+  const yesterday =
+    curves.yesterday !== null &&
+    curves.yesterday.providerDay === previousProviderDay(curves.today.providerDay) &&
+    curves.yesterday.points.length > 0
+      ? curves.yesterday
+      : null;
+  if (curves.today.points.length === 0 && yesterday === null) {
+    return null;
+  }
+  const yMax = Math.max(1, curves.today.points.at(-1)?.totalTokens ?? 0, yesterday?.points.at(-1)?.totalTokens ?? 0);
+  return {
+    today: { points: curveLine(curves.today, yMax) },
+    yesterday:
+      yesterday === null
+        ? null
+        : {
+            points: curveLine(yesterday, yMax),
+            label: `yda ${formatTokensCompact(yesterday.points.at(-1)?.totalTokens ?? 0)}`,
+          },
+  };
 };
 
 export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number): TokenUsageRailModel => {
@@ -109,12 +208,13 @@ export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number
   if (anchor === undefined) {
     // A success with no usable samples yet — render zeros rather than vanish.
     const zero: TokenUsageRateLine = { tokens: 0, trend: "flat" };
-    return { state, totalTokens: snapshot.totalTokens, hour: zero, tenMin: zero };
+    return { state, totalTokens: snapshot.totalTokens, hour: zero, tenMin: zero, sparkline: reduceSparkline(snapshot) };
   }
   return {
     state,
     totalTokens: snapshot.totalTokens,
     hour: rateLine(daySamples, anchor.atMs, ONE_HOUR_MS),
     tenMin: rateLine(daySamples, anchor.atMs, TEN_MINUTES_MS),
+    sparkline: reduceSparkline(snapshot),
   };
 };
