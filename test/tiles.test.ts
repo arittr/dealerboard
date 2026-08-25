@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { statusLineText, stripGridLayout, stripTileExtras, visibleStripKeys } from "../app/src/tiles";
+import {
+  statusLineText,
+  stripGridLayout,
+  stripTileExtras,
+  visibleStripKeys,
+  WASH_CYCLE_MS,
+  washAnimationDelay,
+} from "../app/src/tiles";
 import type { KeyModel } from "../src/plugin/layout";
 import type { ProjectedSession } from "../src/protocol";
 
@@ -125,5 +132,35 @@ describe("stripTileExtras", () => {
     expect(stripTileExtras(ackedError.session, NOW_MS).unread).toBe(false);
     const unreadError = session(4, { status: "error", unreadSince: "2026-08-19T00:01:00.000Z" });
     expect(stripTileExtras(unreadError.session, NOW_MS).unread).toBe(true);
+  });
+});
+
+describe("washAnimationDelay", () => {
+  const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
+
+  const parseDelay = (delay: string): number => {
+    expect(delay).toMatch(/^-\d+\.\d{3}s$/);
+    return Math.round(Number.parseFloat(delay.slice(1, -1)) * 1000);
+  };
+
+  test("seats each session at its own point in the wash cycle", () => {
+    const phases = ["s1", "s2", "s3", "s4"].map((id) => parseDelay(washAnimationDelay(id, NOW_MS)));
+    expect(new Set(phases).size).toBe(phases.length);
+    for (const phase of phases) {
+      expect(phase).toBeGreaterThanOrEqual(0);
+      expect(phase).toBeLessThan(WASH_CYCLE_MS);
+    }
+  });
+
+  test("a re-rendered tile resumes the phase it was already showing", () => {
+    // renderTiles recreates every tile on any data change, so the delay has to
+    // carry the wash forward; otherwise each re-render snaps it to the dim end.
+    const atCreate = parseDelay(washAnimationDelay("s1", NOW_MS));
+    for (const elapsed of [0, 250, 3_100, 7_999, 8_000, 19_400]) {
+      const atRerender = parseDelay(washAnimationDelay("s1", NOW_MS + elapsed));
+      const drift = (((atCreate + elapsed - atRerender) % WASH_CYCLE_MS) + WASH_CYCLE_MS) % WASH_CYCLE_MS;
+      // One millisecond of slack for the delay string's millisecond precision.
+      expect(Math.min(drift, WASH_CYCLE_MS - drift)).toBeLessThanOrEqual(1);
+    }
   });
 });

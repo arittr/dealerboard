@@ -65,6 +65,10 @@ body {
   background: #20b8ff;
   opacity: 0.04;
   animation: wash 4s ease-in-out infinite alternate;
+  /* Per-session stagger, seeded from the wall clock so a re-render resumes
+     mid-wash; see washAnimationDelay in app/src/tiles.ts, which assumes the
+     4s alternate above. Must follow the shorthand, which resets the delay. */
+  animation-delay: var(--wash-delay, 0s);
 }
 @keyframes wash {
   from {

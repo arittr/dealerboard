@@ -4,12 +4,12 @@
  * label, two-line clamped title, descendant badge, Paseo origin pip, degraded
  * flag. Strip-only extras: unread dot, ticking status timer, activity footer
  * (no keypad counterpart). Status color and animation live in styles.css
- * (status-* classes); this module owns structure and text only. All text goes
- * through textContent; no innerHTML anywhere.
+ * (status-* classes); this module owns structure, text, and the working tile's
+ * wash delay only. All text goes through textContent; no innerHTML anywhere.
  */
 
 import type { KeyModel } from "../../src/plugin/layout";
-import { modelLabel, PROVIDER_LETTERS } from "../../src/plugin/render";
+import { modelLabel, PROVIDER_LETTERS, washCycleOffset } from "../../src/plugin/render";
 import type { ProjectedSession, SessionStatus } from "../../src/protocol";
 
 /** Strip tiles are wide enough that the keypad's badged six-point cap never applies. */
@@ -69,12 +69,32 @@ export const stripTileExtras = (session: ProjectedSession, nowMs: number): Strip
   activityLine: session.activityLine,
 });
 
+/** The wash alternates over four seconds each way (styles.css), so one full
+ *  round trip takes eight. */
+export const WASH_CYCLE_MS = 8000;
+
+/**
+ * Negative CSS animation delay that starts a working tile's wash partway into
+ * its cycle. The session offset staggers concurrent tiles so they never
+ * breathe in lockstep, and folding in the wall clock keeps the wash
+ * phase-continuous across re-renders: renderTiles recreates every tile on any
+ * data change, and an undelayed tile would snap back to the dim end each time.
+ */
+export const washAnimationDelay = (sessionId: string, nowMs: number): string => {
+  const elapsed = (nowMs + washCycleOffset(sessionId) * WASH_CYCLE_MS) % WASH_CYCLE_MS;
+  return `-${(elapsed / 1000).toFixed(3)}s`;
+};
+
 const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, index: number): HTMLElement => {
   const { session } = model;
-  const extras = stripTileExtras(session, Date.now());
+  const nowMs = Date.now();
+  const extras = stripTileExtras(session, nowMs);
   const tile = document.createElement("div");
   tile.className = `tile session status-${session.status}`;
   tile.dataset["keyIndex"] = String(index);
+  if (session.status === "working") {
+    tile.style.setProperty("--wash-delay", washAnimationDelay(session.sessionId, nowMs));
+  }
 
   const topband = document.createElement("div");
   topband.className = "topband";

@@ -10,6 +10,7 @@
  * status-colored frame.
  * Animation is a pure function of the key model and an integer phase owned by
  * the plugin: working uses a shallow full-tile wash behind a static dim frame,
+ * staggered per session so concurrent tiles never breathe in lockstep,
  * waiting and error breathe through deeper sinusoidal frame opacity (error
  * faster), and idle is a static green frame. Blank, NEXT, and offline
  * treatments render no session title; degraded models add a small error flag,
@@ -94,13 +95,30 @@ const escapeXml = (value: string): string =>
 const frameOpen = (color: string): string =>
   `<rect x="${FRAME_INSET}" y="${FRAME_INSET}" width="${FRAME_SIZE}" height="${FRAME_SIZE}" fill="none" stroke="${color}" stroke-width="${FRAME_WIDTH}"`;
 
-const statusFrame = (status: SessionStatus, phase: number): string => {
+/**
+ * Where in the wash cycle a session starts, as a fraction of one full cycle.
+ * Every working tile breathes on the plugin's single shared phase, so without
+ * an offset a grid of them reads as one blinking block; staggering by session
+ * makes each tile legible as separately active. FNV-1a over the session id
+ * keeps a tile's place fixed across repaints, page flips, and restarts.
+ */
+export const washCycleOffset = (sessionId: string): number => {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < sessionId.length; index += 1) {
+    hash ^= sessionId.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) / 2 ** 32;
+};
+
+const statusFrame = (status: SessionStatus, phase: number, washOffset: number): string => {
   const color = STATUS_COLORS[status];
   switch (status) {
     case "working": {
       // Thirty-two phases per cycle: a four-second 4%-to-14% wash behind a
-      // static 30% frame, keeping the title and provider chip crisp.
-      const opacity = 0.09 + 0.05 * Math.sin((phase * Math.PI) / 16);
+      // static 30% frame, keeping the title and provider chip crisp. The
+      // per-session offset shifts where in that cycle this tile sits.
+      const opacity = 0.09 + 0.05 * Math.sin((phase * Math.PI) / 16 + washOffset * 2 * Math.PI);
       return (
         `<rect x="0" y="0" width="${TILE_SIZE}" height="${TILE_SIZE}" fill="${color}" opacity="${opacity.toFixed(3)}"/>` +
         `${frameOpen(color)} opacity="0.300"/>`
@@ -237,7 +255,7 @@ const originMark = (originKind: SessionOriginKind | null, originSubagent: boolea
 };
 
 const sessionTile = (model: Extract<KeyModel, { kind: "session" }>, phase: number): string =>
-  statusFrame(model.session.status, phase) +
+  statusFrame(model.session.status, phase, washCycleOffset(model.session.sessionId)) +
   providerMark(model.session.provider) +
   modelMark(model.session.model, model.session.descendantCount) +
   titleLines(model.label) +

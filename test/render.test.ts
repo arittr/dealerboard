@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { KeyModel } from "../src/plugin/layout";
-import { renderKey } from "../src/plugin/render";
+import { renderKey, washCycleOffset } from "../src/plugin/render";
 import type { ProjectedSession } from "../src/protocol";
 
 const DATA_URL_PREFIX = "data:image/svg+xml,";
@@ -379,5 +379,52 @@ describe("non-session and degraded models", () => {
     expect(textNodesByClass(degraded, "flag")).toEqual(["!"]);
     expect(degraded).toContain('<text class="flag" x="16" y="128" text-anchor="start" font-size="16"');
     expect(textNodesByClass(degraded, "title")).toEqual(textNodesByClass(clean, "title"));
+  });
+});
+
+describe("wash stagger", () => {
+  test("the wash offset is a stable, well-spread function of the session id", () => {
+    const ids = Array.from({ length: 200 }, (_, index) => `session-${index}`);
+    const offsets = ids.map(washCycleOffset);
+
+    for (const offset of offsets) {
+      expect(offset).toBeGreaterThanOrEqual(0);
+      expect(offset).toBeLessThan(1);
+    }
+    // Stable across calls, so a tile keeps its place in the cycle across
+    // repaints, page flips, and plugin restarts.
+    expect(ids.map(washCycleOffset)).toEqual(offsets);
+    // Spread across the cycle, so a grid of working tiles never collapses
+    // back into lockstep.
+    expect(new Set(offsets.map((offset) => Math.floor(offset * 8))).size).toBe(8);
+  });
+
+  test("working tiles wash out of step with each other", () => {
+    const washOpacity = (model: KeyModel, phase: number): number => {
+      const overlay = rectNodes(decode(model, phase)).find(
+        (rect) => rect.includes('width="144"') && rect.includes('fill="#20B8FF"'),
+      );
+      expect(overlay).toBeDefined();
+      const match = overlay!.match(/opacity="([\d.]+)"/);
+      expect(match).not.toBeNull();
+      return Number.parseFloat(match![1]!);
+    };
+    const cycleOf = (model: KeyModel): number[] => Array.from({ length: 32 }, (_, phase) => washOpacity(model, phase));
+
+    const first = cycleOf(sessionModel({ status: "working", sessionId: "session-a" }));
+    const second = cycleOf(sessionModel({ status: "working", sessionId: "session-b" }));
+    expect(first).not.toEqual(second);
+
+    // Each tile still sweeps the documented 4%-to-14% band.
+    for (const cycle of [first, second]) {
+      expect(Math.min(...cycle)).toBeGreaterThanOrEqual(0.04);
+      expect(Math.max(...cycle)).toBeLessThanOrEqual(0.14);
+      expect(Math.max(...cycle) - Math.min(...cycle)).toBeGreaterThan(0.09);
+    }
+
+    // The offset keys off the session id alone, so retitling a session does
+    // not jump its wash to a new point in the cycle.
+    const renamed = sessionModel({ status: "working", sessionId: "session-a", title: "Renamed" }, "Renamed");
+    expect(cycleOf(renamed)).toEqual(first);
   });
 });
