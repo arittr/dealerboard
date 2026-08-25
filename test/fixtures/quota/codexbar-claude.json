@@ -18,6 +18,18 @@
         "resetDescription": "Resets Aug 20 at 6pm (America/Los_Angeles)"
       },
       "tertiary": null,
+      "extraRateWindows": [
+        {
+          "title": "Fable only",
+          "id": "claude-weekly-scoped-fable",
+          "window": {
+            "windowMinutes": 10080,
+            "usedPercent": 1,
+            "resetsAt": "2026-08-28T01:00:00Z",
+            "resetDescription": "Resets Aug 27 at 6pm (America/Los_Angeles)"
+          }
+        }
+      ],
       "dataConfidence": "percentOnly"
     }
   }

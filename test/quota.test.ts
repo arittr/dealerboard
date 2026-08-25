@@ -417,4 +417,63 @@ describe("createQuotaCollector", () => {
       "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
     ]);
   });
+
+  test("extra rate windows publish with provider-stripped labels; selected windows stay out", async () => {
+    const harness = makeHarness();
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["claude"]?.extraWindows).toEqual([
+      {
+        id: "claude-weekly-scoped-fable",
+        label: "Fable only",
+        percentRemaining: 99,
+        resetAt: "2026-08-28T01:00:00.000Z",
+      },
+    ]);
+    // Codex's Spark 5-hour is selected as its session window; only Spark Weekly publishes.
+    expect(snapshot.providers["codex"]?.extraWindows).toEqual([
+      { id: "codex-spark-weekly", label: "Spark Weekly", percentRemaining: 90, resetAt: "2026-08-27T06:04:44.000Z" },
+    ]);
+    expect(snapshot.providers["kimi"]?.extraWindows).toEqual([]);
+  });
+
+  test("the widget snapshot rescue publishes no extra windows", async () => {
+    const harness = makeHarness({
+      files: { [widgetPath(tempDir)]: widgetSnapshot("2026-08-19T17:50:00.000Z") },
+    });
+    harness.fail("qwen");
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["qwen"]?.extraWindows).toEqual([]);
+  });
+
+  test("extra labels cap at 14 code points and unnamed extras drop", async () => {
+    const harness = makeHarness();
+    harness.respondRaw("kimi", {
+      exitCode: 0,
+      stdout: JSON.stringify([
+        {
+          provider: "kimi",
+          usage: {
+            primary: { windowMinutes: 300, usedPercent: 16, resetsAt: "2026-08-19T19:00:00Z" },
+            secondary: { windowMinutes: 10080, usedPercent: 12, resetsAt: "2026-08-26T18:00:00Z" },
+            tertiary: null,
+            extraRateWindows: [
+              {
+                id: "kimi-bonus",
+                title: "Kimi Bonus Context Window",
+                window: { windowMinutes: 1440, usedPercent: 50, resetsAt: "2026-08-20T18:00:00Z" },
+              },
+              { window: { windowMinutes: 1440, usedPercent: 10, resetsAt: null } },
+            ],
+          },
+        },
+      ]),
+    });
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["kimi"]?.extraWindows).toEqual([
+      { id: "kimi-bonus", label: "Bonus Context…", percentRemaining: 50, resetAt: "2026-08-20T18:00:00.000Z" },
+    ]);
+  });
 });

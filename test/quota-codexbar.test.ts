@@ -12,6 +12,14 @@ describe("parseCodexbarUsage", () => {
       reading: {
         session: { percentRemaining: 98, resetAt: "2026-08-20T07:00:00.000Z" },
         weekly: { percentRemaining: 37, resetAt: "2026-08-21T01:00:00.000Z" },
+        extras: [
+          {
+            id: "claude-weekly-scoped-fable",
+            label: "Fable only",
+            percentRemaining: 99,
+            resetAt: "2026-08-28T01:00:00.000Z",
+          },
+        ],
       },
     });
   });
@@ -22,6 +30,7 @@ describe("parseCodexbarUsage", () => {
       reading: {
         session: { percentRemaining: 84, resetAt: "2026-08-20T07:27:06.000Z" },
         weekly: { percentRemaining: 88, resetAt: "2026-08-26T20:27:06.000Z" },
+        extras: [],
       },
     });
   });
@@ -32,6 +41,7 @@ describe("parseCodexbarUsage", () => {
       reading: {
         session: { percentRemaining: 100 - 6.833333333333333, resetAt: "2026-08-20T08:20:38.000Z" },
         weekly: { percentRemaining: 100 - 56.364999999999995, resetAt: "2026-08-23T06:53:00.000Z" },
+        extras: [],
       },
     });
   });
@@ -42,6 +52,14 @@ describe("parseCodexbarUsage", () => {
       reading: {
         session: { percentRemaining: 60, resetAt: "2026-08-20T11:04:44.000Z" },
         weekly: { percentRemaining: 75, resetAt: "2026-08-27T06:03:05.000Z" },
+        extras: [
+          {
+            id: "codex-spark-weekly",
+            label: "Spark Weekly",
+            percentRemaining: 90,
+            resetAt: "2026-08-27T06:04:44.000Z",
+          },
+        ],
       },
     });
   });
@@ -61,6 +79,7 @@ describe("parseCodexbarUsage", () => {
       reading: {
         session: null,
         weekly: { percentRemaining: 37, resetAt: "2026-08-21T01:00:00.000Z" },
+        extras: [],
       },
     });
   });
@@ -71,7 +90,7 @@ describe("parseCodexbarUsage", () => {
     ]);
     expect(parseCodexbarUsage(body)).toEqual({
       kind: "ok",
-      reading: { session: { percentRemaining: 90, resetAt: null }, weekly: null },
+      reading: { session: { percentRemaining: 90, resetAt: null }, weekly: null, extras: [] },
     });
   });
 
@@ -90,6 +109,7 @@ describe("parseCodexbarUsage", () => {
       reading: {
         session: null,
         weekly: { percentRemaining: 37, resetAt: "2026-08-21T01:00:00.000Z" },
+        extras: [],
       },
     });
   });
@@ -102,7 +122,7 @@ describe("parseCodexbarUsage", () => {
     ]);
     expect(parseCodexbarUsage(body)).toEqual({
       kind: "ok",
-      reading: { session: { percentRemaining: 90, resetAt: null }, weekly: null },
+      reading: { session: { percentRemaining: 90, resetAt: null }, weekly: null, extras: [] },
     });
   });
 
@@ -131,7 +151,7 @@ describe("parseCodexbarUsage", () => {
     ]);
     expect(parseCodexbarUsage(body, "alibabatokenplan")).toEqual({
       kind: "ok",
-      reading: { session: { percentRemaining: 60, resetAt: "2026-08-24T08:00:00.000Z" }, weekly: null },
+      reading: { session: { percentRemaining: 60, resetAt: "2026-08-24T08:00:00.000Z" }, weekly: null, extras: [] },
     });
   });
 
@@ -175,6 +195,7 @@ describe("parseCodexbarWidgetSnapshot", () => {
     expect(parseCodexbarWidgetSnapshot(body, NOW_MS).get("alibabatokenplan")).toEqual({
       session: null,
       weekly: { percentRemaining: 45, resetAt: "2026-08-27T21:36:00.000Z" },
+      extras: [],
     });
   });
 

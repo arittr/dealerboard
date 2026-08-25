@@ -12,8 +12,10 @@
  * primary/secondary labels are not positional (kimi reports the weekly window
  * as primary), so windows are classified by windowMinutes: weekly = the longest
  * window of at least a day, session = the shortest window under a day, and
- * usage.extraRateWindows is scanned when the main trio yields no session window
- * (codex reports primary: null with the Spark windows there). A provider
+ * usage.extraRateWindows always participates: an extra can be selected as the
+ * session window (codex reports primary: null, its Spark 5-hour lives there),
+ * and unselected extras publish as extraWindows with provider-name-stripped
+ * labels. A provider
  * disabled in the CodexBar app prints an empty array and is omitted.
  *
  * Nothing the process prints is ever logged or persisted beyond the derived
@@ -26,8 +28,11 @@ import { join } from "node:path";
 import {
   type ProviderQuota,
   parseQuotaSnapshot,
+  QUOTA_EXTRA_WINDOWS_LIMIT,
   QUOTA_HISTORY_LIMIT,
   QUOTA_PROVIDER_KEYS,
+  QUOTA_SNAPSHOT_SCHEMA_VERSION,
+  type QuotaExtraWindow,
   type QuotaProviderKey,
   type QuotaSnapshot,
 } from "../quota-snapshot";
@@ -40,6 +45,8 @@ export type ProviderQuotaReading = {
   /** Null when the provider reports no session-class window (e.g. codex weekly-only). */
   session: QuotaWindowReading | null;
   weekly: QuotaWindowReading | null;
+  /** Extra windows not selected as session/weekly (claude's fable, codex's spark weekly). */
+  extras: QuotaExtraWindow[];
 };
 
 export type CodexbarUsageParse =
@@ -87,7 +94,51 @@ const toWindowReading = (window: RawCodexbarWindow): QuotaWindowReading => ({
   resetAt: window.resetsAt,
 });
 
-const classifyCodexbarWindows = (windows: readonly RawCodexbarWindow[]): ProviderQuotaReading | null => {
+type RawCodexbarExtra = { id: string | null; title: string | null; window: RawCodexbarWindow };
+
+const parseCodexbarExtra = (value: unknown): RawCodexbarExtra | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const window = parseCodexbarWindow(value["window"]);
+  if (window === null) {
+    return null;
+  }
+  const id = value["id"];
+  const title = value["title"];
+  return {
+    id: typeof id === "string" && id.length > 0 ? id : null,
+    title: typeof title === "string" && title.length > 0 ? title : null,
+    window,
+  };
+};
+
+/** CodexBar's provider id → the rail's display name, for stripping it out of window titles. */
+const CODEXBAR_DISPLAY_NAMES: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  kimi: "Kimi",
+  zai: "GLM",
+  alibabatokenplan: "Qwen",
+};
+
+const EXTRA_WINDOW_LABEL_MAX_CODE_POINTS = 14;
+
+/** Extra-window tag: title minus the provider's own name, capped at 14 code points with an ellipsis. */
+const extraWindowLabel = (title: string, codexbarProvider: string): string => {
+  const displayName = CODEXBAR_DISPLAY_NAMES[codexbarProvider] ?? codexbarProvider;
+  const stripped = title.replace(new RegExp(`^${displayName}\\s+`, "iu"), "").trim();
+  const source = stripped.length === 0 ? title.trim() : stripped;
+  const codePoints = [...source];
+  if (codePoints.length <= EXTRA_WINDOW_LABEL_MAX_CODE_POINTS) {
+    return source;
+  }
+  return `${codePoints.slice(0, EXTRA_WINDOW_LABEL_MAX_CODE_POINTS).join("").trimEnd()}…`;
+};
+
+type WindowSelection = { session: RawCodexbarWindow | null; weekly: RawCodexbarWindow | null };
+
+const classifyCodexbarWindows = (windows: readonly RawCodexbarWindow[]): WindowSelection | null => {
   let weekly: RawCodexbarWindow | null = null;
   let session: RawCodexbarWindow | null = null;
   for (const window of windows) {
@@ -102,10 +153,7 @@ const classifyCodexbarWindows = (windows: readonly RawCodexbarWindow[]): Provide
   if (session === null && weekly === null) {
     return null;
   }
-  return {
-    session: session === null ? null : toWindowReading(session),
-    weekly: weekly === null ? null : toWindowReading(weekly),
-  };
+  return { session, weekly };
 };
 
 export const parseCodexbarUsage = (body: string, provider?: string): CodexbarUsageParse => {
@@ -139,6 +187,7 @@ export const parseCodexbarUsage = (body: string, provider?: string): CodexbarUsa
     return { kind: "invalid" };
   }
   const usage = entry["usage"];
+  const providerId = provider ?? (typeof entry["provider"] === "string" ? entry["provider"] : "");
   const windows: RawCodexbarWindow[] = [];
   for (const key of ["primary", "secondary", "tertiary"] as const) {
     const window = parseCodexbarWindow(usage[key]);
@@ -146,19 +195,47 @@ export const parseCodexbarUsage = (body: string, provider?: string): CodexbarUsa
       windows.push(window);
     }
   }
-  let reading = classifyCodexbarWindows(windows);
-  // Codex can report primary: null with the 5-hour data under extraRateWindows.
-  if (reading !== null && reading.session === null && Array.isArray(usage["extraRateWindows"])) {
-    const extras: RawCodexbarWindow[] = [];
-    for (const extra of usage["extraRateWindows"]) {
-      const window = parseCodexbarWindow(isRecord(extra) ? extra["window"] : null);
-      if (window !== null) {
-        extras.push(window);
+  // Extra rate windows always parse: the session/weekly selection draws from
+  // them (codex's Spark 5-hour is its session window), and the rest publish.
+  const rawExtras: RawCodexbarExtra[] = [];
+  if (Array.isArray(usage["extraRateWindows"])) {
+    for (const item of usage["extraRateWindows"]) {
+      const extra = parseCodexbarExtra(item);
+      if (extra !== null) {
+        rawExtras.push(extra);
       }
     }
-    reading = classifyCodexbarWindows([...windows, ...extras]);
   }
-  return reading === null ? { kind: "invalid" } : { kind: "ok", reading };
+  const selected = classifyCodexbarWindows([...windows, ...rawExtras.map((extra) => extra.window)]);
+  if (selected === null) {
+    return { kind: "invalid" };
+  }
+  const extras: QuotaExtraWindow[] = [];
+  for (const extra of rawExtras) {
+    if (extra.window === selected.session || extra.window === selected.weekly) {
+      continue;
+    }
+    const name = extra.id ?? extra.title;
+    if (name === null) {
+      continue; // an unnamed window can't be tagged
+    }
+    extras.push({
+      id: name,
+      label: extraWindowLabel(extra.title ?? name, providerId),
+      ...toWindowReading(extra.window),
+    });
+    if (extras.length >= QUOTA_EXTRA_WINDOWS_LIMIT) {
+      break;
+    }
+  }
+  return {
+    kind: "ok",
+    reading: {
+      session: selected.session === null ? null : toWindowReading(selected.session),
+      weekly: selected.weekly === null ? null : toWindowReading(selected.weekly),
+      extras,
+    },
+  };
 };
 
 /**
@@ -197,9 +274,13 @@ export const parseCodexbarWidgetSnapshot = (body: string, nowMs: number): Map<st
         windows.push(window);
       }
     }
-    const reading = classifyCodexbarWindows(windows);
-    if (reading !== null) {
-      readings.set(entry["provider"], reading);
+    const selection = classifyCodexbarWindows(windows);
+    if (selection !== null) {
+      readings.set(entry["provider"], {
+        session: selection.session === null ? null : toWindowReading(selection.session),
+        weekly: selection.weekly === null ? null : toWindowReading(selection.weekly),
+        extras: [], // the widget snapshot carries no extraRateWindows
+      });
     }
   }
   return readings;
@@ -449,7 +530,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         unavailable: false,
         fetchedAt,
         history,
-        extraWindows: [],
+        extraWindows: outcome.reading.extras,
       };
       states.set(provider, { quota, failed: false });
       return quota;
@@ -482,7 +563,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
           providers[provider] = quota;
         }
       }
-      const snapshot: QuotaSnapshot = { schemaVersion: 1, providers };
+      const snapshot: QuotaSnapshot = { schemaVersion: QUOTA_SNAPSHOT_SCHEMA_VERSION, providers };
       const json = `${JSON.stringify(snapshot)}\n`;
       if (json !== lastWrittenJson) {
         try {
