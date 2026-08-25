@@ -301,100 +301,196 @@ The strip is a frameless Tauri webview pinned to the Xeneon Edge touch
 display — a third snapshot consumer alongside the Stream Deck plugin. It
 renders the same projection the deck renders, so the deck remains the
 reference contract for session semantics; this section records the strip's
-own visible contract.
+own visible contract, rewritten for the 2026-08-25 board redesign
+(parent-grouped wide cards, compact rail). The strip's board is an app-local
+grouped reducer (`app/src/board.ts`): the shared `reduceLayout` paging in
+`src/plugin/layout.ts` cannot express grouping or column packing, so the
+strip stopped consuming it (the keypad keeps it unchanged) while label
+fallbacks reuse the shared chain. The full behavioral spec is
+[superpowers/specs/2026-08-25-strip-board-redesign-design.md](superpowers/specs/2026-08-25-strip-board-redesign-design.md).
+
+All dimensions below are native 2560×720 pixels, viewport-relative in the
+implementation (px/25.6 → vw, px/7.2 → vh), so the 1280×360 HiDPI mode
+scales proportionally and nothing is pixel-locked; the top 28px stays clear
+of critical content, and thin marks (hairline borders, the 2px spine, the
+8px status edge) map per-axis to viewport units and never drop below one
+physical pixel in the HiDPI mode (`max(1px, …)`).
 
 ### Geometry
 
-- Up to fifteen square session tiles plus a fixed 32%-width rail on the right.
-  For each page the grid chooses the one-, two-, or three-row packing that
-  produces the largest squares inside the measured tile area. Tile size is
-  capped at the three-across square width, so sparse pages never crowd the
-  rail; the completed grid is centered in both axes.
-- The packing is derived from the rendered tile-area dimensions and viewport-
-  relative gap, so the 2560×720 native mode and the 1280×360 HiDPI mode
-  scale proportionally; nothing is pixel-locked to one display mode.
+- The session area is the canvas minus the fixed 496px rail (~19.4%) and the
+  outer gutters; the board holds two 1012×102 columns of six rows with 12px
+  gaps — up to 12 cards per page.
+- Cards are a fixed standard size and never grow or shrink with session
+  count: one session renders one standard card top-left, empty canvas stays
+  empty. Twelve is a maximum, not an invariant — group-atomic page fill
+  (below) can leave a page sparse.
 
-### Tile anatomy
+### Ordering: parent-grouped, stable
 
-Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
+The board replaces flat slot order with grouped order:
 
-- The same status colors as the keypad: working `#20B8FF`, waiting
-  `#FFB020`, idle `#4ADE80`, error `#FF4D67`, with `#94A3B8` as neutral
-  chrome. The animation semantics carry over unchanged: working keeps the
-  shallow four-second wash breathing between 0.04 and 0.14 opacity behind a
-  static 30%-opacity frame — including the per-session offset — waiting keeps
-  the four-second frame breathe between 0.20 and 0.90, error keeps the
-  two-second pulse, idle stays static. The strip seeds that offset as a
-  negative `animation-delay` folded together with the wall clock, so a tile
-  recreated by a re-render resumes the opacity it was already showing instead
-  of restarting at the dim end.
-- The same provider chips: one-letter marks on the same hues (Claude C
-  `#D97757`, Codex X `#D946EF`, Kimi K `#3B82F6`, pi P `#0EA514`, omp O
-  `#F5F0EA`, zcode Z `#EAB308`, deepseek D `#2DD4BF`, grok G `#F472B6`,
-  qwen Q `#EF4444`).
-- The model label sits right of the chip, vendor prefix stripped, capped at
-  ten code points — the keypad's badged six-point cap does not apply; the
-  strip's tiles are wide enough for the full label.
-- The title clamps to two lines with an ellipsis (a CSS clamp, replacing the
-  keypad's manual twelve-code-point wrap).
-- The descendant badge keeps its upper-right corner; the Paseo origin pip
-  keeps the bottom-right (filled `#A78BFA` disc for a Paseo parent, hollow
-  ring for a subagent).
-- Strip-only marks, with no keypad counterpart (`src/plugin/render.ts` is
-  unchanged): an amber `#FFB020` unread dot in the topband whenever the
-  session carries an unviewed-result stamp (the exact `unreadSince` ledger
-  field, not a status proxy); a neutral-chrome status timer line at the tile
-  bottom ("working 12m" — compact s/m/h/d elapsed against `statusSince`, the
-  row's own status stamp, ticking once a second by in-place `textContent`
-  updates so the render-signature skip and CSS animations are never
-  disturbed); and a neutral-chrome activity footer naming the agent's last
-  tool call ("Bash git status" — ≤64 code points, tool name plus a
-  path/command head, never full arguments; claude and codex sessions only).
-- A degraded tile carries the `!` flag, and a degraded blank renders OFFLINE.
+1. Primary sessions (everything not a Paseo subagent) in slot order.
+2. Each primary is immediately followed by its subagents in slot order. The
+  join is `originParentRef` (subagent) = `originRef` (parent); both fields
+  are already on `ProjectedSession` and the wire `schemaVersion` stays 2 —
+  no protocol change.
+3. Nested subagents flatten: a subagent whose parent is itself a subagent
+  attaches to its nearest on-grid ancestor's group, at the same single
+  indent level, ordered directly after its own parent within that group.
+  There is no recursive visual nesting.
+4. Orphan subagents — live Paseo subagents with no on-grid ancestor — form
+  one atomic tail block strictly after every group, in slot order; the tail
+  never backfills ahead of groups.
+
+### Packing and paging
+
+Pages fill group-atomically in grouped order (a lone primary is a group of
+one; the orphan tail is one block):
+
+- A group of six or fewer cards never splits: it drops whole into the first
+  column of the current page with room; a later group may backfill a gap
+  left earlier on the same page; if it fits in no column of the current
+  page, it starts the next page. Backfill never crosses a page boundary.
+- A group of 7–12 cards needs two adjacent empty columns, so it starts on
+  the current page only while that page is still empty; otherwise it starts
+  the next page. It fills the first column and wraps at the six-row
+  boundary into the second (the spine continues at the top of the
+  continuation column).
+- A group larger than a page fills whole pages from a fresh page and
+  continues across page seams — with the 7–12 rule, the only ways a group
+  ever splits.
+- Page count derives from the packing, not the session count; the rail's
+  pager dots follow it, and the persisted current page
+  (`agent-strip.layout.v1`) clamps when the page count shrinks. The
+  keypad's overflow-latch hysteresis is a NEXT-key concern and does not
+  carry to the board.
+
+Two accepted trade-offs: scan order can deviate from strict linear order
+when a large group skips a too-small gap (deterministic and stable); and
+placement stability has one qualification — hooks stamp only Paseo kind/ref
+at ingest, and the daemon's overlay adds `originSubagent` and
+`originParentRef` on its ~2s pass, so a freshly appeared subagent can render
+ungrouped for its first seconds and then hop into its parent's group once
+the stamp lands (accepted; there is no admission gating on resolved
+lineage). Beyond that, cards move only on membership change — parentage,
+once stamped, is immutable for the session's lifetime.
+
+### Card anatomy
+
+- Left status edge (8px) in the status color — working `#20B8FF`, waiting
+  `#FFB020`, idle `#4ADE80`, error `#FF4D67`; waiting and error cards
+  additionally get a full status-colored border and a faint status-tinted
+  surface wash so they pop from working/idle cards.
+- Status animation semantics carry over unchanged from the tile contract
+  (opacity-only; working's staggered shallow wash breathe 0.04→0.14,
+  waiting's border breathe, error's 2s pulse, idle static), retargeted to
+  edge/border/wash — including the wall-clock-seeded negative
+  animation-delay so a recreated card resumes mid-wash instead of snapping
+  to the dim end.
+- Provider chip (42px, one-letter mark on the locked hues) with the amber
+  unread dot on its corner (an 18px `#FFB020` disc on a 3px card-colored
+  ring) whenever `unreadSince` is set — on the grid, idle ⟺ unread,
+  unchanged.
+- One-line 32px title in primary ink, ellipsized on overflow. The label
+  chain is the shared one: title, else project name, else provider +
+  shortened session id; any fallback (not just project) renders italic as
+  its only cue.
+- Muted meta line: model id (vendor prefix stripped, capped at 24 code
+  points — the tile contract's ten-point cap does not apply) · project ·
+  `activityLine` when present. A grouped subagent whose project equals its
+  parent's suppresses the project (redundant).
+- Meta-line right end, in order: the violet `#A78BFA` origin disc for Paseo
+  parents, then the bare descendant-count badge (`2`, never `+2` — the
+  locked badge convention) when `descendantCount > 0`; the count is live
+  descendants per the existing contract (e.g. Claude Task subagents), not
+  the number of grouped sub-cards.
+- Right-aligned on the head line: status dot + status word + tabular-numeral
+  elapsed timer (`statusSince`, the row's own status stamp), ticking in
+  place on the 1s rail cadence so the render-signature skip and CSS
+  animations are never disturbed.
+- Subagent cards: dimmed treatment — near-canvas surface, hairline border
+  (`max(1px, 0.078125vw)`), 26px muted title, 32px chip, half-opacity
+  status edge; a hollow-violet-ring "sub" pill after the chip replaces the
+  corner ring pip. Grouped subagents indent 44px (968×102, right edges
+  flush) under their parent, connected by a 2px violet spine from the
+  parent's bottom edge with an elbow into each subagent card; orphans keep
+  the dimmed treatment and pill at full 1012px width, no indent or spine.
+  The idle-subagent admission rule is unchanged: idle Paseo subagents are
+  never projected, so grouped subagents are always active.
+- A degraded card keeps the `!` flag; an all-blank page renders OFFLINE.
 
 ### Rail
 
-- Daemon health rides inline on the unread row: a green 0.5vw dot (red plus
-  OFFLINE when degraded) before the exact unread count (tiles whose session
-  carries an `unreadSince` stamp).
-- A token-usage block above it. The block shows today's aggregate token total
-  (input + output + cache-creation + cache-read across every agent the local
-  `agentsview` helper reports, on the America/Los_Angeles calendar day), plus
-  rolling tokens/hour and tokens/10-minute rates differenced from the
-  daemon-recorded cumulative-sample ring, with trend arrows against the
-  previous equal-width window (↑ green `#4ADE80`, ↓ red `#FF4D67`, → neutral
-  `#94A3B8`; deadband the larger of 1,000 tokens or 10% of the previous
-  window). The two rates render as one line (`↑ 4.7M/hr · ↑ 1.3M/10m`), each
-  rate span colored by its own trend, the separator muted. Data comes from
-  `token-usage-snapshot.json` via the
-  `read_token_usage_snapshot` Tauri command — a separate file with its own
-  `schemaVersion`, never the session snapshot. A failed poll keeps last-good
-  numbers dimmed; a missing file or a never-successful collector hides the
-  block.
-- Page dots (0.6vw type), one per page, tap to jump.
-- Quota panels (strip-only; there is no keypad equivalent): a compact
-  two-line row per quota provider (claude, codex, kimi, GLM/zai, Qwen) — all
-  five fit the strip height without scrolling. The head line carries the
-  provider chip, the label, a tag pill naming the binding window (`session` /
-  `weekly` / an extra window's label, with a ` binds` suffix when several
-  windows compete), and at the right the binding window's percent remaining
-  plus its reset countdown muted beside it (`79% · 26m`); the second line is
-  the bar filled on the status palette (green `#4ADE80` above 25%
-  remaining, amber `#FFB020` from 10%, red `#FF4D67` below) to the binding
-  window's percent, with a 0.15vw neutral tick (`#E8EEF7` at 75%) at every
-  other window's percent. The Qwen row reads CodexBar's
-  `alibabatokenplan` provider. Data comes from
-  `quota-snapshot.json` via the `read_quota_snapshot` Tauri command — a
-  separate file with its own `schemaVersion`, never the session snapshot. A
-  provider whose last fetch failed renders dimmed with a last-updated age in
-  place of the percent; a provider disabled in CodexBar (or with no CodexBar
-  binary installed) is omitted; a missing file renders no panels.
+Fixed 496px (~19.4%), top to bottom:
+
+- **Token block**: today's total (`48.9M today`) with the two trend-colored
+  rolling rates on one line (`↑ 32.3M/hr · ↓ 8.5M/10m`) — unchanged
+  semantics, still computed from the 288-sample ring, which is retained
+  unchanged and remains the sole input to the rates.
+- **Day-over-day sparkline** below the rates: a midnight-anchored LA-day
+  x-axis with yesterday's complete cumulative curve as a dim 2px line
+  ending in a `yda <total>` micro-label (an SVG `<text>` at the mockup's
+  baseline) and today's partial curve as a bright 2px line with a faint
+  fill, ending in an endpoint dot at the current position, all in a
+  matched-aspect 436×80 viewBox. Semantics:
+  - The yesterday line renders only when the snapshot's yesterday curve is
+    stamped with the LA calendar day immediately preceding the snapshot's
+    `providerDay`; otherwise only today's line renders. No curves in the
+    snapshot → no sparkline (the block keeps total + rates).
+  - Each curve maps x by elapsed fraction of its own day's actual length,
+    so 23/25-hour DST days share the axis correctly.
+  - One shared zero-based y-scale spans the maximum of both curves.
+  - The block's existing stale-dimming applies to the sparkline with it.
+- **Unread row**: the daemon-health dot (green ok; red plus OFFLINE when
+  degraded) inline before the exact unread count (sessions with a non-null
+  `unreadSince`).
+- **Quota rows** (claude, codex, kimi, GLM/zai, Qwen — strip-only, no
+  keypad equivalent), one compact two-line row each: the head line carries
+  the provider chip, the label, and a pill naming the binding window —
+  bare, no ` binds` suffix, because only the binding window renders (the
+  non-binding tick marks and extra-window readouts of the earlier
+  quota-windows contract are retired from the display; the snapshot keeps
+  publishing all windows, and binding selection — the lowest percent
+  remaining, ties session > weekly > extras — is unchanged). The right side
+  reads `<reset countdown> · <percent>` with the muted countdown first so
+  the bright tabular percents align flush at the rail's right edge
+  regardless of countdown width; "resetting…" takes the countdown's muted
+  slot at reset time. The second line is the 8px full-row-width bar filled
+  to the binding window's percent on the headroom palette (green `#4ADE80`
+  above 25% remaining, amber `#FFB020` from 10%, red `#FF4D67` below).
+- **Pager dots**: one per page, tap to jump.
+- Data plumbing is unchanged: quota via `quota-snapshot.json` and token
+  usage via `token-usage-snapshot.json`, each its own file with its own
+  `schemaVersion`, read through Tauri commands, never the session snapshot.
+  A provider whose last fetch failed renders dimmed with a last-updated
+  age in place of the percent; a provider disabled in CodexBar (or with no
+  binary installed) is omitted; a missing file renders no quota rows /
+  hides the token block. Stale-dimming semantics are unchanged.
+
+The sparkline's data is additive: `token-usage-snapshot.json` gains a
+top-level `dayCurves` key while its `schemaVersion` stays 1 — the parser's
+contract ignores unknown top-level keys precisely so a newer daemon never
+breaks an older app; an old app ignores the key and keeps the full block, a
+new app on an old daemon sees no key and renders no sparkline. Both curves
+are date-keyed (`today` always present, `yesterday` nullable); points are
+oldest-first with totals clamped non-negative — within a day the collector
+stores the running maximum, so a curve is monotone non-decreasing even if
+the helper reports a correction — and each day is bucket-downsampled to at
+most 96 points while always retaining the day's first and latest sample.
+Rollover is date-keyed, never positional: when a sample lands on a new LA
+day, today's finished curve is promoted to `yesterday` only if its
+`providerDay` is exactly the calendar day preceding the new day, otherwise
+`yesterday` becomes null — a daemon down across midnight never promotes a
+stale curve; restart seeding reconciles a seeded curve against the current
+LA day the same way (adjacent promotes, gapped drops, never mislabeled).
 
 ### Interaction
 
 - A tap is the keypad's keyDown: a fire-and-forget ack, then the same
-  paseo/claude/codex/kimi routing. A failed or unroutable press flashes the
-  tile.
+  paseo/claude/codex/kimi routing (subagent cards included). A failed or
+  unroutable press flashes the card. All cards are ≥90px in their smallest
+  dimension.
 - Snapshot delivery is push, not poll: the Rust host watches the app-support
   directory (the daemon publishes by atomic rename, which swaps the file's
   inode, so the watch targets the directory) and emits a `snapshot-changed`
@@ -404,7 +500,7 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   5s heartbeat stops re-arming it, so the flip lands one 10s threshold
   after the last publish), while a slow 10s pass retries real reads only
   while degraded, so a missed event or a late-starting daemon self-heals.
-- A long-press (~500ms without drifting past a 12px slop) on a session tile
+- A long-press (~500ms without drifting past a 12px slop) on a session card
   opens an action sheet anchored at the touch point: Open (the tap's ack +
   routing), Ack, Reveal transcript (`/usr/bin/open -R`; disabled until the
   snapshot carries `transcriptPath`), Copy session ID, and Clear session —
@@ -412,10 +508,10 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   clear") and runs the installed binary's `sessions clear`. The sheet
   dismisses on a pointer-down outside it or on Escape.
 - A horizontal fling (≥80px of travel with ≤48px of vertical drift) pages
-  the tile grid — left for next, right for previous — reusing the rail's
-  page jump, so the dots follow and the page persists. A stroke that moved
-  but matched no gesture swallows its trailing click, keeping taps, holds,
-  and drags unambiguous. There is deliberately no swipe-to-ack: only viewing
+  the board — left for next, right for previous — reusing the rail's page
+  jump, so the dots follow and the page persists. A stroke that moved but
+  matched no gesture swallows its trailing click, keeping taps, holds, and
+  drags unambiguous. There is deliberately no swipe-to-ack: only viewing
   clears unread.
 - The webview's native context menu is suppressed outright — every
   `contextmenu` event is canceled at the document root. macOS delivers a

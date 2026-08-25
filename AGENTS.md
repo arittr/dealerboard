@@ -230,27 +230,43 @@ Notes:
   crate. `bun run build:app` bundles the frontend, `dev:app` runs the Tauri
   dev shell, `bundle:app` produces the release `.app` bundle, and
   `install:app` installs it into /Applications. It reads the same snapshot
-  file as the plugin — the daemon and the plugin are unchanged. Strip
-  geometry is a second `LayoutGeometry`, `STRIP_GEOMETRY` in
-  `src/plugin/layout.ts` (up to 15 square tiles per page; the measured tile
-  area chooses the largest packing across at most 3 rows, capped at the
-  three-across square size; rail pages, no NEXT tile; the rail occupies 32%
-  of the strip width). Tile visuals
-  live in `app/styles.css` + `app/src/tiles.ts`, a web-native port of
-  `render.ts` — keep the two in sync via `docs/design.md`. Strip-only tile
-  extras (no keypad counterpart): an amber unread dot (the exact
-  `unreadSince` ledger flag), a ticking `statusSince` timer line, and an
-  `activityLine` footer; the timer rewrites `textContent` in place on the
-  1s rail cadence so the `renderedSignature` skip is never disturbed. The
+  file as the plugin — the daemon and the plugin are unchanged. The
+  strip's board is an app-local grouped reducer (`app/src/board.ts`, per
+  `docs/superpowers/specs/2026-08-25-strip-board-redesign-design.md`,
+  summarized in `docs/design.md`'s strip section): subagents join under
+  their nearest on-grid Paseo parent (`originParentRef` = `originRef`),
+  nested subs flatten to one indent level, and orphans form one atomic
+  tail; pages fill group-atomically (a ≤6-card group never splits and may
+  backfill a same-page gap, a 7–12 group needs a still-empty page and
+  wraps at the six-row seam, a larger group fills whole pages) into two
+  columns of six fixed 1012×102 cards that never flex-resize, beside a
+  fixed 496px (~19.4%) rail; page count derives from the packing and the
+  persisted current page (`agent-strip.layout.v1`) clamps — the strip no
+  longer consumes the shared `reduceLayout`/`STRIP_GEOMETRY` paging (the
+  keypad keeps it unchanged). Card visuals
+  live in `app/styles.css` + `app/src/cards.ts`, a web-native contract of
+  `render.ts`'s status/chip system (status edge with border+wash on
+  waiting/error, chip-corner unread dot with a ring, one-line
+  italic-fallback title, 24-code-point model cap, meta-line project
+  suppression for grouped subs, origin disc then bare descendant badge,
+  sub pill + indent + violet spine) — keep them aligned via
+  `docs/design.md`. Strip-only card extras (no keypad counterpart): the
+  amber unread dot (the exact
+  `unreadSince` ledger flag), a ticking `statusSince` timer in the status
+  row, and an `activityLine` footer; the timer rewrites `textContent` in
+  place on the 1s rail cadence so the `renderedSignature` skip is never
+  disturbed. The
   window pins to the monitor whose model string matches "xeneon edge" or
   whose physical resolution is 2560×720 (physical, so a scaled 1280×360
   HiDPI mode still matches), re-pins on reconnect, and autostarts at login.
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
 - Quota panels (claude, codex, kimi, GLM/zai, Qwen) ship in the rail as
-  compact two-line rows (head: chip, label, a tag pill naming the binding
-  window, percent remaining plus its reset countdown; second line: the
-  status-palette bar filled to the binding window with a neutral tick at
-  every other window's percent — no sparkline); the binding window is the
+  compact two-line rows (head: chip, label, a bare tag pill naming the
+  binding window — no ` binds` suffix, and only the binding window renders
+  — with the muted reset countdown first (`26m ·`) at the right so the
+  bright tabular percent aligns flush at the rail's edge; second line:
+  the status-palette 8px bar filled to the binding window — no neutral
+  tick at other windows' percents); the binding window is the
   lowest percent remaining (ties: session > weekly > extras), and the
   daemon-health dot rides inline on the unread row (green ok, red plus
   OFFLINE when degraded) instead of its own line.
@@ -275,18 +291,31 @@ Notes:
   CodexBar app omits that provider entirely. `snapshot-v2.json` and
   `src/protocol.ts` stay untouched, and nothing CodexBar prints is ever
   logged or persisted.
-- A token-usage block ships in the rail in place of the old clock: the
+- A token-usage block ships in the rail: the
   daemon's token-usage collector (`src/core/token-usage.ts`, started from
   `cli.ts`, 30s cadence, 15s run timeout) shells out to the local
   `agentsview` helper (`AGENTSVIEW_BIN` override, else /opt/homebrew/bin,
   else PATH) for the America/Los_Angeles day's cumulative total — input +
   output + cacheCreation + cacheRead across all agents — keeps a 288-sample
-  ring (~2.4h), and publishes `token-usage-snapshot.json` (own
-  `schemaVersion`; contract in `src/token-usage-snapshot.ts`); the strip
+  ring (~2.4h, the sole input to the rates), and publishes
+  `token-usage-snapshot.json` (contract in `src/token-usage-snapshot.ts`)
+  carrying date-keyed per-day cumulative curves in an additive top-level
+  `dayCurves` key — `schemaVersion` stays 1 and the parser ignores unknown
+  top-level keys, so daemon and app update in either order (an old app
+  ignores the key; a new app on an old daemon renders no sparkline): points
+  oldest-first with totals clamped to a running maximum, at most 96 per
+  day retaining first and latest, and rollover date-keyed (today promotes
+  to yesterday only on the immediately preceding LA day, else yesterday
+  nulls — an outage across midnight never promotes a stale curve, and
+  restart seeding reconciles the same way); the strip
   reads it through the `read_token_usage_snapshot` Tauri command and renders
   today's total and, on one line below it, both rolling rates
   (`↑ 4.7M/hr · ↑ 1.3M/10m`), each rate colored by its own trend (deadband
-  max(1000, 10% of the previous window)) from the pure view-model in
+  max(1000, 10% of the previous window)), plus a day-over-day sparkline
+  (yesterday's adjacent complete curve dim with a `yda` micro-label under
+  today's partial bright curve with a faint fill, x mapped by elapsed
+  fraction of each day's actual length — DST-safe — on one shared zero-based
+  y-scale) from the pure view-model in
   `app/src/token-usage.ts`. agentsview output is never logged or persisted.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
