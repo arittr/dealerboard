@@ -51,8 +51,12 @@ Session tiles use a thick status-colored frame around a dark interior:
 
 Working uses a shallow full-tile blue wash behind a static dim blue frame. The
 wash breathes from 4% to 14% opacity over four seconds, keeping the title and
-provider chip crisp. Waiting keeps a deeper four-second amber breath, error
-keeps a faster two-second red pulse, and idle remains static. Animated status
+provider chip crisp. Each working tile enters that cycle at its own offset,
+derived from the session id, so several sessions working at once read as
+separately active rather than as one blinking block; the offset is a property
+of the session id alone, so a tile holds its place across repaints, page flips,
+and restarts. Waiting keeps a deeper four-second amber breath, error keeps a
+faster two-second red pulse, and idle remains static. Animated status
 treatments change opacity only; they do not move, scale, or change stroke width
 on the small panels.
 
@@ -318,8 +322,12 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   `#FFB020`, idle `#4ADE80`, error `#FF4D67`, with `#94A3B8` as neutral
   chrome. The animation semantics carry over unchanged: working keeps the
   shallow four-second wash breathing between 0.04 and 0.14 opacity behind a
-  static 30%-opacity frame, waiting keeps the four-second frame breathe
-  between 0.20 and 0.90, error keeps the two-second pulse, idle stays static.
+  static 30%-opacity frame — including the per-session offset — waiting keeps
+  the four-second frame breathe between 0.20 and 0.90, error keeps the
+  two-second pulse, idle stays static. The strip seeds that offset as a
+  negative `animation-delay` folded together with the wall clock, so a tile
+  recreated by a re-render resumes the opacity it was already showing instead
+  of restarting at the dim end.
 - The same provider chips: one-letter marks on the same hues (Claude C
   `#D97757`, Codex X `#D946EF`, Kimi K `#3B82F6`, pi P `#0EA514`, omp O
   `#F5F0EA`, zcode Z `#EAB308`, deepseek D `#2DD4BF`, grok G `#F472B6`,
