@@ -68,7 +68,7 @@ export const DEFAULT_LAYOUT_SETTINGS: LayoutSettingsV1 = {
 
 const SHORT_SESSION_ID_LENGTH = 8;
 
-const labelForSession = (session: ProjectedSession): string => {
+export const labelForSession = (session: ProjectedSession): string => {
   if (session.title !== null && session.title.length > 0) {
     return session.title;
   }
