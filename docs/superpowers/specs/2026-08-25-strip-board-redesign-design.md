@@ -6,12 +6,15 @@ Status: Approved by Drew (visual mockup d6), then reviewed by a three-model
 panel (gpt-5.6-sol, qwen3.8-max-preview, kimi k3) and amended with the
 adjudicated findings. Drew approved the three behavior-visible resolutions:
 group-atomic page fill, the accepted early lineage hop, and the additive
-(no-bump) snapshot key. Supersedes the strip *presentation* sections of
+(no-bump) snapshot key. Drew subsequently approved upward Paseo-lineage status
+aggregation: an active subagent keeps every existing ancestor on the board
+even when the ancestor's own turn is done and read. Supersedes the strip
+*presentation* sections of
 [2026-08-25-strip-rail-quota-windows-design.md](2026-08-25-strip-rail-quota-windows-design.md)
 (tick marks and window display on the rail) and the strip geometry/tile-anatomy
 sections of [2026-08-18-xeneon-edge-strip-app-design.md](2026-08-18-xeneon-edge-strip-app-design.md).
-Data contracts, membership semantics, and the keypad plugin are untouched
-except where stated.
+Wire/data contracts and keypad presentation are untouched. Shared snapshot
+membership changes only for the Paseo ancestor-visibility rule stated below.
 
 Visual reference: [assets/2026-08-25-strip-board/d6.png](assets/2026-08-25-strip-board/d6.png)
 (the approved render, real snapshot data) and its source
@@ -42,9 +45,13 @@ a ~19% width.
 - `src/core/token-usage.ts` + `src/token-usage-snapshot.ts`: one new data
   requirement (per-day cumulative curves) shipped as an additive snapshot key —
   no schema bump (see New data).
+- `src/core/projection.ts`: one shared membership refinement. Active Paseo
+  subagent status aggregates through `originParentRef` ancestry before the
+  existing visibility filter, so a done/read ancestor remains projected while
+  its descendant is active. This changes both snapshot consumers consistently;
+  it adds no wire or registry fields.
 - `src/plugin/render.ts`, the keypad plugin and its overflow latch,
-  `src/protocol.ts`, `quota-snapshot.json`, membership/ack/routing semantics:
-  unchanged.
+  `src/protocol.ts`, `quota-snapshot.json`, ack/routing semantics: unchanged.
 - `docs/design.md`'s strip section and `AGENTS.md`'s strip description are
   rewritten to this contract at implementation time.
 
@@ -81,9 +88,37 @@ The board replaces flat slot order with grouped order:
    subagent attaches to its nearest on-grid ancestor's group, at the same
    single indent level, ordered directly after its own parent within that
    group. There is no recursive visual nesting.
-4. Orphan subagents — live Paseo subagents with no on-grid ancestor — form one
-   atomic tail block strictly after every group, in slot order. The tail never
-   backfills ahead of groups.
+4. Orphan subagents — live Paseo subagents whose ancestor row is genuinely
+   absent or whose lineage cannot be resolved — form one atomic tail block
+   strictly after every group, in slot order. A done/read ancestor that still
+   exists in the registry is not an orphan case: active-descendant aggregation
+   keeps it on-grid. The tail never backfills ahead of groups.
+
+### Paseo ancestor visibility and status
+
+Paseo parentage joins top-level provider sessions through `originRef` /
+`originParentRef`; it is separate from the provider-native
+`parent_session_id` tree. Projection therefore resolves status in two phases:
+
+1. Compute each top-level row's effective provider-native subtree status as
+   today, including the existing rule that any live native descendant lifts an
+   idle root to at least `working`.
+2. For each effectively active Paseo subagent, walk its resolved Paseo ancestry
+   and aggregate status upward using the same
+   `error > waiting > working > idle` priority. This walk crosses provider
+   boundaries, supports nested subagents, and is bounded against cycles and
+   missing links.
+
+The aggregate is the ancestor's projected status. A parent whose own state is
+idle and read is therefore projected as at least `working` while any descendant
+is active; a waiting or failed descendant lifts it to `waiting` or `error`.
+Aggregation does not mutate the stored row, fabricate unread state, or restamp
+`statusSince`: the parent keeps its own timer and `unreadSince` remains null.
+When the final active descendant stops, the parent immediately falls back to
+its own status and ordinary visibility rule, so a read-idle parent leaves the
+board then. This is a visibility aggregation over existing registry rows, not
+resurrection after an authoritative row removal such as SessionEnd, explicit
+clear, or stale prune.
 
 ### Packing and paging
 
@@ -160,8 +195,10 @@ Two accepted trade-offs (reviewed with Drew):
   in the meta line (redundant; deviation from the mockup, which repeats it).
 - Orphans keep the dimmed treatment and "sub" pill at full 1012px width, no
   indent or spine.
-- The idle-subagent admission rule is unchanged: idle Paseo subagents are never
-  projected, so grouped subagents are always active.
+- The idle-subagent admission rule is unchanged: an idle Paseo subagent with no
+  active descendant is never projected. An otherwise-idle subagent retained by
+  an active descendant has an effectively active projected status, so every
+  grouped subagent card is still active.
 
 ### Interaction
 
@@ -263,6 +300,11 @@ spans ~2.4h. Change to `src/core/token-usage.ts` /
 
 View-model units (pure, DOM-free, matching the existing test style):
 
+- Shared projection: separate top-level Paseo rows retain every existing
+  ancestor while a descendant is active, aggregate status upward across nested
+  and cross-provider lineage, preserve the ancestor's unread value and own
+  timer, release it after the final descendant stops, and bound missing/cyclic
+  lineage without a snapshot blackout.
 - Grouped-order derivation: parent join, nested-subagent flattening to the
   nearest on-grid ancestor, orphan tail atomicity, slot order within groups,
   and the lineage hop (a subagent's overlay stamp arriving after its first

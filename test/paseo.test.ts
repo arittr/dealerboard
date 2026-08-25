@@ -421,7 +421,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("falls back to top-level title when extra and metadata are missing", () => {
+  test("extracts the top-level title when nested titles are missing", () => {
     const content = agentRecord({
       title: "top-level truncated title",
       runtimeInfo: { sessionId: "session_abc" },
@@ -445,6 +445,26 @@ describe("createPaseoAgentStateLoader", () => {
         title: "top-level truncated title",
       },
     ]);
+  });
+
+  test("prefers a Paseo-renamed top-level title over stale nested titles", () => {
+    const content = agentRecord({
+      title: "renamed in Paseo",
+      runtimeInfo: {
+        sessionId: "session_abc",
+        extra: { title: "original runtime title" },
+      },
+      persistence: {
+        sessionId: "session_abc",
+        metadata: { title: "original persistence title" },
+      },
+    });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)[0]?.title).toBe("renamed in Paseo");
   });
 
   test("bounds title to 256 code points", () => {
