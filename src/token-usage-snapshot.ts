@@ -14,6 +14,9 @@ export const TOKEN_USAGE_SNAPSHOT_SCHEMA_VERSION = 1;
 /** At the 30s poll cadence, 288 samples cover ~2.4h — the 1h rate window plus its trend-comparison window. */
 export const TOKEN_USAGE_SAMPLE_LIMIT = 288;
 
+/** One day-curve point per 15 minutes covers 24h; the collector's running max keeps totals monotone. */
+export const TOKEN_USAGE_DAY_CURVE_POINT_LIMIT = 96;
+
 export type TokenUsageSample = {
   /** Canonical UTC ISO instant of the successful poll. */
   fetchedAt: string;
@@ -22,6 +25,10 @@ export type TokenUsageSample = {
   /** America/Los_Angeles calendar date, YYYY-MM-DD. */
   providerDay: string;
 };
+
+export type TokenUsageDayCurvePoint = { fetchedAt: string; totalTokens: number };
+export type TokenUsageDayCurve = { providerDay: string; points: TokenUsageDayCurvePoint[] };
+export type TokenUsageDayCurves = { today: TokenUsageDayCurve; yesterday: TokenUsageDayCurve | null };
 
 export type TokenUsageSnapshot = {
   schemaVersion: 1;
@@ -35,6 +42,8 @@ export type TokenUsageSnapshot = {
   fetchedAt: string | null;
   /** Bounded ring of cumulative samples, oldest first. */
   samples: TokenUsageSample[];
+  /** Additive under schemaVersion 1 — the parser ignores unknown top-level keys, so an old app is untouched by this key. */
+  dayCurves?: TokenUsageDayCurves;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -85,6 +94,47 @@ const parseSample = (value: unknown): TokenUsageSample => {
   return { fetchedAt: value["fetchedAt"], totalTokens: value["totalTokens"], providerDay: value["providerDay"] };
 };
 
+const parseDayCurvePoint = (value: unknown): TokenUsageDayCurvePoint => {
+  if (!isRecord(value) || !isIsoInstant(value["fetchedAt"]) || !isTokenCount(value["totalTokens"])) {
+    return invalid("day-curve point must have an ISO fetchedAt and a token count");
+  }
+  return { fetchedAt: value["fetchedAt"], totalTokens: value["totalTokens"] };
+};
+
+const parseDayCurve = (value: unknown): TokenUsageDayCurve => {
+  if (!isRecord(value) || !isProviderDay(value["providerDay"])) {
+    return invalid("day curve must carry a YYYY-MM-DD providerDay");
+  }
+  if (!Array.isArray(value["points"]) || value["points"].length > TOKEN_USAGE_DAY_CURVE_POINT_LIMIT) {
+    return invalid(`day curve points must be an array of at most ${TOKEN_USAGE_DAY_CURVE_POINT_LIMIT}`);
+  }
+  const points = value["points"].map(parseDayCurvePoint);
+  for (let i = 1; i < points.length; i++) {
+    const previous = points[i - 1];
+    const current = points[i];
+    if (previous === undefined || current === undefined) {
+      continue;
+    }
+    if (current.fetchedAt <= previous.fetchedAt) {
+      return invalid("day curve points must be strictly increasing in time");
+    }
+    if (current.totalTokens < previous.totalTokens) {
+      return invalid("day curve totals must be non-decreasing");
+    }
+  }
+  return { providerDay: value["providerDay"], points };
+};
+
+const parseDayCurves = (value: unknown): TokenUsageDayCurves => {
+  if (!isRecord(value)) {
+    return invalid("dayCurves must be an object");
+  }
+  return {
+    today: parseDayCurve(value["today"]),
+    yesterday: value["yesterday"] === null ? null : parseDayCurve(value["yesterday"]),
+  };
+};
+
 /**
  * Validate an unknown value as a token-usage snapshot, returning a newly
  * constructed snapshot. Unknown top-level keys are ignored (not rejected) so a
@@ -113,6 +163,8 @@ export const parseTokenUsageSnapshot = (value: unknown): TokenUsageSnapshot => {
   if (!Array.isArray(value["samples"]) || value["samples"].length > TOKEN_USAGE_SAMPLE_LIMIT) {
     return invalid(`samples must be an array of at most ${TOKEN_USAGE_SAMPLE_LIMIT} points`);
   }
+  const rawDayCurves = value["dayCurves"];
+  const dayCurves = rawDayCurves === undefined ? undefined : parseDayCurves(rawDayCurves);
   return {
     schemaVersion: TOKEN_USAGE_SNAPSHOT_SCHEMA_VERSION,
     providerDay: value["providerDay"],
@@ -120,5 +172,6 @@ export const parseTokenUsageSnapshot = (value: unknown): TokenUsageSnapshot => {
     unavailable: value["unavailable"],
     fetchedAt: value["fetchedAt"],
     samples: value["samples"].map(parseSample),
+    ...(dayCurves === undefined ? {} : { dayCurves }),
   };
 };
