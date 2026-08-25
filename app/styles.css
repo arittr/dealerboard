@@ -498,10 +498,11 @@ body {
   color: #4a5568;
 }
 
-/* d6's day-over-day sparkline: a 436x80-native block under the rates — dim
-   yesterday line, bright today line, endpoint dot at the current position.
-   The yda micro-label is HTML (not stretched by the SVG's non-uniform
-   viewBox) and sits right-aligned below yesterday's end, as in the mockup
+/* d6's day-over-day sparkline: a 436x80-native box under the rates — faint
+   fill under today's curve, dim yesterday line, bright today line, endpoint
+   dot at the current position. The yda micro-label is HTML (the plan's
+   choice — font stays in CSS units) with its BASELINE at d6's y=30 of the
+   80px box; the 0.8em lift approximates the ascent above the baseline
    (native px converted at 2560x720: px / 25.6 = vw, px / 7.2 = vh). */
 .rail-sparkline {
   position: relative;
@@ -517,7 +518,7 @@ body {
 }
 .spark-yda {
   position: absolute;
-  top: 37.5%; /* d6: baseline y=30 of the 80px box */
+  top: calc(37.5% - 0.8em); /* text baseline lands at d6's y=30 (37.5%) */
   right: 0;
   color: #94a3b8;
   font-size: 0.781vw; /* 20px native */

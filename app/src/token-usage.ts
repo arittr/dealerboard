@@ -179,6 +179,48 @@ export const reduceSparkline = (snapshot: TokenUsageSnapshot): SparklineModel | 
   };
 };
 
+/* SVG geometry for the sparkline (d6's exact 436x80 box: curve baseline y=70,
+   curve max y=4). Pure and DOM-free so rail.ts stays a thin attribute shell. */
+
+export const SPARKLINE_VIEWBOX = { width: 436, height: 80 } as const;
+
+const SPARKLINE_BASELINE_Y = 70;
+const SPARKLINE_CURVE_SPAN = 66;
+
+const sparkCoordinate = (point: SparklinePoint): string => {
+  const x = (point.x * SPARKLINE_VIEWBOX.width).toFixed(2);
+  const y = (SPARKLINE_BASELINE_Y - point.y * SPARKLINE_CURVE_SPAN).toFixed(2);
+  return `${x},${y}`;
+};
+
+/** Polyline points attribute for a curve: x*436, 70 − y*66. */
+export const sparklinePolylinePoints = (points: readonly SparklinePoint[]): string =>
+  points.map(sparkCoordinate).join(" ");
+
+/** Fill polygon points: today's curve closed along the baseline at both ends; null with no points. */
+export const sparklineFillPoints = (points: readonly SparklinePoint[]): string | null => {
+  const first = points.at(0);
+  const last = points.at(-1);
+  if (first === undefined || last === undefined) {
+    return null;
+  }
+  const baselineAt = (x: number): string =>
+    `${(x * SPARKLINE_VIEWBOX.width).toFixed(2)},${SPARKLINE_BASELINE_Y.toFixed(2)}`;
+  return `${sparklinePolylinePoints(points)} ${baselineAt(last.x)} ${baselineAt(first.x)}`;
+};
+
+/** Endpoint circle center for today's last point; null with no points. */
+export const sparklineEndpoint = (points: readonly SparklinePoint[]): { cx: number; cy: number } | null => {
+  const last = points.at(-1);
+  if (last === undefined) {
+    return null;
+  }
+  return {
+    cx: last.x * SPARKLINE_VIEWBOX.width,
+    cy: SPARKLINE_BASELINE_Y - last.y * SPARKLINE_CURVE_SPAN,
+  };
+};
+
 export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number): TokenUsageRailModel => {
   if (read === null) {
     return { state: "hidden" };

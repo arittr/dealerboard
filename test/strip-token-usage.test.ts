@@ -4,7 +4,11 @@ import {
   laDayBoundsMs,
   reduceSparkline,
   reduceTokenUsageRead,
+  SPARKLINE_VIEWBOX,
   STALE_TOKEN_USAGE_AGE_MS,
+  sparklineEndpoint,
+  sparklineFillPoints,
+  sparklinePolylinePoints,
 } from "../app/src/token-usage";
 import type { TokenUsageSample, TokenUsageSnapshot } from "../src/token-usage-snapshot";
 
@@ -212,5 +216,41 @@ describe("reduceSparkline", () => {
       }),
     );
     expect(model?.yesterday).toBeNull();
+  });
+});
+
+describe("sparkline SVG geometry", () => {
+  test("polyline points map to d6's 436x80 viewBox: x*436, baseline 70 minus y*66", () => {
+    expect(
+      sparklinePolylinePoints([
+        { x: 0, y: 0 },
+        { x: 0.5, y: 0.5 },
+        { x: 1, y: 1 },
+      ]),
+    ).toBe("0.00,70.00 218.00,37.00 436.00,4.00");
+  });
+
+  test("fill closes today's curve along the baseline at both ends; no points → null", () => {
+    expect(
+      sparklineFillPoints([
+        { x: 0.25, y: 0 },
+        { x: 0.75, y: 1 },
+      ]),
+    ).toBe("109.00,70.00 327.00,4.00 327.00,70.00 109.00,70.00");
+    expect(sparklineFillPoints([])).toBeNull();
+  });
+
+  test("endpoint is the mapped last point; none when empty", () => {
+    expect(
+      sparklineEndpoint([
+        { x: 0, y: 1 },
+        { x: 0.5, y: 0.5 },
+      ]),
+    ).toEqual({ cx: 218, cy: 37 });
+    expect(sparklineEndpoint([])).toBeNull();
+  });
+
+  test("the viewBox matches d6's 436x80 box", () => {
+    expect(SPARKLINE_VIEWBOX).toEqual({ width: 436, height: 80 });
   });
 });

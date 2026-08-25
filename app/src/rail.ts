@@ -17,8 +17,11 @@ import {
 } from "./quota";
 import {
   formatTokensCompact,
+  SPARKLINE_VIEWBOX,
   type SparklineModel,
-  type SparklinePoint,
+  sparklineEndpoint,
+  sparklineFillPoints,
+  sparklinePolylinePoints,
   type TokenUsageRailModel,
   type TokenUsageRateLine,
 } from "./token-usage";
@@ -83,39 +86,44 @@ const rateSpan = (line: TokenUsageRateLine, unit: string): HTMLSpanElement => {
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
-/** Model point → viewBox "0 0 100 28" coordinate: x spans the full day, y rides 27 (0) to 1 (1). */
-const sparkCoordinate = (point: SparklinePoint): string =>
-  `${(point.x * 100).toFixed(2)},${(27 - point.y * 26).toFixed(2)}`;
-
-const sparkPolyline = (points: readonly SparklinePoint[], stroke: string, opacity: string): SVGElement => {
+const sparkPolyline = (points: string, stroke: string, strokeOpacity?: string): SVGElement => {
   const polyline = document.createElementNS(SVG_NAMESPACE, "polyline");
   polyline.setAttribute("fill", "none");
-  polyline.setAttribute("points", points.map(sparkCoordinate).join(" "));
+  polyline.setAttribute("points", points);
   polyline.setAttribute("stroke", stroke);
-  polyline.setAttribute("stroke-opacity", opacity);
+  if (strokeOpacity !== undefined) {
+    polyline.setAttribute("stroke-opacity", strokeOpacity);
+  }
   polyline.setAttribute("stroke-width", "2");
   polyline.setAttribute("stroke-linejoin", "round");
-  polyline.setAttribute("vector-effect", "non-scaling-stroke");
   return polyline;
 };
 
-/** d6's day-over-day sparkline: dim yesterday line with its yda micro-label, bright today line, endpoint dot. */
+/** d6's day-over-day sparkline: faint fill under today's curve, dim yesterday line with its yda label, bright today line, endpoint dot. */
 const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
   const block = document.createElement("div");
   block.className = "rail-sparkline";
   const svg = document.createElementNS(SVG_NAMESPACE, "svg");
-  svg.setAttribute("viewBox", "0 0 100 28");
-  svg.setAttribute("preserveAspectRatio", "none");
-  if (sparkline.yesterday !== null) {
-    svg.append(sparkPolyline(sparkline.yesterday.points, "#94A3B8", "0.6"));
+  // d6's matched-aspect geometry: the 436x80 viewBox scales uniformly (no
+  // preserveAspectRatio) so strokes and the endpoint circle stay true.
+  svg.setAttribute("viewBox", `0 0 ${SPARKLINE_VIEWBOX.width} ${SPARKLINE_VIEWBOX.height}`);
+  const fill = sparklineFillPoints(sparkline.today.points);
+  if (fill !== null) {
+    const polygon = document.createElementNS(SVG_NAMESPACE, "polygon");
+    polygon.setAttribute("fill", "rgba(232,238,247,0.08)");
+    polygon.setAttribute("points", fill);
+    svg.append(polygon);
   }
-  svg.append(sparkPolyline(sparkline.today.points, "#E8EEF7", "1"));
-  const last = sparkline.today.points.at(-1);
-  if (last !== undefined) {
+  if (sparkline.yesterday !== null) {
+    svg.append(sparkPolyline(sparklinePolylinePoints(sparkline.yesterday.points), "#94A3B8", "0.6"));
+  }
+  svg.append(sparkPolyline(sparklinePolylinePoints(sparkline.today.points), "#E8EEF7"));
+  const endpoint = sparklineEndpoint(sparkline.today.points);
+  if (endpoint !== null) {
     const dot = document.createElementNS(SVG_NAMESPACE, "circle");
-    dot.setAttribute("cx", (last.x * 100).toFixed(2));
-    dot.setAttribute("cy", (27 - last.y * 26).toFixed(2));
-    dot.setAttribute("r", "1.2");
+    dot.setAttribute("cx", endpoint.cx.toFixed(2));
+    dot.setAttribute("cy", endpoint.cy.toFixed(2));
+    dot.setAttribute("r", "4");
     dot.setAttribute("fill", "#E8EEF7");
     svg.append(dot);
   }
