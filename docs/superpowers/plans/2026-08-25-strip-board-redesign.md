@@ -4,7 +4,7 @@
 
 **Goal:** Replace the strip's square-tile grid + 32% rail with a parent-grouped board of wide session cards and a 496px rail carrying a day-over-day token sparkline and compact quota rows.
 
-**Architecture:** A new pure board reducer (`app/src/board.ts`) turns the projected sessions into parent-grouped, group-atomically packed pages; a card renderer (`app/src/cards.ts`) replaces the tile renderer; the rail gains a two-line sparkline fed by new `dayCurves` data the daemon's token-usage collector publishes additively (schemaVersion stays 1). The keypad plugin and shared `reduceLayout` are untouched — the strip stops consuming `reduceLayout`'s paging.
+**Architecture:** The shared projection first aggregates active Paseo-subagent status through existing parent rows, so done/read ancestors remain present for both snapshot consumers. A new pure board reducer (`app/src/board.ts`) then turns the projected sessions into parent-grouped, group-atomically packed pages; a card renderer (`app/src/cards.ts`) replaces the tile renderer; the rail gains a two-line sparkline fed by new `dayCurves` data the daemon's token-usage collector publishes additively (schemaVersion stays 1). The keypad renderer and shared `reduceLayout` are untouched — the strip stops consuming `reduceLayout`'s paging.
 
 **Tech Stack:** TypeScript (strict, `exactOptionalPropertyTypes`, `noPropertyAccessFromIndexSignature` → bracket access), Bun test, Biome, DOM via `document.createElement` only (`textContent`, never `innerHTML`), Tauri webview.
 
@@ -16,10 +16,70 @@
 - Status colors locked: working `#20B8FF`, waiting `#FFB020`, idle `#4ADE80`, error `#FF4D67`, neutral `#94A3B8`; provider chip hues per `PROVIDER_COLORS` in `src/plugin/render.ts`; Paseo violet `#A78BFA`.
 - All text via `textContent`; SVG elements via `createElementNS`.
 - Native-pixel dimensions in this plan assume 2560×720; CSS uses viewport-relative units (1px native = 0.0390625vw = 0.1389vh). The mockup d6.html already carries correct values — copy them.
-- The keypad plugin, `src/protocol.ts`, `quota-snapshot.json`, membership/ack semantics: DO NOT TOUCH.
+- The keypad renderer, `src/protocol.ts`, `quota-snapshot.json`, and ack semantics: DO NOT TOUCH. Task 0 deliberately refines shared projection membership so both consumers retain a Paseo parent while its descendants are active.
 - agentsview output is never logged or persisted beyond the snapshot.
 - TDD every task: failing test → run → minimal code → pass → commit. Run a task's test file with `bun test test/<file>.test.ts`; the full gate is `bun run check`.
 - Commit after every task with the shown message; never `git add -A`.
+
+---
+
+### Task 0: Aggregate active Paseo descendants into ancestor visibility
+
+**Files:**
+- Modify: `src/core/projection.ts`
+- Test: `test/projection.test.ts`
+
+**Contract:** Paseo lineage is represented between top-level rows by
+`originRef` / `originParentRef`, not `parentSessionId`. Compute every root's
+existing provider-native subtree result first, then propagate each effectively
+active Paseo subagent's status through every resolved Paseo ancestor using
+`error > waiting > working > idle`. A read-idle ancestor becomes effectively
+working (or waiting/error) and remains projected. Do not alter its stored
+status, `unreadSince`, or `statusSince`. When the last active descendant is
+gone, ordinary visibility applies again. Missing links and cycles stop that
+lineage walk without failing the whole snapshot; those active subagents remain
+available to the board's orphan-tail handling. The walk may cross providers.
+
+- [ ] **Step 1: Write the failing projection tests**
+
+Add focused `projectRows` cases proving:
+
+1. Separate top-level Paseo rows: a read-idle parent plus a working subagent
+   projects both; the parent is `working`, keeps `unreadSince: null`, keeps its
+   own `statusSince`, and the child remains `working`.
+2. Nested, cross-provider lineage retains every existing ancestor, and
+   waiting/error descendants aggregate with the established priority.
+3. An idle subagent with no active descendant does not retain itself or its
+   read-idle parent; removing the last active descendant makes the parent
+   disappear again.
+4. Missing and cyclic lineage is bounded and does not black out otherwise valid
+   active rows.
+
+- [ ] **Step 2: Run the focused tests to verify RED**
+
+Run: `bun test test/projection.test.ts`
+
+Expected: the read-idle Paseo ancestor is absent under current projection.
+
+- [ ] **Step 3: Refactor projection into two phases and implement the roll-up**
+
+Keep the existing provider-native topology validation and traversal. Store its
+per-root results before applying visibility. Build a unique Paseo `originRef`
+index over those roots, then perform bounded ancestor walks from effectively
+active subagent roots. Ambiguous duplicate refs do not link. Apply visibility
+and construct `ProjectedSession` only after all status roll-ups finish. Do not
+write to the registry or change the wire shape.
+
+- [ ] **Step 4: Verify GREEN and regression coverage**
+
+Run: `bun test test/projection.test.ts && bun run typecheck`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/projection.ts test/projection.test.ts
+git commit -m "fix(projection): retain Paseo ancestors with active descendants"
+```
 
 ---
 
@@ -1549,7 +1609,7 @@ git commit -m "feat(strip): drive the board from main; retire the square tile gr
 
 - [ ] **Step 1: Rewrite `docs/design.md`'s strip section**
 
-Replace the Geometry/Tile anatomy/Rail subsections with the amended spec's contract. Must state: the 496px (~19.4%) rail; the parent-grouped board (grouping join, nested flattening, orphan tail, group-atomic packing rules including the 7-12 empty-page rule and page-count derivation, the accepted early lineage hop, the scan-order trade-off); fixed 1012×102 cards, up to 12 per page, no flex-resize; primary/subagent card anatomy (status edge + waiting/error border+wash, chip + unread dot, one-line italic-fallback title, 24-point model cap, meta project suppression, status word + in-place-ticking timer, bare badge, origin disc, sub pill + indent + violet spine); rail contents (token block + day-over-day sparkline semantics incl. adjacency and DST elapsed-fraction mapping, unread/health row, countdown-first quota rows with bare binding tag and no ticks, pager); and the additive `dayCurves` contract (running max, ≤96 points, date-keyed rollover). Keep the Interaction subsection, updating "tile" to "card" where needed.
+Replace the Geometry/Tile anatomy/Rail subsections with the amended spec's contract. Must state: the 496px (~19.4%) rail; the parent-grouped board (grouping join, nested flattening, orphan tail, group-atomic packing rules including the 7-12 empty-page rule and page-count derivation, the accepted early lineage hop, the scan-order trade-off); the shared Paseo-lineage rule (active descendants aggregate status upward and retain existing done/read ancestors without changing unread or the ancestor's own timer); fixed 1012×102 cards, up to 12 per page, no flex-resize; primary/subagent card anatomy (status edge + waiting/error border+wash, chip + unread dot, one-line italic-fallback title, 24-point model cap, meta project suppression, status word + in-place-ticking timer, bare badge, origin disc, sub pill + indent + violet spine); rail contents (token block + day-over-day sparkline semantics incl. adjacency and DST elapsed-fraction mapping, unread/health row, countdown-first quota rows with bare binding tag and no ticks, pager); and the additive `dayCurves` contract (running max, ≤96 points, date-keyed rollover). Keep the Interaction subsection, updating "tile" to "card" where needed.
 
 - [ ] **Step 2: Update `AGENTS.md`**
 
@@ -1578,7 +1638,7 @@ The daemon changed (Task 7), so the full local install applies: `bun scripts/ins
 
 - [ ] **Step 3: Visual verification against the mockup**
 
-With the daemon and app running on the Xeneon Edge: `screencapture -x -D 3 /tmp/strip-live.png` and compare against `docs/superpowers/specs/assets/2026-08-25-strip-board/d6.png` — check: grouped subs indented under their parents with the violet spine, orphan subs at the end, quota percents flush-right with countdown first, 8px bars, sparkline showing today bright over yesterday dim with the `yda` label (yesterday appears only after the collector has lived across a midnight — verify today-only rendering meanwhile), unread dot + green health dot, page dots. Verify tap opens a session, long-press opens the sheet, fling pages (if >12 sessions). If the display runs 1280×360 HiDPI, re-check hairlines are visible.
+With the daemon and app running on the Xeneon Edge: `screencapture -x -D 3 /tmp/strip-live.png` and compare against `docs/superpowers/specs/assets/2026-08-25-strip-board/d6.png` — check: grouped subs indented under their parents with the violet spine; a parent viewed/done in Paseo remains grouped and effectively active while any subagent is active, then retires only after the last subagent stops; orphan subs at the end; quota percents flush-right with countdown first; 8px bars; sparkline showing today bright over yesterday dim with the `yda` label (yesterday appears only after the collector has lived across a midnight — verify today-only rendering meanwhile); unread dot + green health dot; page dots. Verify tap opens a session, long-press opens the sheet, fling pages (if >12 sessions). If the display runs 1280×360 HiDPI, re-check hairlines are visible.
 
 - [ ] **Step 4: Report**
 
