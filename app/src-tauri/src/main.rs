@@ -8,10 +8,14 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
-use tauri::Emitter;
+#[cfg(target_os = "macos")]
+use tauri::menu::{MenuItemBuilder, MenuItemKind};
+use tauri::menu::Menu;
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 const SNAPSHOT_FILE_NAME: &str = "snapshot-v2.json";
 const SNAPSHOT_CHANGED_EVENT: &str = "snapshot-changed";
+const TOGGLE_FULLSCREEN_MENU_ID: &str = "toggle-fullscreen";
 
 /// One publication's file identity: the inode and nanosecond mtime of the
 /// same open file the contents were read from. The daemon publishes by
@@ -246,12 +250,66 @@ fn watch_snapshot(app: &tauri::App) -> Result<(), String> {
     })
 }
 
+/// Preserve Tauri's standard macOS menu while replacing its predefined
+/// fullscreen item. The predefined item calls Cocoa's `toggleFullScreen:`
+/// selector directly, which is a no-op for borderless windows; a normal item
+/// lets the event handler use Tauri's programmatic path instead.
+fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let menu = Menu::default(app)?;
+    #[cfg(target_os = "macos")]
+    {
+        let view = menu
+            .items()?
+            .into_iter()
+            .find_map(|item| match item {
+                MenuItemKind::Submenu(submenu) if matches!(submenu.text().as_deref(), Ok("View")) => {
+                    Some(submenu)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "default menu has no View submenu",
+                )
+            })?;
+        let view_items = view.items()?;
+        if view_items.len() != 1 || !matches!(view_items[0], MenuItemKind::Predefined(_)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "default View menu has an unexpected shape",
+            )
+            .into());
+        }
+
+        let fullscreen = MenuItemBuilder::with_id(TOGGLE_FULLSCREEN_MENU_ID, "Toggle Full Screen")
+            .accelerator("Cmd+Ctrl+F")
+            .build(app)?;
+        view.remove(&view_items[0])?;
+        view.append(&fullscreen)?;
+    }
+    Ok(menu)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
         ))
+        .menu(build_app_menu)
+        .on_menu_event(|app, event| {
+            if event.id() != TOGGLE_FULLSCREEN_MENU_ID {
+                return;
+            }
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+            let Ok(is_fullscreen) = window.is_fullscreen() else {
+                return;
+            };
+            let _ = window.set_fullscreen(!is_fullscreen);
+        })
         .setup(|app| {
             // A failed watch (for example the app-support directory does not
             // exist yet) must not sink the app: the webview's 10s staleness
