@@ -208,7 +208,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
     throw new ProjectionError("cycle");
   }
 
-  // Paseo lineage roll-up: link top-level roots by unique originRef and walk
+  // Paseo lineage roll-up: link top-level paseo roots by unique originRef and walk
   // up from every effectively active Paseo subagent, lifting each resolvable
   // ancestor's effective status (never its stored row). A walk stops at a
   // missing link, an ambiguous duplicate ref, or a cycle (visited refs), so
@@ -217,6 +217,11 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
   const rootByOriginRef = new Map<string, RootResult>();
   const ambiguousOriginRefs = new Set<string>();
   for (const result of rootResults) {
+    // Only paseo roots carry lineage: a terminal- or null-origin ref never
+    // links (and never poisons uniqueness for a valid paseo parent).
+    if (result.row.originKind !== "paseo") {
+      continue;
+    }
     const ref = result.row.originRef;
     if (ref === null || ambiguousOriginRefs.has(ref)) {
       continue;

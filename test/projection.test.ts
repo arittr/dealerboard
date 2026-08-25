@@ -459,6 +459,68 @@ describe("projectRows", () => {
     ).toEqual(["self-loop", "loop-a", "loop-b", "healthy"]);
   });
 
+  test("a non-paseo root with a matching originRef is never treated as a paseo ancestor", () => {
+    // Lineage is paseo-only: a terminal-origin row whose ref collides with
+    // an active subagent's originParentRef must stay a read-and-idle hidden
+    // root, not be lifted and projected as working.
+    const sessions = projectRows([
+      row("terminal-root", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "terminal",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("sub", {
+        status: "working",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["sub"]);
+  });
+
+  test("a non-paseo root sharing a ref does not poison a valid paseo parent's unique link", () => {
+    // Malformed metadata — a ref with no origin kind — is not a paseo root,
+    // so it must not make agent-0 ambiguous for the valid paseo parent.
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("kindless", {
+        status: "idle",
+        unreadSince: null,
+        originKind: null,
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 2,
+      }),
+      row("sub", {
+        status: "working",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 3,
+      }),
+    ]);
+    expect(sessions.map((session) => [session.sessionId, session.status])).toEqual([
+      ["parent", "working"],
+      ["sub", "working"],
+    ]);
+  });
+
   test("reduces effective status by error > waiting > working > idle across the subtree", () => {
     const effective = (rows: ProjectionRow[]): SessionStatus | undefined => projectRows(rows)[0]?.status;
 
