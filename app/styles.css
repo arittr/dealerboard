@@ -149,7 +149,7 @@ body {
    status cue). */
 .card.sub {
   background: #11151d;
-  border: max(1px, 0.078vw) solid #232b38; /* d6's 2px border, color-only change */
+  border: max(1px, 0.078125vw) solid #232b38; /* d6's 2px border, color-only change */
 }
 .card.sub.status-working {
   border-left: 0.3125vw solid rgb(32 184 255 / 0.5);
