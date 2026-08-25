@@ -1,9 +1,9 @@
 /**
  * Pure view-model for the rail's quota panels: reduce the quota-snapshot read
  * to per-provider window lists (session, weekly, extras), pick the binding
- * window (the lowest percent remaining), and derive the tag pill, headline
- * texts, and bar ticks. Kept DOM-free so the logic is unit-testable; the
- * rendering layer is app/src/rail.ts.
+ * window (the lowest percent remaining), and derive the tag pill and headline
+ * texts. Kept DOM-free so the logic is unit-testable; the rendering layer is
+ * app/src/rail.ts.
  */
 
 import {
@@ -131,13 +131,13 @@ export const formatResetCountdown = (resetAtMs: number, now: number): string => 
 export const bindingWindow = (model: QuotaPanelModel): QuotaWindowModel | null =>
   model.bindingIndex === null ? null : (model.windows[model.bindingIndex] ?? null);
 
-/** Pill text: "<name> binds" when several windows compete, the bare name otherwise, null when no data. */
+/** Pill text: the binding window's name; null when no data. */
 export const formatBindingTag = (model: QuotaPanelModel): string | null => {
   const binding = bindingWindow(model);
   if (binding === null) {
     return null;
   }
-  return model.windows.length > 1 ? `${binding.tag} binds` : binding.tag;
+  return binding.tag;
 };
 
 /** Bright right text of the head line: binding percent, em dash when never fetched. */
@@ -163,14 +163,6 @@ export const formatBindingNote = (model: QuotaPanelModel, now: number): string =
     return "resetting…";
   }
   return formatResetCountdown(binding.resetAtMs, now);
-};
-
-/** Percents of the non-binding windows, drawn as ticks on the bar. */
-export const tickPercents = (model: QuotaPanelModel): number[] => {
-  if (model.bindingIndex === null) {
-    return [];
-  }
-  return model.windows.filter((_, index) => index !== model.bindingIndex).map((entry) => entry.percentRemaining);
 };
 
 /** Fill hue follows remaining headroom on the strip's existing status palette. */

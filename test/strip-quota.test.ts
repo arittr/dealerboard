@@ -12,7 +12,6 @@ import {
   reduceQuotaRead,
   STALE_QUOTA_AGE_MS,
   selectBindingIndex,
-  tickPercents,
 } from "../app/src/quota";
 import type { ProviderQuota } from "../src/quota-snapshot";
 
@@ -136,8 +135,8 @@ describe("selectBindingIndex", () => {
 });
 
 describe("formatBindingTag", () => {
-  test("several windows say which binds; a single window is a bare name; none is null", () => {
-    expect(formatBindingTag(model())).toBe("session binds");
+  test("multi- and single-window models render the bare binding name; none is null", () => {
+    expect(formatBindingTag(model())).toBe("session");
     expect(formatBindingTag(model({ windows: [windowModel("weekly", 88)], bindingIndex: 0 }))).toBe("weekly");
     expect(formatBindingTag(model({ windows: [], bindingIndex: null }))).toBeNull();
   });
@@ -185,18 +184,6 @@ describe("formatBindingPercent and formatBindingNote", () => {
     const resetting = model({ windows: [windowModel("session", 10, resetAtMs)], bindingIndex: 0 });
     expect(formatBindingNote(resetting, resetAtMs)).toBe("resetting…");
     expect(formatBindingNote(resetting, resetAtMs + 1)).toBe("resetting…");
-  });
-});
-
-describe("tickPercents", () => {
-  test("every non-binding window ticks; single and empty lists tick nothing", () => {
-    const multi = model({
-      windows: [windowModel("session", 97), windowModel("weekly", 93), windowModel("Fable only", 99)],
-      bindingIndex: 1,
-    });
-    expect(tickPercents(multi)).toEqual([97, 99]);
-    expect(tickPercents(model({ windows: [windowModel("weekly", 5)], bindingIndex: 0 }))).toEqual([]);
-    expect(tickPercents(model({ windows: [], bindingIndex: null }))).toEqual([]);
   });
 });
 

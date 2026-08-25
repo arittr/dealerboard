@@ -2,7 +2,7 @@
  * The strip's fixed right rail: token usage (today's total with rolling /hr
  * and /10m rates), the unread count carrying the daemon-health dot (red plus
  * OFFLINE when degraded), per-provider quota panels (binding window, tag
- * pill, bar ticks), and page dots. Rebuilt
+ * pill, bar), and page dots. Rebuilt
  * wholesale on each render — the rail is small and has no CSS animations to
  * disturb.
  */
@@ -14,7 +14,6 @@ import {
   formatBindingTag,
   type QuotaPanelModel,
   quotaBarColor,
-  tickPercents,
 } from "./quota";
 import { formatTokensCompact, type TokenUsageRailModel, type TokenUsageRateLine } from "./token-usage";
 
@@ -111,7 +110,7 @@ const pagerSection = (model: RailModel, actions: RailActions): HTMLElement => {
   return section;
 };
 
-/** Two-line compact panel: head (chip, label, binding-window tag, percent + note) over a bar that fills to the binding window and ticks every other window. */
+/** Two-line compact panel: head (chip, label, binding-window tag, muted countdown then bright percent) over a bar that fills to the binding window. */
 const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
   const section = document.createElement("section");
   section.className = "rail-quota";
@@ -142,17 +141,17 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
     note.textContent = formatBindingNote(model, nowMs);
     right.append(note);
   } else {
-    const pct = document.createElement("span");
-    pct.className = "quota-pct";
-    pct.textContent = formatBindingPercent(model);
-    right.append(pct);
     const note = formatBindingNote(model, nowMs);
     if (note !== "") {
       const noteSpan = document.createElement("span");
       noteSpan.className = "quota-note";
-      noteSpan.textContent = `· ${note}`;
+      noteSpan.textContent = `${note} ·`;
       right.append(noteSpan);
     }
+    const pct = document.createElement("span");
+    pct.className = "quota-pct";
+    pct.textContent = formatBindingPercent(model);
+    right.append(pct);
   }
   head.append(right);
 
@@ -165,12 +164,6 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
     fill.style.width = `${Math.max(0, Math.min(100, binding.percentRemaining))}%`;
     fill.style.background = quotaBarColor(binding.percentRemaining);
     bar.append(fill);
-    for (const percent of tickPercents(model)) {
-      const tick = document.createElement("span");
-      tick.className = "quota-tick";
-      tick.style.left = `${Math.max(0, Math.min(100, percent))}%`;
-      bar.append(tick);
-    }
   }
   section.append(head, bar);
   return section;
