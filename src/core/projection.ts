@@ -9,7 +9,11 @@
  * a read-and-idle root is filtered from the snapshot (its registry row
  * persists until its lifecycle ends), and so is an idle Paseo subagent even
  * when unread — its result is consumed by the orchestrating parent agent,
- * not by the user pressing tiles. Hidden roots and their subtrees still
+ * not by the user pressing tiles. Paseo lineage spans separate top-level
+ * rows (`originRef`/`originParentRef`), so an effectively active Paseo
+ * subagent also rolls its status up through every resolvable Paseo ancestor
+ * root, retaining read-and-idle ancestors with a lifted effective status
+ * while any active descendant remains. Hidden roots and their subtrees still
  * participate in every topology validation. `readProjection` owns the
  * read transaction boundary around the SQLite select: it commits only a
  * fully mapped and projected snapshot and rolls back if mapping or
@@ -82,6 +86,10 @@ const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal"]);
 
 const identityKey = (provider: Provider, sessionId: string): string => `${provider}\u0000${sessionId}`;
 
+/** The higher-priority of two statuses (error > waiting > working > idle). */
+const maxStatus = (a: SessionStatus, b: SessionStatus): SessionStatus =>
+  STATUS_PRIORITY[a] > STATUS_PRIORITY[b] ? a : b;
+
 /**
  * Project stored rows to the top-level snapshot session list, ordered by
  * stored logical slot with gaps preserved. A root's effective status is the
@@ -91,8 +99,14 @@ const identityKey = (provider: Provider, sessionId: string): string => `${provid
  * inbox, so a root is emitted iff its subtree is still active or its last
  * result is unread — except that an idle Paseo subagent root is never
  * emitted: its unread result is the orchestrating parent's to report, not
- * the user's to ack. Hidden roots keep their registry rows and still
- * traverse for validation.
+ * the user's to ack. Paseo lineage crosses top-level rows — an effectively
+ * active Paseo subagent propagates its status through every Paseo ancestor
+ * resolvable by a unique `originRef`, so a read-and-idle ancestor stays
+ * projected as effectively working (or waiting/error) while any descendant
+ * is active; stored ledger fields are never rewritten. Ambiguous duplicate
+ * refs, missing links, and cycles stop that lineage walk without failing
+ * the snapshot. Hidden roots keep their registry rows and still traverse
+ * for validation.
  * Pure; throws `ProjectionError` on any invalid topology rather than
  * emitting partial output.
  */
@@ -145,7 +159,13 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
   // Traverse each top-level tree: per-root visited set plus a total-step
   // bound of rows.length + 1, so corrupt data can never loop forever.
   roots.sort((a, b) => a.slot - b.slot);
-  const projected: ProjectedSession[] = [];
+  type RootResult = {
+    row: ProjectionRow;
+    slot: number;
+    descendantCount: number;
+    effectiveStatus: SessionStatus;
+  };
+  const rootResults: RootResult[] = [];
   let totalVisited = 0;
   for (const { row: root, slot } of roots) {
     const rootKey = identityKey(root.provider, root.sessionId);
@@ -179,10 +199,66 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       }
     }
     totalVisited += visited.size;
+    rootResults.push({ row: root, slot, descendantCount, effectiveStatus });
+  }
+
+  // Every valid row is reachable from exactly one root; rows left over form a
+  // cycle detached from any root.
+  if (totalVisited !== rows.length) {
+    throw new ProjectionError("cycle");
+  }
+
+  // Paseo lineage roll-up: link top-level roots by unique originRef and walk
+  // up from every effectively active Paseo subagent, lifting each resolvable
+  // ancestor's effective status (never its stored row). A walk stops at a
+  // missing link, an ambiguous duplicate ref, or a cycle (visited refs), so
+  // corrupt lineage never blackouts otherwise valid rows — those active
+  // subagents simply stay available to the board's orphan-tail handling.
+  const rootByOriginRef = new Map<string, RootResult>();
+  const ambiguousOriginRefs = new Set<string>();
+  for (const result of rootResults) {
+    const ref = result.row.originRef;
+    if (ref === null || ambiguousOriginRefs.has(ref)) {
+      continue;
+    }
+    if (rootByOriginRef.has(ref)) {
+      rootByOriginRef.delete(ref);
+      ambiguousOriginRefs.add(ref);
+      continue;
+    }
+    rootByOriginRef.set(ref, result);
+  }
+  for (const result of rootResults) {
+    const { row } = result;
+    if (row.originKind !== "paseo" || row.originSubagent !== 1 || result.effectiveStatus === "idle") {
+      continue;
+    }
+    let carried: SessionStatus = result.effectiveStatus;
+    const walkedRefs = new Set<string>();
+    let parentRef = row.originParentRef;
+    while (parentRef !== null && !walkedRefs.has(parentRef)) {
+      const ancestor = rootByOriginRef.get(parentRef);
+      if (ancestor === undefined) {
+        break;
+      }
+      walkedRefs.add(parentRef);
+      // Both sides take the running maximum: the ancestor's lifted status and
+      // the value carried further upward stay the subtree maximum, so nothing
+      // below the ancestor is lost.
+      const combined = maxStatus(carried, ancestor.effectiveStatus);
+      ancestor.effectiveStatus = combined;
+      carried = combined;
+      parentRef = ancestor.row.originParentRef;
+    }
+  }
+
+  // Visibility applies only after every status roll-up finished.
+  const projected: ProjectedSession[] = [];
+  for (const { row: root, slot, descendantCount, effectiveStatus } of rootResults) {
     // A finished Paseo subagent never holds the grid: its result is consumed
     // by the orchestrating parent agent, so idle subagent roots stay hidden
-    // even when unread. Active ones (or idle ones lifted by live children)
-    // still show with their hollow-ring mark.
+    // even when unread. Active ones (or idle ones lifted by live children or
+    // active Paseo descendants) still show with their hollow-ring mark.
     const visible = effectiveStatus !== "idle" || (root.unreadSince !== null && root.originSubagent !== 1);
     if (visible) {
       projected.push({
@@ -205,12 +281,6 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
         originParentRef: root.originParentRef,
       });
     }
-  }
-
-  // Every valid row is reachable from exactly one root; rows left over form a
-  // cycle detached from any root.
-  if (totalVisited !== rows.length) {
-    throw new ProjectionError("cycle");
   }
   return projected;
 };
