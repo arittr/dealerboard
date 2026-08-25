@@ -122,4 +122,15 @@ describe("parseTokenUsageSnapshot", () => {
     expect(bad({ today: { providerDay: "2026-08-25", points: oversized }, yesterday: null })).toThrow();
     expect(bad({ today: { providerDay: "2026-13-99", points: [] }, yesterday: null })).toThrow();
   });
+
+  test("rejects a sparse points array whose holes bypass per-point validation", () => {
+    const sparse: unknown[] = new Array(1);
+    expect(0 in sparse).toBe(false); // a real hole, not an undefined element
+    expect(() =>
+      parseTokenUsageSnapshot({
+        ...snapshot(),
+        dayCurves: { today: { providerDay: "2026-08-25", points: sparse }, yesterday: null },
+      }),
+    ).toThrow("day-curve point");
+  });
 });

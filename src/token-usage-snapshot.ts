@@ -108,7 +108,7 @@ const parseDayCurve = (value: unknown): TokenUsageDayCurve => {
   if (!Array.isArray(value["points"]) || value["points"].length > TOKEN_USAGE_DAY_CURVE_POINT_LIMIT) {
     return invalid(`day curve points must be an array of at most ${TOKEN_USAGE_DAY_CURVE_POINT_LIMIT}`);
   }
-  const points = value["points"].map(parseDayCurvePoint);
+  const points = Array.from(value["points"], parseDayCurvePoint);
   for (let i = 1; i < points.length; i++) {
     const previous = points[i - 1];
     const current = points[i];
