@@ -8,10 +8,13 @@
  * src/protocol.ts are deliberately untouched: quota rides its own file.
  */
 
-export const QUOTA_SNAPSHOT_SCHEMA_VERSION = 1;
+export const QUOTA_SNAPSHOT_SCHEMA_VERSION = 2;
 
 /** Per-provider sample cap: at the 120s poll cadence, 128 samples cover ~4.3 hours. */
 export const QUOTA_HISTORY_LIMIT = 128;
+
+/** Per-provider cap on published extra rate windows. */
+export const QUOTA_EXTRA_WINDOWS_LIMIT = 8;
 
 export const QUOTA_PROVIDER_KEYS = ["claude", "codex", "kimi", "zai", "qwen"] as const;
 
@@ -22,6 +25,17 @@ export type QuotaHistoryPoint = {
   fetchedAt: string;
   /** Session-window fraction remaining, 0..1. */
   fractionRemaining: number;
+};
+
+export type QuotaExtraWindow = {
+  /** CodexBar's window id (e.g. "claude-weekly-scoped-fable"). */
+  id: string;
+  /** Display tag derived from CodexBar's title, provider name stripped, ≤14 code points. */
+  label: string;
+  /** Percent remaining, 0..100. */
+  percentRemaining: number;
+  /** Reset instant (canonical UTC ISO); null when unknown. */
+  resetAt: string | null;
 };
 
 export type ProviderQuota = {
@@ -39,10 +53,12 @@ export type ProviderQuota = {
   fetchedAt: string | null;
   /** Bounded ring of session-window samples, oldest first. */
   history: QuotaHistoryPoint[];
+  /** Extra rate windows not selected as session/weekly, in CodexBar order; empty for v1 input. */
+  extraWindows: QuotaExtraWindow[];
 };
 
 export type QuotaSnapshot = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   providers: Partial<Record<QuotaProviderKey, ProviderQuota>>;
 };
 
@@ -87,7 +103,38 @@ const parseHistoryPoint = (value: unknown): QuotaHistoryPoint => {
   return { fetchedAt: value["fetchedAt"], fractionRemaining: value["fractionRemaining"] };
 };
 
-const parseProviderQuota = (value: unknown): ProviderQuota => {
+const parseExtraWindow = (value: unknown): QuotaExtraWindow => {
+  if (!isRecord(value)) {
+    return invalid("extra window must be an object");
+  }
+  if (typeof value["id"] !== "string" || value["id"].length === 0) {
+    return invalid("extra window id must be a non-empty string");
+  }
+  if (typeof value["label"] !== "string" || value["label"].length === 0) {
+    return invalid("extra window label must be a non-empty string");
+  }
+  if (!isPercent(value["percentRemaining"])) {
+    return invalid("extra window percentRemaining must be a 0..100 number");
+  }
+  if (!isNullableIsoInstant(value["resetAt"])) {
+    return invalid("extra window resetAt must be null or an ISO instant");
+  }
+  return {
+    id: value["id"],
+    label: value["label"],
+    percentRemaining: value["percentRemaining"],
+    resetAt: value["resetAt"],
+  };
+};
+
+const parseExtraWindows = (value: unknown): QuotaExtraWindow[] => {
+  if (!Array.isArray(value) || value.length > QUOTA_EXTRA_WINDOWS_LIMIT) {
+    return invalid(`extraWindows must be an array of at most ${QUOTA_EXTRA_WINDOWS_LIMIT} windows`);
+  }
+  return value.map(parseExtraWindow);
+};
+
+const parseProviderQuota = (value: unknown, legacy: boolean): ProviderQuota => {
   if (!isRecord(value)) {
     return invalid("provider quota must be an object");
   }
@@ -120,23 +167,25 @@ const parseProviderQuota = (value: unknown): ProviderQuota => {
     unavailable: value["unavailable"],
     fetchedAt: value["fetchedAt"],
     history: value["history"].map(parseHistoryPoint),
+    extraWindows: legacy ? [] : parseExtraWindows(value["extraWindows"]),
   };
 };
 
 /**
  * Validate an unknown value as a quota snapshot, returning a newly constructed
- * snapshot. Unknown provider keys are ignored (not rejected) so a newer daemon
- * adding a provider never breaks an older strip app — a deliberate divergence
- * from src/protocol.ts's provider strictness, this file having exactly one
- * reader shipped in the same repo. Throws on any other contract violation; no
- * coercion.
+ * snapshot (schemaVersion 1 or 2). Unknown provider keys are ignored (not
+ * rejected) so a newer daemon adding a provider never breaks an older strip
+ * app — a deliberate divergence from src/protocol.ts's provider strictness,
+ * this file having exactly one reader shipped in the same repo. Throws on any
+ * other contract violation; no coercion.
  */
 export const parseQuotaSnapshot = (value: unknown): QuotaSnapshot => {
   if (!isRecord(value)) {
     return invalid("snapshot must be an object");
   }
-  if (value["schemaVersion"] !== QUOTA_SNAPSHOT_SCHEMA_VERSION) {
-    return invalid(`schemaVersion must be ${QUOTA_SNAPSHOT_SCHEMA_VERSION}`);
+  const version: unknown = value["schemaVersion"];
+  if (version !== 1 && version !== QUOTA_SNAPSHOT_SCHEMA_VERSION) {
+    return invalid(`schemaVersion must be 1 or ${QUOTA_SNAPSHOT_SCHEMA_VERSION}`);
   }
   if (!isRecord(value["providers"])) {
     return invalid("providers must be an object");
@@ -146,7 +195,7 @@ export const parseQuotaSnapshot = (value: unknown): QuotaSnapshot => {
     if (!QUOTA_PROVIDERS.has(key)) {
       continue;
     }
-    providers[key as QuotaProviderKey] = parseProviderQuota(value["providers"][key]);
+    providers[key as QuotaProviderKey] = parseProviderQuota(value["providers"][key], version === 1);
   }
-  return { schemaVersion: QUOTA_SNAPSHOT_SCHEMA_VERSION, providers };
+  return { schemaVersion: version as 1 | 2, providers };
 };

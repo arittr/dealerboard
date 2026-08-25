@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type ProviderQuota, parseQuotaSnapshot, QUOTA_HISTORY_LIMIT, type QuotaSnapshot } from "../src/quota-snapshot";
+import {
+  type ProviderQuota,
+  parseQuotaSnapshot,
+  QUOTA_EXTRA_WINDOWS_LIMIT,
+  QUOTA_HISTORY_LIMIT,
+  type QuotaSnapshot,
+} from "../src/quota-snapshot";
 
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "quota", "quota-snapshot.json");
 
@@ -13,6 +19,7 @@ const claudeQuota = (): ProviderQuota => ({
   unavailable: false,
   fetchedAt: "2026-08-19T18:00:00.000Z",
   history: [{ fetchedAt: "2026-08-19T18:00:00.000Z", fractionRemaining: 0.625 }],
+  extraWindows: [],
 });
 
 const snapshot = (): QuotaSnapshot => ({
@@ -54,7 +61,7 @@ describe("parseQuotaSnapshot", () => {
 
   test("rejects a non-object, a wrong schemaVersion, and a non-object providers", () => {
     expect(() => parseQuotaSnapshot(null)).toThrow("invalid quota snapshot");
-    expect(() => parseQuotaSnapshot({ schemaVersion: 2, providers: {} })).toThrow("schemaVersion must be 1");
+    expect(() => parseQuotaSnapshot({ schemaVersion: 3, providers: {} })).toThrow("schemaVersion must be 1 or 2");
     expect(() => parseQuotaSnapshot({ schemaVersion: 1, providers: [] })).toThrow("providers must be an object");
   });
 
@@ -94,5 +101,56 @@ describe("parseQuotaSnapshot", () => {
     expect(() => parseQuotaSnapshot({ schemaVersion: 1, providers: { claude: badFraction } })).toThrow(
       "fractionRemaining",
     );
+  });
+
+  describe("extraWindows", () => {
+    const fable = {
+      id: "claude-weekly-scoped-fable",
+      label: "Fable only",
+      percentRemaining: 99,
+      resetAt: "2026-08-28T01:00:00.000Z",
+    };
+
+    test("v1 providers default to no extra windows", () => {
+      const parsed = parseQuotaSnapshot({ schemaVersion: 1, providers: { claude: claudeQuota() } });
+      expect(parsed.providers["claude"]?.extraWindows).toEqual([]);
+    });
+
+    test("v2 round-trips extra windows", () => {
+      const withExtras = { ...claudeQuota(), extraWindows: [fable] };
+      const parsed = parseQuotaSnapshot({ schemaVersion: 2, providers: { claude: withExtras } });
+      expect(parsed.schemaVersion).toBe(2);
+      expect(parsed.providers["claude"]).toEqual(withExtras);
+    });
+
+    test("v2 requires the extraWindows array and bounds it", () => {
+      const missing = {
+        schemaVersion: 2,
+        providers: { claude: { ...claudeQuota(), extraWindows: undefined as unknown as [] } },
+      };
+      expect(() => parseQuotaSnapshot(missing)).toThrow("extraWindows");
+      const over = {
+        schemaVersion: 2,
+        providers: {
+          claude: {
+            ...claudeQuota(),
+            extraWindows: Array.from({ length: QUOTA_EXTRA_WINDOWS_LIMIT + 1 }, () => fable),
+          },
+        },
+      };
+      expect(() => parseQuotaSnapshot(over)).toThrow("extraWindows");
+    });
+
+    test("rejects extras with bad percents, instants, or empty id/label", () => {
+      const bad = (extra: unknown): unknown => ({
+        schemaVersion: 2,
+        providers: { claude: { ...claudeQuota(), extraWindows: [extra] } },
+      });
+      expect(() => parseQuotaSnapshot(bad({ ...fable, percentRemaining: 101 }))).toThrow("percentRemaining");
+      expect(() => parseQuotaSnapshot(bad({ ...fable, resetAt: "soon" }))).toThrow("resetAt");
+      expect(() => parseQuotaSnapshot(bad({ ...fable, id: "" }))).toThrow("id");
+      expect(() => parseQuotaSnapshot(bad({ ...fable, label: "" }))).toThrow("label");
+      expect(() => parseQuotaSnapshot(bad("fable"))).toThrow("extra window");
+    });
   });
 });

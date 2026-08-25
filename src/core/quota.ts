@@ -283,6 +283,7 @@ const emptyQuota = (): ProviderQuota => ({
   unavailable: true,
   fetchedAt: null,
   history: [],
+  extraWindows: [],
 });
 
 const defaultReadFile = (path: string): string | null => {
@@ -448,6 +449,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         unavailable: false,
         fetchedAt,
         history,
+        extraWindows: [],
       };
       states.set(provider, { quota, failed: false });
       return quota;
