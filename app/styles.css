@@ -14,7 +14,7 @@ body {
 }
 #strip {
   display: grid;
-  grid-template-columns: 1fr 24%;
+  grid-template-columns: 1fr 32%;
   gap: 1.56vw;
   padding: 8.33vh 1.56vw;
   height: 100vh;
@@ -235,8 +235,8 @@ body {
   font-size: 1.3vw;
 }
 .dot {
-  width: 1vw;
-  height: 1vw;
+  width: 0.5vw;
+  height: 0.5vw;
   border-radius: 50%;
 }
 .dot.ok {
@@ -266,14 +266,19 @@ body {
   font-weight: 650;
 }
 .tokens-rate {
+  display: flex;
+  gap: 0.5vw;
   color: #94a3b8;
   font-size: 1.2vw;
 }
-.tokens-rate[data-trend="up"] {
+.tokens-rate [data-trend="up"] {
   color: #4ade80;
 }
-.tokens-rate[data-trend="down"] {
+.tokens-rate [data-trend="down"] {
   color: #ff4d67;
+}
+.tokens-rate-sep {
+  color: #4a5568;
 }
 
 .rail-unread {
@@ -294,9 +299,9 @@ body {
   appearance: none;
   border: none;
   background: none;
-  padding: 0.4vw;
+  padding: 0.2vw;
   color: #2a3342;
-  font-size: 1.1vw;
+  font-size: 0.6vw;
   cursor: pointer;
 }
 .page-dot.current {
@@ -360,6 +365,7 @@ body {
   font-size: 1.05vw;
 }
 .quota-bar {
+  position: relative;
   height: 0.8vh;
   border-radius: 0.4vh;
   background: #232b38;
@@ -369,10 +375,23 @@ body {
   height: 100%;
   border-radius: inherit;
 }
-.quota-weekly {
+.quota-tag {
+  flex: none;
+  padding: 0.1vh 0.4vw;
+  border-radius: 0.3vw;
+  background: #1c2430;
   color: #94a3b8;
-  font-size: 1.05vw;
+  font-size: 0.95vw;
+  line-height: 1.3;
   white-space: nowrap;
+}
+.quota-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0.15vw;
+  background: rgb(232 238 247 / 0.75);
+  transform: translateX(-50%);
 }
 
 .tile.flash {
