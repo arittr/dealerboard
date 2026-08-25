@@ -11,6 +11,7 @@
 
 import type { KeyModel } from "../../src/plugin/layout";
 import type { ProjectedSession, Provider } from "../../src/protocol";
+import type { PlacedCard } from "./board";
 
 /** The stable identity of a registry row: a session id is unique per provider. */
 export type SessionIdentity = { readonly provider: Provider; readonly sessionId: string };
@@ -39,6 +40,20 @@ export const resolveSessionTile = (keys: readonly KeyModel[], identity: SessionI
     }
     if (model.session.provider === identity.provider && model.session.sessionId === identity.sessionId) {
       return { index, session: model.session, label: model.label };
+    }
+  }
+  return null;
+};
+
+/** The card currently representing this identity, at its current index — or
+ *  null when the session is no longer on the board. */
+export const resolveBoardCard = (
+  cards: readonly PlacedCard[],
+  identity: SessionIdentity,
+): { index: number; session: ProjectedSession; label: string } | null => {
+  for (const [index, card] of cards.entries()) {
+    if (card.session.provider === identity.provider && card.session.sessionId === identity.sessionId) {
+      return { index, session: card.session, label: card.label };
     }
   }
   return null;

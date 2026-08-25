@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { identityOf, resolveSessionTile, type SessionIdentity } from "../app/src/tile-identity";
+import type { PlacedCard } from "../app/src/board";
+import { identityOf, resolveBoardCard, resolveSessionTile, type SessionIdentity } from "../app/src/tile-identity";
 import type { KeyModel } from "../src/plugin/layout";
 import type { ProjectedSession } from "../src/protocol";
 
@@ -39,6 +40,18 @@ describe("identityOf", () => {
   });
 });
 
+const placedCard = (session: ProjectedSession): PlacedCard => ({
+  session,
+  label: session.title ?? "",
+  subagent: false,
+  parentProject: null,
+  degraded: false,
+  indent: false,
+  spine: "none",
+  column: 0,
+  row: 0,
+});
+
 describe("resolveSessionTile", () => {
   test("resolves the identity's tile, following it to its current index", () => {
     const a = sessionKey(session("claude", "a", "A"));
@@ -69,5 +82,29 @@ describe("resolveSessionTile", () => {
     const a = sessionKey(session("claude", "a", "A"));
     const keys: readonly KeyModel[] = [{ kind: "blank", degraded: false }, a];
     expect(resolveSessionTile(keys, { provider: "claude", sessionId: "a" })?.index).toBe(1);
+  });
+});
+
+describe("resolveBoardCard", () => {
+  test("resolves the identity's card, following it to its current index", () => {
+    const a = placedCard(session("claude", "a", "A"));
+    const b = placedCard(session("codex", "b", "B"));
+    const ref = resolveBoardCard([a, b], { provider: "codex", sessionId: "b" });
+    expect(ref).toEqual({ index: 1, session: b.session, label: "B" });
+  });
+
+  test("a vanished session never resolves to the card that shifted into its index", () => {
+    const pressed: SessionIdentity = { provider: "claude", sessionId: "a" };
+    const before = [placedCard(session("claude", "a", "A")), placedCard(session("codex", "b", "B"))];
+    expect(resolveBoardCard(before, pressed)?.session.sessionId).toBe("a");
+    const after = [placedCard(session("codex", "b", "B"))];
+    expect(resolveBoardCard(after, pressed)).toBeNull();
+    // B now sits at A's old index 0, but resolves only under its own identity.
+    expect(resolveBoardCard(after, { provider: "codex", sessionId: "b" })?.index).toBe(0);
+  });
+
+  test("the same session id under another provider is a different card", () => {
+    const cards = [placedCard(session("codex", "shared", "Codex card"))];
+    expect(resolveBoardCard(cards, { provider: "claude", sessionId: "shared" })).toBeNull();
   });
 });
