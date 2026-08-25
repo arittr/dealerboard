@@ -11,6 +11,22 @@ import { isStripMonitor } from "./monitors";
 
 const REPIN_INTERVAL_MS = 5000;
 
+type Point = { readonly x: number; readonly y: number };
+type Dimensions = { readonly width: number; readonly height: number };
+type WindowGeometry = { readonly position: Point; readonly size: Dimensions };
+
+export const stripWindowNeedsPin = (
+  isFullscreen: boolean,
+  position: Point,
+  size: Dimensions,
+  strip: WindowGeometry,
+): boolean =>
+  !isFullscreen &&
+  (position.x !== strip.position.x ||
+    position.y !== strip.position.y ||
+    size.width !== strip.size.width ||
+    size.height !== strip.size.height);
+
 const findStripMonitor = async (): Promise<Monitor | undefined> =>
   (await availableMonitors()).find((monitor) =>
     isStripMonitor({ name: monitor.name, width: monitor.size.width, height: monitor.size.height }),
@@ -34,6 +50,10 @@ export const startStripWindowManager = async (): Promise<void> => {
       if (strip === undefined) {
         return;
       }
+      const isFullscreen = await window.isFullscreen().catch(() => null);
+      if (isFullscreen === null) {
+        return;
+      }
       const position = await window.outerPosition().catch(() => null);
       if (position === null) {
         return;
@@ -42,12 +62,7 @@ export const startStripWindowManager = async (): Promise<void> => {
       if (size === null) {
         return;
       }
-      if (
-        position.x !== strip.position.x ||
-        position.y !== strip.position.y ||
-        size.width !== strip.size.width ||
-        size.height !== strip.size.height
-      ) {
+      if (stripWindowNeedsPin(isFullscreen, position, size, strip)) {
         await pinTo(strip).catch(() => {});
       }
     })();
