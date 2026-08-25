@@ -5,8 +5,13 @@
  * I/O; the rendering layer is app/src/cards.ts and the driver app/src/main.ts.
  */
 
-import { labelForSession } from "../../src/plugin/layout";
-import type { ProjectedSession } from "../../src/protocol";
+import {
+  DEFAULT_LAYOUT_SETTINGS,
+  type LayoutSettingsV1,
+  labelForSession,
+  validateLayoutSettings,
+} from "../../src/plugin/layout";
+import type { ProjectedSession, SnapshotView } from "../../src/protocol";
 
 export type BoardCardSeed = {
   session: ProjectedSession;
@@ -92,4 +97,107 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
     });
   }
   return groups;
+};
+
+export const BOARD_COLUMNS = 2;
+export const BOARD_ROWS = 6;
+
+export type SpineSegment = "none" | "mid" | "end";
+
+export type PlacedCard = BoardCardSeed & {
+  degraded: boolean;
+  indent: boolean;
+  spine: SpineSegment;
+  /** 0-based column within the page. */
+  column: number;
+  /** 0-based row within the column. */
+  row: number;
+};
+
+export type BoardPage = { cards: PlacedCard[] };
+
+type SpinedSeed = BoardCardSeed & { indent: boolean; spine: SpineSegment };
+
+const withSpines = (group: BoardGroup): SpinedSeed[] =>
+  group.cards.map((seed, index) => {
+    const grouped = seed.subagent && !group.orphanTail;
+    return {
+      ...seed,
+      indent: grouped,
+      spine: grouped ? (index === group.cards.length - 1 ? "end" : "mid") : "none",
+    };
+  });
+
+type MutablePage = { used: number[]; cards: PlacedCard[] };
+
+/**
+ * Group-atomic first-fit (spec "Packing and paging"): small groups take the
+ * first column with room on the current page (later groups may backfill an
+ * earlier gap on that page, never an earlier page); a 7-12 group needs two
+ * empty columns so it starts on the current page only while it is empty;
+ * a larger group fills whole pages from a fresh page.
+ */
+export const packBoard = (groups: readonly BoardGroup[], degraded: boolean): BoardPage[] => {
+  const pages: MutablePage[] = [];
+  const openPage = (): MutablePage => {
+    const page: MutablePage = { used: Array.from({ length: BOARD_COLUMNS }, () => 0), cards: [] };
+    pages.push(page);
+    return page;
+  };
+  const current = (): MutablePage => pages[pages.length - 1] ?? openPage();
+  const place = (page: MutablePage, column: number, seed: SpinedSeed): void => {
+    page.cards.push({ ...seed, degraded, column, row: page.used[column] ?? 0 });
+    page.used[column] = (page.used[column] ?? 0) + 1;
+  };
+
+  for (const group of groups) {
+    const seeds = withSpines(group);
+    if (seeds.length === 0) {
+      continue;
+    }
+    if (seeds.length <= BOARD_ROWS) {
+      let page = current();
+      let column = page.used.findIndex((used) => used + seeds.length <= BOARD_ROWS);
+      if (column === -1) {
+        page = openPage();
+        column = 0;
+      }
+      for (const seed of seeds) {
+        place(page, column, seed);
+      }
+    } else {
+      const empty = current().cards.length === 0;
+      let page = empty ? current() : openPage();
+      let column = 0;
+      for (const seed of seeds) {
+        if ((page.used[column] ?? 0) >= BOARD_ROWS) {
+          column += 1;
+          if (column >= BOARD_COLUMNS) {
+            page = openPage();
+            column = 0;
+          }
+        }
+        place(page, column, seed);
+      }
+    }
+  }
+  return pages.map((page) => ({ cards: page.cards }));
+};
+
+export type BoardResult = {
+  settings: LayoutSettingsV1;
+  dirty: boolean;
+  pages: BoardPage[];
+  pageCount: number;
+};
+
+export const reduceBoard = (view: SnapshotView, storedState: unknown): BoardResult => {
+  const packed = packBoard(groupedOrder(view.snapshot.sessions), view.degraded);
+  const pages = packed.length > 0 ? packed : [{ cards: [] }];
+  const pageCount = pages.length;
+  const { settings: restored, defaulted } = validateLayoutSettings(storedState);
+  const currentPage = Math.min(restored.currentPage, pageCount - 1);
+  const settings: LayoutSettingsV1 = { ...DEFAULT_LAYOUT_SETTINGS, currentPage };
+  const dirty = defaulted || restored.currentPage !== currentPage || restored.overflowLatched;
+  return { settings, dirty, pages, pageCount };
 };

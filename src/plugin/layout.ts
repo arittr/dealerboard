@@ -112,7 +112,7 @@ const buildKeys = (
   return keys;
 };
 
-type ValidatedSettings = {
+export type ValidatedSettings = {
   settings: LayoutSettingsV1;
   defaulted: boolean;
 };
@@ -120,7 +120,7 @@ type ValidatedSettings = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const validateStoredSettings = (stored: unknown): ValidatedSettings => {
+export const validateLayoutSettings = (stored: unknown): ValidatedSettings => {
   if (isRecord(stored)) {
     const value = stored;
     if (
@@ -150,7 +150,7 @@ const sortedSessions = (view: SnapshotView): ProjectedSession[] =>
 const reduceInternal = (view: SnapshotView, storedState: unknown, geometry: LayoutGeometry): LayoutResult => {
   const sessions = sortedSessions(view);
   const count = sessions.length;
-  const { settings: restored, defaulted } = validateStoredSettings(storedState);
+  const { settings: restored, defaulted } = validateLayoutSettings(storedState);
 
   // The latch engages only when the live count exceeds the unpaged capacity;
   // once engaged it holds while at least that many sessions remain live.
