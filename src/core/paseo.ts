@@ -114,9 +114,15 @@ const parentAgentIdFrom = (value: Record<string, unknown>): string | null => {
   return typeof topLevel === "string" && topLevel.length > 0 ? topLevel : null;
 };
 
-/** Extract title from a Paseo agent record, preferring the full title. */
+/** Extract the user-visible title from a Paseo agent record. */
 const titleFrom = (value: Record<string, unknown>): string | null => {
-  // Prefer runtimeInfo.extra.title or persistence.metadata.title (full titles)
+  // Paseo renames update the top-level title but leave the original title in
+  // the nested provider metadata, so the user-visible value is authoritative.
+  const topLevelTitle = value["title"];
+  if (typeof topLevelTitle === "string" && topLevelTitle.length > 0) {
+    return boundTitle(topLevelTitle);
+  }
+
   const runtimeInfo = value["runtimeInfo"];
   if (isRecord(runtimeInfo)) {
     const extra = runtimeInfo["extra"];
@@ -136,11 +142,6 @@ const titleFrom = (value: Record<string, unknown>): string | null => {
         return boundTitle(metadataTitle);
       }
     }
-  }
-  // Fall back to top-level title (may be truncated)
-  const topLevelTitle = value["title"];
-  if (typeof topLevelTitle === "string" && topLevelTitle.length > 0) {
-    return boundTitle(topLevelTitle);
   }
   return null;
 };
