@@ -371,9 +371,9 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   `weekly` / an extra window's label, with a ` binds` suffix when several
   windows compete), and at the right the binding window's percent remaining
   plus its reset countdown muted beside it (`79% · 26m`); the second line is
-  the bare bar filled on the status palette (green `#4ADE80` above 25%
+  the bar filled on the status palette (green `#4ADE80` above 25%
   remaining, amber `#FFB020` from 10%, red `#FF4D67` below) to the binding
-  window's percent, with a 2px neutral tick (`#E8EEF7` at 75%) at every
+  window's percent, with a 0.15vw neutral tick (`#E8EEF7` at 75%) at every
   other window's percent. The Qwen row reads CodexBar's
   `alibabatokenplan` provider. Data comes from
   `quota-snapshot.json` via the `read_quota_snapshot` Tauri command — a

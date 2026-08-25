@@ -284,7 +284,7 @@ Notes:
   ring (~2.4h), and publishes `token-usage-snapshot.json` (own
   `schemaVersion`; contract in `src/token-usage-snapshot.ts`); the strip
   reads it through the `read_token_usage_snapshot` Tauri command and renders
-  today's total plus both rolling rates on one line
+  today's total and, on one line below it, both rolling rates
   (`↑ 4.7M/hr · ↑ 1.3M/10m`), each rate colored by its own trend (deadband
   max(1000, 10% of the previous window)) from the pure view-model in
   `app/src/token-usage.ts`. agentsview output is never logged or persisted.
