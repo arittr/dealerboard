@@ -14,22 +14,23 @@ body {
 }
 #strip {
   display: grid;
-  grid-template-columns: 1fr 19.375%;
-  gap: 1.56vw;
-  padding: 8.33vh 1.56vw;
+  grid-template-columns: 1fr 19.375%; /* 496px native rail, flush as in d6 */
   height: 100vh;
   touch-action: none;
   -webkit-touch-callout: none;
 }
 
-/* Board: two fixed columns of six rows (BOARD_COLUMNS x BOARD_ROWS in
-   app/src/board.ts); the renderer sets each card's grid position inline
-   from its placement. 12px native gaps. */
+/* Board: d6's fixed geometry — two 1012px columns of six 102px rows, 12px
+   gaps, 34px top / 16px left padding (native px converted at 2560x720:
+   px / 25.6 = vw, px / 7.2 = vh). Cards are a fixed standard size and never
+   flex-resize; the renderer sets each card's grid position inline from its
+   placement. */
 #board {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  grid-template-rows: repeat(6, 1fr);
-  gap: 1.667vh 0.469vw;
+  grid-template-columns: repeat(2, 39.531vw); /* 1012px native */
+  grid-template-rows: repeat(6, 14.167vh); /* 102px native */
+  gap: 1.667vh 0.469vw; /* 12px native */
+  padding: 4.722vh 0 0 0.625vw; /* 34px top clears the 28px menu bar, 16px left */
   min-width: 0;
 }
 #board > .offline {
@@ -142,18 +143,19 @@ body {
   }
 }
 
-/* Subagents: quieter everything — near-canvas surface, hairline frame, and
-   a half-opacity edge; no frame breathing or static tint (the edge is the
+/* Subagents: quieter everything — near-canvas surface, d6's 2px frame
+   recolored #232b38 (hairline, never below 1 physical px), and a
+   half-opacity edge; no frame breathing or static tint (the edge is the
    status cue). */
 .card.sub {
   background: #11151d;
-  border: 1px solid #232b38;
+  border: max(1px, 0.078vw) solid #232b38; /* d6's 2px border, color-only change */
 }
 .card.sub.status-working {
-  border-left: 0.3125vw solid rgb(32 184 255 / 0.45);
+  border-left: 0.3125vw solid rgb(32 184 255 / 0.5);
 }
 .card.sub.status-idle {
-  border-left: 0.3125vw solid rgb(74 222 128 / 0.45);
+  border-left: 0.3125vw solid rgb(74 222 128 / 0.5);
 }
 .card.sub.status-waiting,
 .card.sub.status-error {
@@ -358,11 +360,15 @@ body {
 }
 
 .unread-dot {
-  flex: none;
-  width: 0.703vw; /* 18px native */
+  /* d6's chip-corner badge: -6px offsets, 18px disc, 3px card-colored ring. */
+  position: absolute;
+  top: -0.833vh;
+  right: -0.234vw;
+  width: 0.703vw;
   height: 0.703vw;
   border-radius: 50%;
   background: #ffb020;
+  border: 0.117vw solid #1c2430;
 }
 
 /* The hollow-ring "sub" cue after the chip. */

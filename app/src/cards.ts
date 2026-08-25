@@ -138,9 +138,10 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   const chip = appendText(head, "chip", model.letter);
   chip.dataset["provider"] = model.provider;
   if (model.unread) {
+    // d6's corner badge: absolutely positioned on the chip, card-colored ring.
     const dot = document.createElement("span");
     dot.className = "unread-dot";
-    head.append(dot);
+    chip.append(dot);
   }
   if (model.subagent) {
     appendText(head, "sub-pill", "sub");
@@ -162,13 +163,13 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   }
   const metaRight = document.createElement("span");
   metaRight.className = "meta-right";
-  if (model.badge > 0) {
-    appendText(metaRight, "badge", String(model.badge));
-  }
   if (model.originDisc) {
     const disc = document.createElement("span");
     disc.className = "origin-disc";
     metaRight.append(disc);
+  }
+  if (model.badge > 0) {
+    appendText(metaRight, "badge", String(model.badge));
   }
   meta.append(metaRight);
   element.append(meta);
