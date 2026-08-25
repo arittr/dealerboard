@@ -234,7 +234,8 @@ Notes:
   geometry is a second `LayoutGeometry`, `STRIP_GEOMETRY` in
   `src/plugin/layout.ts` (up to 15 square tiles per page; the measured tile
   area chooses the largest packing across at most 3 rows, capped at the
-  three-across square size; rail pages, no NEXT tile). Tile visuals
+  three-across square size; rail pages, no NEXT tile; the rail occupies 32%
+  of the strip width). Tile visuals
   live in `app/styles.css` + `app/src/tiles.ts`, a web-native port of
   `render.ts` — keep the two in sync via `docs/design.md`. Strip-only tile
   extras (no keypad counterpart): an amber unread dot (the exact
@@ -246,10 +247,13 @@ Notes:
   HiDPI mode still matches), re-pins on reconnect, and autostarts at login.
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
 - Quota panels (claude, codex, kimi, GLM/zai, Qwen) ship in the rail as
-  compact two-line rows (head: chip, label, muted weekly summary, percent
-  remaining plus muted reset countdown; second line: the bare status-palette
-  bar — no sparkline), and the daemon-health dot rides inline on the unread
-  row (green ok, red plus OFFLINE when degraded) instead of its own line.
+  compact two-line rows (head: chip, label, a tag pill naming the binding
+  window, percent remaining plus its reset countdown; second line: the
+  status-palette bar filled to the binding window with a neutral tick at
+  every other window's percent — no sparkline); the binding window is the
+  lowest percent remaining (ties: session > weekly > extras), and the
+  daemon-health dot rides inline on the unread row (green ok, red plus
+  OFFLINE when degraded) instead of its own line.
   The daemon's quota collector (`src/core/quota.ts`, started
   from `cli.ts`, own 120s cadence) shells out to the locally installed
   CodexBar CLI for every provider (`codexbar usage --provider <arg> --format
@@ -257,12 +261,15 @@ Notes:
   `CODEXBAR_PROVIDER_ARGS`; binary resolved per pass from
   `CODEXBAR_BINARY_CANDIDATES`, serialized spawns), classifies
   the returned windows by `windowMinutes` — weekly = the longest window of at
-  least a day, session = the shortest under a day, with
-  `usage.extraRateWindows` scanned when the main trio has no session window
-  (codex reports `primary: null`, Spark windows live there) — and publishes
-  `quota-snapshot.json` (own `schemaVersion`, bounded history ring of
-  session-window samples; contract in `src/quota-snapshot.ts`) via the
-  `writeFileAtomically` primitive; the strip reads it through the
+  least a day, session = the shortest under a day, `usage.extraRateWindows`
+  always participates — an extra can be selected as the session window
+  (codex's Spark 5-hour), and unselected extras publish as `extraWindows`
+  (cap 8) with provider-name-stripped labels (claude's `Fable only`, codex's
+  `Spark Weekly`); the widget-snapshot fallback publishes none — and
+  publishes `quota-snapshot.json` (`schemaVersion` 2; the strip's reader
+  also accepts v1, so daemon and app update in either order; bounded history
+  ring of session-window samples; contract in `src/quota-snapshot.ts`) via
+  the `writeFileAtomically` primitive; the strip reads it through the
   `read_quota_snapshot` Tauri command and renders from the pure view-model in
   `app/src/quota.ts`. A missing CodexBar binary or a provider disabled in the
   CodexBar app omits that provider entirely. `snapshot-v2.json` and
@@ -277,10 +284,10 @@ Notes:
   ring (~2.4h), and publishes `token-usage-snapshot.json` (own
   `schemaVersion`; contract in `src/token-usage-snapshot.ts`); the strip
   reads it through the `read_token_usage_snapshot` Tauri command and renders
-  today's total plus rolling /hr and /10m rates with trend arrows
-  (deadband max(1000, 10% of the previous window)) from the pure view-model
-  in `app/src/token-usage.ts`. agentsview output is never logged or
-  persisted.
+  today's total plus both rolling rates on one line
+  (`↑ 4.7M/hr · ↑ 1.3M/10m`), each rate colored by its own trend (deadband
+  max(1000, 10% of the previous window)) from the pure view-model in
+  `app/src/token-usage.ts`. agentsview output is never logged or persisted.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and
   `docs/verification/` are historical records — do not edit them.

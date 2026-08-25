@@ -301,7 +301,7 @@ own visible contract.
 
 ### Geometry
 
-- Up to fifteen square session tiles plus a fixed 24%-width rail on the right.
+- Up to fifteen square session tiles plus a fixed 32%-width rail on the right.
   For each page the grid chooses the one-, two-, or three-row packing that
   produces the largest squares inside the measured tile area. Tile size is
   capped at the three-across square width, so sparse pages never crowd the
@@ -346,7 +346,7 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
 
 ### Rail
 
-- Daemon health rides inline on the unread row: a green dot (red plus
+- Daemon health rides inline on the unread row: a green 0.5vw dot (red plus
   OFFLINE when degraded) before the exact unread count (tiles whose session
   carries an `unreadSince` stamp).
 - A token-usage block above it. The block shows today's aggregate token total
@@ -356,21 +356,26 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   daemon-recorded cumulative-sample ring, with trend arrows against the
   previous equal-width window (↑ green `#4ADE80`, ↓ red `#FF4D67`, → neutral
   `#94A3B8`; deadband the larger of 1,000 tokens or 10% of the previous
-  window). Data comes from `token-usage-snapshot.json` via the
+  window). The two rates render as one line (`↑ 4.7M/hr · ↑ 1.3M/10m`), each
+  rate span colored by its own trend, the separator muted. Data comes from
+  `token-usage-snapshot.json` via the
   `read_token_usage_snapshot` Tauri command — a separate file with its own
   `schemaVersion`, never the session snapshot. A failed poll keeps last-good
   numbers dimmed; a missing file or a never-successful collector hides the
   block.
-- Page dots, one per page, tap to jump.
+- Page dots (0.6vw type), one per page, tap to jump.
 - Quota panels (strip-only; there is no keypad equivalent): a compact
   two-line row per quota provider (claude, codex, kimi, GLM/zai, Qwen) — all
   five fit the strip height without scrolling. The head line carries the
-  provider chip, the label, the muted weekly-window summary when present
-  (`wk 94% · 3d`), and at the right the session-window percent remaining
-  plus the reset countdown muted beside it (`79% · 26m`); the second line is
+  provider chip, the label, a tag pill naming the binding window (`session` /
+  `weekly` / an extra window's label, with a ` binds` suffix when several
+  windows compete), and at the right the binding window's percent remaining
+  plus its reset countdown muted beside it (`79% · 26m`); the second line is
   the bare bar filled on the status palette (green `#4ADE80` above 25%
-  remaining, amber `#FFB020` from 10%, red `#FF4D67` below). The Qwen row
-  reads CodexBar's `alibabatokenplan` provider. Data comes from
+  remaining, amber `#FFB020` from 10%, red `#FF4D67` below) to the binding
+  window's percent, with a 2px neutral tick (`#E8EEF7` at 75%) at every
+  other window's percent. The Qwen row reads CodexBar's
+  `alibabatokenplan` provider. Data comes from
   `quota-snapshot.json` via the `read_quota_snapshot` Tauri command — a
   separate file with its own `schemaVersion`, never the session snapshot. A
   provider whose last fetch failed renders dimmed with a last-updated age in
