@@ -127,13 +127,18 @@ const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
     dot.setAttribute("fill", "#E8EEF7");
     svg.append(dot);
   }
-  block.append(svg);
   if (sparkline.yesterday !== null) {
-    const label = document.createElement("span");
-    label.className = "spark-yda";
+    const label = document.createElementNS(SVG_NAMESPACE, "text");
+    // d6.html:444 — the exact baseline: y=30 of the 80px box, right-aligned at x=434.
+    label.setAttribute("x", "434");
+    label.setAttribute("y", "30");
+    label.setAttribute("text-anchor", "end");
+    label.setAttribute("font-size", "20");
+    label.setAttribute("fill", "#94A3B8");
     label.textContent = sparkline.yesterday.label;
-    block.append(label);
+    svg.append(label);
   }
+  block.append(svg);
   return block;
 };
 
