@@ -90,7 +90,7 @@ Notes:
   distinctness on the LCD panel, not brand fidelity (`PROVIDER_COLORS`):
   Claude `#D97757`, Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp
   `#F5F0EA`, zcode `#EAB308`, deepseek `#2DD4BF`, grok `#F472B6`, qwen
-  `#8B5CF6`. Session
+  `#EF4444`. Session
   tiles also carry the model id as neutral-chrome text right of the chip
   (vendor prefix stripped, ten-code-point cap); the registry stores the raw
   id (schema v6 `model` column; the v8 repair backfills it into pre-merge v7

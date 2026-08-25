@@ -61,7 +61,7 @@ const PROVIDER_COLORS: Record<Provider, string> = {
   zcode: "#EAB308",
   deepseek: "#2DD4BF",
   grok: "#F472B6",
-  qwen: "#8B5CF6",
+  qwen: "#EF4444",
 };
 
 export const PROVIDER_LETTERS: Record<Provider, string> = {

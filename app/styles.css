@@ -138,7 +138,7 @@ body {
   background: #f472b6;
 }
 .chip[data-provider="qwen"] {
-  background: #8b5cf6;
+  background: #ef4444;
 }
 .model {
   color: #94a3b8;
@@ -343,7 +343,7 @@ body {
   background: #2dd4bf;
 }
 .quota-chip[data-provider="qwen"] {
-  background: #8b5cf6;
+  background: #ef4444;
 }
 .quota-right {
   margin-left: auto;
