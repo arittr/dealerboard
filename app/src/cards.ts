@@ -192,6 +192,14 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   return element;
 };
 
+/** The render-skip signature: every renderBoard input except the wall clock
+ *  (the in-place ticker owns time). Cards carry their own degraded bit, so a
+ *  degraded flip changes any non-empty page — but an empty page serializes to
+ *  the same "[]" healthy or degraded, and the page-level flag is what makes
+ *  the healthy↔OFFLINE transition re-render it. */
+export const boardRenderSignature = (page: BoardPage, degraded: boolean): string =>
+  JSON.stringify({ cards: page.cards, degraded });
+
 export const renderBoard = (root: HTMLElement, page: BoardPage, degraded: boolean): void => {
   if (page.cards.length === 0) {
     const blank = document.createElement("div");

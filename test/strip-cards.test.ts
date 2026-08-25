@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PlacedCard } from "../app/src/board";
 import {
+  boardRenderSignature,
   CARD_MODEL_LABEL_MAX_CODE_POINTS,
   cardViewModel,
   statusLineText,
@@ -151,5 +152,23 @@ describe("cardViewModel", () => {
     );
     expect(model.unread).toBe(true);
     expect(model.timer).toBe("working 2m");
+  });
+});
+
+describe("boardRenderSignature", () => {
+  test("an empty page distinguishes healthy from degraded (the OFFLINE re-render)", () => {
+    // The regression the review caught: an empty page serializes its cards to
+    // "[]" either way, so the page-level degraded flag must ride the signature
+    // or a healthy↔OFFLINE flip on an empty board skips the re-render.
+    const empty = { cards: [] };
+    expect(boardRenderSignature(empty, false)).not.toBe(boardRenderSignature(empty, true));
+    expect(boardRenderSignature(empty, false)).toBe(boardRenderSignature(empty, false));
+  });
+
+  test("a non-empty page flips on the cards' own degraded bits and placement", () => {
+    const healthy = boardRenderSignature({ cards: [placed()] }, false);
+    expect(boardRenderSignature({ cards: [placed({ degraded: true })] }, false)).not.toBe(healthy);
+    expect(boardRenderSignature({ cards: [placed({ column: 1, row: 3 })] }, false)).not.toBe(healthy);
+    expect(boardRenderSignature({ cards: [placed()] }, true)).not.toBe(healthy);
   });
 });

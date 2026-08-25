@@ -44,7 +44,7 @@ import {
   revealTranscript,
   type SnapshotPayload,
 } from "./bridge";
-import { elapsedLabel, renderBoard } from "./cards";
+import { boardRenderSignature, elapsedLabel, renderBoard } from "./cards";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -179,11 +179,12 @@ const applyBoard = (result: BoardResult): void => {
   currentPages = result.pages;
   const page = currentPages[currentPage] ?? { cards: [] };
   currentCards = page.cards;
-  const signature = JSON.stringify(page.cards);
+  const degraded = currentView?.degraded ?? false;
+  const signature = boardRenderSignature(page, degraded);
   const root = document.querySelector<HTMLElement>("#board");
   if (root !== null && signature !== renderedSignature) {
     renderedSignature = signature;
-    renderBoard(root, page, currentView?.degraded ?? false);
+    renderBoard(root, page, degraded);
   }
 };
 
