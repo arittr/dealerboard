@@ -87,7 +87,7 @@ export const formatResetCountdown = (resetAtMs: number, now: number): string => 
     return `${minutes}m`;
   }
   const hours = Math.floor(minutes / 60);
-  if (hours >= 48) {
+  if (hours >= 24) {
     return `${Math.round(hours / 24)}d`;
   }
   return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`;

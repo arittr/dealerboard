@@ -84,6 +84,9 @@ describe("formatResetCountdown", () => {
     expect(formatResetCountdown(resetAt, NOW)).toBe("3h 12m");
     expect(formatResetCountdown(NOW + 2 * 3_600_000, NOW)).toBe("2h");
     expect(formatResetCountdown(NOW + 42 * 60_000, NOW)).toBe("42m");
+    expect(formatResetCountdown(NOW + 23 * 3_600_000, NOW)).toBe("23h");
+    expect(formatResetCountdown(NOW + 24 * 3_600_000, NOW)).toBe("1d");
+    expect(formatResetCountdown(NOW + 43 * 3_600_000, NOW)).toBe("2d");
     expect(formatResetCountdown(NOW + 49 * 3_600_000, NOW)).toBe("2d");
     expect(formatResetCountdown(NOW - 1, NOW)).toBe("resetting…");
   });
