@@ -33,6 +33,7 @@ export const routeForSession = (session: ProjectedSession): SessionRoute => {
     case "zcode":
     case "deepseek":
     case "grok":
+    case "qwen":
       return { kind: "flash" };
   }
   // Exhaustiveness proof: adding a Provider without a case fails typecheck.

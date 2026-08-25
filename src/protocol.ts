@@ -5,7 +5,7 @@
  * plugin bundle, so it must stay free of runtime-specific and SDK imports.
  */
 
-export const PROVIDER_KEYS = ["claude", "codex", "kimi", "pi", "omp", "zcode", "deepseek", "grok"] as const;
+export const PROVIDER_KEYS = ["claude", "codex", "kimi", "pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const;
 
 export type Provider = (typeof PROVIDER_KEYS)[number];
 

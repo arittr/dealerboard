@@ -42,13 +42,14 @@ describe("parseQuotaSnapshot", () => {
     expect(Object.keys(parsed.providers)).toEqual(["claude"]);
   });
 
-  test("parses the kimi and zai provider keys", () => {
+  test("parses the kimi, zai, and qwen provider keys", () => {
     const parsed = parseQuotaSnapshot({
       schemaVersion: 1,
-      providers: { kimi: claudeQuota(), zai: claudeQuota() },
+      providers: { kimi: claudeQuota(), zai: claudeQuota(), qwen: claudeQuota() },
     });
     expect(parsed.providers["kimi"]).toEqual(claudeQuota());
     expect(parsed.providers["zai"]).toEqual(claudeQuota());
+    expect(parsed.providers["qwen"]).toEqual(claudeQuota());
   });
 
   test("rejects a non-object, a wrong schemaVersion, and a non-object providers", () => {

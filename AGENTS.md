@@ -86,16 +86,17 @@ Notes:
   idle `#4ADE80`, error `#FF4D67`; `COLOR_NEUTRAL` `#94A3B8` is non-status
   chrome only (NEXT frame, page count, OFFLINE text). Provider corner chips
   carry a one-letter mark (`PROVIDER_LETTERS`: Claude C, Codex X, Kimi K, pi
-  P, omp O, zcode Z, deepseek D, grok G) on hues picked for mutual
+  P, omp O, zcode Z, deepseek D, grok G, qwen Q) on hues picked for mutual
   distinctness on the LCD panel, not brand fidelity (`PROVIDER_COLORS`):
   Claude `#D97757`, Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp
-  `#F5F0EA`, zcode `#EAB308`, deepseek `#2DD4BF`, grok `#F472B6`. Session
+  `#F5F0EA`, zcode `#EAB308`, deepseek `#2DD4BF`, grok `#F472B6`, qwen
+  `#8B5CF6`. Session
   tiles also carry the model id as neutral-chrome text right of the chip
   (vendor prefix stripped, ten-code-point cap); the registry stores the raw
   id (schema v6 `model` column; the v8 repair backfills it into pre-merge v7
   databases that were
-  stamped without it, so every v8-or-later database has it), Kimi and pi push
-  it at session start (pi via its shim's `session_start`), and the daemon
+  stamped without it, so every v8-or-later database has it), Kimi, pi, and
+  qwen push it at session start (pi via its shim's `session_start`), and the daemon
   resolves Claude/Codex ids (transcript tails) and grok's id (summary.json)
   in the same maintenance pass as titles (last `"model":"…"` in the tail
   wins). Null never clears a stored model.
@@ -117,7 +118,12 @@ Notes:
   for every reason — `/new` and friends close the old row, and the new
   session re-registers via the next start or late-join. omp fires no
   StopFailure-equivalent (an omp tile never shows `error`; an interrupt
-  settles as `Stop`, i.e. idle). grok fires `StopCancelled` for
+  settles as `Stop`, i.e. idle). qwen pushes no title (labels fall back to
+  the project name), maps an interrupted turn's `PostToolUseFailure` with
+  `is_interrupt: true` to `Stop` (like zcode), shows `error` on real
+  `StopFailure` and `waiting` on `permission_prompt` Notifications, and
+  `SessionEnd` owns removal under the standard 24h prune; its hooks live in
+  `~/.qwen/settings.json` (manual, docs/hook-configuration.md). grok fires `StopCancelled` for
   interrupted/declined turns (mapped to `Stop`, i.e. idle), real `StopFailure`
   (tiles can show `error`), and `permission_prompt` Notifications (tiles can
   show `waiting`); grok has no background tracking, no subagent rows (its
@@ -239,11 +245,17 @@ Notes:
   whose physical resolution is 2560×720 (physical, so a scaled 1280×360
   HiDPI mode still matches), re-pins on reconnect, and autostarts at login.
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
-- Quota panels (claude, codex, kimi, GLM/zai) ship in the rail: the daemon's
-  quota collector (`src/core/quota.ts`, started from `cli.ts`, own 120s
-  cadence) shells out to the locally installed CodexBar CLI for every
-  provider (`codexbar usage --provider <key> --format json`, binary resolved
-  per pass from `CODEXBAR_BINARY_CANDIDATES`, serialized spawns), classifies
+- Quota panels (claude, codex, kimi, GLM/zai, Qwen) ship in the rail as
+  compact two-line rows (head: chip, label, muted weekly summary, percent
+  remaining plus muted reset countdown; second line: the bare status-palette
+  bar — no sparkline), and the daemon-health dot rides inline on the unread
+  row (green ok, red plus OFFLINE when degraded) instead of its own line.
+  The daemon's quota collector (`src/core/quota.ts`, started
+  from `cli.ts`, own 120s cadence) shells out to the locally installed
+  CodexBar CLI for every provider (`codexbar usage --provider <arg> --format
+  json`, the arg the contract key except qwen → `alibabatokenplan`, per
+  `CODEXBAR_PROVIDER_ARGS`; binary resolved per pass from
+  `CODEXBAR_BINARY_CANDIDATES`, serialized spawns), classifies
   the returned windows by `windowMinutes` — weekly = the longest window of at
   least a day, session = the shortest under a day, with
   `usage.extraRateWindows` scanned when the main trio has no session window

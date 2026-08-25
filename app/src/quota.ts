@@ -93,11 +93,48 @@ export const formatResetCountdown = (resetAtMs: number, now: number): string => 
   return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`;
 };
 
-export const formatWeeklyLine = (percent: number | null, resetAtMs: number | null, now: number): string | null => {
+/**
+ * The headline window is the session window when present, else the weekly
+ * window (qwen's Token Plan reports only a 7-day window).
+ */
+export const headlinePercent = (model: QuotaPanelModel): number | null =>
+  model.percentRemaining ?? model.weeklyPercentRemaining;
+
+/** The reset instant of the headline window. */
+export const headlineResetAtMs = (model: QuotaPanelModel): number | null =>
+  model.percentRemaining === null ? model.weeklyResetAtMs : model.resetAtMs;
+
+/** Bright right text of the head line: last-good headline percent, em dash when never fetched. */
+export const formatSessionPercent = (model: QuotaPanelModel): string => {
+  const percent = headlinePercent(model);
+  return percent === null ? "—" : formatPercentRemaining(percent);
+};
+
+/** Muted right text of the head line: unavailable age, headline reset countdown, or empty. */
+export const formatSessionNote = (model: QuotaPanelModel, now: number): string => {
+  if (model.state === "unavailable") {
+    if (model.fetchedAtMs === null || headlinePercent(model) === null) {
+      return "unavailable";
+    }
+    const ageMinutes = Math.max(0, Math.round((now - model.fetchedAtMs) / 60_000));
+    return ageMinutes < 1 ? "updated just now" : `updated ${ageMinutes}m ago`;
+  }
+  const resetAtMs = headlineResetAtMs(model);
+  if (resetAtMs === null) {
+    return "";
+  }
+  if (resetAtMs <= now) {
+    return "resetting…";
+  }
+  return formatResetCountdown(resetAtMs, now);
+};
+
+/** Muted weekly summary right of the bar; null when the provider reports no weekly window. */
+export const formatWeeklySummary = (percent: number | null, resetAtMs: number | null, now: number): string | null => {
   if (percent === null) {
     return null;
   }
-  const base = `week ${Math.round(percent)}% left`;
+  const base = `wk ${Math.round(percent)}%`;
   return resetAtMs === null ? base : `${base} · ${formatResetCountdown(resetAtMs, now)}`;
 };
 
@@ -110,43 +147,4 @@ export const quotaBarColor = (percentRemaining: number): string => {
     return "#ffb020";
   }
   return "#ff4d67";
-};
-
-export const quotaStatusText = (model: QuotaPanelModel, now: number): string => {
-  if (model.state === "unavailable") {
-    if (model.fetchedAtMs === null || model.percentRemaining === null) {
-      return "unavailable";
-    }
-    const ageMinutes = Math.max(0, Math.round((now - model.fetchedAtMs) / 60_000));
-    return ageMinutes < 1 ? "updated just now" : `updated ${ageMinutes}m ago`;
-  }
-  if (model.resetAtMs === null) {
-    return "";
-  }
-  if (model.resetAtMs <= now) {
-    return "resetting…";
-  }
-  return `resets in ${formatResetCountdown(model.resetAtMs, now)}`;
-};
-
-export type SparkPoint = { x: number; y: number };
-
-/**
- * Map the history ring onto a canvas of the given CSS size: oldest sample at
- * x=0, newest at x=width, full remaining at y=0 (canvas y grows downward).
- */
-export const sparklinePoints = (history: readonly QuotaHistoryPoint[], width: number, height: number): SparkPoint[] => {
-  if (history.length < 2 || width <= 0 || height <= 0) {
-    return [];
-  }
-  const firstMs = Date.parse(history[0]?.fetchedAt ?? "");
-  const lastMs = Date.parse(history[history.length - 1]?.fetchedAt ?? "");
-  if (Number.isNaN(firstMs) || Number.isNaN(lastMs)) {
-    return [];
-  }
-  const span = Math.max(1, lastMs - firstMs);
-  return history.map((point) => ({
-    x: ((Date.parse(point.fetchedAt) - firstMs) / span) * width,
-    y: height - point.fractionRemaining * height,
-  }));
 };

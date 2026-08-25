@@ -61,6 +61,7 @@ const PROVIDER_COLORS: Record<Provider, string> = {
   zcode: "#EAB308",
   deepseek: "#2DD4BF",
   grok: "#F472B6",
+  qwen: "#8B5CF6",
 };
 
 export const PROVIDER_LETTERS: Record<Provider, string> = {
@@ -72,6 +73,7 @@ export const PROVIDER_LETTERS: Record<Provider, string> = {
   zcode: "Z",
   deepseek: "D",
   grok: "G",
+  qwen: "Q",
 };
 
 const STATUS_COLORS: Record<SessionStatus, string> = {

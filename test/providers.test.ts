@@ -6,7 +6,7 @@ const NOW = "2026-08-06T00:00:00.000Z";
 
 const decode = (
   value: unknown,
-  provider: "claude" | "codex" | "kimi" | "pi" | "omp" | "zcode" | "deepseek" | "grok" = "claude",
+  provider: "claude" | "codex" | "kimi" | "pi" | "omp" | "zcode" | "deepseek" | "grok" | "qwen" = "claude",
 ): RegistryEvent[] => decodeNativeHook(provider, value, NOW);
 
 describe("field extraction", () => {
@@ -836,7 +836,7 @@ describe("SessionTitleChanged", () => {
 describe("zcode PostToolUseFailure", () => {
   const failure = { hook_event_name: "PostToolUseFailure", session_id: "z1", is_interrupt: true };
 
-  test("maps an interrupt to Stop for zcode only", () => {
+  test("maps an interrupt to Stop for zcode", () => {
     expect(decode(failure, "zcode")).toEqual([{ kind: "Stop", provider: "zcode", sessionId: "z1", observedAt: NOW }]);
     expect(decode(failure, "claude")).toEqual([]);
     expect(decode(failure, "kimi")).toEqual([]);
@@ -846,6 +846,55 @@ describe("zcode PostToolUseFailure", () => {
     expect(decode({ ...failure, is_interrupt: false }, "zcode")).toEqual([]);
     expect(decode({ ...failure, is_interrupt: "true" }, "zcode")).toEqual([]);
     expect(decode({ hook_event_name: "PostToolUseFailure", session_id: "z1" }, "zcode")).toEqual([]);
+  });
+});
+
+describe("qwen native envelopes", () => {
+  test("SessionStart registers with the pushed model and transcript path", () => {
+    expect(
+      decode(
+        {
+          hook_event_name: "SessionStart",
+          session_id: "q1",
+          cwd: "/users/drew/proj",
+          transcript_path: "/users/drew/.qwen/projects/proj/chats/q1.jsonl",
+          model: "qwen3.8-max-preview",
+          source: "startup",
+        },
+        "qwen",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "qwen",
+        sessionId: "q1",
+        title: null,
+        project: "proj",
+        ghosttyTerminalId: null,
+        transcriptPath: "/users/drew/.qwen/projects/proj/chats/q1.jsonl",
+        model: "qwen3.8-max-preview",
+        observedAt: NOW,
+      },
+    ]);
+  });
+
+  test("maps an interrupt to Stop like zcode, and ignores plain tool failures", () => {
+    const failure = { hook_event_name: "PostToolUseFailure", session_id: "q1", is_interrupt: true };
+    expect(decode(failure, "qwen")).toEqual([{ kind: "Stop", provider: "qwen", sessionId: "q1", observedAt: NOW }]);
+    expect(decode({ ...failure, is_interrupt: false }, "qwen")).toEqual([]);
+    expect(decode({ hook_event_name: "PostToolUseFailure", session_id: "q1" }, "qwen")).toEqual([]);
+  });
+
+  test("permission_prompt is Attention, StopFailure is error, SessionEnd deletes", () => {
+    expect(
+      decode({ hook_event_name: "Notification", session_id: "q1", notification_type: "permission_prompt" }, "qwen"),
+    ).toEqual([{ kind: "Attention", provider: "qwen", sessionId: "q1", observedAt: NOW }]);
+    expect(decode({ hook_event_name: "StopFailure", session_id: "q1" }, "qwen")).toEqual([
+      { kind: "StopFailure", provider: "qwen", sessionId: "q1", observedAt: NOW },
+    ]);
+    expect(decode({ hook_event_name: "SessionEnd", session_id: "q1" }, "qwen")).toEqual([
+      { kind: "SessionEnd", provider: "qwen", sessionId: "q1", observedAt: NOW },
+    ]);
   });
 });
 

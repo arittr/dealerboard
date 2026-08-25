@@ -117,14 +117,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 11 database and stays silent on stdout", async () => {
+  test("creates a version 12 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
     } finally {
       db.close();
     }
@@ -715,7 +715,7 @@ describe("event ingress", () => {
     expect(pulled).toBe(false);
   });
 
-  test.each(["pi", "omp", "zcode", "deepseek", "grok"] as const)("event %s is accepted", async (provider) => {
+  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const)("event %s is accepted", async (provider) => {
     initRegistry();
     const harness = makeHarness({
       stdin: stdinOf(JSON.stringify({ hook_event_name: "Stop", session_id: `${provider}-1` })),
@@ -729,7 +729,7 @@ describe("event ingress", () => {
     const harness = makeHarness();
 
     expect(await runCli(["bogus-command"], harness.deps)).toBe(1);
-    expect(harness.stderr()).toContain("event <claude|codex|kimi|pi|omp|zcode|deepseek|grok>");
+    expect(harness.stderr()).toContain("event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen>");
   });
 
   test("returns zero for extra event arguments", async () => {
@@ -1225,7 +1225,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 11");
+      restore.exec("PRAGMA user_version = 12");
     } finally {
       restore.close();
     }

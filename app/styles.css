@@ -137,6 +137,9 @@ body {
 .chip[data-provider="grok"] {
   background: #f472b6;
 }
+.chip[data-provider="qwen"] {
+  background: #8b5cf6;
+}
 .model {
   color: #94a3b8;
   font-size: 1.5vw;
@@ -223,19 +226,13 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 2vh;
+  gap: 1vh;
   background: #10141c;
   border: 1px solid #232b38;
   border-radius: 1vw;
   padding: 3.5%;
   color: #94a3b8;
-  font-size: 1.5vw;
-}
-
-.rail-health {
-  display: flex;
-  align-items: center;
-  gap: 0.8vw;
+  font-size: 1.3vw;
 }
 .dot {
   width: 1vw;
@@ -265,12 +262,12 @@ body {
 }
 .tokens-today {
   color: #e8eef7;
-  font-size: 1.8vw;
+  font-size: 1.6vw;
   font-weight: 650;
 }
 .tokens-rate {
   color: #94a3b8;
-  font-size: 1.4vw;
+  font-size: 1.2vw;
 }
 .tokens-rate[data-trend="up"] {
   color: #4ade80;
@@ -279,6 +276,11 @@ body {
   color: #ff4d67;
 }
 
+.rail-unread {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+}
 .rail-unread.active {
   color: #ffb020;
   font-weight: 600;
@@ -305,7 +307,7 @@ body {
 .rail-quota {
   display: flex;
   flex-direction: column;
-  gap: 0.6vh;
+  gap: 0.5vh;
 }
 .rail-quota[data-state="stale"],
 .rail-quota[data-state="unavailable"] {
@@ -315,16 +317,17 @@ body {
   display: flex;
   align-items: center;
   gap: 0.6vw;
+  font-size: 1.2vw;
 }
 .quota-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.6vw;
-  height: 1.6vw;
+  width: 1.4vw;
+  height: 1.4vw;
   border-radius: 22%;
   color: #10151c;
-  font-size: 1vw;
+  font-size: 0.9vw;
   font-weight: 700;
 }
 .quota-chip[data-provider="claude"] {
@@ -339,10 +342,22 @@ body {
 .quota-chip[data-provider="zai"] {
   background: #2dd4bf;
 }
-.quota-pct {
+.quota-chip[data-provider="qwen"] {
+  background: #8b5cf6;
+}
+.quota-right {
   margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4vw;
+}
+.quota-pct {
   color: #e8eef7;
   font-variant-numeric: tabular-nums;
+}
+.quota-note {
+  color: #94a3b8;
+  font-size: 1.05vw;
 }
 .quota-bar {
   height: 0.8vh;
@@ -354,19 +369,10 @@ body {
   height: 100%;
   border-radius: inherit;
 }
-.quota-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.6vw;
-  font-size: 1.2vw;
-}
-.quota-spark {
-  width: 6vw;
-  height: 2.4vh;
-}
 .quota-weekly {
-  font-size: 1.1vw;
+  color: #94a3b8;
+  font-size: 1.05vw;
+  white-space: nowrap;
 }
 
 .tile.flash {

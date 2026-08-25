@@ -1,0 +1,23 @@
+[
+  {
+    "provider": "alibabatokenplan",
+    "source": "auto",
+    "usage": {
+      "updatedAt": "2026-08-24T06:00:00Z",
+      "identity": { "providerID": "alibabatokenplan" },
+      "primary": {
+        "windowMinutes": 300,
+        "usedPercent": 40,
+        "resetsAt": "2026-08-24T08:00:00Z",
+        "resetDescription": "40/1000 requests"
+      },
+      "secondary": {
+        "windowMinutes": 10080,
+        "usedPercent": 10,
+        "resetsAt": "2026-08-30T00:00:00Z",
+        "resetDescription": "10/100 weekly requests"
+      },
+      "tertiary": null
+    }
+  }
+]

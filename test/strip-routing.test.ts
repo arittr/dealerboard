@@ -64,7 +64,7 @@ describe("routeForSession", () => {
   });
 
   test("providers without an activation binding flash", () => {
-    for (const provider of ["pi", "omp", "zcode", "deepseek", "grok"] as const) {
+    for (const provider of ["pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const) {
       expect(routeForSession(session({ provider }))).toEqual({ kind: "flash" });
     }
   });

@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   formatPercentRemaining,
   formatResetCountdown,
-  formatWeeklyLine,
+  formatSessionNote,
+  formatSessionPercent,
+  formatWeeklySummary,
   type QuotaPanelModel,
   quotaBarColor,
-  quotaStatusText,
   reduceQuotaRead,
   STALE_QUOTA_AGE_MS,
-  sparklinePoints,
 } from "../app/src/quota";
 import type { ProviderQuota } from "../src/quota-snapshot";
 
@@ -69,9 +69,12 @@ describe("reduceQuotaRead", () => {
     expect(panel).toMatchObject({ provider: "codex", state: "unavailable", fetchedAtMs: null, resetAtMs: null });
   });
 
-  test("panels follow the contract provider order across all four providers", () => {
-    const panels = reduceQuotaRead(read({ zai: quota(), kimi: quota(), codex: quota(), claude: quota() }), NOW);
-    expect(panels.map((panel) => panel.provider)).toEqual(["claude", "codex", "kimi", "zai"]);
+  test("panels follow the contract provider order across all five providers", () => {
+    const panels = reduceQuotaRead(
+      read({ qwen: quota(), zai: quota(), kimi: quota(), codex: quota(), claude: quota() }),
+      NOW,
+    );
+    expect(panels.map((panel) => panel.provider)).toEqual(["claude", "codex", "kimi", "zai", "qwen"]);
   });
 });
 
@@ -86,15 +89,61 @@ describe("formatResetCountdown", () => {
   });
 });
 
-describe("formatWeeklyLine and formatPercentRemaining", () => {
-  test("weekly line combines percent and countdown, or is null without data", () => {
-    expect(formatWeeklyLine(88, NOW + 4 * 86_400_000, NOW)).toBe("week 88% left · 4d");
-    expect(formatWeeklyLine(88, null, NOW)).toBe("week 88% left");
-    expect(formatWeeklyLine(null, null, NOW)).toBeNull();
+describe("formatWeeklySummary and formatPercentRemaining", () => {
+  test("weekly summary combines percent and countdown, or is null without data", () => {
+    expect(formatWeeklySummary(88, NOW + 4 * 86_400_000, NOW)).toBe("wk 88% · 4d");
+    expect(formatWeeklySummary(88, null, NOW)).toBe("wk 88%");
+    expect(formatWeeklySummary(null, null, NOW)).toBeNull();
   });
 
   test("percent rounds to a whole number", () => {
     expect(formatPercentRemaining(62.5)).toBe("63%");
+  });
+});
+
+describe("formatSessionPercent and formatSessionNote", () => {
+  test("ok panels show the rounded percent and the bare countdown", () => {
+    expect(formatSessionPercent(model())).toBe("63%");
+    expect(formatSessionNote(model(), NOW)).toBe("4h");
+  });
+
+  test("no windows at all render an em dash and no note", () => {
+    const bare = model({
+      percentRemaining: null,
+      resetAtMs: null,
+      weeklyPercentRemaining: null,
+      weeklyResetAtMs: null,
+    });
+    expect(formatSessionPercent(bare)).toBe("—");
+    expect(formatSessionNote(bare, NOW)).toBe("");
+  });
+
+  test("weekly-only panels headline the weekly window and its countdown", () => {
+    const weeklyOnly = model({
+      percentRemaining: null,
+      resetAtMs: null,
+      weeklyPercentRemaining: 88,
+      weeklyResetAtMs: NOW + 4 * 86_400_000,
+    });
+    expect(formatSessionPercent(weeklyOnly)).toBe("88%");
+    expect(formatSessionNote(weeklyOnly, NOW)).toBe("4d");
+  });
+
+  test("unavailable panels with last-good data show the last-update age", () => {
+    const staleModel = model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 });
+    expect(formatSessionNote(staleModel, NOW)).toBe("updated 12m ago");
+  });
+
+  test("unavailable panels without data say so", () => {
+    expect(formatSessionNote(model({ state: "unavailable", fetchedAtMs: null, percentRemaining: null }), NOW)).toBe(
+      "unavailable",
+    );
+  });
+
+  test("ok panels at or past the reset say resetting", () => {
+    const resetAtMs = NOW + 4 * 3_600_000;
+    expect(formatSessionNote(model({ resetAtMs }), resetAtMs)).toBe("resetting…");
+    expect(formatSessionNote(model({ resetAtMs }), resetAtMs + 1)).toBe("resetting…");
   });
 });
 
@@ -104,63 +153,5 @@ describe("quotaBarColor", () => {
     expect(quotaBarColor(25)).toBe("#ffb020");
     expect(quotaBarColor(10)).toBe("#ffb020");
     expect(quotaBarColor(9)).toBe("#ff4d67");
-  });
-});
-
-describe("quotaStatusText", () => {
-  test("ok panels count down to the reset", () => {
-    expect(quotaStatusText(model(), NOW)).toBe("resets in 4h");
-  });
-
-  test("unavailable panels with last-good data show the last-update age", () => {
-    const staleModel = model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 });
-    expect(quotaStatusText(staleModel, NOW)).toBe("updated 12m ago");
-  });
-
-  test("unavailable panels without data say so", () => {
-    expect(quotaStatusText(model({ state: "unavailable", fetchedAtMs: null, percentRemaining: null }), NOW)).toBe(
-      "unavailable",
-    );
-  });
-
-  test("ok panels at or past the reset say resetting, not resets in resetting", () => {
-    const resetAtMs = NOW + 4 * 3_600_000;
-    const exact = model({ resetAtMs });
-    expect(quotaStatusText(exact, resetAtMs)).toBe("resetting…");
-    expect(quotaStatusText(exact, resetAtMs + 1)).toBe("resetting…");
-  });
-});
-
-describe("sparklinePoints", () => {
-  test("fewer than two samples or a zero-size canvas draws nothing", () => {
-    expect(sparklinePoints([], 100, 20)).toEqual([]);
-    expect(sparklinePoints([{ fetchedAt: "2026-08-19T18:00:00.000Z", fractionRemaining: 0.5 }], 100, 20)).toEqual([]);
-    expect(
-      sparklinePoints(
-        [
-          { fetchedAt: "2026-08-19T17:00:00.000Z", fractionRemaining: 1 },
-          { fetchedAt: "2026-08-19T18:00:00.000Z", fractionRemaining: 0 },
-        ],
-        0,
-        20,
-      ),
-    ).toEqual([]);
-  });
-
-  test("samples map time to x and fraction to inverted y across the canvas", () => {
-    const points = sparklinePoints(
-      [
-        { fetchedAt: "2026-08-19T17:00:00.000Z", fractionRemaining: 1 },
-        { fetchedAt: "2026-08-19T17:30:00.000Z", fractionRemaining: 0.5 },
-        { fetchedAt: "2026-08-19T18:00:00.000Z", fractionRemaining: 0 },
-      ],
-      100,
-      20,
-    );
-    expect(points).toEqual([
-      { x: 0, y: 0 },
-      { x: 50, y: 10 },
-      { x: 100, y: 20 },
-    ]);
   });
 });

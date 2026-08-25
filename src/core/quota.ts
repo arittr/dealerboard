@@ -1,10 +1,13 @@
 /**
- * Quota collection for the strip's rail panels (claude, codex, kimi, GLM/zai).
+ * Quota collection for the strip's rail panels (claude, codex, kimi, GLM/zai,
+ * Qwen).
  *
- * All four providers are read through the locally installed CodexBar CLI:
- * `codexbar usage --provider <key> --format json --log-level critical`, spawned
- * once per provider per pass (serialized — CodexBar's app-support directory
- * carries lock files). The binary resolves per pass from
+ * All five providers are read through the locally installed CodexBar CLI:
+ * `codexbar usage --provider <arg> --format json --log-level critical`,
+ * spawned once per provider per pass (serialized — CodexBar's app-support
+ * directory carries lock files). The provider argument is the contract key
+ * itself except qwen, which reads CodexBar's `alibabatokenplan` provider
+ * (CODEXBAR_PROVIDER_ARGS). The binary resolves per pass from
  * CODEXBAR_BINARY_CANDIDATES; a missing binary omits every provider. CodexBar's
  * primary/secondary labels are not positional (kimi reports the weekly window
  * as primary), so windows are classified by windowMinutes: weekly = the longest
@@ -18,6 +21,8 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   type ProviderQuota,
   parseQuotaSnapshot,
@@ -103,7 +108,7 @@ const classifyCodexbarWindows = (windows: readonly RawCodexbarWindow[]): Provide
   };
 };
 
-export const parseCodexbarUsage = (body: string): CodexbarUsageParse => {
+export const parseCodexbarUsage = (body: string, provider?: string): CodexbarUsageParse => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -116,7 +121,20 @@ export const parseCodexbarUsage = (body: string): CodexbarUsageParse => {
   if (parsed.length === 0) {
     return { kind: "absent" };
   }
-  const entry: unknown = parsed[0];
+  // CodexBar normally honors --provider with a single entry, but sparse
+  // environments (the daemon's launchd context) get the unfiltered
+  // all-provider array. Entries carry their provider id, so select on it when
+  // ids are present; an id-carrying array without the requested provider means
+  // the provider is disabled in the CodexBar app.
+  const ids = parsed.map((item) => (isRecord(item) && typeof item["provider"] === "string" ? item["provider"] : null));
+  let entry: unknown = parsed[0];
+  if (provider !== undefined && ids.some((id) => id !== null)) {
+    const index = ids.indexOf(provider);
+    if (index === -1) {
+      return { kind: "absent" };
+    }
+    entry = parsed[index];
+  }
   if (!isRecord(entry) || !isRecord(entry["usage"])) {
     return { kind: "invalid" };
   }
@@ -142,6 +160,63 @@ export const parseCodexbarUsage = (body: string): CodexbarUsageParse => {
   }
   return reading === null ? { kind: "invalid" } : { kind: "ok", reading };
 };
+
+/**
+ * Parse the CodexBar widget snapshot into per-provider readings keyed by the
+ * CodexBar provider id. Invalid bodies, a stale generatedAt, and windowless
+ * entries yield no readings rather than throwing — the fallback must never
+ * break a pass.
+ */
+export const parseCodexbarWidgetSnapshot = (body: string, nowMs: number): Map<string, ProviderQuotaReading> => {
+  const readings = new Map<string, ProviderQuotaReading>();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return readings;
+  }
+  if (!isRecord(parsed)) {
+    return readings;
+  }
+  const generatedAt = typeof parsed["generatedAt"] === "string" ? Date.parse(parsed["generatedAt"]) : Number.NaN;
+  if (Number.isNaN(generatedAt) || nowMs - generatedAt > WIDGET_SNAPSHOT_MAX_AGE_MS) {
+    return readings;
+  }
+  const entries = parsed["entries"];
+  if (!Array.isArray(entries)) {
+    return readings;
+  }
+  for (const entry of entries) {
+    if (!isRecord(entry) || typeof entry["provider"] !== "string") {
+      continue;
+    }
+    const windows: RawCodexbarWindow[] = [];
+    for (const key of ["primary", "secondary", "tertiary"] as const) {
+      const window = parseCodexbarWindow(entry[key]);
+      if (window !== null) {
+        windows.push(window);
+      }
+    }
+    const reading = classifyCodexbarWindows(windows);
+    if (reading !== null) {
+      readings.set(entry["provider"], reading);
+    }
+  }
+  return readings;
+};
+
+/**
+ * The CodexBar menu-bar app refreshes on its own cadence with its own
+ * Keychain-approved cookie access and publishes this widget snapshot, readable
+ * without any TCC grant. The daemon-spawned CLI often lacks that access (cookie
+ * auth fails in launchd contexts), so when a CLI probe yields no reading the
+ * collector falls back to the snapshot's per-provider windows.
+ */
+export const codexbarWidgetSnapshotPath = (home: string = homedir()): string =>
+  join(home, "Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar/widget-snapshot.json");
+
+/** The widget snapshot only counts as a source while the app is actually refreshing it. */
+export const WIDGET_SNAPSHOT_MAX_AGE_MS = 45 * 60_000;
 
 /** Quota windows move slowly; CodexBar itself polls providers on a similar cadence. */
 export const QUOTA_POLL_INTERVAL_MS = 120_000;
@@ -172,6 +247,8 @@ export type QuotaScheduler = (tick: () => void, intervalMs: number) => () => voi
 
 export type QuotaCollectorDependencies = {
   quotaSnapshotPath: string;
+  /** Defaults to codexbarWidgetSnapshotPath(); tests point at a temp file. */
+  widgetSnapshotPath?: string;
   exec?: QuotaExec;
   fileExists?: (path: string) => boolean;
   readFile?: (path: string) => string | null;
@@ -216,10 +293,19 @@ const defaultReadFile = (path: string): string | null => {
   }
 };
 
+/** CodexBar's provider key matches the contract key except for qwen (Alibaba Token Plan). */
+export const CODEXBAR_PROVIDER_ARGS: Record<QuotaProviderKey, string> = {
+  claude: "claude",
+  codex: "codex",
+  kimi: "kimi",
+  zai: "zai",
+  qwen: "alibabatokenplan",
+};
+
 const codexbarArgs = (provider: QuotaProviderKey): string[] => [
   "usage",
   "--provider",
-  provider,
+  CODEXBAR_PROVIDER_ARGS[provider],
   "--format",
   "json",
   "--log-level",
@@ -314,18 +400,31 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     if (result.exitCode !== 0) {
       return { kind: "failed" };
     }
-    const parsed = parseCodexbarUsage(result.stdout);
+    const parsed = parseCodexbarUsage(result.stdout, CODEXBAR_PROVIDER_ARGS[provider]);
     if (parsed.kind === "absent") {
       return { kind: "absent" };
     }
     return parsed.kind === "ok" ? { kind: "ok", reading: parsed.reading } : { kind: "failed" };
   };
 
-  const pollProvider = async (exec: QuotaExec | null, provider: QuotaProviderKey): Promise<ProviderQuota | null> => {
+  const pollProvider = async (
+    exec: QuotaExec | null,
+    provider: QuotaProviderKey,
+    widget: ReadonlyMap<string, ProviderQuotaReading>,
+  ): Promise<ProviderQuota | null> => {
     // A fresh row displays unavailable (never fetched) but has not yet failed —
     // `failed` tracks the diagnostic transition, separately from that display.
     const state = states.get(provider) ?? { quota: emptyQuota(), failed: false };
-    const outcome = exec === null ? ({ kind: "absent" } as const) : await probe(exec, provider);
+    let outcome: FetchOutcome = exec === null ? { kind: "absent" } : await probe(exec, provider);
+    // The widget snapshot rescues providers whose CLI auth fails in this
+    // context (notably qwen's cookie auth under launchd) — the app behind the
+    // widget has its own approved access and keeps the file fresh.
+    if (outcome.kind !== "ok") {
+      const reading = widget.get(CODEXBAR_PROVIDER_ARGS[provider]);
+      if (reading !== undefined) {
+        outcome = { kind: "ok", reading };
+      }
+    }
     if (outcome.kind === "absent") {
       states.delete(provider);
       return null;
@@ -370,9 +469,13 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     polling = true;
     try {
       const exec = resolveExec();
+      const widget = parseCodexbarWidgetSnapshot(
+        readFile(dependencies.widgetSnapshotPath ?? codexbarWidgetSnapshotPath()) ?? "",
+        Date.parse(now()),
+      );
       const providers: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
       for (const provider of QUOTA_PROVIDER_KEYS) {
-        const quota = await pollProvider(exec, provider);
+        const quota = await pollProvider(exec, provider, widget);
         if (quota !== null) {
           providers[provider] = quota;
         }

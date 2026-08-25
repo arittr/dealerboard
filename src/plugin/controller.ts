@@ -215,7 +215,8 @@ export class SessionGridController {
       case "zcode":
       case "deepseek":
       case "grok":
-        // pi, omp, zcode, deepseek, and grok have no activation binding
+      case "qwen":
+        // pi, omp, zcode, deepseek, grok, and qwen have no activation binding
         // yet; match the unbound-Claude behavior instead of silently doing nothing.
         await this.showActivationAlert(context);
         return;

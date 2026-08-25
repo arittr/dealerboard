@@ -961,6 +961,160 @@ provider" below). To remove grok reporting, delete the file.
 
 ---
 
+## Qwen Code
+
+Target file: `/Users/drewritter/.qwen/settings.json` (user level, applies to
+all projects).
+
+Qwen Code runs command hooks through a shell with the event JSON on stdin,
+so the installed path — which contains a space — is shell-quoted inside the
+single `command` string. Timeouts are milliseconds; each handler sets five
+seconds. Like the other manual providers, the installer never touches this
+file.
+
+**Credential note.** `settings.json` can carry API keys (e.g. under `env`);
+back it up and merge only the `"hooks"` key.
+
+### 1. Back up
+
+```bash
+cp /Users/drewritter/.qwen/settings.json /Users/drewritter/.qwen/settings.json.before-stream-deck-agents
+```
+
+### 2. Edit
+
+Merge the following top-level `"hooks"` object into the existing settings,
+keeping every existing key.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Behavior to expect
+
+- `SessionStart` registers the row and stores the pushed model id; Qwen Code
+  pushes no title, so the tile label falls back to the project basename.
+- Prompt and tool activity show working; `Stop` settles idle and stamps
+  unread like every provider.
+- Qwen Code has no interrupt event of its own: an interrupted turn surfaces
+  as `PostToolUseFailure` with `is_interrupt: true`, which maps to `Stop`
+  (idle) exactly like zcode; plain tool failures are ignored. A real API
+  failure fires `StopFailure`, so a failed turn shows the error color.
+- Only a `permission_prompt` Notification raises waiting.
+- `SessionEnd` removes the row; the standard 24-hour prune applies.
+- Hooks load at session start — sessions already running when the config
+  lands start reporting at their next start.
+
+### Verify and remove
+
+Start a new Qwen Code session and watch its tile appear (see "After every
+provider" below). To remove Qwen reporting, delete the `"hooks"` key.
+
+---
+
 ## After every provider
 
 Start a session in each provider, then list what the registry recorded:

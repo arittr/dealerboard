@@ -68,7 +68,6 @@ const SETTINGS_KEY = "agent-strip.layout.v1";
 let lastGood: SessionSnapshotV2 | null = null;
 let renderedSignature = "";
 let currentView: SnapshotView | null = null;
-let lastReadMtimeMs: number | null = null;
 let lastPayload: SnapshotPayload | null = null;
 let currentQuota: QuotaPanelModel[] = [];
 let currentTokenUsage: TokenUsageRailModel = { state: "hidden" };
@@ -138,7 +137,6 @@ const renderRailNow = (): void => {
     root,
     {
       degraded: currentView.degraded,
-      heartbeatAgeMs: lastReadMtimeMs === null ? null : Date.now() - lastReadMtimeMs,
       unreadCount: countUnreadSessions(currentView.snapshot),
       quota: currentQuota,
       tokens: currentTokenUsage,
@@ -231,7 +229,6 @@ const scheduleExpiryCheck = (payload: SnapshotPayload): void => {
 
 const ingest = (payload: SnapshotPayload | null): void => {
   lastPayload = payload;
-  lastReadMtimeMs = payload === null ? null : payload.mtimeMs;
   const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
   lastGood = reduction.lastGood;
   currentView = reduction.view;

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
 import {
   CODEXBAR_BINARY_CANDIDATES,
+  CODEXBAR_PROVIDER_ARGS,
   createQuotaCollector,
   QUOTA_POLL_INTERVAL_MS,
   type QuotaCollectorDependencies,
@@ -16,13 +17,28 @@ const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fi
 
 const NOW = "2026-08-19T18:00:00.000Z";
 
+const widgetSnapshot = (generatedAt: string): string =>
+  JSON.stringify({
+    generatedAt,
+    entries: [
+      {
+        provider: "alibabatokenplan",
+        primary: null,
+        secondary: { windowMinutes: 10080, usedPercent: 55, resetsAt: "2026-08-27T21:36:00Z" },
+        tertiary: null,
+      },
+    ],
+  });
+
+// Keyed by the CodexBar --provider argument the collector spawns (qwen maps to alibabatokenplan).
 const FIXTURE_BY_PROVIDER: Record<string, string> = {
   claude: "codexbar-claude.json",
   codex: "codexbar-codex.json",
   kimi: "codexbar-kimi.json",
   zai: "codexbar-zai.json",
+  alibabatokenplan: "codexbar-qwen.json",
 };
-const ALL_PROVIDERS = ["claude", "codex", "kimi", "zai"] as const;
+const ALL_PROVIDERS = ["claude", "codex", "kimi", "zai", "qwen"] as const;
 
 describe("createQuotaCollector", () => {
   let tempDir: string;
@@ -32,6 +48,9 @@ describe("createQuotaCollector", () => {
     tempDir = mkdtempSync(join(tmpdir(), "stream-deck-agents-quota-"));
     quotaPath = join(tempDir, "quota-snapshot.json");
   });
+
+  // The widget fallback must never read the real machine's CodexBar snapshot.
+  const widgetPath = (dir: string): string => join(dir, "widget-snapshot.json");
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
@@ -60,9 +79,15 @@ describe("createQuotaCollector", () => {
     const failures = new Set<string>();
     const omissions = new Set<string>();
     const raw = new Map<string, RawResponse>();
+    // Harness controls (fail/heal/omit/respondRaw) speak contract keys; the
+    // spawn args carry CodexBar's --provider argument (qwen ≠ alibabatokenplan).
+    const contractKeyByArg: Record<string, string> = Object.fromEntries(
+      Object.entries(CODEXBAR_PROVIDER_ARGS).map(([key, arg]) => [arg, key]),
+    );
     const execSpy: QuotaExec = (args) => {
       calls.push(args);
-      const provider = args[2] ?? "";
+      const arg = args[2] ?? "";
+      const provider = contractKeyByArg[arg] ?? arg;
       const override = raw.get(provider);
       if (override !== undefined) {
         return Promise.resolve(override);
@@ -73,12 +98,13 @@ describe("createQuotaCollector", () => {
       if (omissions.has(provider)) {
         return Promise.resolve({ exitCode: 0, stdout: "[]" });
       }
-      const name = FIXTURE_BY_PROVIDER[provider];
+      const name = FIXTURE_BY_PROVIDER[arg];
       return Promise.resolve({ exitCode: 0, stdout: name === undefined ? "[]" : fixture(name) });
     };
     const binaryPresent = options.binaryPresent ?? true;
     const deps: QuotaCollectorDependencies = {
       quotaSnapshotPath: quotaPath,
+      widgetSnapshotPath: widgetPath(tempDir),
       fileExists: () => binaryPresent,
       // No binary → no injected exec either: resolution must report "absent"
       // without ever spawning.
@@ -119,7 +145,7 @@ describe("createQuotaCollector", () => {
     };
   };
 
-  test("publishes all four providers in contract order after successful runs", async () => {
+  test("publishes all five providers in contract order after successful runs", async () => {
     const harness = makeHarness();
     await createQuotaCollector(harness.deps).pollNow();
     const writes = harness.writes();
@@ -137,11 +163,12 @@ describe("createQuotaCollector", () => {
     expect(snapshot.providers["kimi"]).toMatchObject({ percentRemaining: 84, weeklyPercentRemaining: 88 });
     expect(snapshot.providers["zai"]?.percentRemaining).toBe(100 - 6.833333333333333);
     expect(snapshot.providers["zai"]?.weeklyPercentRemaining).toBe(100 - 56.364999999999995);
+    expect(snapshot.providers["qwen"]).toMatchObject({ percentRemaining: 60, weeklyPercentRemaining: 90 });
     expect(harness.calls).toEqual(
       [...ALL_PROVIDERS].map((provider) => [
         "usage",
         "--provider",
-        provider,
+        CODEXBAR_PROVIDER_ARGS[provider],
         "--format",
         "json",
         "--log-level",
@@ -173,14 +200,14 @@ describe("createQuotaCollector", () => {
     harness.fail(...ALL_PROVIDERS);
     await collector.pollNow(); // first pass from cold start
     await collector.pollNow(); // repeated failure — no new records
-    expect(failures().length).toBe(4);
+    expect(failures().length).toBe(5);
     expect(new Set(failures().map((record) => record.provider))).toEqual(new Set(ALL_PROVIDERS));
     harness.heal(...ALL_PROVIDERS);
     await collector.pollNow(); // recovery emits nothing
-    expect(failures().length).toBe(4);
+    expect(failures().length).toBe(5);
     harness.fail(...ALL_PROVIDERS);
     await collector.pollNow(); // recovery → failure is a new transition
-    expect(failures().length).toBe(8);
+    expect(failures().length).toBe(10);
   });
 
   test("a nonzero exit and unparseable stdout degrade to unavailable without escaping pollNow", async () => {
@@ -211,7 +238,53 @@ describe("createQuotaCollector", () => {
     harness.omit("kimi");
     await createQuotaCollector(harness.deps).pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
-    expect(Object.keys(snapshot.providers)).toEqual(["claude", "codex", "zai"]);
+    expect(Object.keys(snapshot.providers)).toEqual(["claude", "codex", "zai", "qwen"]);
+  });
+
+  test("the widget snapshot rescues a provider whose CLI probe fails", async () => {
+    const harness = makeHarness({
+      files: { [widgetPath(tempDir)]: widgetSnapshot("2026-08-19T17:50:00.000Z") },
+    });
+    harness.fail("qwen");
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["qwen"]).toMatchObject({
+      percentRemaining: null,
+      weeklyPercentRemaining: 45,
+      weeklyResetAt: "2026-08-27T21:36:00.000Z",
+      unavailable: false,
+    });
+    expect(harness.diagnostics.filter((record) => record.code === "quota_failed")).toEqual([]);
+  });
+
+  test("the widget snapshot also rescues a provider the CLI reports absent", async () => {
+    const harness = makeHarness({
+      files: { [widgetPath(tempDir)]: widgetSnapshot("2026-08-19T17:50:00.000Z") },
+    });
+    harness.omit("qwen");
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["qwen"]?.weeklyPercentRemaining).toBe(45);
+  });
+
+  test("a stale widget snapshot does not rescue a failed probe", async () => {
+    const harness = makeHarness({
+      files: { [widgetPath(tempDir)]: widgetSnapshot("2026-08-19T16:00:00.000Z") },
+    });
+    harness.fail("qwen");
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["qwen"]).toMatchObject({ unavailable: true });
+  });
+
+  test("a successful CLI probe wins over the widget snapshot", async () => {
+    const harness = makeHarness({
+      files: { [widgetPath(tempDir)]: widgetSnapshot("2026-08-19T17:50:00.000Z") },
+    });
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    // The qwen fixture carries session 60 / weekly 90; the widget says weekly 45.
+    expect(snapshot.providers["qwen"]).toMatchObject({ percentRemaining: 60, weeklyPercentRemaining: 90 });
   });
 
   test("a weekly-only reading publishes null session fields and appends no history", async () => {
@@ -245,7 +318,7 @@ describe("createQuotaCollector", () => {
     const harness = makeHarness();
     const collector = createQuotaCollector(harness.deps);
     await Promise.all([collector.pollNow(), collector.pollNow()]);
-    expect(harness.calls.length).toBe(4);
+    expect(harness.calls.length).toBe(5);
   });
 
   test("start is idempotent, stop disarms the one interval, and start-after-stop works", () => {

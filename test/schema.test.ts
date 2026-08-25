@@ -113,7 +113,7 @@ describe("resolveAppPaths", () => {
 });
 
 describe("initializeDatabase", () => {
-  test("initializes a WAL database at user_version 11 with foreign keys on every connection", () => {
+  test("initializes a WAL database at user_version 12 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
       join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
@@ -122,7 +122,7 @@ describe("initializeDatabase", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(db.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       expect(db.query("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     } finally {
@@ -170,7 +170,7 @@ describe("initializeDatabase", () => {
     const verify = openRegistryDatabase(paths.database, "readwrite");
     try {
       expect(countSessions(verify)).toBe(1);
-      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(verify.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(verify.query("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     } finally {
       verify.close();
@@ -186,7 +186,7 @@ describe("initializeDatabase", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(
         db
           .query(
@@ -577,7 +577,7 @@ describe("schema v5", () => {
       expect(() => insertFull(db, "zcode", "orphan", "missing-parent", null)).toThrow();
       expect(db.query("PRAGMA foreign_key_check").all()).toEqual([]);
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(11);
+      expect(version.user_version).toBe(12);
     } finally {
       db.close();
     }
@@ -695,7 +695,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -747,7 +747,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(countSessions(db)).toBe(2);
       expect(
         db
@@ -799,7 +799,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
         name: string;
       }>;
@@ -849,7 +849,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(db.query("SELECT model FROM active_sessions WHERE session_id = 'root'").get()).toEqual({ model: "k3" });
     } finally {
       db.close();
@@ -862,7 +862,7 @@ describe("schema v7/v8", () => {
 
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       // A fresh database must not skip the v6 model migration on its way to
       // v9: every feature's columns exist on every migration path.
       const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
@@ -951,7 +951,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       // Every seeded pre-v6 value must survive verbatim; model is NULL on both.
       expect(
         db
@@ -1012,7 +1012,7 @@ describe("schema v6", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(countSessions(db)).toBe(2);
     } finally {
       db.close();
@@ -1058,7 +1058,7 @@ describe("schema v9", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(countSessions(db)).toBe(2);
       // acked_at lands null on existing rows; everything else is untouched.
       expect(db.query("SELECT acked_at FROM active_sessions ORDER BY session_id").all()).toEqual([
@@ -1075,7 +1075,7 @@ describe("schema v9", () => {
 });
 
 describe("schema v11", () => {
-  test("migrates a v10 database to v11, backfilling status_since from updated_at", () => {
+  test("migrates a v10 database through the v11 backfill to v12", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     createVersion9Database(paths.database);
@@ -1099,7 +1099,7 @@ describe("schema v11", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       expect(
         db
           .query(
@@ -1169,7 +1169,7 @@ describe("schema v11", () => {
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 11 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
       const names = (
         db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{ name: string }>
       ).map((column) => column.name);
@@ -1271,7 +1271,7 @@ describe("schema v10 rebuild", () => {
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
       const version = db.query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBe(11);
+      expect(version.user_version).toBe(12);
       const rows = db.query("SELECT * FROM active_sessions ORDER BY session_id ASC").all() as Array<
         Record<string, unknown>
       >;
@@ -1300,7 +1300,7 @@ describe("schema v10 rebuild", () => {
         origin_subagent: 1,
         acked_at: "2026-08-06T04:45:00.000Z",
       });
-      // The widened CHECK accepts grok and still rejects non-providers.
+      // The widened CHECK accepts grok and qwen and still rejects non-providers.
     } finally {
       db.close();
     }
@@ -1310,6 +1310,10 @@ describe("schema v10 rebuild", () => {
       writer.run(
         `INSERT INTO active_sessions (provider, session_id, status, logical_slot, opened_at, updated_at)
          VALUES ('grok', 'g1', 'idle', 2, '2026-08-16T00:00:00.000Z', '2026-08-16T00:00:00.000Z')`,
+      );
+      writer.run(
+        `INSERT INTO active_sessions (provider, session_id, status, logical_slot, opened_at, updated_at)
+         VALUES ('qwen', 'q1', 'idle', 3, '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z')`,
       );
       expect(() =>
         writer.run(
@@ -1340,6 +1344,7 @@ describe("schema v10 rebuild", () => {
       };
       expect(ddl.sql).toContain("WITHOUT ROWID");
       expect(ddl.sql).toContain("'grok'");
+      expect(ddl.sql).toContain("'qwen'");
       expect(
         writer.query("SELECT name FROM sqlite_master WHERE name = 'active_sessions_v9_archived'").all(),
       ).toHaveLength(0);
@@ -1376,22 +1381,53 @@ describe("schema v10 rebuild", () => {
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(11);
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(12);
     } finally {
       db.close();
     }
   });
 
-  test("fresh init lands at v11 and repeated init is idempotent", () => {
+  test("fresh init lands at v12 and repeated init is idempotent", () => {
     const paths = resolveAppPaths(tempHome);
     mkdirSync(paths.root, { recursive: true });
     initializeDatabase(paths);
     initializeDatabase(paths);
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(11);
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(12);
       const ddl = db.query("SELECT sql FROM sqlite_master WHERE name = 'active_sessions'").get() as { sql: string };
       expect(ddl.sql).toContain("'grok'");
+      expect(ddl.sql).toContain("'qwen'");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("the v12 rebuild migrates a v11-stamped database, preserving rows", () => {
+    const paths = resolveAppPaths(tempHome);
+    mkdirSync(paths.root, { recursive: true });
+    createVersion9Database(paths.database);
+    initializeDatabase(paths);
+    // The v12 table shape equals the v11 shape, so re-stamping 11 yields a
+    // database the v12 rebuild must still converge.
+    const stamp = new Database(paths.database, { readwrite: true });
+    try {
+      stamp.exec("PRAGMA user_version = 11");
+    } finally {
+      stamp.close();
+    }
+
+    initializeDatabase(paths);
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect((db.query("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(12);
+      expect(countSessions(db)).toBe(2);
+      const ddl = db.query("SELECT sql FROM sqlite_master WHERE name = 'active_sessions'").get() as { sql: string };
+      expect(ddl.sql).toContain("'qwen'");
+      expect(db.query("SELECT name FROM sqlite_master WHERE name = 'active_sessions_v11_archived'").all()).toHaveLength(
+        0,
+      );
     } finally {
       db.close();
     }

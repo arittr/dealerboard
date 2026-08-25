@@ -279,10 +279,12 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
     case "PostToolUse":
       return [statusEvent("Activity", provider, sessionId, now)];
     case "PostToolUseFailure":
-      // zcode has no interrupt event; a tool failure carrying is_interrupt is
-      // the only signal. Tool-level failures without it are not turn events.
-      // The `error` payload field is never read (privacy contract).
-      return provider === "zcode" && firstAllowlistedBoolean(value, SAFE_FIELDS.isInterrupt) === true
+      // zcode and qwen have no interrupt event; a tool failure carrying
+      // is_interrupt is the only signal. Tool-level failures without it are
+      // not turn events. The `error` payload field is never read (privacy
+      // contract).
+      return (provider === "zcode" || provider === "qwen") &&
+        firstAllowlistedBoolean(value, SAFE_FIELDS.isInterrupt) === true
         ? [statusEvent("Stop", provider, sessionId, now)]
         : [];
     case "PreToolUse": {

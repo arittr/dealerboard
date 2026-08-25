@@ -1,25 +1,23 @@
 /**
- * The strip's fixed right rail: daemon health (with heartbeat age), token
- * usage (today's total with rolling /hr and /10m rates), unread count,
- * per-provider quota panels, and page dots. Rebuilt wholesale on
- * each render — the rail is small and has no CSS animations to disturb.
+ * The strip's fixed right rail: token usage (today's total with rolling /hr
+ * and /10m rates), the unread count carrying the daemon-health dot (red plus
+ * OFFLINE when degraded), per-provider quota panels, and page dots. Rebuilt
+ * wholesale on each render — the rail is small and has no CSS animations to
+ * disturb.
  */
 
-import type { QuotaHistoryPoint } from "../../src/quota-snapshot";
 import {
-  formatPercentRemaining,
-  formatWeeklyLine,
+  formatSessionNote,
+  formatSessionPercent,
+  formatWeeklySummary,
+  headlinePercent,
   type QuotaPanelModel,
   quotaBarColor,
-  quotaStatusText,
-  sparklinePoints,
 } from "./quota";
 import { formatTokensCompact, type TokenUsageRailModel, type TokenUsageRateLine } from "./token-usage";
 
 export type RailModel = {
   degraded: boolean;
-  /** Age of the snapshot file's mtime; null when no read has succeeded. */
-  heartbeatAgeMs: number | null;
   unreadCount: number;
   quota: readonly QuotaPanelModel[];
   tokens: TokenUsageRailModel;
@@ -39,28 +37,31 @@ const PROVIDER_LABELS: Record<QuotaPanelModel["provider"], string> = {
   codex: "Codex",
   kimi: "Kimi",
   zai: "GLM",
+  qwen: "Qwen",
 };
 const PROVIDER_CHIP_LETTERS: Record<QuotaPanelModel["provider"], string> = {
   claude: "C",
   codex: "X",
   kimi: "K",
   zai: "G",
+  qwen: "Q",
 };
 
-const healthSection = (model: RailModel): HTMLElement => {
+/** Unread count with the daemon-health dot inline; degraded adds OFFLINE after the dot. */
+const unreadSection = (model: RailModel): HTMLElement => {
   const section = document.createElement("section");
-  section.className = "rail-health";
+  section.className = model.unreadCount > 0 ? "rail-unread active" : "rail-unread";
   const dot = document.createElement("span");
   dot.className = model.degraded ? "dot bad" : "dot ok";
   section.append(dot);
-  const text = document.createElement("span");
   if (model.degraded) {
-    text.className = "offline-text";
-    text.textContent = "OFFLINE";
-  } else {
-    const ageSeconds = model.heartbeatAgeMs === null ? null : Math.max(0, Math.round(model.heartbeatAgeMs / 1000));
-    text.textContent = ageSeconds === null ? "daemon ok" : `daemon ok · ${ageSeconds}s ago`;
+    const offline = document.createElement("span");
+    offline.className = "offline-text";
+    offline.textContent = "OFFLINE";
+    section.append(offline);
   }
+  const text = document.createElement("span");
+  text.textContent = model.unreadCount === 1 ? "1 unread" : `${model.unreadCount} unread`;
   section.append(text);
   return section;
 };
@@ -103,6 +104,7 @@ const pagerSection = (model: RailModel, actions: RailActions): HTMLElement => {
   return section;
 };
 
+/** Two-line compact panel: head (chip, label, weekly summary, percent + note) over a bare bar. */
 const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
   const section = document.createElement("section");
   section.className = "rail-quota";
@@ -117,96 +119,64 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
   chip.textContent = PROVIDER_CHIP_LETTERS[model.provider];
   const name = document.createElement("span");
   name.textContent = PROVIDER_LABELS[model.provider];
-  const pct = document.createElement("span");
-  pct.className = "quota-pct";
-  pct.textContent = model.percentRemaining === null ? "—" : formatPercentRemaining(model.percentRemaining);
-  head.append(chip, name, pct);
+  head.append(chip, name);
+  // Weekly-only providers headline the weekly window, so the summary would
+  // just repeat the headline; show it only beside a session headline.
+  if (model.percentRemaining !== null) {
+    const weekly = formatWeeklySummary(model.weeklyPercentRemaining, model.weeklyResetAtMs, nowMs);
+    if (weekly !== null) {
+      const week = document.createElement("span");
+      week.className = "quota-weekly";
+      week.textContent = weekly;
+      head.append(week);
+    }
+  }
+  const right = document.createElement("span");
+  right.className = "quota-right";
+  if (model.state === "unavailable") {
+    const note = document.createElement("span");
+    note.className = "quota-note";
+    note.textContent = formatSessionNote(model, nowMs);
+    right.append(note);
+  } else {
+    const pct = document.createElement("span");
+    pct.className = "quota-pct";
+    pct.textContent = formatSessionPercent(model);
+    right.append(pct);
+    const note = formatSessionNote(model, nowMs);
+    if (note !== "") {
+      const noteSpan = document.createElement("span");
+      noteSpan.className = "quota-note";
+      noteSpan.textContent = `· ${note}`;
+      right.append(noteSpan);
+    }
+  }
+  head.append(right);
 
   const bar = document.createElement("div");
   bar.className = "quota-bar";
   const fill = document.createElement("div");
   fill.className = "quota-bar-fill";
-  if (model.percentRemaining !== null) {
-    fill.style.width = `${Math.max(0, Math.min(100, model.percentRemaining))}%`;
-    fill.style.background = quotaBarColor(model.percentRemaining);
+  const headline = headlinePercent(model);
+  if (headline !== null) {
+    fill.style.width = `${Math.max(0, Math.min(100, headline))}%`;
+    fill.style.background = quotaBarColor(headline);
   }
   bar.append(fill);
 
-  const meta = document.createElement("div");
-  meta.className = "quota-meta";
-  const status = document.createElement("span");
-  status.textContent = quotaStatusText(model, nowMs);
-  const spark = document.createElement("canvas");
-  spark.className = "quota-spark";
-  meta.append(status, spark);
-
-  section.append(head, bar, meta);
-  const weekly = formatWeeklyLine(model.weeklyPercentRemaining, model.weeklyResetAtMs, nowMs);
-  if (weekly !== null) {
-    const weekLine = document.createElement("div");
-    weekLine.className = "quota-weekly";
-    weekLine.textContent = weekly;
-    section.append(weekLine);
-  }
+  section.append(head, bar);
   return section;
-};
-
-const drawSparkline = (section: HTMLElement, history: readonly QuotaHistoryPoint[]): void => {
-  const canvas = section.querySelector<HTMLCanvasElement>(".quota-spark");
-  if (canvas === null) {
-    return;
-  }
-  const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  if (width === 0 || height === 0) {
-    return;
-  }
-  canvas.width = width * ratio;
-  canvas.height = height * ratio;
-  const context = canvas.getContext("2d");
-  if (context === null) {
-    return;
-  }
-  context.scale(ratio, ratio);
-  const points = sparklinePoints(history, width, height);
-  const first = points[0];
-  if (first === undefined) {
-    return;
-  }
-  context.strokeStyle = "#94a3b8";
-  context.lineWidth = 1.5;
-  context.lineJoin = "round";
-  context.beginPath();
-  context.moveTo(first.x, first.y);
-  for (const point of points.slice(1)) {
-    context.lineTo(point.x, point.y);
-  }
-  context.stroke();
 };
 
 export const renderRail = (root: HTMLElement, model: RailModel, actions: RailActions): void => {
   const tokens = tokensSection(model.tokens);
-
-  const unread = document.createElement("section");
-  unread.className = model.unreadCount > 0 ? "rail-unread active" : "rail-unread";
-  unread.textContent = model.unreadCount === 1 ? "1 unread" : `${model.unreadCount} unread`;
-
   const nowMs = model.now.getTime();
   const quotaSections = model.quota.map((quota) => quotaSection(quota, nowMs));
 
-  const sections = [healthSection(model)];
+  const sections: HTMLElement[] = [];
   if (tokens !== null) {
     sections.push(tokens);
   }
-  sections.push(unread, ...quotaSections, pagerSection(model, actions));
+  sections.push(unreadSection(model), ...quotaSections, pagerSection(model, actions));
   root.replaceChildren(...sections);
-  // Canvases only have layout once attached; draw after replaceChildren.
-  for (let index = 0; index < quotaSections.length; index += 1) {
-    const section = quotaSections[index];
-    const quota = model.quota[index];
-    if (section !== undefined && quota !== undefined) {
-      drawSparkline(section, quota.history);
-    }
-  }
 };

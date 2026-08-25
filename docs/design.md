@@ -60,8 +60,8 @@ There is no visible status word or status glyph. A session whose current state i
 
 Each tile also has:
 
-- A provider-colored chip in the upper-left with the provider's one-letter mark in dark text: terracotta `#D97757` C for Claude, fuchsia `#D946EF` X for Codex, blue `#3B82F6` K for Kimi, green `#0EA514` P for pi, cream `#F5F0EA` O for oh-my-pi, gold `#EAB308` Z for zcode, teal `#2DD4BF` D for deepseek, and pink `#F472B6` G for grok. Hues are chosen for mutual distinctness on the LCD panel, not brand fidelity.
-- The session's model id as small neutral-chrome text right of the provider chip, when known: vendor prefix stripped (`claude-fable-5` shows as `fable-5`, `grok-4.6` as `4.6`), capped at ten code points with an ellipsis. Kimi pushes its model in SessionStart hooks (a titleless start registers too — see the membership rule below — so fresh sessions get their model); pi pushes it through its shim's `session_start`. The daemon resolves Claude and Codex models from transcript/rollout tails (last occurrence wins, so mid-session model switches register). The daemon resolves grok's model (and title) from the session's `summary.json`. omp, zcode, and deepseek have no model source — their tiles show the chip alone.
+- A provider-colored chip in the upper-left with the provider's one-letter mark in dark text: terracotta `#D97757` C for Claude, fuchsia `#D946EF` X for Codex, blue `#3B82F6` K for Kimi, green `#0EA514` P for pi, cream `#F5F0EA` O for oh-my-pi, gold `#EAB308` Z for zcode, teal `#2DD4BF` D for deepseek, pink `#F472B6` G for grok, and violet `#8B5CF6` Q for Qwen. Hues are chosen for mutual distinctness on the LCD panel, not brand fidelity.
+- The session's model id as small neutral-chrome text right of the provider chip, when known: vendor prefix stripped (`claude-fable-5` shows as `fable-5`, `grok-4.6` as `4.6`), capped at ten code points with an ellipsis. Kimi pushes its model in SessionStart hooks (a titleless start registers too — see the membership rule below — so fresh sessions get their model); pi pushes it through its shim's `session_start`; Qwen pushes it in its SessionStart hook. The daemon resolves Claude and Codex models from transcript/rollout tails (last occurrence wins, so mid-session model switches register). The daemon resolves grok's model (and title) from the session's `summary.json`. omp, zcode, and deepseek have no model source — their tiles show the chip alone.
 - An origin pip in the free bottom-right corner for Paseo-origin sessions: a filled violet `#A78BFA` disc (center 122,122, radius 9) for a Paseo parent session and a hollow violet ring (stroke width 3) for a Paseo subagent. Terminal-origin and origin-unknown sessions render no pip. Pressing a Paseo-origin tile with a known agent reference routes to the Paseo app deep link `paseo://h/<serverId>/agent/<agentId>` instead of the provider's own activation; a null reference falls back to provider routing. Provider routing is otherwise unchanged: Claude tiles focus their Ghostty terminal, Codex tiles open `codex://threads/<thread>`, and Kimi tiles open the Web session at the fixed local origin.
 - A two-line session title. Kimi pushes `session_title` through its hooks; the daemon resolves Claude titles from the transcript's `ai-title` records and Codex titles from `~/.codex/session_index.jsonl`'s `thread_name`, writing them back to the registry. Grok titles come from the same `summary.json` pull. Title text is word-wrapped into two twelve-code-point lines; a word longer than a line hard-splits, and text that outlives the second line ends in an ellipsis.
 - Repository or worktree name as the first fallback while no title is known.
@@ -322,7 +322,8 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   between 0.20 and 0.90, error keeps the two-second pulse, idle stays static.
 - The same provider chips: one-letter marks on the same hues (Claude C
   `#D97757`, Codex X `#D946EF`, Kimi K `#3B82F6`, pi P `#0EA514`, omp O
-  `#F5F0EA`, zcode Z `#EAB308`, deepseek D `#2DD4BF`, grok G `#F472B6`).
+  `#F5F0EA`, zcode Z `#EAB308`, deepseek D `#2DD4BF`, grok G `#F472B6`,
+  qwen Q `#8B5CF6`).
 - The model label sits right of the chip, vendor prefix stripped, capped at
   ten code points — the keypad's badged six-point cap does not apply; the
   strip's tiles are wide enough for the full label.
@@ -345,9 +346,10 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
 
 ### Rail
 
-- Daemon health: `daemon ok` with the heartbeat age, or OFFLINE.
-- A token-usage block and the exact unread count (tiles whose session carries
-  an `unreadSince` stamp). The block shows today's aggregate token total
+- Daemon health rides inline on the unread row: a green dot (red plus
+  OFFLINE when degraded) before the exact unread count (tiles whose session
+  carries an `unreadSince` stamp).
+- A token-usage block above it. The block shows today's aggregate token total
   (input + output + cache-creation + cache-read across every agent the local
   `agentsview` helper reports, on the America/Los_Angeles calendar day), plus
   rolling tokens/hour and tokens/10-minute rates differenced from the
@@ -360,18 +362,20 @@ Tiles are a DOM/CSS port of the keypad tile (`src/plugin/render.ts`):
   numbers dimmed; a missing file or a never-successful collector hides the
   block.
 - Page dots, one per page, tap to jump.
-- Quota panels (strip-only; there is no keypad equivalent): one section per
-  quota provider (claude, codex, kimi, GLM/zai) with the provider chip, the
-  session-window percent remaining, a bar filled on the status palette (green
-  `#4ADE80` above 25% remaining, amber `#FFB020` from 10%, red `#FF4D67`
-  below), a reset countdown ticking on the rail's 1s cadence, a sparkline of
-  the daemon-recorded session-window history ring, and a weekly-window
-  summary line. Data comes from `quota-snapshot.json` via the
-  `read_quota_snapshot` Tauri command — a separate file with its own
-  `schemaVersion`, never the session snapshot. A provider whose last fetch
-  failed keeps its last-good numbers dimmed with a last-updated age; a
-  provider disabled in CodexBar (or with no CodexBar binary installed) is
-  omitted; a missing file renders no panels.
+- Quota panels (strip-only; there is no keypad equivalent): a compact
+  two-line row per quota provider (claude, codex, kimi, GLM/zai, Qwen) — all
+  five fit the strip height without scrolling. The head line carries the
+  provider chip, the label, the muted weekly-window summary when present
+  (`wk 94% · 3d`), and at the right the session-window percent remaining
+  plus the reset countdown muted beside it (`79% · 26m`); the second line is
+  the bare bar filled on the status palette (green `#4ADE80` above 25%
+  remaining, amber `#FFB020` from 10%, red `#FF4D67` below). The Qwen row
+  reads CodexBar's `alibabatokenplan` provider. Data comes from
+  `quota-snapshot.json` via the `read_quota_snapshot` Tauri command — a
+  separate file with its own `schemaVersion`, never the session snapshot. A
+  provider whose last fetch failed renders dimmed with a last-updated age in
+  place of the percent; a provider disabled in CodexBar (or with no CodexBar
+  binary installed) is omitted; a missing file renders no panels.
 
 ### Interaction
 
