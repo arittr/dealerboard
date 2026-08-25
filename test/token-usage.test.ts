@@ -298,11 +298,17 @@ describe("createTokenUsageCollector day curves", () => {
   // increasing in fetchedAt, so this fixture carries an advancing clock.
   const makeDayCurveHarness = (files: Record<string, string> = {}) => {
     let clockMs = Date.parse("2026-08-25T17:00:00.000Z"); // 10:00 in Los Angeles
+    let throws = false;
     const writes: string[] = [];
     const deps: TokenUsageCollectorDependencies = {
       agentsviewBin: "agentsview",
       tokenUsageSnapshotPath: "/tmp/token-usage-snapshot.json",
-      run: async () => dayReport("2026-08-25", 1000),
+      run: async () => {
+        if (throws) {
+          throw new Error("spawn failed");
+        }
+        return dayReport("2026-08-25", 1000);
+      },
       readFile: (path) => files[path] ?? null,
       now: () => new Date(clockMs).toISOString(),
       nowMs: () => clockMs,
@@ -315,6 +321,9 @@ describe("createTokenUsageCollector day curves", () => {
       writes,
       advanceMinutes: (minutes: number) => {
         clockMs += minutes * 60_000;
+      },
+      fail: () => {
+        throws = true;
       },
     };
   };
@@ -358,5 +367,42 @@ describe("createTokenUsageCollector day curves", () => {
       providerDay: "2026-08-25",
       points: [{ fetchedAt: "2026-08-25T17:00:00.000Z", totalTokens: 1000 }],
     });
+  });
+
+  test("a failed first poll still publishes the reconciled seed state, not the stale curve", async () => {
+    const staleSeed = (day: string): string =>
+      `${JSON.stringify({
+        schemaVersion: 1,
+        providerDay: day,
+        totalTokens: 700,
+        unavailable: true, // already failed — a failed first poll must still reconcile
+        fetchedAt: `${day}T22:00:00.000Z`,
+        samples: [],
+        dayCurves: {
+          today: { providerDay: day, points: [{ fetchedAt: `${day}T22:00:00.000Z`, totalTokens: 700 }] },
+          yesterday: null,
+        },
+      })}\n`;
+
+    // Adjacent-day seed rotates: the stale curve lands in yesterday, today starts empty.
+    const adjacent = makeDayCurveHarness({ "/tmp/token-usage-snapshot.json": staleSeed("2026-08-24") });
+    const adjacentCollector = createTokenUsageCollector(adjacent.deps);
+    adjacent.fail();
+    await adjacentCollector.pollNow();
+    expect(adjacent.writes.length).toBe(1); // the reconciled state must reach the file, not just memory
+    const rotated = parseTokenUsageSnapshot(JSON.parse(adjacent.writes[0] ?? ""));
+    expect(rotated.unavailable).toBe(true);
+    expect(rotated.dayCurves?.yesterday?.providerDay).toBe("2026-08-24");
+    expect(rotated.dayCurves?.today).toEqual({ providerDay: "2026-08-25", points: [] });
+
+    // Gapped seed drops the stale curve entirely.
+    const gapped = makeDayCurveHarness({ "/tmp/token-usage-snapshot.json": staleSeed("2026-08-22") });
+    const gappedCollector = createTokenUsageCollector(gapped.deps);
+    gapped.fail();
+    await gappedCollector.pollNow();
+    expect(gapped.writes.length).toBe(1);
+    const dropped = parseTokenUsageSnapshot(JSON.parse(gapped.writes[0] ?? ""));
+    expect(dropped.unavailable).toBe(true);
+    expect(dropped.dayCurves).toBeUndefined();
   });
 });

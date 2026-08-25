@@ -297,7 +297,11 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
       // A seeded unavailable snapshot is already in the failed state — its
       // continuation must not re-log, only a good→failed transition may.
       state = { snapshot, failed: seeded.unavailable };
-      lastWrittenJson = `${JSON.stringify(snapshot)}\n`;
+      // The write guard tracks the bytes actually on disk, not the
+      // reconciled in-memory state — those were never written, so seeding
+      // with them would let a failed first poll suppress publishing the
+      // reconciled (rotated or dropped) curve across an outage.
+      lastWrittenJson = `${JSON.stringify(seeded)}\n`;
     }
   } catch {
     // An unreadable or unparseable file is simply rewritten on the first pass.
