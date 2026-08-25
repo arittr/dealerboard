@@ -1,14 +1,14 @@
 /**
- * Pure per-card view model for the board renderer: the timer/wash helpers the
- * strip's tiles already use, plus the derived card fields (fallback title,
- * model label cap, project suppression, origin disc) the board draws from.
- * No DOM, no I/O; the DOM tile layer stays in app/src/tiles.ts until the
- * board renderer replaces it.
+ * Per-card view model and DOM renderer for the board: the pure derived
+ * fields (fallback title, model label cap, project suppression, origin disc)
+ * plus the card assembler that turns a BoardPage into the d6 card anatomy
+ * (status edge, head/meta/status rows, sub pill, spine). All text goes
+ * through textContent; no innerHTML anywhere.
  */
 
 import { modelLabel, PROVIDER_LETTERS, washCycleOffset } from "../../src/plugin/render";
 import type { ProjectedSession, SessionStatus } from "../../src/protocol";
-import type { PlacedCard, SpineSegment } from "./board";
+import type { BoardPage, PlacedCard, SpineSegment } from "./board";
 
 /** Compact elapsed label for the status timer: 42s, 12m, 3h, 2d. */
 export const elapsedLabel = (elapsedMs: number): string => {
@@ -104,4 +104,103 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     badge: session.descendantCount,
     degraded: card.degraded,
   };
+};
+
+const appendText = (parent: HTMLElement, className: string, text: string): HTMLSpanElement => {
+  const element = document.createElement("span");
+  element.className = className;
+  element.textContent = text;
+  parent.append(element);
+  return element;
+};
+
+const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElement => {
+  const model = cardViewModel(card, nowMs);
+  const element = document.createElement("div");
+  element.className = [
+    "card",
+    `status-${model.status}`,
+    model.subagent ? "sub" : "primary",
+    model.indent ? "indented" : "",
+    model.spine !== "none" ? `spine-${model.spine}` : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
+  element.dataset["cardIndex"] = String(index);
+  element.style.gridColumn = String(card.column + 1);
+  element.style.gridRow = String(card.row + 1);
+  if (model.status === "working") {
+    element.style.setProperty("--wash-delay", washAnimationDelay(card.session.sessionId, nowMs));
+  }
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const chip = appendText(head, "chip", model.letter);
+  chip.dataset["provider"] = model.provider;
+  if (model.unread) {
+    const dot = document.createElement("span");
+    dot.className = "unread-dot";
+    head.append(dot);
+  }
+  if (model.subagent) {
+    appendText(head, "sub-pill", "sub");
+  }
+  const title = appendText(head, model.fallbackTitle ? "card-title fallback" : "card-title", model.title);
+  title.classList.add("one-line");
+  element.append(head);
+
+  const meta = document.createElement("div");
+  meta.className = "card-meta";
+  if (model.modelLabel !== null) {
+    appendText(meta, "meta-item", model.modelLabel);
+  }
+  if (model.project !== null) {
+    appendText(meta, "meta-item", model.project);
+  }
+  if (model.activity !== null) {
+    appendText(meta, "meta-item activity", model.activity);
+  }
+  const metaRight = document.createElement("span");
+  metaRight.className = "meta-right";
+  if (model.badge > 0) {
+    appendText(metaRight, "badge", String(model.badge));
+  }
+  if (model.originDisc) {
+    const disc = document.createElement("span");
+    disc.className = "origin-disc";
+    metaRight.append(disc);
+  }
+  meta.append(metaRight);
+  element.append(meta);
+
+  const statusRow = document.createElement("div");
+  statusRow.className = "card-status";
+  const statusDot = document.createElement("span");
+  statusDot.className = "status-dot";
+  statusRow.append(statusDot);
+  appendText(statusRow, "status-word", model.status);
+  if (model.statusSince !== null && model.timer !== null) {
+    const timer = appendText(statusRow, "cardtimer", model.timer.slice(model.status.length + 1));
+    timer.dataset["since"] = model.statusSince;
+  }
+  element.append(statusRow);
+
+  if (model.degraded) {
+    appendText(element, "flag", "!");
+  }
+  return element;
+};
+
+export const renderBoard = (root: HTMLElement, page: BoardPage, degraded: boolean): void => {
+  if (page.cards.length === 0) {
+    const blank = document.createElement("div");
+    blank.className = "offline";
+    if (degraded) {
+      blank.textContent = "OFFLINE";
+    }
+    root.replaceChildren(blank);
+    return;
+  }
+  const nowMs = Date.now();
+  root.replaceChildren(...page.cards.map((card, index) => cardElement(card, index, nowMs)));
 };
