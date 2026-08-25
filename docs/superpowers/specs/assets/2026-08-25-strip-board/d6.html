@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Strip — D6: parent-grouped board</title>
+<!--
+  ROUND 3 — D6: d5b's mixed board with parent-grouped ordering + rail refinements.
+
+  ORDERING RULE: primaries in dataset order, each immediately followed by its
+  subagents in dataset order; orphan subagents (parentN null / parent not on the
+  grid) collect at the END of the board in dataset order with d5b's plain dimmed
+  sub treatment (no indent, no connector). Board order for this dataset:
+  n3, n5, n6, n7, [n8 + n2 n9 n10], [n11 + n4], n12, orphan n1.
+  This ordering is STABLE: parentage (originParentRef <-> originRef) is immutable
+  for a session's lifetime, so a session's group never changes; groups and the
+  subs within them sit in dataset (arrival) order. The join is real daemon data —
+  no NEW-DATA flag needed for grouping.
+
+  FLOW RULE (group-atomic first-fit): the board is two fixed 1012px columns of
+  six 102px rows. Each group (primary + its subs) places as an ATOMIC block into
+  the first column with enough remaining rows, in board order; a group that does
+  not fit the remaining column space moves whole to the next column, and later
+  groups may backfill the gap it skipped — so a group never interleaves with or
+  splits around another group, and every sub renders directly under its parent.
+  The only split case is a group taller than a whole column (7+ cards): it breaks
+  after the sixth card and its violet spine continues at the top of the next
+  column. Dataset placement: col 1 = n3, n5, n6, n7, [n11 + n4];
+  col 2 = [n8 + n2, n9, n10], n12, orphan n1.
+
+  SCAN-ORDER TRADEOFF: backfill means visual scan order can deviate from strict
+  dataset order — here the [n11 + n4] group renders in column 1 BEFORE the [n8 +
+  n2, n9, n10] group that opens column 2. This is forced for this dataset: 12
+  cards fill exactly 12 slots, and no strict-order packing keeps the 4-card n8
+  group contiguous (a strict cut after n7 leaves 8 cards for a 6-row column, and
+  splitting across the column seam would separate subs from their parent). So
+  "consistent slotting" means a consistent, deterministic rule — same dataset,
+  same layout, groups never split or interleave — not strict linear scan order.
+
+  FIXED CARD SIZE: primary card 1012 x 102 px; grouped subagent card 968 x 102 px
+  (44px left indent under its parent, violet spine + elbow at the indent); orphan
+  subagent card 1012 x 102 px. 12px gaps. All tappable regions >= 90px smallest
+  dimension. Cards never flex-grow/shrink with session count: 1 session = one
+  standard card top-left, empty canvas below/right; 12 sessions = the board shown.
+
+  CAPACITY: a page holds 12 card rows (2 cols x 6). 13+ sessions page via
+  horizontal fling; pager dots live in the 60px touch strip at the rail bottom.
+  1-3 sessions: standard cards/groups stack top of column one, rest quiet canvas.
+
+  RAIL: d1/d5b's 496px rail with round-3 changes: quota meter bar thickened
+  5px -> 8px (still full row width, 436px track); right side swapped to
+  countdown-then-percent ("2d · 88%") with the percent flush right in tabular
+  numerals so all five percents column-align regardless of countdown width;
+  token sparkline is now a day-over-day comparison (see below). Daemon health
+  stays the green dot inline with unread.
+
+  SPARKLINE: x-axis anchored midnight -> midnight (LA day). Yesterday's complete
+  cumulative curve = dim 2px line with a "yda 61.3M" micro-label at its end;
+  today's partial curve (midnight -> 10:30am) = bright 2px line + faint fill,
+  ending in the endpoint marker. No axes/gridlines/legend.
+-->
+<!-- NEW-DATA: per-day cumulative token curves (rail.tokens.dayCurves) — the
+     collector's ring only spans ~2.4h, so persisting midnight-anchored per-day
+     curves is a daemon contract change. -->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 2560px; height: 720px; overflow: hidden; }
+  body {
+    margin: 0;
+    background: #10151c;
+    font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    color: #E8EEF7;
+    display: flex;
+  }
+
+  /* ============ BOARD: two fixed 1012px columns, group-atomic fill ============ */
+  .board {
+    flex: 1;
+    padding: 34px 0 0 16px; /* top pad keeps content clear of 28px menu bar */
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .col { flex: none; width: 1012px; display: flex; flex-direction: column; gap: 12px; }
+  .group { display: flex; flex-direction: column; gap: 12px; }
+  .card {
+    position: relative;
+    flex: none;
+    width: 1012px; height: 102px;
+    background: #1c2430;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    padding: 0 16px 0 30px;
+    display: flex; flex-direction: column; justify-content: center; gap: 6px;
+    overflow: hidden;
+  }
+  .card::before {            /* status edge — mid-breath frame */
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 8px;
+    background: var(--st); opacity: .9;
+  }
+  .card.working  { --st: #20B8FF; }
+  .card.idle     { --st: #4ADE80; }
+  .card.waiting  { --st: #FFB020; border-color: rgba(255,176,32,.75); background: linear-gradient(rgba(255,176,32,.10), rgba(255,176,32,.10)), #1c2430; }
+  .card.error    { --st: #FF4D67; border-color: rgba(255,77,103,.75); background: linear-gradient(rgba(255,77,103,.10), rgba(255,77,103,.10)), #1c2430; }
+  .card.waiting::before, .card.error::before { width: 12px; opacity: 1; }
+
+  .trow { display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .chip {
+    position: relative;
+    flex: none; width: 42px; height: 42px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 25px; font-weight: 800; color: #10151c;
+  }
+  .chip .un {              /* unread badge — lives on identity, away from status */
+    position: absolute; top: -6px; right: -6px; width: 18px; height: 18px;
+    border-radius: 50%; background: #FFB020; border: 3px solid #1c2430;
+  }
+  .title {
+    flex: 1; min-width: 0;
+    font-size: 32px; font-weight: 650; line-height: 1.15;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .title.fallback { font-style: italic; font-weight: 560; } /* null title -> project name; italic cue keeps primary ink bright */
+  .stat { flex: none; display: flex; align-items: baseline; gap: 8px; }
+  .stat .sdot { align-self: center; width: 13px; height: 13px; border-radius: 50%; background: var(--st); }
+  .stat .word  { font-size: 22px; color: #94A3B8; }
+  .stat .word.hot { color: #E8EEF7; font-weight: 700; }
+  .stat .timer { font-size: 28px; font-weight: 650; color: #E8EEF7; font-variant-numeric: tabular-nums; }
+
+  .mrow {
+    display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden;
+    margin-left: 56px; font-size: 22px; color: #94A3B8; line-height: 1.2;
+  }
+  .mrow > span { flex: none; white-space: nowrap; }
+  .mrow .sep { opacity: .55; }
+  .mrow .act { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+               font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 20px; }
+  .mrow .right { margin-left: auto; display: flex; align-items: center; gap: 9px; padding-left: 12px; }
+  .origin { flex: none; width: 14px; height: 14px; border-radius: 50%; background: #A78BFA; }
+  .desc { font-size: 22px; color: #A78BFA; font-weight: 650; }
+
+  /* ---------- SUBAGENT treatment: quieter everything (d5b) ---------- */
+  .card.sub {
+    background: #11151d;
+    border-color: #232b38;
+  }
+  .card.sub::before { opacity: .5; }
+  .card.sub .chip { width: 32px; height: 32px; border-radius: 8px; font-size: 20px; opacity: .85; }
+  .card.sub .title { font-size: 26px; font-weight: 550; color: #94A3B8; }
+  .card.sub .stat .word { font-size: 20px; color: rgba(148,163,184,.8); }
+  .card.sub .stat .timer { font-size: 24px; font-weight: 600; color: #94A3B8; }
+  .card.sub .stat .sdot { width: 11px; height: 11px; }
+  .card.sub .mrow { margin-left: 46px; font-size: 20px; color: rgba(148,163,184,.85); }
+  .subtag {                 /* the hollow-ring + "sub" cue */
+    flex: none; display: flex; align-items: center; gap: 8px;
+    border: 1.5px solid rgba(167,139,250,.45); border-radius: 8px;
+    padding: 3px 10px 3px 8px;
+  }
+  .subtag .ring { width: 13px; height: 13px; border-radius: 50%; border: 2.5px solid #A78BFA; }
+  .subtag .w { font-size: 20px; color: #94A3B8; }
+
+  /* ---------- group attachment: indent + violet spine/elbow ---------- */
+  .subs {
+    position: relative;
+    margin-left: 44px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .subs .card { width: 968px; }
+  .subs::before {            /* vertical spine: parent's bottom edge -> last sub's center */
+    content: ""; position: absolute; left: -24px; top: -12px; bottom: 51px;
+    width: 2px; background: rgba(167,139,250,.75);
+  }
+  .subslot { position: relative; }
+  .subslot::before {         /* elbow into each sub card */
+    content: ""; position: absolute; left: -24px; top: 50%; margin-top: -1px;
+    width: 24px; height: 2px; background: rgba(167,139,250,.75);
+  }
+
+  /* provider hues (locked) */
+  .p-claude   { background: #D97757; }
+  .p-codex    { background: #D946EF; }
+  .p-kimi     { background: #3B82F6; }
+  .p-qwen     { background: #EF4444; }
+  .p-grok     { background: #F472B6; }
+  .p-zai      { background: #2DD4BF; }
+
+  /* ============ RAIL: 496px, round-3 quota + sparkline changes ============ */
+  .rail {
+    flex: 0 0 496px;
+    border-left: 1px solid #232b38;
+    padding: 40px 30px 12px 30px;
+    display: flex; flex-direction: column;
+  }
+  .tok-num-row { display: flex; align-items: baseline; gap: 14px; }
+  .tok-num { font-size: 56px; font-weight: 750; letter-spacing: -0.5px; }
+  .tok-label { font-size: 22px; color: #94A3B8; }
+  .rates { display: flex; gap: 26px; margin-top: 6px; font-size: 24px; font-weight: 600; }
+  .rate.up   { color: #4ADE80; }
+  .rate.down { color: #FF4D67; }
+  .spark { margin-top: 14px; overflow: visible; }
+
+  .rail-div { border-top: 1px solid #232b38; margin: 18px 0; }
+
+  /* daemon health = the green dot next to unread (red + OFFLINE when degraded) */
+  .inbox-row { display: flex; align-items: center; font-size: 24px; }
+  .inbox-row .green { width: 12px; height: 12px; border-radius: 50%; background: #4ADE80; margin-right: 12px; }
+  .inbox-row .n { font-weight: 700; margin-right: 8px; }
+
+  .q-row { padding: 7px 0 12px; }
+  .q-row + .q-row { border-top: 1px solid rgba(35,43,56,0.6); }
+  .q-line { display: flex; align-items: center; gap: 12px; }
+  .q-chip {
+    width: 32px; height: 32px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 800; color: #10151c; flex: 0 0 auto;
+  }
+  .q-name { font-size: 24px; font-weight: 600; }
+  .q-tag  { font-size: 20px; color: #94A3B8; background: #1c2430; border-radius: 6px; padding: 2px 8px; }
+  .q-right { margin-left: auto; display: flex; align-items: baseline; gap: 8px; }
+  .q-reset { font-size: 22px; color: #94A3B8; font-variant-numeric: tabular-nums; }
+  .q-pct { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .q-track { margin-top: 9px; height: 8px; border-radius: 4px; background: #232b38; overflow: hidden; }
+  .q-fill { height: 100%; border-radius: 4px; }
+  .q-fill.ok   { background: #4ADE80; }
+  .q-fill.warn { background: #FFB020; }
+  .q-fill.crit { background: #FF4D67; }
+
+  .pager {
+    margin-top: auto; height: 60px; /* >=60px touch strip */
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pager .dot { width: 10px; height: 10px; border-radius: 50%; background: #94A3B8; }
+</style>
+</head>
+<body>
+
+<div class="board">
+
+  <div class="col">
+
+    <!-- n3 qwen · working 15h · PRIMARY · null title -> project -->
+    <div class="card working">
+      <div class="trow">
+        <div class="chip p-qwen">Q</div>
+        <div class="title fallback">qwen-hook-probe</div>
+        <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">15h</span></div>
+      </div>
+      <div class="mrow">
+        <span>qwen3.8-max-preview</span>
+        <span class="right"><span class="origin"></span></span>
+      </div>
+    </div>
+
+    <!-- n5 qwen · idle 10h · PRIMARY · unread · null title -> project -->
+    <div class="card idle">
+      <div class="trow">
+        <div class="chip p-qwen">Q<span class="un"></span></div>
+        <div class="title fallback">superpowers-evals</div>
+        <div class="stat"><span class="sdot"></span><span class="word">idle</span><span class="timer">10h</span></div>
+      </div>
+      <div class="mrow">
+        <span>qwen3.8-max-preview</span>
+        <span class="right"><span class="origin"></span></span>
+      </div>
+    </div>
+
+    <!-- n6 kimi · idle 2m · PRIMARY · unread · ugly long title -->
+    <div class="card idle">
+      <div class="trow">
+        <div class="chip p-kimi">K<span class="un"></span></div>
+        <div class="title">&lt;chat-history-summary&gt; Chat history from a previous Paseo agent. Source agent: let's pick the implementation back up here</div>
+        <div class="stat"><span class="sdot"></span><span class="word">idle</span><span class="timer">2m</span></div>
+      </div>
+      <div class="mrow">
+        <span>kimi-code/k3</span><span class="sep">·</span><span>paseo</span>
+        <span class="right"><span class="origin"></span></span>
+      </div>
+    </div>
+
+    <!-- n7 claude · WAITING 4m · PRIMARY · activity -->
+    <div class="card waiting">
+      <div class="trow">
+        <div class="chip p-claude">C</div>
+        <div class="title">can you go ahead and get all this stuff comitted pls</div>
+        <div class="stat"><span class="sdot"></span><span class="word hot">waiting</span><span class="timer">4m</span></div>
+      </div>
+      <div class="mrow">
+        <span>claude-opus-5</span><span class="sep">·</span><span>dotfiles</span><span class="sep">·</span>
+        <span class="act">Bash git push origin main</span>
+        <span class="right"><span class="origin"></span></span>
+      </div>
+    </div>
+
+    <!-- GROUP: n11 + sub n4 (backfilled here by first-fit; n8's 4-card group skipped to col 2) -->
+    <div class="group">
+
+      <!-- n11 claude · working 2m · PRIMARY · 2 descendants · activity -->
+      <div class="card working">
+        <div class="trow">
+          <div class="chip p-claude">C</div>
+          <div class="title">i think this still doesn't look that good - the rail is too</div>
+          <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">2m</span></div>
+        </div>
+        <div class="mrow">
+          <span>claude-fable-5</span><span class="sep">·</span><span>stream-deck-agents</span><span class="sep">·</span>
+          <span class="act">Bash cd "/Users/drewritter/Library/Application Support/com.drew…</span>
+          <span class="right"><span class="origin"></span><span class="desc">+2</span></span>
+        </div>
+      </div>
+
+      <div class="subs">
+        <!-- n4 codex · working 10h · SUBAGENT of n11 -->
+        <div class="subslot">
+          <div class="card working sub">
+            <div class="trow">
+              <div class="chip p-codex">X</div>
+              <div class="subtag"><span class="ring"></span><span class="w">sub</span></div>
+              <div class="title">Review Task 2 (spec + quality)</div>
+              <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">10h</span></div>
+            </div>
+            <div class="mrow">
+              <span>gpt-5.6-sol</span><span class="sep">·</span><span>stream-deck-agents</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <div class="col">
+
+    <!-- GROUP: n8 + subs n2, n9, n10 -->
+    <div class="group">
+
+      <!-- n8 qwen · working 3m · PRIMARY · null title -> project -->
+      <div class="card working">
+        <div class="trow">
+          <div class="chip p-qwen">Q</div>
+          <div class="title fallback">superpowers-evals</div>
+          <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">3m</span></div>
+        </div>
+        <div class="mrow">
+          <span>qwen3.8-max-preview</span>
+          <span class="right"><span class="origin"></span></span>
+        </div>
+      </div>
+
+      <div class="subs">
+        <!-- n2 claude · working 2m · SUBAGENT of n8 · activity -->
+        <div class="subslot">
+          <div class="card working sub">
+            <div class="trow">
+              <div class="chip p-claude">C</div>
+              <div class="subtag"><span class="ring"></span><span class="w">sub</span></div>
+              <div class="title">D2 spec review: parent compliance (Fable)</div>
+              <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">2m</span></div>
+            </div>
+            <div class="mrow">
+              <span>claude-fable-5</span><span class="sep">·</span><span>superpowers-evals</span><span class="sep">·</span>
+              <span class="act">Bash wc -l /Users/drewritter/prime-rad/superpowers-evals/docs/s…</span>
+            </div>
+          </div>
+        </div>
+        <!-- n9 kimi · working 2m · SUBAGENT of n8 -->
+        <div class="subslot">
+          <div class="card working sub">
+            <div class="trow">
+              <div class="chip p-kimi">K</div>
+              <div class="subtag"><span class="ring"></span><span class="w">sub</span></div>
+              <div class="title">D2 spec review: architecture (k3)</div>
+              <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">2m</span></div>
+            </div>
+            <div class="mrow">
+              <span>kimi-code/k3</span><span class="sep">·</span><span>superpowers-evals</span>
+            </div>
+          </div>
+        </div>
+        <!-- n10 codex · working 2m · SUBAGENT of n8 -->
+        <div class="subslot">
+          <div class="card working sub">
+            <div class="trow">
+              <div class="chip p-codex">X</div>
+              <div class="subtag"><span class="ring"></span><span class="w">sub</span></div>
+              <div class="title">D2 spec review: codebase fidelity (Sol)</div>
+              <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">2m</span></div>
+            </div>
+            <div class="mrow">
+              <span>gpt-5.6-sol</span><span class="sep">·</span><span>superpowers-evals</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- n12 grok · ERROR 6m · PRIMARY (terminal origin: no mark) · unread -->
+    <div class="card error">
+      <div class="trow">
+        <div class="chip p-grok">G<span class="un"></span></div>
+        <div class="title">terminus deploy runbook</div>
+        <div class="stat"><span class="sdot"></span><span class="word hot">error</span><span class="timer">6m</span></div>
+      </div>
+      <div class="mrow">
+        <span>grok-4.6</span><span class="sep">·</span><span>terminus</span>
+      </div>
+    </div>
+
+    <!-- n1 codex · working 22h · ORPHAN SUBAGENT (parentN null) — end of board, plain dimmed treatment -->
+    <div class="card working sub">
+      <div class="trow">
+        <div class="chip p-codex">X</div>
+        <div class="subtag"><span class="ring"></span><span class="w">sub</span></div>
+        <div class="title">Sol architecture synthesis</div>
+        <div class="stat"><span class="sdot"></span><span class="word">working</span><span class="timer">22h</span></div>
+      </div>
+      <div class="mrow">
+        <span>gpt-5.6-sol</span><span class="sep">·</span><span>worktree-phase0-capacity-simulation</span>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- ============ rail: 496px / 19.4% ============ -->
+<div class="rail">
+
+  <div class="tok-num-row">
+    <div class="tok-num">48.9M</div>
+    <div class="tok-label">tokens today</div>
+  </div>
+  <div class="rates">
+    <div class="rate up">&#8593; 32.3M/hr</div>
+    <div class="rate down">&#8595; 8.5M/10m</div>
+  </div>
+  <!-- day-over-day sparkline: x = midnight->midnight (LA day), y = cumulative tokens.
+       Dim line = yesterday complete (61.3M); bright line = today to 10:30am (48.9M). -->
+  <svg class="spark" width="436" height="80" viewBox="0 0 436 80">
+    <polygon fill="rgba(232,238,247,0.08)" points="0,70 18.2,69.6 36.3,69.4 54.5,69.4 72.7,69.2 90.8,68.8 109.0,67.8 118.1,66.7 127.2,64.6 136.3,61.6 145.3,57.9 154.4,52.8 163.5,45.9 168.0,41.9 172.6,36.7 177.1,31.5 181.7,26.3 186.2,21.7 190.8,17.4 190.8,70"/>
+    <polyline fill="none" stroke="#94A3B8" stroke-opacity="0.6" stroke-width="2" stroke-linejoin="round" points="0,70.0 18.2,69.8 36.3,69.7 54.5,69.7 72.7,69.7 90.8,69.5 109.0,68.9 127.2,67.2 145.3,63.4 163.5,57.2 172.6,53.6 181.7,50.2 190.8,46.5 199.8,42.5 218.0,36.6 236.2,33.2 254.3,31.1 272.5,26.6 290.7,20.7 308.8,16.0 327.0,12.0 345.2,9.3 363.3,7.6 381.5,5.8 399.7,4.6 417.8,4.2 436.0,4.0"/>
+    <polyline fill="none" stroke="#E8EEF7" stroke-width="2" stroke-linejoin="round" points="0,70.0 18.2,69.6 36.3,69.4 54.5,69.4 72.7,69.2 90.8,68.8 109.0,67.8 118.1,66.7 127.2,64.6 136.3,61.6 145.3,57.9 154.4,52.8 163.5,45.9 168.0,41.9 172.6,36.7 177.1,31.5 181.7,26.3 186.2,21.7 190.8,17.4"/>
+    <circle cx="190.8" cy="17.4" r="4" fill="#E8EEF7"/>
+    <text x="434" y="30" text-anchor="end" font-size="20" fill="#94A3B8">yda 61.3M</text>
+  </svg>
+
+  <div class="rail-div"></div>
+
+  <!-- green dot = daemon health, inline with unread (production treatment) -->
+  <div class="inbox-row">
+    <div class="green"></div><div class="n">3</div><div>unread</div>
+  </div>
+
+  <div class="rail-div"></div>
+
+  <!-- quota: binding window per provider (countdown · pct, pct flush right) -->
+  <div class="q-row">
+    <div class="q-line">
+      <div class="q-chip p-claude">C</div>
+      <div class="q-name">Claude</div><div class="q-tag">weekly</div>
+      <div class="q-right"><div class="q-reset">2d ·</div><div class="q-pct">88%</div></div>
+    </div>
+    <div class="q-track"><div class="q-fill ok" style="width:88%"></div></div>
+  </div>
+  <div class="q-row">
+    <div class="q-line">
+      <div class="q-chip p-codex">X</div>
+      <div class="q-name">Codex</div><div class="q-tag">weekly</div>
+      <div class="q-right"><div class="q-reset">7d ·</div><div class="q-pct">99%</div></div>
+    </div>
+    <div class="q-track"><div class="q-fill ok" style="width:99%"></div></div>
+  </div>
+  <div class="q-row">
+    <div class="q-line">
+      <div class="q-chip p-kimi">K</div>
+      <div class="q-name">Kimi</div><div class="q-tag">weekly</div>
+      <div class="q-right"><div class="q-reset">1d ·</div><div class="q-pct">29%</div></div>
+    </div>
+    <div class="q-track"><div class="q-fill ok" style="width:29%"></div></div>
+  </div>
+  <div class="q-row">
+    <div class="q-line">
+      <div class="q-chip p-zai">G</div>
+      <div class="q-name">GLM</div><div class="q-tag">weekly</div>
+      <div class="q-right"><div class="q-reset">5d ·</div><div class="q-pct">97%</div></div>
+    </div>
+    <div class="q-track"><div class="q-fill ok" style="width:97%"></div></div>
+  </div>
+  <div class="q-row">
+    <div class="q-line">
+      <div class="q-chip p-qwen">Q</div>
+      <div class="q-name">Qwen</div><div class="q-tag">weekly</div>
+      <div class="q-right"><div class="q-reset">2d ·</div><div class="q-pct">2%</div></div>
+    </div>
+    <div class="q-track"><div class="q-fill crit" style="width:2%"></div></div>
+  </div>
+
+  <div class="pager"><div class="dot"></div></div>
+
+</div>
+
+</body>
+</html>
