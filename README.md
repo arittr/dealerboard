@@ -1,9 +1,9 @@
 # Dealerboard
 
-Dealerboard is a macOS-local status board for coding agents. A background
-daemon turns provider lifecycle signals into a private local session registry,
-while the companion strip app shows who is working, waiting, finished, or
-failed—and lets you jump back to supported sessions.
+Dealerboard is a macOS-local status board for coding agents. It turns provider
+lifecycle signals into a private local session registry, while the companion
+strip app shows who is working, waiting, finished, or failed—and lets you jump
+back to supported sessions.
 
 It is designed for the Corsair Xeneon Edge, but it also works as a normal
 floating macOS window. Dealerboard is currently source-built and locally
