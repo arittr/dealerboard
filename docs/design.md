@@ -97,7 +97,7 @@ off the grid until its next Activity or unread output.
 
 Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. As implemented, the lease is uniform: the daemon prunes any top-level session whose last hook is older than 24 hours, and a still-live session pruned by mistake reappears at its next prompt (every provider late-joins on `UserPromptSubmit`). The daemon also rewrites the snapshot every five seconds as a heartbeat; the plugin treats a file older than ten seconds as a dead daemon and degrades instead of rendering stale tiles as live.
 
-Evener is the inventory-backed exception to hook ingress. The daemon connects to the local Evener hub's authenticated AppWire v3 `/rpc` endpoint, lists the `local` source, hydrates and subscribes to every root and live subagent, and refreshes the inventory every two seconds so newly launched sessions are discovered. Disconnects retry every five seconds; hydration repairs status without manufacturing unread results, while ordered live `turn/completed` events own the unread transition. AppWire `active`, `awaiting`, and `warning`/`systemError` map to working, waiting, and error respectively. List omission is not deletion because one failing hub source can make a list partial; an explicit `thread/closed` removes the row, and the ordinary 24-hour prune remains the missed-close backstop.
+Evener is the inventory-backed exception to hook ingress. The daemon connects to the local Evener hub's authenticated AppWire v3 `/rpc` endpoint, lists the `local` source, hydrates and subscribes to every root and live subagent, and refreshes the inventory every two seconds so newly launched sessions are discovered. Disconnects retry every five seconds; hydration repairs status without manufacturing unread results, while ordered live `turn/completed` events own the unread transition. AppWire `active` maps to working, and `warning`/`systemError` map to error. A plain `awaiting` means the turn settled after agent output, so it maps to idle; only `evener.askPending` or a non-empty `pendingEscalations` list maps to waiting. This distinction also prevents settled subagents from reappearing and lifting their parent to waiting. List omission is not deletion because one failing hub source can make a list partial; an explicit `thread/closed` removes the row, and the ordinary 24-hour prune remains the missed-close backstop.
 The client address comes from `EVENER_HUB_ADDR`, durable `hub.toml`, or the
 standard loopback default. Evener does not publish a process-local `hub
 --addr` override; a custom flag must therefore be mirrored in `hub.toml` or in
@@ -305,16 +305,22 @@ Only after that choice do we revise this candidate design into an implementation
 ## Strip app (Xeneon Edge)
 
 The strip is a frameless Tauri webview pinned to the Xeneon Edge touch
-display — a third snapshot consumer alongside the Stream Deck plugin. It
-renders the same projection the deck renders, so the deck remains the
-reference contract for session semantics; this section records the strip's
-own visible contract, rewritten for the 2026-08-25 board redesign
-(parent-grouped wide cards, compact rail). The strip's board is an app-local
-grouped reducer (`app/src/board.ts`): the shared `reduceLayout` paging in
-`src/plugin/layout.ts` cannot express grouping or column packing, so the
-strip stopped consuming it (the keypad keeps it unchanged) while label
-fallbacks reuse the shared chain. The full behavioral spec is
-[superpowers/specs/2026-08-25-strip-board-redesign-design.md](superpowers/specs/2026-08-25-strip-board-redesign-design.md).
+display — a third snapshot consumer alongside the Stream Deck plugin.
+Snapshot v2 now carries the legacy root-only `sessions` projection and an
+additive, optional-on-wire `agents` graph. The parser maps an absent `agents`
+field to null for old-daemon fallback; a present array, including an empty
+one, selects graph-exclusive board reduction. The Stream Deck keeps consuming
+`sessions` and its legacy `descendantCount` unchanged. This section records
+the strip's visible contract after the 2026-08-25 board redesign
+(parent-grouped wide cards, compact rail) and live-tree addition. The strip's
+board is an app-local grouped reducer (`app/src/board.ts`): the shared
+`reduceLayout` paging in `src/plugin/layout.ts` cannot express grouping or
+column packing, so the strip stopped consuming it (the keypad keeps it
+unchanged) while label fallbacks reuse the shared chain. The authoritative
+behavioral specs are
+[superpowers/specs/2026-08-25-strip-board-redesign-design.md](superpowers/specs/2026-08-25-strip-board-redesign-design.md)
+and
+[superpowers/specs/2026-08-25-xeneon-live-subagent-tree-design.md](superpowers/specs/2026-08-25-xeneon-live-subagent-tree-design.md).
 
 All dimensions below are native 2560×720 pixels, viewport-relative in the
 implementation (px/25.6 → vw, px/7.2 → vh), so the 1280×360 HiDPI mode
@@ -340,33 +346,40 @@ HiDPI mode (`max(1px, …)`).
 
 ### Ordering: parent-grouped, stable
 
-The board replaces flat slot order with grouped order:
+The daemon publishes one mixed native/Paseo hierarchy. It first validates the
+authoritative provider-native `parent_session_id` topology, then resolves each
+safe Paseo `originParentRef` against a unique `originRef` and removes unsafe
+Paseo cycle edges. With `agents` present, the board consumes only those
+resolved composite parent identities; native and Paseo edges use the same
+graph reducer:
 
-1. Primary sessions (everything not a Paseo subagent) in slot order.
-2. Each primary is immediately followed by its subagents in slot order. The
-  join is `originParentRef` (subagent) = `originRef` (parent); both fields
-  are already on `ProjectedSession` and the wire `schemaVersion` stays 2 —
-  no protocol change.
-3. Nested subagents flatten: a subagent whose parent is itself a subagent
-  attaches to its nearest on-grid ancestor's group, at the same single
-  indent level, ordered directly after its own parent within that group.
-  There is no recursive visual nesting.
-4. Orphan subagents — live Paseo subagents with no on-grid ancestor — form
-  one atomic tail block strictly after every group, in slot order; the tail
-  never backfills ahead of groups.
+1. Primary groups sort by positive `logicalSlot`.
+2. Every node's immediate children sort by `openedAt`, then provider, then
+   session ID.
+3. Children traverse depth-first in pre-order, so every descendant follows
+   its immediate parent. All descendants in a resolved primary group flatten
+   to the same 44px visual indent; there is no recursive visual nesting.
+4. Parentless Paseo subagents caused by missing, ambiguous, or cyclic lineage
+   form one atomic tail strictly after every primary group. Orphan roots use
+   the same timestamp/provider/ID order, and each root retains its safe native
+   or Paseo descendants in depth-first order before the next orphan root. The
+   whole tail stays full-width, unindented, and unspined; it never backfills
+   ahead of primary groups.
 
-Paseo lineage carries status as well as grouping: `originParentRef` resolves
-to a parent root's unique Paseo `originRef` — separate from the
-provider-native `parent_session_id` tree — and every effectively active
-Paseo subagent rolls its status up that ancestry with the same
-`error > waiting > working > idle` priority, across nested chains and
-provider boundaries. A done/read ancestor therefore stays on the board with
-a lifted effective status (at least `working`) while any descendant is
-active; its stored status, `unreadSince`, and own `statusSince` timer are
-untouched, and ordinary visibility resumes as soon as the last active
-descendant ends. A missing link, an ambiguous duplicate ref, or a cycle
-stops the walk safely — no snapshot failure — leaving those active
-subagents to the orphan tail.
+Status reduces bottom-up through each native subtree and then up every safe
+Paseo ancestry with `error > waiting > working > idle` priority. A live native
+child is at least effectively `working`, even if its stored row is idle. A
+done/read ancestor therefore stays on the board with a lifted effective status
+while any descendant is active. Each graph card still shows its own row's
+`statusSince` timer: status rollup never restamps that value or changes stored
+status or `unreadSince`. Ordinary root visibility resumes when the final live
+descendant ends. Invalid native topology fails the projection atomically;
+missing, ambiguous, or cyclic Paseo lineage remains safe and visible in the
+orphan tail instead of failing the snapshot.
+
+The live graph changes membership and hierarchy only. Existing card colors,
+dimensions, status animation, group packing, page clamping, rail content, and
+degraded-view behavior remain unchanged.
 
 ### Packing and paging
 
@@ -432,7 +445,8 @@ once stamped, is immutable for the session's lifetime.
 - Provider chip (42px, one-letter mark on the locked hues) with the amber
   unread dot on its corner (an 18px `#FFB020` disc on a 3px card-colored
   ring) whenever `unreadSince` is set — on the grid, idle ⟺ unread,
-  unchanged.
+  unchanged. Native child nodes always project `unreadSince: null` and never
+  show the dot.
 - One-line 32px title in primary ink, ellipsized on overflow. The label
   chain is the shared one: title, else project name, else provider +
   shortened session id; any fallback (not just project) renders italic as
@@ -441,15 +455,18 @@ once stamped, is immutable for the session's lifetime.
   points — the tile contract's ten-point cap does not apply) · project ·
   `activityLine` when present. A grouped subagent whose project equals its
   parent's suppresses the project (redundant).
-- Meta-line right end, in order: the violet `#A78BFA` origin disc for Paseo
-  parents, then the bare descendant-count badge (`2`, never `+2` — the
-  locked badge convention) when `descendantCount > 0`; the count is live
-  descendants per the existing contract (e.g. Claude Task subagents), not
-  the number of grouped sub-cards.
+- Meta-line right end: the violet `#A78BFA` origin disc for Paseo parents.
+  Graph-backed cards never show a descendant-count badge because the graph
+  renders every live child. Only the old-daemon `sessions` fallback can still
+  show the legacy bare badge (`2`, never `+2`) when `descendantCount > 0`;
+  that count remains live provider-native descendants for Stream Deck
+  compatibility, not the number of grouped Paseo cards.
 - Right-aligned on the head line: status dot + status word + tabular-numeral
   elapsed timer (`statusSince`, the row's own status stamp), ticking in
   place on the 1s rail cadence so the render-signature skip and CSS
-  animations are never disturbed.
+  animations are never disturbed. Every child uses its own provider, model,
+  title, effective status, and timer rather than inheriting display facts
+  from its parent.
 - Subagent cards: dimmed treatment — near-canvas surface, hairline border
   (`max(1px, 0.078125vw)`), 26px muted title, 32px chip, half-opacity
   status edge; a hollow-violet-ring "sub" pill after the chip replaces the
@@ -460,7 +477,8 @@ once stamped, is immutable for the session's lifetime.
   The idle-subagent admission rule is unchanged: an idle Paseo subagent
   with no active descendant is never projected — one retained by an active
   descendant projects as effectively active — so grouped subagent cards are
-  always active.
+  always active. Native child completion removes that card. The board keeps
+  no child history and has no automatic or user-controlled collapse behavior.
 - A degraded card keeps the `!` flag; an all-blank page renders OFFLINE.
 
 ### Rail
@@ -507,12 +525,14 @@ Fixed 600px (~23.4%), top to bottom:
   meter per privacy-safe numeric slot. The account meters sit in one indented
   stack with a subtle 2px Claude-colored spine: 10px from the provider header
   to the stack, 12px between account meters, and 7px from each meter's labels
-  to its unchanged 8px bar. Slots stay in ascending order; the active slot has
-  a Claude-orange dot and never reorders. Each account independently selects
-  its binding window and owns its reset, fill, and ticks. Stale or unavailable
-  accounts dim only their right-side metric and bar, so account identity and
-  the active dot remain legible. Zero or one account keeps the ambient row,
-  and a transient account probe failure keeps the last-good meters visible.
+  to its unchanged 8px bar. Each privacy-safe slot number is a muted 20px
+  micro-index in a fixed-width alignment column, not primary data. Slots stay
+  in ascending order; the active slot has a full-contrast Claude-orange dot
+  and never reorders. Each account independently selects its binding window
+  and owns its reset, fill, and ticks. Stale or unavailable accounts dim only
+  their right-side metric and bar, so account identity and the active dot
+  remain legible. Zero or one account keeps the ambient row, and a transient
+  account probe failure keeps the last-good meters visible.
 - **Pager dots**: one per page, tap to jump.
 - Data plumbing remains additive: quota via `quota-snapshot.json` and token
   usage via `token-usage-snapshot.json`, each its own file with its own
@@ -544,9 +564,11 @@ LA day the same way (adjacent promotes, gapped drops, never mislabeled).
 
 ### Interaction
 
-- A tap is the keypad's keyDown: a fire-and-forget ack, then the same
-  paseo/claude/codex/kimi routing (subagent cards included). A failed or
-  unroutable press flashes the card. All cards are ≥90px in their smallest
+- A tap on a primary or Paseo subagent is the keypad's keyDown: a
+  fire-and-forget ack, then the same paseo/claude/codex/kimi routing. A failed
+  or unroutable press flashes the card. Paseo subagents remain independently
+  actionable. Native child cards are display-only: tap schedules no ack,
+  route, flash, or other mutation. All cards are ≥90px in their smallest
   dimension.
 - Snapshot delivery is push, not poll: the Rust host watches the app-support
   directory (the daemon publishes by atomic rename, which swaps the file's
@@ -557,13 +579,16 @@ LA day the same way (adjacent promotes, gapped drops, never mislabeled).
   5s heartbeat stops re-arming it, so the flip lands one 10s threshold
   after the last publish), while a slow 10s pass retries real reads only
   while degraded, so a missed event or a late-starting daemon self-heals.
-- A long-press (~500ms without drifting past a 12px slop) on a session card
-  opens an action sheet anchored at the touch point: Open (the tap's ack +
-  routing), Ack, Reveal transcript (`/usr/bin/open -R`; disabled until the
-  snapshot carries `transcriptPath`), Copy session ID, and Clear session —
-  the destructive action sits behind an inline two-tap confirm ("Confirm
-  clear") and runs the installed binary's `sessions clear`. The sheet
-  dismisses on a pointer-down outside it or on Escape.
+- A long-press (~500ms without drifting past a 12px slop) on a primary or
+  Paseo subagent opens an action sheet anchored at the touch point: Open (the
+  tap's ack + routing), Ack, Reveal transcript (`/usr/bin/open -R`; disabled
+  until the snapshot carries `transcriptPath`), Copy session ID, and Clear
+  session — the destructive action sits behind an inline two-tap confirm
+  ("Confirm clear") and runs the installed binary's `sessions clear`. Paseo
+  subagents retain this independent action sheet. A native child long-press
+  constructs no target and opens no sheet; display-only identity checks also
+  reject deferred actions after the card disappears. The sheet dismisses on a
+  pointer-down outside it or on Escape.
 - A horizontal fling (≥80px of travel with ≤48px of vertical drift) pages
   the board — left for next, right for previous — reusing the rail's page
   jump, so the dots follow and the page persists. A stroke that moved but

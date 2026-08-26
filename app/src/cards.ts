@@ -7,8 +7,8 @@
  */
 
 import { modelLabel, PROVIDER_LETTERS } from "../../src/plugin/render";
-import type { ProjectedSession, SessionStatus } from "../../src/protocol";
-import type { BoardPage, PlacedCard, SpineSegment } from "./board";
+import type { SessionStatus } from "../../src/protocol";
+import type { BoardPage, BoardSession, PlacedCard, SpineSegment } from "./board";
 import { breathAnimationDelay, elapsedLabel } from "./liveness";
 
 /**
@@ -30,7 +30,7 @@ export const statusLineText = (status: SessionStatus, statusSince: string | null
 export const CARD_MODEL_LABEL_MAX_CODE_POINTS = 24;
 
 export type CardViewModel = {
-  provider: ProjectedSession["provider"];
+  provider: BoardSession["provider"];
   letter: string;
   unread: boolean;
   title: string;
@@ -46,7 +46,8 @@ export type CardViewModel = {
   subagent: boolean;
   indent: boolean;
   spine: SpineSegment;
-  badge: number;
+  displayOnly: boolean;
+  badge: number | null;
   degraded: boolean;
 };
 
@@ -55,7 +56,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
   return {
     provider: session.provider,
     letter: PROVIDER_LETTERS[session.provider],
-    unread: session.unreadSince !== null,
+    unread: !card.displayOnly && session.unreadSince !== null,
     title: card.label,
     fallbackTitle: !(session.title !== null && session.title.length > 0),
     modelLabel: session.model === null ? null : modelLabel(session.model, CARD_MODEL_LABEL_MAX_CODE_POINTS),
@@ -69,7 +70,8 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     subagent: card.subagent,
     indent: card.indent,
     spine: card.spine,
-    badge: session.descendantCount,
+    displayOnly: card.displayOnly,
+    badge: card.displayOnly ? null : card.descendantBadge,
     degraded: card.degraded,
   };
 };
@@ -82,18 +84,22 @@ const appendText = (parent: HTMLElement, className: string, text: string): HTMLS
   return element;
 };
 
-const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElement => {
-  const model = cardViewModel(card, nowMs);
-  const element = document.createElement("div");
-  element.className = [
+export const cardClassName = (model: CardViewModel): string =>
+  [
     "card",
     `status-${model.status}`,
     model.subagent ? "sub" : "primary",
     model.indent ? "indented" : "",
     model.spine !== "none" ? `spine-${model.spine}` : "",
+    model.displayOnly ? "display-only" : "",
   ]
     .filter((part) => part !== "")
     .join(" ");
+
+const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElement => {
+  const model = cardViewModel(card, nowMs);
+  const element = document.createElement("div");
+  element.className = cardClassName(model);
   element.dataset["cardIndex"] = String(index);
   element.style.gridColumn = String(card.column + 1);
   element.style.gridRow = String(card.row + 1);
@@ -136,7 +142,7 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
     disc.className = "origin-disc";
     metaRight.append(disc);
   }
-  if (model.badge > 0) {
+  if (model.badge !== null && model.badge > 0) {
     appendText(metaRight, "badge", String(model.badge));
   }
   // The quiet label slot stays empty while live; the 1s ticker owns its text.
@@ -177,16 +183,19 @@ export const boardRenderSignature = (page: BoardPage, degraded: boolean): string
 /** The reconciliation identity: one DOM node per session per page. */
 export const cardKey = (card: PlacedCard): string => `${card.session.provider}\u0000${card.session.sessionId}`;
 
+/** The liveness stamp, when the card's session carries one — agent-graph
+ *  nodes have no stamp and render stampless (the stylesheet treatment). */
+export const sessionLastEventAt = (session: BoardSession): string | null =>
+  "lastEventAt" in session ? session.lastEventAt : null;
+
 /**
  * The per-card rebuild signature: everything cardElement bakes into the node
  * except its page position and its liveness stamp — both are (re)applied on
  * every pass by applyCardFrame, so a card that merely moves or ticks keeps
  * its DOM node, its CSS animation phase, and its in-place-painted decay.
  */
-export const cardContentSignature = ({ column: _column, row: _row, ...content }: PlacedCard): string => {
-  const { lastEventAt: _lastEventAt, ...session } = content.session;
-  return JSON.stringify({ ...content, session });
-};
+export const cardContentSignature = ({ column: _column, row: _row, ...content }: PlacedCard): string =>
+  JSON.stringify({ ...content, session: { ...content.session, lastEventAt: undefined } });
 
 /**
  * Everything outside the rebuild signature, (re)written on every pass: grid
@@ -197,7 +206,7 @@ export const applyCardFrame = (element: HTMLElement, card: PlacedCard, index: nu
   element.dataset["cardIndex"] = String(index);
   element.style.gridColumn = String(card.column + 1);
   element.style.gridRow = String(card.row + 1);
-  element.dataset["lastEvent"] = card.session.lastEventAt ?? "";
+  element.dataset["lastEvent"] = sessionLastEventAt(card.session) ?? "";
 };
 
 export type CardPatch = {

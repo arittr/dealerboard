@@ -43,6 +43,7 @@ const EMPTY_DEGRADED_SNAPSHOT: SessionSnapshotV2 = {
   schemaVersion: 2,
   health: { status: "error", message: "snapshot_unavailable" },
   sessions: [],
+  agents: null,
 };
 
 const sameIdentity = (a: FileIdentity, b: FileIdentity): boolean =>

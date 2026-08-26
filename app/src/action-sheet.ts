@@ -5,7 +5,7 @@
  * panel, not under bun test). All text goes through textContent.
  */
 
-import type { ProjectedSession } from "../../src/protocol";
+import type { BoardSession } from "./board";
 
 export type SheetActionId = "open" | "ack" | "reveal" | "copy" | "clear";
 
@@ -40,13 +40,12 @@ export type SheetOptions = {
  * lands, parsed sessions simply lack the key. Read it defensively so the
  * sheet works — with Reveal disabled — against both protocol shapes.
  */
-export const transcriptPathOf = (session: ProjectedSession): string | null => {
-  const record: Record<string, unknown> = session;
-  const value = record["transcriptPath"];
-  return typeof value === "string" && value.length > 0 ? value : null;
+export const transcriptPathOf = (session: BoardSession): string | null => {
+  const transcriptPath = session.transcriptPath;
+  return typeof transcriptPath === "string" && transcriptPath.length > 0 ? transcriptPath : null;
 };
 
-export const buildSheetModel = (session: ProjectedSession, options: SheetOptions): SheetModel => {
+export const buildSheetModel = (session: BoardSession, options: SheetOptions): SheetModel => {
   const actionsLocked = options.pendingAction != null;
   return {
     title: options.title,

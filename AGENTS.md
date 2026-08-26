@@ -118,9 +118,10 @@ stopping it is part of the change.
   stamped without it, so every v8-or-later database has it), Kimi, pi, and
   qwen push it at session start (pi via its shim's `session_start`), and the daemon
   resolves Claude/Codex ids (transcript tails) and grok's id (summary.json),
-  while Evener publishes its current model over AppWire
-  in the same maintenance pass as titles (last `"model":"…"` in the tail
-  wins). Null never clears a stored model.
+  while Evener publishes root and child models over AppWire: child starts
+  retain their initial model, and update-only model-change events apply to
+  existing roots or children, so heterogeneous siblings keep distinct models
+  as they change. Null never clears a stored model.
   The Paseo origin pip uses `COLOR_ORIGIN_PASEO` `#A78BFA` (bottom-right):
   filled disc for a Paseo parent session, hollow ring for a Paseo subagent,
   nothing for terminal/native sessions.
@@ -151,15 +152,19 @@ stopping it is part of the change.
   `subagentType` payloads are dropped), and no `SessionTitleChanged` push
   (titles are pulled). A grok `Stop` with a non-`end_turn` reason is the
   session-teardown observe fire and is dropped — `SessionEnd` owns removal.
-  Evener is inventory-backed rather than hook-backed: AppWire `active`,
-  `awaiting`, and `warning`/`systemError` map to working, waiting, and error;
-  ordered `turn/completed` notifications own unread settlement, while cold
-  hydration uses `SessionStatusObserved` to repair status without changing the
-  unread ledger.
-  A tile's effective status is the max (`error > waiting > working > idle`)
-  over its whole subtree, and any live subagent row lifts it to at least
-  `working` (`src/core/projection.ts`). The max also rolls up across
-  separate top-level rows through Paseo lineage: every effectively active
+  Evener is inventory-backed rather than hook-backed: AppWire `active` maps to
+  working, plain `awaiting` is the ordinary post-reply state and maps to idle,
+  `warning`/`systemError` map to error, and only `evener.askPending` or a
+  non-empty `pendingEscalations` list maps to waiting. Settled awaiting
+  subagents therefore remain removed instead of lifting their parents to
+  waiting. Ordered `turn/completed` notifications own unread settlement, while
+  cold hydration uses `SessionStatusObserved` to repair status without changing
+  the unread ledger.
+  Every projected node's effective status is the max
+  (`error > waiting > working > idle`) over its native subtree, and any live
+  native child row is at least `working` (`src/core/projection.ts`). The max
+  then rolls up across separate top-level rows through Paseo lineage: every
+  effectively active
   Paseo subagent aggregates its status upward along unique
   `originRef`/`originParentRef` ancestry (nested chains and cross-provider
   links included), so a done/read Paseo ancestor stays projected with a
@@ -256,8 +261,10 @@ stopping it is part of the change.
   Evener's `hub.toml` and `<hub_state_root>/auth-token` defaults. The bearer
   capability stays in memory and is never logged or persisted; non-loopback
   endpoints are refused. The collector lists only source `local`, hydrates
-  roots before live subagents, subscribes with one replace followed by additive
-  subscriptions, refreshes every 2s, and retries disconnects every 5s.
+  roots before live subagents, records each child start's own model, applies
+  later root or child model changes only after membership exists, subscribes
+  with one replace followed by additive subscriptions, refreshes every 2s,
+  and retries disconnects every 5s.
   Evener does not publish a process-local `hub --addr` override; custom
   addresses must also be set durably in `hub.toml` (preferred) or in the
   Stream Deck Agents LaunchAgent's `EVENER_HUB_ADDR` environment.
@@ -297,33 +304,46 @@ stopping it is part of the change.
   (frontend sources plus `styles.css`) and `app/src-tauri/` is the Rust
   crate. `bun run build:app` bundles the frontend, `dev:app` runs the Tauri
   dev shell, `bundle:app` produces the release `.app` bundle, and
-  `install:app` installs it into /Applications. It reads the same snapshot
-  file as the plugin — the daemon and the plugin are unchanged. The
-  strip's board is an app-local grouped reducer (`app/src/board.ts`, per
-  `docs/superpowers/specs/2026-08-25-strip-board-redesign-design.md`,
-  summarized in `docs/design.md`'s strip section): subagents join under
-  their nearest on-grid Paseo parent (`originParentRef` = `originRef`),
-  nested subs flatten to one indent level, and orphans form one atomic
-  tail; pages fill group-atomically (a ≤6-card group never splits and may
-  backfill a same-page gap, a 7–12 group needs a still-empty page and
-  wraps at the six-row seam, a larger group fills whole pages) into two
-  columns of six fixed 966×102 cards that never flex-resize, beside a
-  fixed 600px (~23.4%) rail; page count derives from the packing and the
-  persisted current page (`agent-strip.layout.v1`) clamps — the strip no
-  longer consumes the shared `reduceLayout`/`STRIP_GEOMETRY` paging (the
-  keypad keeps it unchanged). Card visuals
+  `install:app` installs it into /Applications. Snapshot v2 keeps the legacy
+  root-only `sessions` list and adds optional-on-wire `agents`; absence parses
+  as null and selects the old-daemon sessions/count fallback, while any
+  present array, including `[]`, selects graph-exclusive Xeneon reduction.
+  Stream Deck remains on `sessions` and `descendantCount`. The daemon validates
+  native parentage atomically, resolves safe cross-provider Paseo parents, and
+  publishes one mixed graph. The strip's app-local reducer
+  (`app/src/board.ts`, per
+  `docs/superpowers/specs/2026-08-25-strip-board-redesign-design.md` and
+  `docs/superpowers/specs/2026-08-25-xeneon-live-subagent-tree-design.md`,
+  summarized in `docs/design.md`'s strip section) sorts primary groups by
+  logical slot, immediate native/Paseo children by `openedAt`, provider, and
+  ID, and traverses them depth-first at one 44px indent. Missing, ambiguous,
+  or cyclic Paseo roots form one deterministic full-width orphan tail while
+  retaining safe descendants in depth-first order. Pages still fill
+  group-atomically (a ≤6-card group never splits and may backfill a same-page
+  gap, a 7–12 group needs a still-empty page and wraps at the six-row seam, a
+  larger group fills whole pages) into two columns of six fixed 966×102 cards
+  that never flex-resize, beside a fixed 600px (~23.4%) rail; page count derives
+  from the packing and the persisted current page (`agent-strip.layout.v1`)
+  clamps — the strip no longer consumes the shared
+  `reduceLayout`/`STRIP_GEOMETRY` paging (the keypad keeps it unchanged). Card
+  visuals
   live in `app/styles.css` + `app/src/cards.ts`, a web-native contract of
   `render.ts`'s status/chip system (status edge with border+wash on
   waiting/error, chip-corner unread dot with a ring, one-line
   italic-fallback title, 24-code-point model cap, meta-line project
-  suppression for grouped subs, origin disc then bare descendant badge,
-  sub pill + indent + violet spine) — keep them aligned via
-  `docs/design.md`. Strip-only card extras (no keypad counterpart): the
-  amber unread dot (the exact
-  `unreadSince` ledger flag), a ticking `statusSince` timer in the status
-  row, and an `activityLine` footer; the timer rewrites `textContent` in
-  place on the 1s rail cadence so the `renderedSignature` skip is never
-  disturbed. The
+  suppression for grouped subs, origin disc, sub pill + indent + violet
+  spine) — keep them aligned via `docs/design.md`. Every graph child renders
+  its own provider, model, title, effective status, and own `statusSince`
+  timer. Graph cards never show a descendant badge; only the old-daemon
+  fallback does. Native children always suppress unread and are display-only:
+  no tap ack/route/flash and no long-press sheet or deferred action. Paseo
+  children retain independent tap and action-sheet behavior. Finished native
+  children disappear; there is no history or collapse. Strip-only card extras
+  (no keypad counterpart) remain the amber unread dot (the exact `unreadSince`
+  ledger flag where permitted), a ticking `statusSince` timer in the status
+  row, and an `activityLine` footer; the timer rewrites `textContent` in place
+  on the 1s rail cadence so the `renderedSignature` skip is never disturbed.
+  The
   window pins to the monitor whose model string matches "xeneon edge" or
   whose physical resolution is 2560×720 (physical, so a scaled 1280×360
   HiDPI mode still matches), re-pins on reconnect, and autostarts at login.

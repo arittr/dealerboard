@@ -5,7 +5,7 @@
  * deep links; everything else flashes the tile. Pure — no Tauri imports.
  */
 
-import type { ProjectedSession } from "../../src/protocol";
+import type { BoardSession } from "./board";
 
 export type SessionRoute =
   | { kind: "paseo"; agentId: string }
@@ -15,7 +15,7 @@ export type SessionRoute =
 
 const KIMI_WEB_SESSIONS_URL = "http://127.0.0.1:58627/sessions/";
 
-export const routeForSession = (session: ProjectedSession): SessionRoute => {
+export const routeForSession = (session: BoardSession): SessionRoute => {
   if (session.originKind === "paseo" && session.originRef !== null) {
     return { kind: "paseo", agentId: session.originRef };
   }

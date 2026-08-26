@@ -160,6 +160,30 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       lastEventAt: NOW,
     },
   ],
+  agents: [
+    {
+      provider: "claude",
+      sessionId: "s1",
+      role: "primary",
+      lineage: null,
+      parent: null,
+      status: "idle",
+      title: "Title for s1",
+      project: null,
+      model: null,
+      openedAt: NOW,
+      statusSince: NOW,
+      activityLine: null,
+      unreadSince: NOW,
+      logicalSlot: 1,
+      ghosttyTerminalId: null,
+      transcriptPath: null,
+      originKind: null,
+      originRef: null,
+      originSubagent: false,
+      originParentRef: null,
+    },
+  ],
 };
 
 describe("ProjectionDaemon", () => {
@@ -255,6 +279,7 @@ describe("ProjectionDaemon", () => {
           schemaVersion: 2,
           health: { status: "error", message: "unsupported_schema" },
           sessions: [],
+          agents: [],
         },
       ]);
       expect(readSnapshotFile()).toEqual(unsupported.writes[0]!);
@@ -282,7 +307,7 @@ describe("ProjectionDaemon", () => {
     corrupt.daemon.start();
     try {
       expect(corrupt.writes).toEqual([
-        { schemaVersion: 2, health: { status: "error", message: "internal_error" }, sessions: [] },
+        { schemaVersion: 2, health: { status: "error", message: "internal_error" }, sessions: [], agents: [] },
       ]);
       expect(readSnapshotFile()).toEqual(corrupt.writes[0]!);
       expect(corrupt.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "internal_error" }]);
@@ -305,7 +330,7 @@ describe("ProjectionDaemon", () => {
     harness.daemon.start();
     try {
       expect(harness.writes).toEqual([
-        { schemaVersion: 2, health: { status: "error", message: "internal_error" }, sessions: [] },
+        { schemaVersion: 2, health: { status: "error", message: "internal_error" }, sessions: [], agents: [] },
       ]);
       // No commit happens between these polls: the retry is driven purely by
       // the previous poll having been unhealthy, and the identical unhealthy

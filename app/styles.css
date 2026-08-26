@@ -81,6 +81,9 @@ body[data-fullscreen] #board {
   border-left: 0.3125vw solid transparent; /* the 8px status-edge slot */
   cursor: pointer;
 }
+.card.display-only {
+  cursor: default;
+}
 
 /* Status edges and motion (colors and semantics mirror
    src/plugin/render.ts): working carries the liveness treatment: the 1s
@@ -670,8 +673,10 @@ body[data-fullscreen] #rail {
 .quota-account-label {
   flex: none;
   min-width: 0.8vw;
-  color: #e8eef7;
+  color: #64748b;
   font-variant-numeric: tabular-nums;
+  transform: scale(0.651); /* 20px glyph at native width; inherited metrics keep every meter aligned */
+  transform-origin: left center;
 }
 .quota-head {
   display: flex;

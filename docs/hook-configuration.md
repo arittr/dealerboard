@@ -80,8 +80,9 @@ and refreshes every two seconds to discover new sessions. Status mapping is:
 
 | Evener AppWire | Tile |
 |---|---|
-| `active` | working |
-| `awaiting` | waiting |
+| `active` without a pending blocker | working |
+| `awaiting` without a pending blocker | idle (the ordinary post-reply state) |
+| `evener.askPending` or non-empty `evener.pendingEscalations` | waiting |
 | `warning` / `systemError` | error |
 | `idle` | idle (visible only when unread) |
 | `closed` | removed |
@@ -99,8 +100,8 @@ To verify, start an Evener session through the hub, submit a prompt, then run:
 "$HOME/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" sessions list
 ```
 
-An `evener` row should show the session title/model and `working`, `waiting`,
-or `error` status. Evener tile presses currently use the same alert/flash
+An `evener` row should show the session title/model and `idle`, `working`,
+`waiting`, or `error` status. Evener tile presses currently use the same alert/flash
 behavior as pi and omp; no exact-focus binding is claimed.
 
 ---

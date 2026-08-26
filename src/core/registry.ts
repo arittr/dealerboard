@@ -337,6 +337,22 @@ const applySessionTitleChanged = (
   return result.changes > 0 ? "applied" : "ignored";
 };
 
+const isNonEmptyBoundedModel = (model: string): boolean => model.length > 0 && Array.from(model).length <= 256;
+
+const applySessionModelChanged = (
+  db: Database,
+  event: Extract<RegistryEvent, { kind: "SessionModelChanged" }>,
+): MutationResult => {
+  if (!isNonEmptyBoundedModel(event.model)) {
+    return "ignored";
+  }
+  const result = db.run(
+    "UPDATE active_sessions SET model = ? WHERE provider = ? AND session_id = ? AND model IS NOT ?",
+    [event.model, event.provider, event.sessionId, event.model],
+  );
+  return result.changes > 0 ? "applied" : "ignored";
+};
+
 /**
  * Reconcile an authoritative external snapshot without manufacturing a new
  * result. Live terminal events own unread_since; hydration and reconnect only
@@ -369,6 +385,7 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
     db.run(
       `UPDATE active_sessions
        SET parent_session_id = ?, status = 'idle', title = ?, project = ?,
+           model = COALESCE(?, model),
            status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
            updated_at = ?
        WHERE provider = ? AND session_id = ?`,
@@ -376,6 +393,7 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
         event.parentSessionId,
         event.title,
         event.project,
+        event.model,
         event.observedAt,
         event.observedAt,
         event.provider,
@@ -387,7 +405,7 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
   db.run(
     `INSERT INTO active_sessions
        (${COLUMNS}, status_since)
-     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL, 0, NULL, NULL, NULL, NULL, 0, NULL, ?)`,
+     VALUES (?, ?, ?, 'idle', ?, ?, NULL, ?, ?, NULL, 0, NULL, ?, NULL, NULL, 0, NULL, ?)`,
     [
       event.provider,
       event.sessionId,
@@ -396,6 +414,7 @@ const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: 
       event.project,
       event.observedAt,
       event.observedAt,
+      event.model,
       event.observedAt,
     ],
   );
@@ -498,6 +517,8 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
       return applySessionObserved(db, event);
     case "SessionTitleChanged":
       return applySessionTitleChanged(db, event);
+    case "SessionModelChanged":
+      return applySessionModelChanged(db, event);
     case "SubagentStart":
       return applySubagentStart(db, event);
     case "SessionStatusObserved":
