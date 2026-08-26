@@ -116,11 +116,15 @@ describe("planPulses", () => {
     expect(gated.next.get(CARD)?.lastEventAt).toBe("2026-08-25T00:00:03.000Z");
   });
 
-  test("an advance on a waiting, idle, or error card never fires", () => {
+  test("a working card that turns waiting, idle, or error never fires on an advance", () => {
     // The spec's non-goals: those three treatments are unchanged — an
     // Attention/Stop/StopFailure event must not bloom a non-working card.
     for (const status of ["waiting", "idle", "error"] as const) {
-      const seeded = planPulses(new Map(), [{ key: CARD, lastEventAt: "2026-08-25T00:00:01.000Z", status }], 1000);
+      const seeded = planPulses(
+        new Map(),
+        [{ key: CARD, lastEventAt: "2026-08-25T00:00:01.000Z", status: "working" }],
+        1000,
+      );
       const advanced = planPulses(seeded.next, [{ key: CARD, lastEventAt: "2026-08-25T00:00:02.000Z", status }], 8000);
       expect(advanced.fire).toEqual([]);
     }
