@@ -208,13 +208,13 @@ describe("token block layout", () => {
     });
   });
 
-  test("the yda label and viewBox carry d7's 446x84 geometry", () => {
+  test("the yda label and viewBox carry d7's 500x84 geometry", () => {
     withFakeDocument((root) => {
       renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }), { onJumpToPage: () => {} });
       const svg = descendants(root).find((node) => node.tagName === "svg");
-      expect(svg?.attributes["viewBox"]).toBe("0 0 446 84");
+      expect(svg?.attributes["viewBox"]).toBe("0 0 500 84");
       const label = descendants(root).find((node) => node.tagName === "text");
-      expect(label?.attributes["x"]).toBe("444");
+      expect(label?.attributes["x"]).toBe("498");
       expect(label?.attributes["y"]).toBe("48");
       expect(label?.textContent).toBe("yda 641M");
     });

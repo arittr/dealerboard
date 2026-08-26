@@ -86,26 +86,33 @@ the quota rows.
 
 1. **Token block** — `562.7M today` line unchanged (1.6vw, 650). Below it
    (10px margin), a single row replaces the old rates-then-sparkline stack:
-   - Left: a fixed **240px (9.375vw)** column with the two rolling rates
-     stacked vertically (`↑ 31.1M/hr` over `↑ 12.2M/10m`, 6px between),
-     1.2vw, existing trend colors, no `·` separator. Bottom-aligned to the
-     sparkline's box. Width check: the widest reachable string is the
-     flat-trend `→ 999.9M/10m` at ~216px (B-suffix values reach ~223px;
-     `formatTokensCompact` emits only k/M/B) — all under 240 with margin.
-   - Right: separated by an **18px gap**, the sparkline fills the remainder
-     (~447px), **84px tall**. In `app/src/token-usage.ts` the coupled
+   - Left: a content-sized column (`width: auto`) with a **190px (7.422vw)
+     min-width floor**, holding the two rolling rates stacked vertically
+     (`↑ 31.1M/hr` over `↑ 12.2M/10m`, 6px between), 1.2vw, existing trend
+     colors, no `·` separator. Bottom-aligned to the sparkline's box. Width
+     check: realistic rate strings run 151.8–179.5px (widest is
+     `→ 116.3M/hr`) — all under the 190px floor, so the column renders at a
+     constant 190px and the sparkline never shifts. The absolute worst
+     reachable string, `→ 9999.9B/10m` at ~227.8px, exceeds the floor; there
+     it pushes the column wider rather than clipping.
+   - Right: separated by a **12px gap**, the sparkline fills the remainder
+     (~503px), **84px tall**. In `app/src/token-usage.ts` the coupled
      geometry constants ALL change together: `SPARKLINE_VIEWBOX` 436×80 →
-     **446×84**, `SPARKLINE_BASELINE_Y` 70 → **78**, `SPARKLINE_CURVE_SPAN`
+     **500×84**, `SPARKLINE_BASELINE_Y` 70 → **78**, `SPARKLINE_CURVE_SPAN`
      66 → **74** (curve band y∈[4,78], matching d7's drawn baseline).
      Changing only the viewbox would leave a 14px dead band and a shrunken
      curve. The fill polygon keeps production semantics and **closes at the
      baseline (y=78)** — the d7 asset's close at the box bottom (y=84) is a
-     mockup artifact; the spec wins. `.rail-sparkline`'s `aspect-ratio`
-     (styles.css) changes 436/80 → **446/84** in step, and its full-width
-     sizing gives way to the flex-remainder row slot. Uniform
-     matched-aspect scaling is retained so 2px strokes and the 20px `yda`
-     label stay true. The `yda <total>` label (hardcoded in `rail.ts`'s
-     sparkline block) moves to baseline y=48, right-anchored at x=444.
+     mockup artifact; the spec wins. `.rail-sparkline` sizes with an
+     explicit **height (84px / 11.667vh)** rather than `aspect-ratio`, so
+     widening the box for the reclaimed rates-column space does not also
+     make it taller; row-slot sizing still gives the flex-remainder its
+     width. Uniform matched-aspect scaling is retained — the viewBox's
+     aspect nearly matches the resulting box, so the SVG's default uniform
+     `preserveAspectRatio` still scales it ~1:1 — so 2px strokes and the
+     20px `yda` label stay true. The `yda <total>` label (hardcoded in
+     `rail.ts`'s sparkline block) moves to baseline y=48, right-anchored at
+     x=498.
      Honest note: at y=48 the label clears the yesterday line for
      yesterday-≥-today data (the common case), but when today runs far
      ahead of yesterday the line's right end can pass through the label
@@ -118,9 +125,11 @@ the quota rows.
      absent and the row renders the rates column alone (row height from the
      rates); total + rates without curves matches today's behavior.
    - Note: the d7 asset sizes the rates column to its content and draws the
-     sparkline in a 460×84 box; the fixed 240px column, 18px gap, and
-     446×84 box here are the normative geometry (visually equivalent, and
-     stable as the rate values change width).
+     sparkline in a 460×84 box; the spec now follows suit — a content-sized
+     column (with a 190px min-width floor, so it stays stable across
+     realistic rate values rather than purely tracking content) beside a
+     500×84 box, closer to d7's own approach than the original fixed-240px,
+     446×84 geometry was, and still normative here.
 2. **Unread row** — text drops to **26px (1.016vw)**; dot, OFFLINE, amber
    active treatment, and count semantics unchanged.
 3. **Quota panels** (inside the zone) — the existing two-line meter contract
@@ -148,11 +157,12 @@ the quota rows.
 
 ## Implementation surface
 
-- `app/styles.css` — strip/board/rail widths; tokens-block row (240px rates
-  column, 6px intra-gap, 18px column gap); unread size; `.rail-sparkline`
-  aspect-ratio 446/84 and row-slot sizing; quota-zone flex rules. Update the
-  stale geometry comments while there: "600px native rail" (`:17`), "two
-  966px columns" (`:23–33`), "436x80-native box" (`:521–531`).
+- `app/styles.css` — strip/board/rail widths; tokens-block row (content-sized
+  rates column with a 190px min-width floor, 6px intra-gap, 12px column
+  gap); unread size; `.rail-sparkline` fixed height (500×84 box) and
+  row-slot sizing; quota-zone flex rules. Update the stale geometry
+  comments while there: "600px native rail" (`:17`), "two 966px columns"
+  (`:23–33`), "436x80-native box" (`:521–531`).
 - `app/src/rail.ts` — tokens section DOM (rates column + sparkline row);
   quota-zone wrapper around the quota sections; `yda` label baseline; stale
   436×80 comments (`:110–111`, `:135`).

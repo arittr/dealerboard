@@ -501,12 +501,12 @@ body[data-fullscreen] #rail {
   font-size: 1.6vw;
   font-weight: 650;
 }
-/* The two rolling rates stack in a fixed column beside the sparkline; the
-   240px width holds the widest compact value (→ 999.9M/10m ≈ 216px). */
+/* The two rolling rates stack beside the sparkline; tokens-rate's min-width
+   floor keeps the column width stable across realistic values. */
 .tokens-flow {
   display: flex;
   align-items: flex-end;
-  gap: 0.703vw; /* 18px native */
+  gap: 0.469vw; /* 12px native */
   margin-top: 1.389vh; /* 10px native */
 }
 .tokens-rate {
@@ -515,7 +515,8 @@ body[data-fullscreen] #rail {
   flex-direction: column;
   align-items: flex-start;
   gap: 0.833vh; /* 6px native */
-  width: 9.375vw; /* 240px native */
+  width: auto;
+  min-width: 7.422vw; /* 190px native: a stable floor above every realistic rate string, so the sparkline never shifts */
   color: #94a3b8;
   font-size: 1.2vw;
 }
@@ -526,17 +527,17 @@ body[data-fullscreen] #rail {
   color: #ff4d67;
 }
 
-/* d7's day-over-day sparkline: a 446x84-native box beside the rates — faint
+/* d7's day-over-day sparkline: a 500x84-native box beside the rates — faint
    fill under today's curve, dim yesterday line, bright today line, endpoint
    dot, and the yda micro-label as SVG text at d7's baseline (uniform
-   viewBox scaling keeps it 20px native). */
+   viewBox scaling keeps it 20px native). The height is fixed rather than
+   ratio-locked to the width, so a wider box is not a taller one — a taller
+   sparkline would eat the rail's quota-panel breathing room. */
 .rail-sparkline {
   position: relative;
   flex: 1;
   min-width: 0;
-  /* Match the 446x84 viewBox's aspect so the uniformly scaled SVG fills the
-     row's remaining width instead of centering with side gaps. */
-  aspect-ratio: 446 / 84;
+  height: 11.667vh; /* 84px native */
   overflow: visible; /* the endpoint dot sits at the plot edge */
 }
 .rail-sparkline svg {

@@ -471,17 +471,18 @@ once stamped, is immutable for the session's lifetime.
 Fixed 760px (~29.7%), top to bottom:
 
 - **Token block**: today's total (`48.9M today`) over a row that puts the
-  two trend-colored rolling rates — stacked vertically in a fixed 240px
-  column, no separator — beside the day-over-day sparkline. Rate semantics
-  are unchanged, still computed from the 288-sample ring, which is retained
-  unchanged and remains the sole input to the rates. With no day curves the
-  row renders the rates column alone.
+  two trend-colored rolling rates — stacked vertically in a content-sized
+  column with a 190px min-width floor, no separator — beside the
+  day-over-day sparkline. Rate semantics are unchanged, still computed from
+  the 288-sample ring, which is retained unchanged and remains the sole
+  input to the rates. With no day curves the row renders the rates column
+  alone.
 - **Day-over-day sparkline** beside the rates: a midnight-anchored LA-day
   x-axis with yesterday's complete cumulative curve as a dim 2px line
   ending in a `yda <total>` micro-label (an SVG `<text>` at the mockup's
   baseline) and today's partial curve as a bright 2px line with a faint
   fill, ending in an endpoint dot at the current position, all in a
-  matched-aspect 446×84 viewBox. Semantics:
+  matched-aspect 500×84 viewBox. Semantics:
   - The yesterday line renders only when the snapshot's yesterday curve is
     stamped with the LA calendar day immediately preceding the today curve's
     `providerDay`; otherwise only today's line renders. No curves in the

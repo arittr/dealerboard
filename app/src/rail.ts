@@ -107,7 +107,7 @@ const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
   const block = document.createElement("div");
   block.className = "rail-sparkline";
   const svg = document.createElementNS(SVG_NAMESPACE, "svg");
-  // d7's matched-aspect geometry: the 446x84 viewBox scales uniformly (no
+  // d7's matched-aspect geometry: the 500x84 viewBox scales uniformly (no
   // preserveAspectRatio) so strokes and the endpoint circle stay true.
   svg.setAttribute("viewBox", `0 0 ${SPARKLINE_VIEWBOX.width} ${SPARKLINE_VIEWBOX.height}`);
   const fill = sparklineFillPoints(sparkline.today.points);
@@ -132,8 +132,8 @@ const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
   }
   if (sparkline.yesterday !== null) {
     const label = document.createElementNS(SVG_NAMESPACE, "text");
-    // d7's baseline: y=48 of the 84px box, right-anchored at x=444.
-    label.setAttribute("x", "444");
+    // d7's baseline: y=48 of the 84px box, right-anchored at x=498.
+    label.setAttribute("x", "498");
     label.setAttribute("y", "48");
     label.setAttribute("text-anchor", "end");
     label.setAttribute("font-size", "20");

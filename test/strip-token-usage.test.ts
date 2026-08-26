@@ -220,14 +220,14 @@ describe("reduceSparkline", () => {
 });
 
 describe("sparkline SVG geometry", () => {
-  test("polyline points map to d7's 446x84 viewBox: x*446, baseline 78 minus y*74", () => {
+  test("polyline points map to d7's 500x84 viewBox: x*500, baseline 78 minus y*74", () => {
     expect(
       sparklinePolylinePoints([
         { x: 0, y: 0 },
         { x: 0.5, y: 0.5 },
         { x: 1, y: 1 },
       ]),
-    ).toBe("0.00,78.00 223.00,41.00 446.00,4.00");
+    ).toBe("0.00,78.00 250.00,41.00 500.00,4.00");
   });
 
   test("fill closes today's curve along the baseline at both ends; no points → null", () => {
@@ -236,7 +236,7 @@ describe("sparkline SVG geometry", () => {
         { x: 0.25, y: 0 },
         { x: 0.75, y: 1 },
       ]),
-    ).toBe("111.50,78.00 334.50,4.00 334.50,78.00 111.50,78.00");
+    ).toBe("125.00,78.00 375.00,4.00 375.00,78.00 125.00,78.00");
     expect(sparklineFillPoints([])).toBeNull();
   });
 
@@ -246,11 +246,11 @@ describe("sparkline SVG geometry", () => {
         { x: 0, y: 1 },
         { x: 0.5, y: 0.5 },
       ]),
-    ).toEqual({ cx: 223, cy: 41 });
+    ).toEqual({ cx: 250, cy: 41 });
     expect(sparklineEndpoint([])).toBeNull();
   });
 
-  test("the viewBox matches d7's 446x84 box", () => {
-    expect(SPARKLINE_VIEWBOX).toEqual({ width: 446, height: 84 });
+  test("the viewBox matches d7's 500x84 box", () => {
+    expect(SPARKLINE_VIEWBOX).toEqual({ width: 500, height: 84 });
   });
 });
