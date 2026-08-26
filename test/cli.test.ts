@@ -87,7 +87,7 @@ const startEvent = (sessionId: string, extra: Record<string, unknown> = {}): str
   JSON.stringify({
     hook_event_name: "SessionStart",
     session_id: sessionId,
-    cwd: "/users/drew/project-x",
+    cwd: "/users/test/project-x",
     session_title: `Title for ${sessionId}`,
     ...extra,
   });
@@ -270,7 +270,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "SessionStart",
           session_id: "blank-kimi",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           source: "startup",
           model: "k3",
         }),
@@ -309,7 +309,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "blank-kimi",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
@@ -537,7 +537,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "late-join",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
@@ -563,7 +563,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "s1",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
@@ -605,7 +605,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "s1",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),

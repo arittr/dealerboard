@@ -15,7 +15,7 @@ describe("field extraction", () => {
       decode({
         hook_event_name: "SessionStart",
         session_id: "s1",
-        cwd: "/users/drew/project-x",
+        cwd: "/users/test/project-x",
         session_title: "Fix the thing",
         source: "startup",
       }),
@@ -82,7 +82,7 @@ describe("field extraction", () => {
 
   test("derives project only as the basename of the allowlisted cwd", () => {
     const start = (cwd: string): RegistryEvent[] => decode({ hook_event_name: "SessionStart", session_id: "s1", cwd });
-    expect(start("/users/drew/work/repo")).toEqual([
+    expect(start("/users/test/work/repo")).toEqual([
       {
         kind: "SessionStart",
         provider: "claude",
@@ -116,7 +116,7 @@ describe("field extraction", () => {
       decode({
         hook_event_name: "SessionStart",
         session_id: "s1",
-        cwd: "/users/drew/repo",
+        cwd: "/users/test/repo",
         transcript_path: "/Users/test/.claude/projects/-users-test-repo/s1.jsonl",
       }),
     ).toEqual([
@@ -136,7 +136,7 @@ describe("field extraction", () => {
       decode({
         hook_event_name: "UserPromptSubmit",
         session_id: "s1",
-        cwd: "/users/drew/repo",
+        cwd: "/users/test/repo",
         transcriptPath: "/Users/test/.claude/projects/-users-test-repo/s1.jsonl",
       }),
     ).toEqual([
@@ -210,7 +210,7 @@ describe("event mapping", () => {
     // registers (so the start's model lands), but an idle, never-unread row
     // is never projected — the grid stays clean until the first prompt.
     expect(
-      decode(withIdentity({ hook_event_name: "SessionStart", cwd: "/users/drew/project-x", model: "k3" }), "kimi"),
+      decode(withIdentity({ hook_event_name: "SessionStart", cwd: "/users/test/project-x", model: "k3" }), "kimi"),
     ).toEqual([
       {
         kind: "SessionStart",
@@ -229,7 +229,7 @@ describe("event mapping", () => {
       decode(
         withIdentity({
           hook_event_name: "UserPromptSubmit",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
         "kimi",
@@ -357,7 +357,7 @@ describe("event mapping", () => {
         session_id: "parent",
         agent_id: "child-1",
         agent_type: "Explore",
-        cwd: "/users/drew/repo",
+        cwd: "/users/test/repo",
       }),
     ).toEqual([
       {
@@ -446,7 +446,7 @@ describe("event mapping", () => {
     const ambientStart = {
       session_id: "ambient-1",
       transcript_path: null,
-      cwd: "/users/drew/project-x",
+      cwd: "/users/test/project-x",
       hook_event_name: "SessionStart",
       model: "gpt-5.6-terra",
       permission_mode: "bypassPermissions",
@@ -459,7 +459,7 @@ describe("event mapping", () => {
           session_id: "ambient-1",
           turn_id: "turn-1",
           transcript_path: null,
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           hook_event_name: "UserPromptSubmit",
           prompt: "Generate 0 to 3 hyperpersonalized suggestions",
         },
@@ -697,7 +697,7 @@ describe("model field", () => {
           hook_event_name: "SessionStart",
           session_id: "k1",
           session_title: "Existing session",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           model: "k3",
         },
         "kimi",
@@ -724,7 +724,7 @@ describe("model field", () => {
           hook_event_name: "SessionStart",
           session_id: "k1",
           session_title: "Existing session",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
         },
         "kimi",
       ),
@@ -859,8 +859,8 @@ describe("qwen native envelopes", () => {
         {
           hook_event_name: "SessionStart",
           session_id: "q1",
-          cwd: "/users/drew/proj",
-          transcript_path: "/users/drew/.qwen/projects/proj/chats/q1.jsonl",
+          cwd: "/users/test/proj",
+          transcript_path: "/users/test/.qwen/projects/proj/chats/q1.jsonl",
           model: "qwen3.8-max-preview",
           source: "startup",
         },
@@ -874,7 +874,7 @@ describe("qwen native envelopes", () => {
         title: null,
         project: "proj",
         ghosttyTerminalId: null,
-        transcriptPath: "/users/drew/.qwen/projects/proj/chats/q1.jsonl",
+        transcriptPath: "/users/test/.qwen/projects/proj/chats/q1.jsonl",
         model: "qwen3.8-max-preview",
         observedAt: NOW,
       },
@@ -908,7 +908,7 @@ describe("zcode transcript suppression", () => {
         {
           hook_event_name: "SessionStart",
           session_id: "z1",
-          cwd: "/users/drew/proj",
+          cwd: "/users/test/proj",
           transcript_path: "/tmp/zcode-hook-123.jsonl",
         },
         "zcode",

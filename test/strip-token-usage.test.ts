@@ -39,7 +39,7 @@ const read = (value: TokenUsageSnapshot): { mtimeMs: number; contents: string } 
 });
 
 describe("formatTokensCompact", () => {
-  test("formats with glorp's compact rules: one decimal, .0 stripped, k/M/B", () => {
+  test("formats compactly with one decimal, .0 stripped, and k/M/B suffixes", () => {
     expect(formatTokensCompact(0)).toBe("0");
     expect(formatTokensCompact(42)).toBe("42");
     expect(formatTokensCompact(999)).toBe("999");
