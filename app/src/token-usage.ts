@@ -179,13 +179,13 @@ export const reduceSparkline = (snapshot: TokenUsageSnapshot): SparklineModel | 
   };
 };
 
-/* SVG geometry for the sparkline (d6's exact 436x80 box: curve baseline y=70,
+/* SVG geometry for the sparkline (d7's exact 500x84 box: curve baseline y=78,
    curve max y=4). Pure and DOM-free so rail.ts stays a thin attribute shell. */
 
-export const SPARKLINE_VIEWBOX = { width: 436, height: 80 } as const;
+export const SPARKLINE_VIEWBOX = { width: 500, height: 84 } as const;
 
-const SPARKLINE_BASELINE_Y = 70;
-const SPARKLINE_CURVE_SPAN = 66;
+const SPARKLINE_BASELINE_Y = 78;
+const SPARKLINE_CURVE_SPAN = 74;
 
 const sparkCoordinate = (point: SparklinePoint): string => {
   const x = (point.x * SPARKLINE_VIEWBOX.width).toFixed(2);
@@ -193,7 +193,7 @@ const sparkCoordinate = (point: SparklinePoint): string => {
   return `${x},${y}`;
 };
 
-/** Polyline points attribute for a curve: x*436, 70 − y*66. */
+/** Polyline points attribute for a curve: x*500, 78 − y*74. */
 export const sparklinePolylinePoints = (points: readonly SparklinePoint[]): string =>
   points.map(sparkCoordinate).join(" ");
 

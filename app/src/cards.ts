@@ -155,7 +155,11 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   const statusDot = document.createElement("span");
   statusDot.className = "status-dot";
   statusRow.append(statusDot);
-  appendText(statusRow, "status-word", model.status);
+  // Working/idle carry their state in the dot and edge color; only the
+  // attention states spell it out.
+  if (model.status === "waiting" || model.status === "error") {
+    appendText(statusRow, "status-word", model.status);
+  }
   if (model.statusSince !== null && model.timer !== null) {
     const timer = appendText(statusRow, "cardtimer", model.timer.slice(model.status.length + 1));
     timer.dataset["since"] = model.statusSince;

@@ -14,13 +14,13 @@ body {
 }
 #strip {
   display: grid;
-  grid-template-columns: 1fr 23.4375%; /* 600px native rail */
+  grid-template-columns: 1fr 29.6875%; /* 760px native rail */
   height: 100vh;
   touch-action: none;
   -webkit-touch-callout: none;
 }
 
-/* Board: fixed geometry — two 966px columns of six 102px rows, 12px gaps,
+/* Board: fixed geometry — two 886px columns of six 102px rows, 12px gaps,
    44px top / 16px left padding (native px converted at 2560x720:
    px / 25.6 = vw, px / 7.2 = vh). macOS draws its menu bar as a ~30px
    overlay on the strip display (no visibleFrame reservation), so the top
@@ -30,7 +30,7 @@ body {
    placement. */
 #board {
   display: grid;
-  grid-template-columns: repeat(2, 37.734vw); /* 966px native */
+  grid-template-columns: repeat(2, 34.609vw); /* 886px native */
   grid-template-rows: repeat(6, 14.167vh); /* 102px native */
   gap: 1.667vh 0.469vw; /* 12px native */
   padding: 6.111vh 0 0 0.625vw; /* 44px top clears the menu bar overlay, 16px left */
@@ -541,7 +541,6 @@ body[data-fullscreen] #rail {
 .rail-tokens {
   display: flex;
   flex-direction: column;
-  gap: 0.4vh;
   font-variant-numeric: tabular-nums;
 }
 .rail-tokens[data-state="stale"] {
@@ -552,9 +551,22 @@ body[data-fullscreen] #rail {
   font-size: 1.6vw;
   font-weight: 650;
 }
-.tokens-rate {
+/* The two rolling rates stack beside the sparkline; tokens-rate's min-width
+   floor keeps the column width stable across realistic values. */
+.tokens-flow {
   display: flex;
-  gap: 0.5vw;
+  align-items: flex-end;
+  gap: 0.469vw; /* 12px native */
+  margin-top: 1.389vh; /* 10px native */
+}
+.tokens-rate {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.833vh; /* 6px native */
+  width: auto;
+  min-width: 7.422vw; /* 190px native: a stable floor above every realistic rate string, so the sparkline never shifts */
   color: #94a3b8;
   font-size: 1.2vw;
 }
@@ -564,21 +576,18 @@ body[data-fullscreen] #rail {
 .tokens-rate [data-trend="down"] {
   color: #ff4d67;
 }
-.tokens-rate-sep {
-  color: #4a5568;
-}
 
-/* d6's day-over-day sparkline: a 436x80-native box under the rates — faint
+/* d7's day-over-day sparkline: a 500x84-native box beside the rates — faint
    fill under today's curve, dim yesterday line, bright today line, endpoint
-   dot, and the yda micro-label as SVG text at d6's exact baseline (uniform
-   viewBox scaling keeps it 20px native; native px converted at 2560x720:
-   px / 25.6 = vw, px / 7.2 = vh). */
+   dot, and the yda micro-label as SVG text at d7's baseline (uniform
+   viewBox scaling keeps it 20px native). The height is fixed rather than
+   ratio-locked to the width, so a wider box is not a taller one — a taller
+   sparkline would eat the rail's quota-panel breathing room. */
 .rail-sparkline {
   position: relative;
-  margin-top: 0.547vw; /* 14px native */
-  /* Match the 436x80 viewBox's aspect so the uniformly scaled SVG fills the
-     rail's inner width instead of centering with side gaps. */
-  aspect-ratio: 436 / 80;
+  flex: 1;
+  min-width: 0;
+  height: 11.667vh; /* 84px native */
   overflow: visible; /* the endpoint dot sits at the plot edge */
 }
 .rail-sparkline svg {
@@ -592,10 +601,23 @@ body[data-fullscreen] #rail {
   display: flex;
   align-items: center;
   gap: 0.6vw;
+  margin-top: 1.667vh; /* + the rail gap ≈ 20px below the token block */
+  font-size: 1.016vw; /* 26px native */
 }
 .rail-unread.active {
   color: #ffb020;
   font-weight: 600;
+}
+
+/* The quota panels share one flex zone that absorbs the rail's free height,
+   spreading the meters evenly instead of packing them (the reclaimed space
+   goes between the bars). */
+.rail-quota-zone {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-evenly;
+  min-height: 0;
 }
 
 .rail-pager {

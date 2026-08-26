@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { QuotaAccountMeterModel, QuotaPanelModel } from "../app/src/quota";
 import { quotaRenderModel, type RailModel, railRenderSignature, renderRail } from "../app/src/rail";
+import type { TokenUsageRailModel } from "../app/src/token-usage";
 import { descendants, hasClass, renderedText, withFakeDocument } from "./support/fake-dom";
 
 const NOW = Date.parse("2026-08-25T20:00:00Z");
@@ -149,6 +150,88 @@ test("groups Claude account meters in one stack after the shared provider header
     expect(group?.children[1]?.children.map((node) => node.dataset["account"])).toEqual([
       "claude-swap:1",
       "claude-swap:2",
+    ]);
+  });
+});
+
+const visibleTokens = (): Extract<TokenUsageRailModel, { state: "ok" | "stale" }> => ({
+  state: "ok",
+  totalTokens: 562_700_000,
+  hour: { tokens: 31_100_000, trend: "up" },
+  tenMin: { tokens: 12_200_000, trend: "up" },
+  sparkline: {
+    today: {
+      points: [
+        { x: 0, y: 0 },
+        { x: 0.65, y: 0.88 },
+      ],
+    },
+    yesterday: {
+      points: [
+        { x: 0, y: 0 },
+        { x: 1, y: 1 },
+      ],
+      label: "yda 641M",
+    },
+  },
+});
+
+describe("token block layout", () => {
+  test("stacks the two rates in a column beside the sparkline, no separator", () => {
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }), { onJumpToPage: () => {} });
+      expect(root.children.map((node) => node.className)).toEqual([
+        "rail-tokens",
+        "rail-unread active",
+        "rail-quota-zone",
+        "rail-pager",
+      ]);
+      const tokens = descendants(root).find((node) => node.className === "rail-tokens");
+      expect(tokens?.children.map((node) => node.className)).toEqual(["tokens-today", "tokens-flow"]);
+      const flow = tokens?.children[1];
+      expect(flow?.children.map((node) => node.className)).toEqual(["tokens-rate", "rail-sparkline"]);
+      expect(flow?.children[0]?.children).toHaveLength(2);
+      expect(descendants(root).some((node) => node.className === "tokens-rate-sep")).toBe(false);
+      expect(renderedText(root)).toContain("562.7M today");
+      expect(renderedText(root)).toContain("↑ 31.1M/hr");
+      expect(renderedText(root)).toContain("↑ 12.2M/10m");
+    });
+  });
+
+  test("without day curves the row renders the rates column alone", () => {
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), sparkline: null } }), {
+        onJumpToPage: () => {},
+      });
+      const flow = descendants(root).find((node) => node.className === "tokens-flow");
+      expect(flow?.children.map((node) => node.className)).toEqual(["tokens-rate"]);
+    });
+  });
+
+  test("the yda label and viewBox carry d7's 500x84 geometry", () => {
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }), { onJumpToPage: () => {} });
+      const svg = descendants(root).find((node) => node.tagName === "svg");
+      expect(svg?.attributes["viewBox"]).toBe("0 0 500 84");
+      const label = descendants(root).find((node) => node.tagName === "text");
+      expect(label?.attributes["x"]).toBe("498");
+      expect(label?.attributes["y"]).toBe("48");
+      expect(label?.textContent).toBe("yda 641M");
+    });
+  });
+});
+
+test("quota sections sit inside one flex zone between unread and pager", () => {
+  withFakeDocument((root) => {
+    renderRail(root as unknown as HTMLElement, model({ quota: [quotaPanel(), quotaPanel({ provider: "codex" })] }), {
+      onJumpToPage: () => {},
+    });
+    const zone = descendants(root).find((node) => node.className === "rail-quota-zone");
+    expect(zone?.children.map((node) => node.className)).toEqual(["rail-quota", "rail-quota"]);
+    expect(root.children.map((node) => node.className.split(" ")[0])).toEqual([
+      "rail-unread",
+      "rail-quota-zone",
+      "rail-pager",
     ]);
   });
 });

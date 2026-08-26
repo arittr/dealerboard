@@ -11,10 +11,11 @@ import {
   cardKey,
   cardViewModel,
   planCardPatches,
+  renderBoard,
   statusLineText,
 } from "../app/src/cards";
 import type { ProjectedSession } from "../src/protocol";
-import { FakeElement } from "./support/fake-dom";
+import { descendants, FakeElement, hasClass, withFakeDocument } from "./support/fake-dom";
 
 const session = (slot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
   provider: "claude",
@@ -247,5 +248,35 @@ describe("liveness reconciliation", () => {
     expect(element.style.gridRow).toBe("2");
     applyCardFrame(element, placed({ column: 2, row: 1 }, { lastEventAt: null }), 5);
     expect(element.dataset["lastEvent"]).toBe("");
+  });
+});
+
+describe("status word rendering", () => {
+  const pageWith = (status: ProjectedSession["status"]) => ({
+    cards: [placed({}, { status, statusSince: "2026-08-25T00:08:00.000Z" })],
+  });
+
+  test("working and idle cards render dot and timer with no status word", () => {
+    for (const status of ["working", "idle"] as const) {
+      withFakeDocument((root) => {
+        renderBoard(root as unknown as HTMLElement, pageWith(status), false);
+        const nodes = descendants(root);
+        expect(nodes.some((node) => hasClass(node, "status-word"))).toBe(false);
+        expect(nodes.some((node) => hasClass(node, "status-dot"))).toBe(true);
+        expect(nodes.filter((node) => hasClass(node, "cardtimer"))).toHaveLength(1);
+      });
+    }
+  });
+
+  test("waiting and error cards keep their bright status word", () => {
+    for (const status of ["waiting", "error"] as const) {
+      withFakeDocument((root) => {
+        renderBoard(root as unknown as HTMLElement, pageWith(status), false);
+        const word = descendants(root).find((node) => hasClass(node, "status-word"));
+        expect(word?.textContent).toBe(status);
+        expect(descendants(root).some((node) => hasClass(node, "status-dot"))).toBe(true);
+        expect(descendants(root).filter((node) => hasClass(node, "cardtimer"))).toHaveLength(1);
+      });
+    }
   });
 });
