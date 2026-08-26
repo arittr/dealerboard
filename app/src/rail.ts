@@ -1,8 +1,8 @@
 /**
- * The strip's fixed right rail: token usage (today's total with rolling /hr
- * and /10m rates), the unread count carrying the daemon-health dot (red plus
- * OFFLINE when degraded), per-provider quota panels (binding window, tag
- * pill, bar), and page dots. Rebuilt
+ * The strip's fixed right rail: the token block (total over
+ * rates-beside-sparkline), the unread row carrying the daemon-health dot (red
+ * plus OFFLINE when degraded), the quota zone (per-provider quota panels:
+ * binding window, tag pill, bar), and page dots. Rebuilt
  * wholesale on each render — the rail is small and has no CSS animations to
  * disturb.
  */
@@ -107,7 +107,7 @@ const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
   const block = document.createElement("div");
   block.className = "rail-sparkline";
   const svg = document.createElementNS(SVG_NAMESPACE, "svg");
-  // d6's matched-aspect geometry: the 436x80 viewBox scales uniformly (no
+  // d7's matched-aspect geometry: the 446x84 viewBox scales uniformly (no
   // preserveAspectRatio) so strokes and the endpoint circle stay true.
   svg.setAttribute("viewBox", `0 0 ${SPARKLINE_VIEWBOX.width} ${SPARKLINE_VIEWBOX.height}`);
   const fill = sparklineFillPoints(sparkline.today.points);
@@ -132,9 +132,9 @@ const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
   }
   if (sparkline.yesterday !== null) {
     const label = document.createElementNS(SVG_NAMESPACE, "text");
-    // d6.html:444 — the exact baseline: y=30 of the 80px box, right-aligned at x=434.
-    label.setAttribute("x", "434");
-    label.setAttribute("y", "30");
+    // d7's baseline: y=48 of the 84px box, right-anchored at x=444.
+    label.setAttribute("x", "444");
+    label.setAttribute("y", "48");
     label.setAttribute("text-anchor", "end");
     label.setAttribute("font-size", "20");
     label.setAttribute("fill", "#94A3B8");
@@ -155,16 +155,16 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   const today = document.createElement("div");
   today.className = "tokens-today";
   today.textContent = `${formatTokensCompact(model.totalTokens)} today`;
+  const flow = document.createElement("div");
+  flow.className = "tokens-flow";
   const rates = document.createElement("div");
   rates.className = "tokens-rate";
-  const separator = document.createElement("span");
-  separator.className = "tokens-rate-sep";
-  separator.textContent = "·";
-  rates.append(rateSpan(model.hour, "hr"), separator, rateSpan(model.tenMin, "10m"));
-  section.append(today, rates);
+  rates.append(rateSpan(model.hour, "hr"), rateSpan(model.tenMin, "10m"));
+  flow.append(rates);
   if (model.sparkline !== null) {
-    section.append(sparklineBlock(model.sparkline));
+    flow.append(sparklineBlock(model.sparkline));
   }
+  section.append(today, flow);
   return section;
 };
 
@@ -345,12 +345,14 @@ export const railRenderSignature = (model: RailModel): string => {
 export const renderRail = (root: HTMLElement, model: RailModel, actions: RailActions): void => {
   const tokens = tokensSection(model.tokens);
   const nowMs = model.now.getTime();
-  const quotaSections = model.quota.map((quota) => quotaSection(quota, nowMs));
+  const zone = document.createElement("div");
+  zone.className = "rail-quota-zone";
+  zone.append(...model.quota.map((quota) => quotaSection(quota, nowMs)));
 
   const sections: HTMLElement[] = [];
   if (tokens !== null) {
     sections.push(tokens);
   }
-  sections.push(unreadSection(model), ...quotaSections, pagerSection(model, actions));
+  sections.push(unreadSection(model), zone, pagerSection(model, actions));
   root.replaceChildren(...sections);
 };
