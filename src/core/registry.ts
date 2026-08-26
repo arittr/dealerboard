@@ -788,7 +788,7 @@ export const syncPaseoStates = (
     const joinedByRef = new Map<string, Set<string>>();
     for (const state of states) {
       const joined = joinedByRef.get(state.agentId) ?? new Set<string>();
-      joined.add(`${state.provider} ${state.sessionId}`);
+      joined.add(`${state.provider}\u0000${state.sessionId}`);
       joinedByRef.set(state.agentId, joined);
     }
     for (const state of states) {
