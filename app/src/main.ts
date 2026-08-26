@@ -56,7 +56,7 @@ import {
 import { createIngestGate } from "./ingest-gate";
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
-import { renderRail } from "./rail";
+import { railRenderSignature, renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
 import { identityOf, resolveBoardCard, type SessionIdentity } from "./tile-identity";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
@@ -67,6 +67,7 @@ const SETTINGS_KEY = "agent-strip.layout.v1";
 
 let lastGood: SessionSnapshotV2 | null = null;
 let renderedSignature = "";
+let railRenderedSignature = "";
 let currentView: SnapshotView | null = null;
 let lastPayload: SnapshotPayload | null = null;
 let currentQuota: QuotaPanelModel[] = [];
@@ -134,19 +135,24 @@ const renderRailNow = (): void => {
   if (root === null || currentView === null) {
     return;
   }
-  renderRail(
-    root,
-    {
-      degraded: currentView.degraded,
-      unreadCount: countUnreadSessions(currentView.snapshot),
-      quota: currentQuota,
-      tokens: currentTokenUsage,
-      page: currentPage + 1,
-      pageCount: currentPageCount,
-      now: new Date(),
-    },
-    { onJumpToPage: jumpToPage },
-  );
+  const model = {
+    degraded: currentView.degraded,
+    unreadCount: countUnreadSessions(currentView.snapshot),
+    quota: currentQuota,
+    tokens: currentTokenUsage,
+    page: currentPage + 1,
+    pageCount: currentPageCount,
+    now: new Date(),
+  };
+  // Skip the rebuild while nothing rendered would change: the 1s cadence
+  // exists only for countdown minute rollovers, and rebuilding every second
+  // would replace the page-dot buttons out from under an in-flight tap.
+  const signature = railRenderSignature(model);
+  if (signature === railRenderedSignature) {
+    return;
+  }
+  railRenderedSignature = signature;
+  renderRail(root, model, { onJumpToPage: jumpToPage });
 };
 
 /**

@@ -239,6 +239,33 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
   return section;
 };
 
+/**
+ * The rail's render-skip signature: every derivation renderRail puts on
+ * screen, with wall-clock time folded in only through the formatted strings
+ * that actually display it (the reset countdown's minute label). The driver
+ * renders on a 1s cadence for those minute rollovers; between them the
+ * signature is stable and the rebuild is skipped — a wholesale rebuild every
+ * second would detach the page-dot buttons mid-press and churn layout.
+ */
+export const railRenderSignature = (model: RailModel): string => {
+  const nowMs = model.now.getTime();
+  return JSON.stringify({
+    degraded: model.degraded,
+    unreadCount: model.unreadCount,
+    page: model.page,
+    pageCount: model.pageCount,
+    tokens: model.tokens,
+    quota: model.quota.map((panel) => [
+      panel.provider,
+      panel.state,
+      formatBindingTag(panel),
+      formatBindingNote(panel, nowMs),
+      formatBindingPercent(panel),
+      bindingWindow(panel)?.percentRemaining ?? null,
+    ]),
+  });
+};
+
 export const renderRail = (root: HTMLElement, model: RailModel, actions: RailActions): void => {
   const tokens = tokensSection(model.tokens);
   const nowMs = model.now.getTime();
