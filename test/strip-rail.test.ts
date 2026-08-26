@@ -140,3 +140,15 @@ test("renders one Claude header, two bars, one active marker, and per-account di
     expect(renderedText(root)).not.toContain("organization");
   });
 });
+
+test("groups Claude account meters in one stack after the shared provider header", () => {
+  withFakeDocument((root) => {
+    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
+    const group = descendants(root).find((node) => hasClass(node, "quota-group"));
+    expect(group?.children.map((node) => node.className)).toEqual(["quota-provider-head", "quota-account-stack"]);
+    expect(group?.children[1]?.children.map((node) => node.dataset["account"])).toEqual([
+      "claude-swap:1",
+      "claude-swap:2",
+    ]);
+  });
+});
