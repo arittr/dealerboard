@@ -24,7 +24,7 @@ import type { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { PROVIDER_KEYS, type Provider, type RegistryEvent } from "../protocol";
 import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
-import { ProjectionDaemon } from "./daemon";
+import { PASEO_BACKGROUND_SETTLE_GRACE_MS, ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
 import { createEvenerCollector, resolveEvenerHubConnection } from "./evener";
 import { detectOrigin } from "./origin";
@@ -430,7 +430,12 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     // The loader skips records naming unknown providers, so the predicate
     // narrows its string providers to the canonical union on the way into
     // the registry sync.
-    const syncPaseo = (db: Database) => syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState));
+    const syncPaseo = (db: Database) =>
+      syncPaseoStates(
+        db,
+        loadPaseoStates(paseoDir).filter(isKnownProviderState),
+        new Date(Date.now() - PASEO_BACKGROUND_SETTLE_GRACE_MS).toISOString(),
+      );
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
     // Evener is observed through its supported daemon-wide AppWire feed. The

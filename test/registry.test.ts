@@ -1159,6 +1159,29 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")?.status).toBe("working");
   });
 
+  test("settles a background-armed row only past the caller's grace cutoff", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("Activity", "s1", { at: at(3) }),
+      simple("BackgroundWorkStarted", "s1", { at: at(4) }),
+      // The Stop keeps the row working: a background shell is outstanding.
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    expect(getRow("s1")).toMatchObject({ status: "working", background_outstanding: 1 });
+
+    const settledRecord = paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: at(6) });
+
+    // The row's last hook is not older than the cutoff yet: the background
+    // claim stands and the row keeps working.
+    syncPaseoStates(db, [settledRecord], at(4));
+    expect(getRow("s1")?.status).toBe("working");
+
+    // Past the cutoff the lost completion is presumed: retire and disarm, so
+    // a later Stop cannot re-stick the row.
+    expect(syncPaseoStates(db, [settledRecord], at(8))).toBe(1);
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(6), background_outstanding: 0 });
+  });
+
   test("retires a stuck waiting row when the agent closed", () => {
     applyRegistryEvents(db, [start("s1"), simple("Attention", "s1", { at: at(3) })]);
     expect(getRow("s1")?.status).toBe("waiting");

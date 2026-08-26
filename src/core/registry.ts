@@ -717,10 +717,18 @@ export type PaseoSyncState = {
  *   flight) whose `updatedAt` is strictly newer than the row's last hook
  *   retires a stuck working or waiting row to idle: its turn-end hook was
  *   missed (interrupt, host sleep, daemon swap) and Paseo's record is the
- *   newer witness. Background-armed rows stay working — the shell still
- *   acts on the session's behalf, exactly as in applyStop — and error rows
- *   keep their failure visible. `status_since` adopts the record's settle
- *   time; unread stays the attention mirror's business.
+ *   newer witness. Error rows keep their failure visible. `status_since`
+ *   adopts the record's settle time; unread stays the attention mirror's
+ *   business.
+ * - A background-armed row normally outlives its Stop on purpose — the
+ *   shell still acts on the session's behalf, exactly as in applyStop. But
+ *   the disarming edge (TaskStop) can be lost the same way the turn-end
+ *   can, so a settled record may override the claim once the row's last
+ *   hook is older than `backgroundSettleCutoffIso`: the completion is
+ *   presumed lost, the row retires, and the flag disarms so a later Stop
+ *   cannot re-stick it. Real background work that completes after the
+ *   retirement still wakes a turn whose hooks re-raise working. Callers
+ *   that pass no cutoff never settle background-armed rows.
  *
  * Origin stamping (kind/ref/subagent) (and now `origin_parent_ref`) stays
  * unconditional for matched top-level rows. A difference-guard in the WHERE
@@ -747,7 +755,11 @@ const laterInstant = (a: string | null, b: string | null): string | null =>
 /** Paseo lifecycle values with no turn in flight: proof a working row's turn-end was missed. */
 const SETTLED_PASEO_STATUSES: ReadonlySet<PaseoAgentStatus> = new Set(["idle", "closed"]);
 
-export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
+export const syncPaseoStates = (
+  db: Database,
+  states: readonly PaseoSyncState[],
+  backgroundSettleCutoffIso: string | null = null,
+): number =>
   inWriteTransaction(db, () => {
     let changed = 0;
     // The joined provider sessions each ref claims in this pass: rotation
@@ -841,16 +853,25 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
       // settle time as status_since. updated_at (the prune lease) stays put
       // like every other maintenance write, and the strict comparison keeps
       // a record written before the row's newest hook from undoing a turn
-      // that genuinely started since.
+      // that genuinely started since. A background-armed row holds out until
+      // its last hook predates the caller's cutoff — then the lost TaskStop
+      // is presumed and the flag disarms with the retirement.
       if (state.lastStatus !== null && SETTLED_PASEO_STATUSES.has(state.lastStatus) && state.updatedAt !== null) {
         const settled = db.run(
           `UPDATE active_sessions
-           SET status = 'idle', status_since = ?
+           SET status = 'idle', status_since = ?, background_outstanding = 0
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND status IN ('working', 'waiting')
-             AND background_outstanding = 0
-             AND ? > updated_at`,
-          [state.updatedAt, state.provider, state.sessionId, state.updatedAt],
+             AND ? > updated_at
+             AND (background_outstanding = 0 OR (? IS NOT NULL AND updated_at < ?))`,
+          [
+            state.updatedAt,
+            state.provider,
+            state.sessionId,
+            state.updatedAt,
+            backgroundSettleCutoffIso,
+            backgroundSettleCutoffIso,
+          ],
         );
         changed += settled.changes;
       }
