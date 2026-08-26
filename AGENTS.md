@@ -328,8 +328,18 @@ stopping it is part of the change.
   always participates — an extra can be selected as the session window
   (codex's Spark 5-hour), and unselected extras publish as `extraWindows`
   (cap 8) with provider-name-stripped labels (claude's `Fable only`, codex's
-  `Spark Weekly`); the widget-snapshot fallback publishes none — and
-  publishes `quota-snapshot.json` (`schemaVersion` 2; the strip's reader
+  `Spark Weekly`); the widget-snapshot fallback publishes none.
+  The collector still runs CodexBar for all five ambient providers. Once per
+  same 120s pass it also resolves claude-swap from ~/.local/bin/cswap,
+  /opt/homebrew/bin/cswap, then /usr/local/bin/cswap and runs only
+  `list --json` with a 5s timeout. It allowlists numeric slot, active slot,
+  5-hour/7-day/scoped windows, and source instants into Claude's additive
+  `accounts` field; personal and credential fields and raw process output are
+  never stored or logged. Two or more accounts render as stable numeric-slot
+  meters under one Claude header; zero/one account or no binary uses the
+  ambient row. A failed resolved probe keeps last-good account rows
+  unavailable and is independent of ambient Claude.
+  It publishes `quota-snapshot.json` (`schemaVersion` 2; the strip's reader
   also accepts v1, so daemon and app update in either order; bounded history
   ring of session-window samples; contract in `src/quota-snapshot.ts`) via
   the `writeFileAtomically` primitive; the strip reads it through the
