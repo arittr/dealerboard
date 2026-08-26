@@ -562,6 +562,47 @@ body {
 .rail-quota[data-state="unavailable"] {
   opacity: 0.45;
 }
+.quota-group {
+  gap: 0.35vh;
+}
+.quota-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5vh;
+}
+.quota-provider-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+  font-size: 1.2vw;
+}
+.quota-account {
+  display: flex;
+  flex-direction: column;
+}
+.quota-account .quota-meter {
+  gap: 0.35vh;
+}
+.quota-account[data-state="stale"],
+.quota-account[data-state="unavailable"] {
+  opacity: 0.45;
+}
+.quota-account-marker {
+  flex: none;
+  width: 0.42vw;
+  height: 0.42vw;
+  border-radius: 50%;
+  background: transparent;
+}
+.quota-account-active {
+  background: #d97757;
+}
+.quota-account-label {
+  flex: none;
+  min-width: 0.8vw;
+  color: #e8eef7;
+  font-variant-numeric: tabular-nums;
+}
 .quota-head {
   display: flex;
   align-items: center;

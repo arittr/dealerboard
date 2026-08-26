@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "activeAccountNumber": 2,
+  "accounts": [
+    {
+      "number": 2,
+      "email": "second@example.invalid",
+      "organizationName": "Ignored Corp",
+      "organizationUuid": "ignored-uuid",
+      "usageStatus": "unavailable",
+      "lastGoodUsage": {
+        "fiveHour": { "pct": 0 },
+        "sevenDay": { "pct": 56, "resetsAt": "2026-08-30T00:59:00Z" },
+        "scoped": [{ "name": "Fable", "pct": 98, "resetsAt": "2026-08-30T00:59:00Z" }]
+      },
+      "lastGoodFetchedAt": "2026-08-25T19:30:00Z"
+    },
+    {
+      "number": 1,
+      "email": "first@example.invalid",
+      "organizationName": "Ignored Personal",
+      "organizationUuid": "ignored-personal-uuid",
+      "usageStatus": "ok",
+      "usage": {
+        "fiveHour": { "pct": 25, "resetsAt": "2026-08-26T02:19:00Z" },
+        "sevenDay": { "pct": 40, "resetsAt": "2026-08-30T00:59:00Z" },
+        "scoped": [{ "name": "Fable", "pct": 45, "resetsAt": "2026-08-30T00:59:00Z" }]
+      },
+      "usageFetchedAt": "2026-08-25T20:00:00Z"
+    }
+  ]
+}

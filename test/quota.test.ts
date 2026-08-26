@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseClaudeSwapAccounts } from "../src/core/claude-swap-quota";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
 import {
   CODEXBAR_BINARY_CANDIDATES,
@@ -61,24 +62,33 @@ describe("createQuotaCollector", () => {
   type Harness = {
     deps: QuotaCollectorDependencies;
     calls: string[][];
+    claudeSwapCalls: string[][];
+    claudeSwapTimeouts: number[];
     diagnostics: DiagnosticRecord[];
     fail: (...providers: string[]) => void;
     heal: (...providers: string[]) => void;
     omit: (...providers: string[]) => void;
     respondRaw: (provider: string, response: RawResponse) => void;
+    failClaudeSwap: () => void;
+    healClaudeSwap: () => void;
+    setClaudeSwap: (body: string) => void;
     writes: () => string[];
   };
 
   const makeHarness = (
-    options: { binaryPresent?: boolean; files?: Record<string, string> } = {},
+    options: { binaryPresent?: boolean; claudeSwapBinaryPresent?: boolean; files?: Record<string, string> } = {},
     overrides: Partial<QuotaCollectorDependencies> = {},
   ): Harness => {
     const calls: string[][] = [];
+    const claudeSwapCalls: string[][] = [];
+    const claudeSwapTimeouts: number[] = [];
     const diagnostics: DiagnosticRecord[] = [];
     const writes: string[] = [];
     const failures = new Set<string>();
     const omissions = new Set<string>();
     const raw = new Map<string, RawResponse>();
+    let claudeSwapFailed = false;
+    let claudeSwapBody = fixture("claude-swap-accounts.json");
     // Harness controls (fail/heal/omit/respondRaw) speak contract keys; the
     // spawn args carry CodexBar's --provider argument (qwen ≠ alibabatokenplan).
     const contractKeyByArg: Record<string, string> = Object.fromEntries(
@@ -101,14 +111,23 @@ describe("createQuotaCollector", () => {
       const name = FIXTURE_BY_PROVIDER[arg];
       return Promise.resolve({ exitCode: 0, stdout: name === undefined ? "[]" : fixture(name) });
     };
+    const claudeSwapExec: QuotaExec = (args, timeoutMs) => {
+      claudeSwapCalls.push(args);
+      claudeSwapTimeouts.push(timeoutMs);
+      return Promise.resolve(
+        claudeSwapFailed ? { exitCode: 1, stdout: "private failure text" } : { exitCode: 0, stdout: claudeSwapBody },
+      );
+    };
     const binaryPresent = options.binaryPresent ?? true;
+    const claudeSwapBinaryPresent = options.claudeSwapBinaryPresent ?? true;
     const deps: QuotaCollectorDependencies = {
       quotaSnapshotPath: quotaPath,
       widgetSnapshotPath: widgetPath(tempDir),
-      fileExists: () => binaryPresent,
+      fileExists: (path) => (path.endsWith("/cswap") ? claudeSwapBinaryPresent : binaryPresent),
       // No binary → no injected exec either: resolution must report "absent"
       // without ever spawning.
       ...(binaryPresent ? { exec: execSpy } : {}),
+      ...(claudeSwapBinaryPresent ? { claudeSwapExec } : {}),
       readFile: (path) => options.files?.[path] ?? null,
       now: () => NOW,
       writeFile: (_path, payload) => {
@@ -140,6 +159,17 @@ describe("createQuotaCollector", () => {
       },
       respondRaw: (provider, response) => {
         raw.set(provider, response);
+      },
+      claudeSwapCalls,
+      claudeSwapTimeouts,
+      failClaudeSwap: () => {
+        claudeSwapFailed = true;
+      },
+      healClaudeSwap: () => {
+        claudeSwapFailed = false;
+      },
+      setClaudeSwap: (body) => {
+        claudeSwapBody = body;
       },
       writes: () => writes,
     };
@@ -175,6 +205,171 @@ describe("createQuotaCollector", () => {
         "critical",
       ]),
     );
+    expect(harness.claudeSwapCalls).toEqual([["list", "--json"]]);
+    expect(harness.claudeSwapTimeouts).toEqual([5_000]);
+    expect(snapshot.providers["claude"]?.accounts.map((account) => account.id)).toEqual([
+      "claude-swap:1",
+      "claude-swap:2",
+    ]);
+    expect(writes.join("\n")).not.toContain("@example.invalid");
+    expect(writes.join("\n")).not.toContain("Ignored Corp");
+  });
+
+  test("publishes claude-swap accounts without changing the five CodexBar calls", async () => {
+    const harness = makeHarness();
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
+    expect(harness.calls.length).toBe(5);
+    expect(harness.claudeSwapCalls).toEqual([["list", "--json"]]);
+    expect(harness.claudeSwapTimeouts).toEqual([5_000]);
+    expect(snapshot.providers["claude"]?.accounts.map((account) => account.id)).toEqual([
+      "claude-swap:1",
+      "claude-swap:2",
+    ]);
+  });
+
+  test("account success survives ambient Claude failure and ambient success survives account failure", async () => {
+    const harness = makeHarness();
+    const collector = createQuotaCollector(harness.deps);
+    harness.fail("claude");
+    await collector.pollNow();
+    let claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.unavailable).toBe(true);
+    expect(claude?.accounts.length).toBe(2);
+
+    harness.heal("claude");
+    harness.failClaudeSwap();
+    await collector.pollNow();
+    claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.unavailable).toBe(false);
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+  });
+
+  test("synthesizes ambient Claude only when accounts exist and CodexBar omits Claude", async () => {
+    const harness = makeHarness();
+    harness.omit("claude");
+    await createQuotaCollector(harness.deps).pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude).toMatchObject({ percentRemaining: null, unavailable: true });
+    expect(claude?.accounts).toHaveLength(2);
+  });
+
+  test("missing claude-swap is a supported absence while ambient Claude remains", async () => {
+    const harness = makeHarness({ claudeSwapBinaryPresent: false });
+    await createQuotaCollector(harness.deps).pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude).toMatchObject({ percentRemaining: 98, unavailable: false, accounts: [] });
+    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toEqual([]);
+  });
+
+  test("preserves last-good accounts and logs only healthy-to-failed transitions", async () => {
+    const harness = makeHarness();
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    harness.failClaudeSwap();
+    await collector.pollNow();
+    await collector.pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.accounts).toHaveLength(2);
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(1);
+
+    harness.healClaudeSwap();
+    await collector.pollNow();
+    harness.failClaudeSwap();
+    await collector.pollNow();
+    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(2);
+    expect(JSON.stringify(harness.diagnostics)).not.toContain("private failure text");
+  });
+
+  test("successful zero and one account results authoritatively disable grouping", async () => {
+    const harness = makeHarness();
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    harness.setClaudeSwap(JSON.stringify({ schemaVersion: 1, activeAccountNumber: 1, accounts: [] }));
+    await collector.pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"]?.accounts).toEqual([]);
+
+    harness.setClaudeSwap(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [{ number: 1, usageStatus: "token_expired" }],
+      }),
+    );
+    await collector.pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"]?.accounts).toHaveLength(1);
+  });
+
+  test("seeds last-good accounts across daemon restart", async () => {
+    const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
+    if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
+    const seeded = parseQuotaSnapshot({
+      schemaVersion: 2,
+      providers: {
+        claude: {
+          percentRemaining: 98,
+          resetAt: null,
+          weeklyPercentRemaining: 37,
+          weeklyResetAt: null,
+          unavailable: false,
+          fetchedAt: NOW,
+          history: [],
+          extraWindows: [],
+          accounts: seededAccounts.accounts,
+        },
+      },
+    });
+    const harness = makeHarness(
+      { files: { [quotaPath]: JSON.stringify(seeded) } },
+      { claudeSwapExec: () => Promise.resolve({ exitCode: 1, stdout: "private failure text" }) },
+    );
+    await createQuotaCollector(harness.deps).pollNow();
+    const latest = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
+    expect(latest.providers["claude"]?.accounts).toEqual(
+      seededAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+    );
+  });
+
+  test("widget fallback is ambient-only", async () => {
+    const widget = JSON.stringify({
+      generatedAt: NOW,
+      entries: [
+        {
+          provider: "claude",
+          primary: { windowMinutes: 300, usedPercent: 10, resetsAt: null },
+          secondary: { windowMinutes: 10080, usedPercent: 20, resetsAt: null },
+          tertiary: null,
+        },
+      ],
+    });
+    const harness = makeHarness({ files: { [widgetPath(tempDir)]: widget } });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const successful = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
+    const lastGoodAccounts = successful.providers["claude"]?.accounts ?? [];
+    harness.fail("claude");
+    harness.failClaudeSwap();
+    await collector.pollNow();
+    const rescued = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
+    expect(rescued.providers["claude"]).toMatchObject({ percentRemaining: 90, unavailable: false });
+    expect(rescued.providers["claude"]?.accounts).toEqual(
+      lastGoodAccounts.map((account) => ({ ...account, unavailable: true })),
+    );
+  });
+
+  test("account subprocess errors stay payload-free in diagnostics", async () => {
+    const harness = makeHarness(
+      {},
+      {
+        claudeSwapExec: async () => {
+          throw new Error("private caught failure text");
+        },
+      },
+    );
+    await createQuotaCollector(harness.deps).pollNow();
+    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(1);
+    expect(JSON.stringify(harness.diagnostics)).not.toContain("private caught failure text");
   });
 
   test("a failed run keeps last-good data, marks unavailable, and logs only the transition", async () => {
@@ -227,9 +422,10 @@ describe("createQuotaCollector", () => {
   });
 
   test("a missing binary omits every provider without spawning", async () => {
-    const harness = makeHarness({ binaryPresent: false });
+    const harness = makeHarness({ binaryPresent: false, claudeSwapBinaryPresent: false });
     await createQuotaCollector(harness.deps).pollNow();
     expect(harness.calls.length).toBe(0);
+    expect(harness.claudeSwapCalls.length).toBe(0);
     expect(parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? "")).providers).toEqual({});
   });
 
@@ -319,6 +515,7 @@ describe("createQuotaCollector", () => {
     const collector = createQuotaCollector(harness.deps);
     await Promise.all([collector.pollNow(), collector.pollNow()]);
     expect(harness.calls.length).toBe(5);
+    expect(harness.claudeSwapCalls).toEqual([["list", "--json"]]);
   });
 
   test("start is idempotent, stop disarms the one interval, and start-after-stop works", () => {

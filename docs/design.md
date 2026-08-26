@@ -483,13 +483,24 @@ Fixed 600px (~23.4%), top to bottom:
   with a 2px neutral tick at each non-binding window's percent — the tick
   is the whole non-binding treatment; textual readouts proved too busy for
   the row.
+- For Claude only, two or more published claude-swap accounts replace the
+  ambient meter with one shared `[C] Claude` header and one existing-style
+  meter per privacy-safe numeric slot. Slots stay in ascending order; the
+  active slot has a Claude-orange dot and never reorders. Each account
+  independently selects its binding window and owns its reset, fill, ticks,
+  stale/unavailable dimming. Zero or one account keeps the ambient row, and a
+  transient account probe failure keeps the last-good meters visible and
+  dimmed.
 - **Pager dots**: one per page, tap to jump.
-- Data plumbing is unchanged: quota via `quota-snapshot.json` and token
+- Data plumbing remains additive: quota via `quota-snapshot.json` and token
   usage via `token-usage-snapshot.json`, each its own file with its own
   `schemaVersion`, read through Tauri commands, never the session snapshot.
+  The schema-v2 quota sidecar now has an additive Claude `accounts`
+  collection, while old/new daemon-app deployment order remains compatible.
   A provider whose last fetch failed renders dimmed with a last-updated
   age in place of the percent; a provider disabled in CodexBar (or with no
-  binary installed) is omitted; a missing file renders no quota rows /
+  binary installed) is omitted unless Claude has non-empty claude-swap
+  account rows, which synthesize its panel; a missing file renders no quota rows /
   hides the token block. Stale-dimming semantics are unchanged.
 
 The sparkline's data is additive: `token-usage-snapshot.json` gains a

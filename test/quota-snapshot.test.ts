@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ProviderQuota,
+  type ProviderQuotaAccount,
   parseQuotaSnapshot,
+  QUOTA_ACCOUNTS_LIMIT,
   QUOTA_EXTRA_WINDOWS_LIMIT,
   QUOTA_HISTORY_LIMIT,
   type QuotaSnapshot,
@@ -20,7 +22,42 @@ const claudeQuota = (): ProviderQuota => ({
   fetchedAt: "2026-08-19T18:00:00.000Z",
   history: [{ fetchedAt: "2026-08-19T18:00:00.000Z", fractionRemaining: 0.625 }],
   extraWindows: [],
+  accounts: [],
 });
+
+const accountRows = (): ProviderQuotaAccount[] => [
+  {
+    id: "claude-swap:1",
+    label: "1",
+    active: false,
+    percentRemaining: 75,
+    resetAt: "2026-08-26T02:00:00.000Z",
+    weeklyPercentRemaining: 60,
+    weeklyResetAt: "2026-08-29T00:00:00.000Z",
+    unavailable: false,
+    fetchedAt: "2026-08-25T20:00:00.000Z",
+    extraWindows: [],
+  },
+  {
+    id: "claude-swap:2",
+    label: "2",
+    active: true,
+    percentRemaining: null,
+    resetAt: null,
+    weeklyPercentRemaining: 44,
+    weeklyResetAt: "2026-08-30T00:00:00.000Z",
+    unavailable: true,
+    fetchedAt: "2026-08-25T19:00:00.000Z",
+    extraWindows: [
+      {
+        id: "claude-swap:2:scoped:0",
+        label: "Fable",
+        percentRemaining: 2,
+        resetAt: "2026-08-30T00:00:00.000Z",
+      },
+    ],
+  },
+];
 
 const snapshot = (): QuotaSnapshot => ({
   schemaVersion: 1,
@@ -38,6 +75,70 @@ describe("parseQuotaSnapshot", () => {
   test("accepts a snapshot with no providers and one with a single provider", () => {
     expect(parseQuotaSnapshot({ schemaVersion: 1, providers: {} }).providers).toEqual({});
     expect(parseQuotaSnapshot(snapshot()).providers["codex"]).toBeUndefined();
+  });
+
+  test("v1 and v2 providers without accounts normalize to an empty account collection", () => {
+    for (const schemaVersion of [1, 2] as const) {
+      const value = snapshot();
+      const claude = { ...value.providers.claude };
+      delete (claude as Partial<ProviderQuota>)["accounts"];
+      const parsed = parseQuotaSnapshot({ schemaVersion, providers: { claude } });
+      expect(parsed.providers["claude"]?.accounts).toEqual([]);
+    }
+  });
+
+  test("v2 round-trips two privacy-safe account rows", () => {
+    const accounts = accountRows();
+    const parsed = parseQuotaSnapshot({
+      schemaVersion: 2,
+      providers: { claude: { ...claudeQuota(), accounts } },
+    });
+    expect(parsed.providers["claude"]?.accounts).toEqual(accounts);
+  });
+
+  test("rejects every invalid account collection shape", () => {
+    const accounts = accountRows();
+    const first = accounts[0];
+    const second = accounts[1];
+    if (first === undefined || second === undefined) throw new Error("account test fixture must contain two rows");
+    const invalidCollections: [string, unknown[]][] = [
+      [
+        "nine accounts",
+        Array.from({ length: QUOTA_ACCOUNTS_LIMIT + 1 }, (_, index) => ({
+          ...first,
+          id: `claude-swap:${index + 1}`,
+          label: `${index + 1}`,
+        })),
+      ],
+      ["duplicate id", [first, { ...second, id: first.id }]],
+      ["duplicate label", [first, { ...second, label: first.label }]],
+      ["non-numeric label", [first, { ...second, id: "claude-swap:private", label: "private" }]],
+      ["id-label mismatch", [first, { ...second, id: "claude-swap:3" }]],
+      ["two active", accounts.map((account) => ({ ...account, active: true }))],
+      ["invalid percent", [{ ...first, percentRemaining: 101 }, second]],
+      ["noncanonical fetchedAt", [{ ...first, fetchedAt: "2026-08-25T20:00:00Z" }, second]],
+      ["malformed extras", [{ ...first, extraWindows: [{ id: "x" }] }, second]],
+    ];
+    for (const [_name, invalidAccounts] of invalidCollections) {
+      expect(() =>
+        parseQuotaSnapshot({
+          schemaVersion: 2,
+          providers: { claude: { ...claudeQuota(), accounts: invalidAccounts } },
+        }),
+      ).toThrow("invalid quota snapshot");
+    }
+  });
+
+  test("ignores unknown account fields", () => {
+    const first = accountRows()[0];
+    if (first === undefined) throw new Error("account test fixture must contain one row");
+    const parsed = parseQuotaSnapshot({
+      schemaVersion: 2,
+      providers: {
+        claude: { ...claudeQuota(), accounts: [{ ...first, privateFutureField: "ignored" }] },
+      },
+    });
+    expect(parsed.providers["claude"]?.accounts[0]).toEqual(first);
   });
 
   test("ignores unknown provider keys so a newer daemon never breaks an older app", () => {
