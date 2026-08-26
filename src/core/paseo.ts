@@ -23,7 +23,10 @@
  *   carried as `parentAgentId` so the registry sync can stamp
  *   `origin_parent_ref`;
  * - `.id` and `.provider`, the latter validated against the canonical
- *   provider keys — records naming an unknown provider are skipped.
+ *   provider keys — records naming an unknown provider are skipped;
+ * - `.lastStatus`, Paseo's persisted lifecycle, validated against Paseo's
+ *   vocabulary (unknown values → null) — the registry sync uses a settled
+ *   value as proof that a stuck working row's turn-end was missed.
  *
  * Every read flows through injected filesystem dependencies, and results are
  * cached per file on the (mtime, size) identity, so a pass over unchanged
@@ -42,6 +45,9 @@ const MAX_STRING_CODE_POINTS = 256;
 const MAX_TITLE_CODE_POINTS = 256;
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 
+/** Paseo's agent lifecycle vocabulary as persisted in a record's `lastStatus`. */
+export type PaseoAgentStatus = "initializing" | "idle" | "running" | "error" | "closed";
+
 export type PaseoAgentState = {
   provider: string;
   sessionId: string;
@@ -55,6 +61,8 @@ export type PaseoAgentState = {
   /** When the user archived the agent in Paseo (ISO-8601 UTC), or null while live. */
   archivedAt: string | null;
   title: string | null;
+  /** Paseo's persisted lifecycle (`lastStatus`), or null when absent or unrecognized. */
+  lastStatus: PaseoAgentStatus | null;
 };
 
 export type PaseoFileStat = { mtimeMs: number; size: number };
@@ -99,6 +107,12 @@ const sessionIdFrom = (value: Record<string, unknown>, container: string): strin
   const sessionId = nested["sessionId"];
   return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
 };
+
+const PASEO_AGENT_STATUSES: ReadonlySet<string> = new Set(["initializing", "idle", "running", "error", "closed"]);
+
+/** The record's persisted lifecycle, or null when absent or outside Paseo's vocabulary. */
+const lastStatusFrom = (value: unknown): PaseoAgentStatus | null =>
+  typeof value === "string" && PASEO_AGENT_STATUSES.has(value) ? (value as PaseoAgentStatus) : null;
 
 const PARENT_AGENT_ID_LABEL = "paseo.parent-agent-id";
 
@@ -180,6 +194,7 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
     updatedAt: isoTimestampFrom(value["updatedAt"]),
     archivedAt: isoTimestampFrom(value["archivedAt"]),
     title: titleFrom(value),
+    lastStatus: lastStatusFrom(value["lastStatus"]),
   };
 };
 

@@ -582,6 +582,7 @@ describe("ProjectionDaemon maintenance", () => {
                 updatedAt: null,
                 archivedAt: null,
                 title: null,
+                lastStatus: null,
               },
             ])
           : 0,

@@ -29,6 +29,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { Provider, RegistryEvent, SessionStatus } from "../protocol";
+import type { PaseoAgentStatus } from "./paseo";
 
 export type MutationResult = "applied" | "ignored";
 
@@ -686,6 +687,8 @@ export type PaseoSyncState = {
   archivedAt: string | null;
   /** Title from Paseo's agent record, or null when absent. */
   title: string | null;
+  /** Paseo's persisted lifecycle (`lastStatus`), or null when unreported or unrecognized. */
+  lastStatus: PaseoAgentStatus | null;
 };
 
 /**
@@ -710,6 +713,14 @@ export type PaseoSyncState = {
  *   its attention flag is still up — archiving is the user's terminal
  *   gesture on an agent — with the later of `archivedAt` and `updatedAt` as
  *   the proof-of-viewing time under the same freshness guard.
+ * - A settled record (`lastStatus` idle or closed — no turn can be in
+ *   flight) whose `updatedAt` is strictly newer than the row's last hook
+ *   retires a stuck working or waiting row to idle: its turn-end hook was
+ *   missed (interrupt, host sleep, daemon swap) and Paseo's record is the
+ *   newer witness. Background-armed rows stay working — the shell still
+ *   acts on the session's behalf, exactly as in applyStop — and error rows
+ *   keep their failure visible. `status_since` adopts the record's settle
+ *   time; unread stays the attention mirror's business.
  *
  * Origin stamping (kind/ref/subagent) (and now `origin_parent_ref`) stays
  * unconditional for matched top-level rows. A difference-guard in the WHERE
@@ -732,6 +743,9 @@ export type PaseoSyncState = {
 /** The later of two canonical ISO-8601 UTC instants (lexical order is chronological); null when both are absent. */
 const laterInstant = (a: string | null, b: string | null): string | null =>
   a === null ? b : b === null ? a : a > b ? a : b;
+
+/** Paseo lifecycle values with no turn in flight: proof a working row's turn-end was missed. */
+const SETTLED_PASEO_STATUSES: ReadonlySet<PaseoAgentStatus> = new Set(["idle", "closed"]);
 
 export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
   inWriteTransaction(db, () => {
@@ -821,6 +835,24 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
           ],
         );
         changed += result.changes;
+      }
+      // A settled record strictly newer than the row's last hook repairs a
+      // missed turn-end: retire working/waiting to idle with the record's
+      // settle time as status_since. updated_at (the prune lease) stays put
+      // like every other maintenance write, and the strict comparison keeps
+      // a record written before the row's newest hook from undoing a turn
+      // that genuinely started since.
+      if (state.lastStatus !== null && SETTLED_PASEO_STATUSES.has(state.lastStatus) && state.updatedAt !== null) {
+        const settled = db.run(
+          `UPDATE active_sessions
+           SET status = 'idle', status_since = ?
+           WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+             AND status IN ('working', 'waiting')
+             AND background_outstanding = 0
+             AND ? > updated_at`,
+          [state.updatedAt, state.provider, state.sessionId, state.updatedAt],
+        );
+        changed += settled.changes;
       }
       // Un-stamp rows abandoned by provider-session rotation: every match
       // carries the stamp being cleared, so the WHERE is its own difference

@@ -898,6 +898,7 @@ describe("syncPaseoStates", () => {
     attentionTimestamp?: string | null;
     updatedAt?: string | null;
     archivedAt?: string | null;
+    lastStatus?: "initializing" | "idle" | "running" | "error" | "closed" | null;
   }) => ({
     provider: "claude" as const,
     sessionId: overrides.sessionId ?? "s1",
@@ -908,6 +909,7 @@ describe("syncPaseoStates", () => {
     attentionTimestamp: overrides.attentionTimestamp ?? null,
     updatedAt: overrides.updatedAt ?? null,
     archivedAt: overrides.archivedAt ?? null,
+    lastStatus: overrides.lastStatus ?? null,
     title: null,
   });
 
@@ -1112,6 +1114,73 @@ describe("syncPaseoStates", () => {
       ]),
     ).toBe(1);
     expect(getRow("s1")).toMatchObject({ unread_since: null, origin_parent_ref: "agent-0" });
+  });
+
+  test("retires a stuck working row when a settled record postdates its last hook", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1", { at: at(3) })]);
+
+    // A running record never settles anything; this pass only stamps origin.
+    expect(
+      syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "running", updatedAt: at(4) })]),
+    ).toBe(1);
+    expect(getRow("s1")?.status).toBe("working");
+
+    // The agent settled after the row's last hook: the missed Stop is repaired.
+    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: at(6) })])).toBe(
+      1,
+    );
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(6), updated_at: at(3) });
+
+    // The same settled record on a later pass changes nothing further.
+    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: at(6) })])).toBe(
+      0,
+    );
+  });
+
+  test("a settled record at or before the row's last hook never settles it", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1", { at: at(5) })]);
+
+    // Older record: a new turn may have started since Paseo last wrote.
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: at(4) })]);
+    expect(getRow("s1")?.status).toBe("working");
+
+    // Equal stamps are ambiguous ordering: the settle needs strictly newer news.
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: at(5) })]);
+    expect(getRow("s1")?.status).toBe("working");
+  });
+
+  test("a settled record leaves a background-armed row working", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("Activity", "s1", { at: at(3) }),
+      simple("BackgroundWorkStarted", "s1", { at: at(4) }),
+    ]);
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: at(6) })]);
+    expect(getRow("s1")?.status).toBe("working");
+  });
+
+  test("retires a stuck waiting row when the agent closed", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Attention", "s1", { at: at(3) })]);
+    expect(getRow("s1")?.status).toBe("waiting");
+
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "closed", updatedAt: at(6) })]);
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(6) });
+  });
+
+  test("never settles an error row: the failure stays visible", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(3) })]);
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: at(6) })]);
+    expect(getRow("s1")?.status).toBe("error");
+  });
+
+  test("a record without a settled status or a timestamp never settles", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1", { at: at(3) })]);
+
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: null, updatedAt: at(6) })]);
+    expect(getRow("s1")?.status).toBe("working");
+
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: null })]);
+    expect(getRow("s1")?.status).toBe("working");
   });
 
   test("un-stamps a row abandoned by provider-session rotation so the agent's ref has one carrier", () => {
@@ -1412,6 +1481,7 @@ describe("paseo-owned titles", () => {
         updatedAt: at(2),
         archivedAt: null,
         title,
+        lastStatus: null,
       },
     ]);
 
