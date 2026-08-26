@@ -201,3 +201,18 @@ export const reduceBoard = (view: SnapshotView, storedState: unknown): BoardResu
   const dirty = defaulted || restored.currentPage !== currentPage || restored.overflowLatched;
   return { settings, dirty, pages, pageCount };
 };
+
+/**
+ * A user page jump on top of the stored settings: clamp the target into range
+ * and mark the result dirty when it changes the page — the driver persists
+ * dirty settings, and every later ingest reduces from what was persisted, so
+ * an unpersisted jump would snap back within one snapshot heartbeat.
+ */
+export const jumpBoard = (view: SnapshotView, storedState: unknown, page: number): BoardResult => {
+  const base = reduceBoard(view, storedState);
+  const currentPage = Math.min(Math.max(page, 0), base.pageCount - 1);
+  if (currentPage === base.settings.currentPage) {
+    return base;
+  }
+  return { ...base, settings: { ...base.settings, currentPage }, dirty: true };
+};

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type BoardGroup, groupedOrder, packBoard, reduceBoard } from "../app/src/board";
+import { type BoardGroup, groupedOrder, jumpBoard, packBoard, reduceBoard } from "../app/src/board";
 import type { ProjectedSession } from "../src/protocol";
 
 const session = (slot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
@@ -187,5 +187,30 @@ describe("reduceBoard", () => {
     expect(count(12)).toBe(1);
     expect(count(13)).toBe(2);
     expect(count(15)).toBe(2);
+  });
+});
+
+describe("jumpBoard", () => {
+  const view = (sessions: ProjectedSession[]) =>
+    ({ snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions }, degraded: false }) as never;
+  const twoPages = () => view(Array.from({ length: 13 }, (_, i) => session(i + 1)));
+
+  test("an in-range jump is dirty, so it persists and the next reduce keeps the page", () => {
+    const jumped = jumpBoard(twoPages(), { schemaVersion: 1, overflowLatched: false, currentPage: 0 }, 1);
+    expect(jumped.settings.currentPage).toBe(1);
+    expect(jumped.dirty).toBe(true);
+    // The driver persists jumped.settings; a later ingest reduces from them
+    // and must stay on the chosen page without churn.
+    const next = reduceBoard(twoPages(), jumped.settings);
+    expect(next.settings.currentPage).toBe(1);
+    expect(next.dirty).toBe(false);
+  });
+
+  test("clamps out-of-range targets and keeps a same-page jump clean", () => {
+    const stored = { schemaVersion: 1, overflowLatched: false, currentPage: 1 };
+    expect(jumpBoard(twoPages(), stored, 9).settings.currentPage).toBe(1);
+    expect(jumpBoard(twoPages(), stored, -3).settings.currentPage).toBe(0);
+    expect(jumpBoard(twoPages(), stored, -3).dirty).toBe(true);
+    expect(jumpBoard(twoPages(), stored, 1).dirty).toBe(false);
   });
 });

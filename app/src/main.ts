@@ -30,7 +30,7 @@ import {
   settleSheetAction,
   transcriptPathOf,
 } from "./action-sheet";
-import { type BoardPage, type BoardResult, type PlacedCard, reduceBoard } from "./board";
+import { type BoardPage, type BoardResult, jumpBoard, type PlacedCard, reduceBoard } from "./board";
 import {
   ackSession,
   clearSession,
@@ -122,7 +122,9 @@ const jumpToPage = (page: number): void => {
   if (currentView === null) {
     return;
   }
-  applyBoard(reduceBoard(currentView, { schemaVersion: 1, overflowLatched: false, currentPage: page }));
+  // jumpBoard reports a page change as dirty, so applyBoard persists it and
+  // later ingests (which reduce from the persisted settings) keep the page.
+  applyBoard(jumpBoard(currentView, loadStoredSettings(), page));
   // renderRailNow is declared below; referenced here at click time.
   renderRailNow();
 };
