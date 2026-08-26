@@ -64,14 +64,21 @@ const start = (
 const subStart = (
   sessionId: string,
   parentSessionId: string,
-  options: { provider?: Provider; title?: string | null; project?: string | null; at?: string } = {},
-): RegistryEvent => ({
+  options: {
+    provider?: Provider;
+    title?: string | null;
+    project?: string | null;
+    model?: string | null;
+    at?: string;
+  } = {},
+): Extract<RegistryEvent, { kind: "SubagentStart" }> => ({
   kind: "SubagentStart",
   provider: options.provider ?? "claude",
   sessionId,
   parentSessionId,
   title: options.title ?? null,
   project: options.project ?? null,
+  model: options.model ?? null,
   observedAt: options.at ?? at(1),
 });
 
@@ -328,6 +335,71 @@ describe("applyRegistryEvents", () => {
 
     expect(applyRegistryEvents(db, [simple("SessionEnd", "parent")])).toEqual(["applied"]);
     expect(countRows()).toBe(0);
+  });
+
+  test("stores and backfills a child model without null-clearing it", () => {
+    applyRegistryEvents(db, [start("parent"), subStart("child", "parent", { model: "model-a", at: at(2) })]);
+    expect(getRow("child")?.model).toBe("model-a");
+
+    applyRegistryEvents(db, [subStart("child", "parent", { model: null, at: at(3) })]);
+    expect(getRow("child")?.model).toBe("model-a");
+
+    applyRegistryEvents(db, [subStart("child", "parent", { model: "model-b", at: at(4) })]);
+    expect(getRow("child")?.model).toBe("model-b");
+  });
+
+  test("SessionModelChanged updates only model on existing roots and children", () => {
+    applyRegistryEvents(db, [start("root", { model: "root-a", at: at(1) }), subStart("child", "root", { at: at(2) })]);
+    const rootBefore = getRow("root");
+    const childBefore = getRow("child");
+    if (rootBefore === null || childBefore === null) {
+      throw new Error("model-change fixtures must exist");
+    }
+
+    expect(
+      applyRegistryEvents(db, [
+        { kind: "SessionModelChanged", provider: "claude", sessionId: "root", model: "root-b", observedAt: at(3) },
+        { kind: "SessionModelChanged", provider: "claude", sessionId: "child", model: "child-b", observedAt: at(4) },
+      ]),
+    ).toEqual(["applied", "applied"]);
+
+    expect(getRow("root")).toEqual({ ...rootBefore, model: "root-b" });
+    expect(getRow("child")).toEqual({ ...childBefore, model: "child-b" });
+  });
+
+  test("SessionModelChanged ignores unknown, unchanged, empty, and oversized models", () => {
+    applyRegistryEvents(db, [start("root", { model: "stable", at: at(1) })]);
+    expect(
+      applyRegistryEvents(db, [
+        { kind: "SessionModelChanged", provider: "claude", sessionId: "missing", model: "new", observedAt: at(2) },
+        { kind: "SessionModelChanged", provider: "claude", sessionId: "root", model: "stable", observedAt: at(3) },
+        { kind: "SessionModelChanged", provider: "claude", sessionId: "root", model: "", observedAt: at(4) },
+        {
+          kind: "SessionModelChanged",
+          provider: "claude",
+          sessionId: "root",
+          model: "m".repeat(257),
+          observedAt: at(5),
+        },
+      ]),
+    ).toEqual(["ignored", "ignored", "ignored", "ignored"]);
+    expect(getRow("root")?.model).toBe("stable");
+  });
+
+  test("a facts update cannot promote a child whose start had no valid parent", () => {
+    expect(
+      applyRegistryEvents(db, [
+        subStart("orphan", "missing", { model: "child-model", at: at(1) }),
+        {
+          kind: "SessionModelChanged",
+          provider: "claude",
+          sessionId: "orphan",
+          model: "child-model",
+          observedAt: at(2),
+        },
+      ]),
+    ).toEqual(["ignored", "ignored"]);
+    expect(getRow("orphan")).toBeNull();
   });
 
   test("persists a Claude terminal target until a repeated SessionStart clears it", () => {

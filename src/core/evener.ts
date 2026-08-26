@@ -541,6 +541,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
           parentSessionId: parent.sessionId,
           title: state.title,
           project: state.project,
+          model: state.model,
           observedAt,
         });
         state.registered = true;

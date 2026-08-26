@@ -1001,6 +1001,7 @@ describe("sessions commands", () => {
           parentSessionId: "a",
           title: null,
           project: null,
+          model: null,
           observedAt: at(3),
         },
         {
@@ -1010,6 +1011,7 @@ describe("sessions commands", () => {
           parentSessionId: "a",
           title: null,
           project: null,
+          model: null,
           observedAt: at(4),
         },
       ];

@@ -643,6 +643,7 @@ describe("readProjection", () => {
             parentSessionId: "parent",
             title: null,
             project: null,
+            model: null,
             observedAt: "2026-08-06T00:00:02.000Z",
           },
           {
@@ -652,6 +653,7 @@ describe("readProjection", () => {
             parentSessionId: "child",
             title: null,
             project: null,
+            model: null,
             observedAt: "2026-08-06T00:00:03.000Z",
           },
         ]);
@@ -754,6 +756,7 @@ describe("readProjection", () => {
             parentSessionId: "o1",
             title: null,
             project: null,
+            model: null,
             observedAt: "2026-08-06T00:00:03.000Z",
           },
           {

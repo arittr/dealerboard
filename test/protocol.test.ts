@@ -362,12 +362,20 @@ describe("RegistryEvent", () => {
       { kind: "StopFailure", provider: "claude", sessionId: "s1", observedAt },
       { kind: "SessionEnd", provider: "claude", sessionId: "s1", observedAt },
       {
+        kind: "SessionModelChanged",
+        provider: "evener",
+        sessionId: "s2",
+        model: "gpt-5.6-terra",
+        observedAt,
+      },
+      {
         kind: "SubagentStart",
         provider: "claude",
         sessionId: "s2",
         parentSessionId: "s1",
         title: null,
         project: null,
+        model: null,
         observedAt,
       },
       { kind: "SubagentStop", provider: "claude", sessionId: "s2", observedAt },
@@ -380,6 +388,7 @@ describe("RegistryEvent", () => {
       "Stop",
       "StopFailure",
       "SessionEnd",
+      "SessionModelChanged",
       "SubagentStart",
       "SubagentStop",
     ]);

@@ -367,6 +367,7 @@ describe("event mapping", () => {
         parentSessionId: "parent",
         title: "Explore",
         project: "repo",
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -400,6 +401,7 @@ describe("event mapping", () => {
         parentSessionId: "parent",
         title: "researcher",
         project: null,
+        model: null,
         observedAt: NOW,
       },
     ]);
@@ -424,6 +426,7 @@ describe("event mapping", () => {
         parentSessionId: "parent",
         title: "ignored-name",
         project: null,
+        model: null,
         observedAt: NOW,
       },
     ]);

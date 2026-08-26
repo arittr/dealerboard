@@ -64,6 +64,13 @@ export type RegistryEvent =
       observedAt: string;
     }
   | {
+      kind: "SessionModelChanged";
+      provider: Provider;
+      sessionId: string;
+      model: string;
+      observedAt: string;
+    }
+  | {
       /** Authoritative hydration/reconnect status; unlike a terminal event, this never changes unread state. */
       kind: "SessionStatusObserved";
       provider: Provider;
@@ -85,6 +92,7 @@ export type RegistryEvent =
       parentSessionId: string;
       title: string | null;
       project: string | null;
+      model: string | null;
       observedAt: string;
     }
   | { kind: "SubagentStop"; provider: Provider; sessionId: string; observedAt: string };
