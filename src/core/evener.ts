@@ -381,6 +381,17 @@ const titleEvent = (state: EvenerThreadState, observedAt: string): RegistryEvent
         observedAt,
       };
 
+const modelEvent = (state: EvenerThreadState, observedAt: string): RegistryEvent | null =>
+  state.model === null
+    ? null
+    : {
+        kind: "SessionModelChanged",
+        provider: "evener",
+        sessionId: state.sessionId,
+        model: state.model,
+        observedAt,
+      };
+
 const endEvent = (state: EvenerThreadState, observedAt: string): RegistryEvent =>
   isChild(state)
     ? { kind: "SubagentStop", provider: "evener", sessionId: state.sessionId, observedAt }
@@ -541,10 +552,15 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
           parentSessionId: parent.sessionId,
           title: state.title,
           project: state.project,
+          model: state.model,
           observedAt,
         });
         state.registered = true;
         state.cleanupEmitted = false;
+      }
+      const model = modelEvent(state, observedAt);
+      if (model !== null) {
+        events.push(model);
       }
       const title = titleEvent(state, observedAt);
       if (title !== null) {
@@ -848,11 +864,19 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   const handleModelChanged = (params: Record<string, unknown>): void => {
     const state = stateForParams(params);
     const model = boundedString(params["model"]);
-    if (state === null || model === null || isChild(state)) {
+    if (state === null || model === null) {
       return;
     }
     state.model = model;
-    emit([observedEvent(state, now())]);
+    emit([
+      {
+        kind: "SessionModelChanged",
+        provider: "evener",
+        sessionId: state.sessionId,
+        model,
+        observedAt: now(),
+      },
+    ]);
   };
 
   const handleNotification = (method: string, paramsValue: unknown): void => {

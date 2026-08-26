@@ -11,7 +11,7 @@ import {
   STRIP_GEOMETRY,
 } from "../src/plugin/layout";
 import { SnapshotCache, type SnapshotView } from "../src/plugin/snapshot-reader";
-import type { ProjectedSession, SessionSnapshotV2 } from "../src/protocol";
+import type { ProjectedAgentNode, ProjectedSession, SessionSnapshotV2 } from "../src/protocol";
 
 const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
   provider: "claude",
@@ -38,14 +38,22 @@ const range = (from: number, to: number): number[] => Array.from({ length: to - 
 
 const sessionsAt = (...slots: number[]): ProjectedSession[] => slots.map((slot) => session(slot));
 
-const healthySnapshot = (sessions: ProjectedSession[]): SessionSnapshotV2 => ({
+const healthySnapshot = (
+  sessions: ProjectedSession[],
+  agents: ProjectedAgentNode[] | null = null,
+): SessionSnapshotV2 => ({
   schemaVersion: 2,
   health: { status: "ok" },
   sessions,
+  agents,
 });
 
-const healthyView = (sessions: ProjectedSession[], degraded = false): SnapshotView => ({
-  snapshot: healthySnapshot(sessions),
+const healthyView = (
+  sessions: ProjectedSession[],
+  degraded = false,
+  agents: ProjectedAgentNode[] | null = null,
+): SnapshotView => ({
+  snapshot: healthySnapshot(sessions, agents),
   degraded,
 });
 
@@ -67,6 +75,35 @@ const labelFor = (overrides: Partial<ProjectedSession>): string =>
   sessionKeyAt(reduceLayout(healthyView([session(1, overrides)]), DEFAULT_LAYOUT_SETTINGS).keys, 0).label;
 
 describe("reduceLayout without overflow", () => {
+  test("uses legacy sessions only when an additive native graph is present", () => {
+    const legacy = session(1, { descendantCount: 1 });
+    const native: ProjectedAgentNode = {
+      provider: "claude",
+      sessionId: "native-child",
+      role: "subagent",
+      lineage: "native",
+      parent: { provider: "claude", sessionId: legacy.sessionId },
+      status: "working",
+      title: "Child",
+      project: null,
+      model: null,
+      openedAt: "2026-08-26T05:00:00.000Z",
+      statusSince: null,
+      activityLine: null,
+      unreadSince: null,
+      logicalSlot: null,
+      ghosttyTerminalId: null,
+      transcriptPath: null,
+      originKind: null,
+      originRef: null,
+      originSubagent: false,
+      originParentRef: null,
+    };
+    const result = reduceLayout(healthyView([legacy], false, [native]), DEFAULT_LAYOUT_SETTINGS);
+    expect(result.keys.filter((key) => key.kind === "session")).toHaveLength(1);
+    expect(sessionKeyAt(result.keys, 0).session).toMatchObject({ sessionId: legacy.sessionId, descendantCount: 1 });
+  });
+
   test("packs sessions densely in slot order, filling gaps", () => {
     const result = reduceLayout(healthyView(sessionsAt(2, 5)), DEFAULT_LAYOUT_SETTINGS);
     expect(result.keys).toHaveLength(15);
@@ -356,7 +393,8 @@ describe("SnapshotCache", () => {
   };
 
   const publishSnapshot = (path: string, snapshot: SessionSnapshotV2): void => {
-    publish(path, `${JSON.stringify(snapshot)}\n`);
+    const { agents, ...raw } = snapshot;
+    publish(path, `${JSON.stringify(agents === null ? raw : snapshot)}\n`);
   };
 
   test("returns an empty degraded view when the snapshot is missing and no last-good exists", () => {
@@ -465,6 +503,7 @@ describe("SnapshotCache", () => {
         schemaVersion: 2,
         health: { status: "error", message: "database busy" },
         sessions: [],
+        agents: null,
       });
       const unhealthy = cache.read();
       expect(unhealthy.degraded).toBe(true);

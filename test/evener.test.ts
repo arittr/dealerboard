@@ -81,6 +81,7 @@ const thread = (
     parentRef?: string;
     kind?: string;
     name?: string;
+    model?: string;
     askPending?: boolean;
     pendingEscalations?: number;
   } = {},
@@ -89,7 +90,7 @@ const thread = (
   sessionId,
   source: "local",
   name: options.name ?? `Title ${sessionId}`,
-  modelProvider: "gpt-5.6-sol",
+  modelProvider: options.model ?? "gpt-5.6-sol",
   cwd: `/work/${sessionId}`,
   path: sessionId,
   status: { type: status },
@@ -227,8 +228,17 @@ describe("Evener AppWire collector", () => {
     });
     respond(socket, list, {
       data: [
-        thread("child", "active", { parentRef: "local:root", kind: "subagent" }),
-        thread("root", "active", { name: "Root title" }),
+        thread("terra-child", "active", {
+          parentRef: "local:root",
+          kind: "subagent",
+          model: "gpt-5.6-terra",
+        }),
+        thread("opus-child", "active", {
+          parentRef: "local:root",
+          kind: "subagent",
+          model: "claude-opus-4.1",
+        }),
+        thread("root", "active", { name: "Root title", model: "gpt-5.6-sol" }),
         { ...thread("foreign", "active"), source: "codex-local", evener: { ref: "codex-local:foreign" } },
       ],
     });
@@ -239,12 +249,31 @@ describe("Evener AppWire collector", () => {
       ["SessionObserved", "root"],
       ["SessionTitleChanged", "root"],
       ["SessionStatusObserved", "root"],
-      ["SubagentStart", "child"],
-      ["SessionTitleChanged", "child"],
-      ["SessionStatusObserved", "child"],
+      ["SubagentStart", "opus-child"],
+      ["SessionModelChanged", "opus-child"],
+      ["SessionTitleChanged", "opus-child"],
+      ["SessionStatusObserved", "opus-child"],
+      ["SubagentStart", "terra-child"],
+      ["SessionModelChanged", "terra-child"],
+      ["SessionTitleChanged", "terra-child"],
+      ["SessionStatusObserved", "terra-child"],
     ]);
     expect(initialEvents[2]).toMatchObject({ status: "working" });
     expect(initialEvents[3]).toMatchObject({ parentSessionId: "root" });
+    expect(
+      initialEvents.filter((event) => event.kind === "SubagentStart").map((event) => [event.sessionId, event.model]),
+    ).toEqual([
+      ["opus-child", "claude-opus-4.1"],
+      ["terra-child", "gpt-5.6-terra"],
+    ]);
+    expect(
+      initialEvents
+        .filter((event) => event.kind === "SessionModelChanged")
+        .map((event) => [event.sessionId, event.model]),
+    ).toEqual([
+      ["opus-child", "claude-opus-4.1"],
+      ["terra-child", "gpt-5.6-terra"],
+    ]);
 
     const firstRead = requestByMethod(socket, "thread/read");
     expect(firstRead["params"]).toMatchObject({
@@ -253,15 +282,46 @@ describe("Evener AppWire collector", () => {
       subscribe: true,
       replaceSubscription: true,
     });
-    respond(socket, firstRead, { thread: thread("root", "active", { name: "Root title" }) });
-    await flush();
-    const reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
-    expect(reads).toHaveLength(2);
-    expect(reads[1]?.["params"]).toMatchObject({ ref: "local:child", replaceSubscription: false });
-    respond(socket, reads[1]!, {
-      thread: thread("child", "active", { parentRef: "local:root", kind: "subagent" }),
+    respond(socket, firstRead, {
+      thread: thread("root", "active", { name: "Root title", model: "gpt-5.6-sol" }),
     });
     await flush();
+    let reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(2);
+    expect(reads[1]?.["params"]).toMatchObject({ ref: "local:opus-child", replaceSubscription: false });
+    respond(socket, reads[1]!, {
+      thread: thread("opus-child", "active", {
+        parentRef: "local:root",
+        kind: "subagent",
+        model: "claude-opus-4.1",
+      }),
+    });
+    await flush();
+    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(3);
+    expect(reads[2]?.["params"]).toMatchObject({ ref: "local:terra-child", replaceSubscription: false });
+    respond(socket, reads[2]!, {
+      thread: thread("terra-child", "active", {
+        parentRef: "local:root",
+        kind: "subagent",
+        model: "gpt-5.6-terra",
+      }),
+    });
+    await flush();
+    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(3);
+
+    socket.message({
+      method: "thread/model/changed",
+      params: { ref: "local:terra-child", model: "gemini-3-pro" },
+    });
+    expect(updates.flatMap((update) => update.events).at(-1)).toEqual({
+      kind: "SessionModelChanged",
+      provider: "evener",
+      sessionId: "terra-child",
+      model: "gemini-3-pro",
+      observedAt: "2026-08-26T05:00:00.000Z",
+    });
     expect(timers.timers.some((timer) => timer.active && timer.delayMs === 2_000)).toBe(true);
 
     collector.stop();
@@ -409,6 +469,7 @@ describe("Evener AppWire collector", () => {
     for (const sessionId of ["status-child", "turn-child"]) {
       expect(events.filter((event) => event.sessionId === sessionId).map((event) => event.kind)).toEqual([
         "SubagentStart",
+        "SessionModelChanged",
         "SessionTitleChanged",
         "SessionStatusObserved",
       ]);
@@ -527,7 +588,7 @@ describe("Evener AppWire collector", () => {
       ["Stop", "root"],
       ["SessionStatusObserved", "root"],
       ["SessionTitleChanged", "root"],
-      ["SessionObserved", "root"],
+      ["SessionModelChanged", "root"],
       ["Activity", "root"],
       ["StopFailure", "root"],
       ["SessionStatusObserved", "root"],
@@ -535,7 +596,7 @@ describe("Evener AppWire collector", () => {
       ["SessionEnd", "root"],
     ]);
     expect(events[1]).toMatchObject({ status: "idle" });
-    expect(events[3]).toMatchObject({ model: "gpt-5.6-terra", title: "Renamed" });
+    expect(events[3]).toMatchObject({ model: "gpt-5.6-terra" });
     expect(events[6]).toMatchObject({ status: "error" });
     collector.stop();
   });

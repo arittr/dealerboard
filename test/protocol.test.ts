@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type ProjectedAgentNode,
   type ProjectedSession,
   type Provider,
   parseSessionSnapshot,
@@ -33,7 +34,32 @@ const valid: SessionSnapshotV2 = {
       originParentRef: null,
     },
   ],
+  agents: [],
 };
+
+const agent = (overrides: Partial<ProjectedAgentNode> = {}): ProjectedAgentNode => ({
+  provider: "claude",
+  sessionId: "agent-root",
+  role: "primary",
+  lineage: null,
+  parent: null,
+  status: "working",
+  title: "Agent root",
+  project: "stream-deck-agents",
+  model: "claude-opus-4.1",
+  openedAt: "2026-08-26T05:00:00.000Z",
+  statusSince: "2026-08-26T05:00:00.000Z",
+  activityLine: null,
+  unreadSince: null,
+  logicalSlot: 1,
+  ghosttyTerminalId: null,
+  transcriptPath: null,
+  originKind: null,
+  originRef: null,
+  originSubagent: false,
+  originParentRef: null,
+  ...overrides,
+});
 
 const firstSession = (): ProjectedSession => {
   const session = valid.sessions[0];
@@ -65,6 +91,177 @@ describe("parseSessionSnapshot", () => {
     expect(result.health).not.toBe(valid.health);
     expect(result.sessions).not.toBe(valid.sessions);
     expect(result.sessions[0]).not.toBe(firstSession());
+  });
+
+  test("normalizes an absent agents field to null", () => {
+    const { agents: _agents, ...oldDaemon } = valid;
+    expect(parseSessionSnapshot(oldDaemon).agents).toBeNull();
+  });
+
+  test("rejects a present agents field that is not an array", () => {
+    expect(() => parseSessionSnapshot({ ...valid, agents: null })).toThrow("agents must be an array when present");
+    expect(() => parseSessionSnapshot({ ...valid, agents: {} })).toThrow("agents must be an array when present");
+  });
+
+  test("parses a valid mixed graph without changing legacy sessions", () => {
+    const root = agent();
+    const child = agent({
+      sessionId: "native-child",
+      role: "subagent",
+      lineage: "native",
+      parent: { provider: "claude", sessionId: "agent-root" },
+      logicalSlot: null,
+    });
+    const parsed = parseSessionSnapshot({ ...valid, agents: [root, child] });
+    expect(parsed.sessions).toEqual(valid.sessions);
+    expect(parsed.agents).toEqual([root, child]);
+  });
+
+  test.each([
+    ["empty identity", [agent({ sessionId: "" })]],
+    ["duplicate identity", [agent(), agent({ logicalSlot: 2 })]],
+    ["unknown provider", [agent({ provider: "unknown" as Provider })]],
+    ["unknown status", [agent({ status: "stopped" as SessionStatus })]],
+    ["non-canonical openedAt", [agent({ openedAt: "2026-08-26T05:00:00Z" })]],
+    ["invalid role", [agent({ role: "root" as ProjectedAgentNode["role"] })]],
+    ["invalid lineage", [agent({ role: "subagent", lineage: null, logicalSlot: null })]],
+    ["native null parent", [agent({ sessionId: "native", role: "subagent", lineage: "native", logicalSlot: null })]],
+    [
+      "native cross-provider parent",
+      [
+        agent(),
+        agent({
+          sessionId: "native",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "codex", sessionId: "agent-root" },
+          logicalSlot: null,
+        }),
+      ],
+    ],
+    [
+      "native missing parent",
+      [
+        agent({
+          sessionId: "native",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "claude", sessionId: "missing" },
+          logicalSlot: null,
+        }),
+      ],
+    ],
+    [
+      "Paseo parent targeting native node",
+      [
+        agent(),
+        agent({
+          sessionId: "native",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "claude", sessionId: "agent-root" },
+          logicalSlot: null,
+        }),
+        agent({
+          provider: "codex",
+          sessionId: "paseo",
+          role: "subagent",
+          lineage: "paseo",
+          parent: { provider: "claude", sessionId: "native" },
+          logicalSlot: 2,
+          originKind: "paseo",
+          originSubagent: true,
+        }),
+      ],
+    ],
+    [
+      "Paseo missing parent",
+      [
+        agent({
+          provider: "codex",
+          sessionId: "paseo",
+          role: "subagent",
+          lineage: "paseo",
+          parent: { provider: "claude", sessionId: "missing" },
+          logicalSlot: 2,
+          originKind: "paseo",
+          originSubagent: true,
+        }),
+      ],
+    ],
+    [
+      "native slot",
+      [
+        agent(),
+        agent({
+          sessionId: "native",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "claude", sessionId: "agent-root" },
+          logicalSlot: 2,
+        }),
+      ],
+    ],
+    ["primary null slot", [agent({ logicalSlot: null })]],
+    [
+      "Paseo null slot",
+      [
+        agent(),
+        agent({
+          provider: "codex",
+          sessionId: "paseo",
+          role: "subagent",
+          lineage: "paseo",
+          parent: { provider: "claude", sessionId: "agent-root" },
+          logicalSlot: null,
+          originKind: "paseo",
+          originSubagent: true,
+        }),
+      ],
+    ],
+    ["duplicate root slots", [agent(), agent({ sessionId: "agent-root-2" })]],
+    [
+      "native independent facts",
+      [
+        agent(),
+        agent({
+          sessionId: "native",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "claude", sessionId: "agent-root" },
+          logicalSlot: null,
+          ghosttyTerminalId: "terminal-1",
+          transcriptPath: "/tmp/native.jsonl",
+          originKind: "terminal",
+          originRef: "origin",
+          originSubagent: true,
+          originParentRef: "parent",
+          unreadSince: "2026-08-26T05:00:00.000Z",
+        }),
+      ],
+    ],
+    ["non-Claude terminal binding", [agent({ provider: "codex", ghosttyTerminalId: "terminal-1" })]],
+    [
+      "two-node parent cycle",
+      [
+        agent({
+          sessionId: "a",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "claude", sessionId: "b" },
+          logicalSlot: null,
+        }),
+        agent({
+          sessionId: "b",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "claude", sessionId: "a" },
+          logicalSlot: null,
+        }),
+      ],
+    ],
+  ])("rejects invalid agent graph: %s", (_name, agents) => {
+    expect(() => parseSessionSnapshot({ ...valid, agents })).toThrow();
   });
 
   test("accepts the optional bounded health.message, null title/project, and empty sessions", () => {
@@ -362,12 +559,20 @@ describe("RegistryEvent", () => {
       { kind: "StopFailure", provider: "claude", sessionId: "s1", observedAt },
       { kind: "SessionEnd", provider: "claude", sessionId: "s1", observedAt },
       {
+        kind: "SessionModelChanged",
+        provider: "evener",
+        sessionId: "s2",
+        model: "gpt-5.6-terra",
+        observedAt,
+      },
+      {
         kind: "SubagentStart",
         provider: "claude",
         sessionId: "s2",
         parentSessionId: "s1",
         title: null,
         project: null,
+        model: null,
         observedAt,
       },
       { kind: "SubagentStop", provider: "claude", sessionId: "s2", observedAt },
@@ -380,6 +585,7 @@ describe("RegistryEvent", () => {
       "Stop",
       "StopFailure",
       "SessionEnd",
+      "SessionModelChanged",
       "SubagentStart",
       "SubagentStop",
     ]);

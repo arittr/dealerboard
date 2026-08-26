@@ -11,14 +11,18 @@ import {
   labelForSession,
   validateLayoutSettings,
 } from "../../src/plugin/layout";
-import type { ProjectedSession, SnapshotView } from "../../src/protocol";
+import type { AgentIdentity, ProjectedAgentNode, ProjectedSession, SnapshotView } from "../../src/protocol";
+
+export type BoardSession = ProjectedSession | ProjectedAgentNode;
 
 export type BoardCardSeed = {
-  session: ProjectedSession;
+  session: BoardSession;
   label: string;
   subagent: boolean;
   /** Anchoring primary's project, for meta-line suppression; null for primaries and orphans. */
   parentProject: string | null;
+  displayOnly: boolean;
+  descendantBadge: number | null;
 };
 
 export type BoardGroup = { cards: BoardCardSeed[]; orphanTail: boolean };
@@ -70,14 +74,28 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
 
   const groups: BoardGroup[] = primaries.map((primary) => {
     const cards: BoardCardSeed[] = [
-      { session: primary, label: labelForSession(primary), subagent: false, parentProject: null },
+      {
+        session: primary,
+        label: labelForSession(primary),
+        subagent: false,
+        parentProject: null,
+        displayOnly: false,
+        descendantBadge: primary.descendantCount,
+      },
     ];
     const walk = (ref: string | null): void => {
       if (ref === null) {
         return;
       }
       for (const child of childrenOf.get(ref) ?? []) {
-        cards.push({ session: child, label: labelForSession(child), subagent: true, parentProject: primary.project });
+        cards.push({
+          session: child,
+          label: labelForSession(child),
+          subagent: true,
+          parentProject: primary.project,
+          displayOnly: false,
+          descendantBadge: child.descendantCount,
+        });
         walk(child.originRef);
       }
     };
@@ -92,9 +110,74 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
         label: labelForSession(entry),
         subagent: true,
         parentProject: null,
+        displayOnly: false,
+        descendantBadge: entry.descendantCount,
       })),
       orphanTail: true,
     });
+  }
+  return groups;
+};
+
+const agentKey = (identity: AgentIdentity): string => `${identity.provider}\u0000${identity.sessionId}`;
+
+const compareOpenedIdentity = (a: ProjectedAgentNode, b: ProjectedAgentNode): number =>
+  a.openedAt.localeCompare(b.openedAt) ||
+  a.provider.localeCompare(b.provider) ||
+  a.sessionId.localeCompare(b.sessionId);
+
+export const groupedAgentOrder = (agents: readonly ProjectedAgentNode[]): BoardGroup[] => {
+  const childrenOf = new Map<string, ProjectedAgentNode[]>();
+  const primaries = agents
+    .filter(
+      (node): node is ProjectedAgentNode & { logicalSlot: number } =>
+        node.role === "primary" && node.logicalSlot !== null,
+    )
+    .sort((a, b) => a.logicalSlot - b.logicalSlot);
+
+  for (const node of agents) {
+    if (node.parent === null) {
+      continue;
+    }
+    const key = agentKey(node.parent);
+    const children = childrenOf.get(key) ?? [];
+    children.push(node);
+    childrenOf.set(key, children);
+  }
+  for (const children of childrenOf.values()) {
+    children.sort(compareOpenedIdentity);
+  }
+
+  const seed = (node: ProjectedAgentNode, parentProject: string | null): BoardCardSeed => ({
+    session: node,
+    label: labelForSession(node),
+    subagent: node.role === "subagent",
+    parentProject,
+    displayOnly: node.lineage === "native",
+    descendantBadge: null,
+  });
+
+  const appendChildren = (cards: BoardCardSeed[], parent: ProjectedAgentNode, parentProject: string | null): void => {
+    for (const child of childrenOf.get(agentKey(parent)) ?? []) {
+      cards.push(seed(child, parentProject));
+      appendChildren(cards, child, parentProject);
+    }
+  };
+
+  const groups = primaries.map((primary): BoardGroup => {
+    const cards = [seed(primary, null)];
+    appendChildren(cards, primary, primary.project);
+    return { cards, orphanTail: false };
+  });
+
+  const orphans = agents.filter((node) => node.role === "subagent" && node.parent === null).sort(compareOpenedIdentity);
+  if (orphans.length > 0) {
+    const cards: BoardCardSeed[] = [];
+    for (const orphan of orphans) {
+      cards.push(seed(orphan, null));
+      appendChildren(cards, orphan, null);
+    }
+    groups.push({ cards, orphanTail: true });
   }
   return groups;
 };
@@ -192,7 +275,9 @@ export type BoardResult = {
 };
 
 export const reduceBoard = (view: SnapshotView, storedState: unknown): BoardResult => {
-  const packed = packBoard(groupedOrder(view.snapshot.sessions), view.degraded);
+  const groups =
+    view.snapshot.agents === null ? groupedOrder(view.snapshot.sessions) : groupedAgentOrder(view.snapshot.agents);
+  const packed = packBoard(groups, view.degraded);
   const pages = packed.length > 0 ? packed : [{ cards: [] }];
   const pageCount = pages.length;
   const { settings: restored, defaulted } = validateLayoutSettings(storedState);

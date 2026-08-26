@@ -72,7 +72,9 @@ export const DEFAULT_LAYOUT_SETTINGS: LayoutSettingsV1 = {
 
 const SHORT_SESSION_ID_LENGTH = 8;
 
-export const labelForSession = (session: ProjectedSession): string => {
+export type SessionLabelSource = Pick<ProjectedSession, "provider" | "sessionId" | "title" | "project">;
+
+export const labelForSession = (session: SessionLabelSource): string => {
   if (session.title !== null && session.title.length > 0) {
     return session.title;
   }

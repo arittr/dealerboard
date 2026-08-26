@@ -340,6 +340,7 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
           parentSessionId: sessionId,
           title: firstAllowlistedString(value, SAFE_FIELDS.agentType) ?? null,
           project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
+          model: null,
           observedAt: now,
         },
       ];

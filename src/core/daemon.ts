@@ -327,6 +327,7 @@ export class ProjectionDaemon {
       schemaVersion: 2,
       health: { status: "error", message: code },
       sessions: [],
+      agents: [],
     };
     const json = JSON.stringify(snapshot);
     if (json === this.state.lastPublishedJson) {

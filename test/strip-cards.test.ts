@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PlacedCard } from "../app/src/board";
 import {
   boardRenderSignature,
   CARD_MODEL_LABEL_MAX_CODE_POINTS,
+  cardClassName,
   cardContentSignature,
   cardKey,
   cardViewModel,
@@ -34,17 +37,29 @@ const session = (slot: number, overrides: Partial<ProjectedSession> = {}): Proje
   ...overrides,
 });
 
-const placed = (overrides: Partial<PlacedCard> = {}, sessionOverrides: Partial<ProjectedSession> = {}): PlacedCard => ({
-  session: session(1, sessionOverrides),
-  label: "Label",
-  subagent: false,
-  parentProject: null,
-  degraded: false,
-  indent: false,
-  spine: "none",
-  column: 0,
-  row: 0,
-  ...overrides,
+const placed = (overrides: Partial<PlacedCard> = {}, sessionOverrides: Partial<ProjectedSession> = {}): PlacedCard => {
+  const projected = session(1, sessionOverrides);
+  return {
+    session: projected,
+    label: "Label",
+    subagent: false,
+    parentProject: null,
+    displayOnly: false,
+    descendantBadge: projected.descendantCount,
+    degraded: false,
+    indent: false,
+    spine: "none",
+    column: 0,
+    row: 0,
+    ...overrides,
+  };
+};
+
+describe("card source hygiene", () => {
+  test("contains no literal NUL bytes", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "app", "src", "cards.ts"));
+    expect(source.includes(0x00)).toBe(false);
+  });
 });
 
 describe("statusLineText", () => {
@@ -156,6 +171,36 @@ describe("cardViewModel", () => {
     );
     expect(model.unread).toBe(true);
     expect(model.timer).toBe("working 2m");
+  });
+
+  test("a graph-backed display-only child has no unread dot or descendant badge", () => {
+    const model = cardViewModel(
+      placed(
+        { displayOnly: true, descendantBadge: null, subagent: true, indent: true },
+        {
+          model: "gpt-5.6-terra",
+          status: "waiting",
+          statusSince: "2026-08-25T00:08:00.000Z",
+          unreadSince: "2026-08-25T00:09:00.000Z",
+          descendantCount: 9,
+        },
+      ),
+      NOW_MS,
+    );
+    expect(model).toMatchObject({
+      displayOnly: true,
+      modelLabel: "5.6-terra",
+      status: "waiting",
+      timer: "waiting 2m",
+      unread: false,
+      badge: null,
+    });
+    expect(cardClassName(model)).toContain("display-only");
+    expect(cardViewModel(placed({ displayOnly: true, descendantBadge: 3 }), NOW_MS).badge).toBeNull();
+  });
+
+  test("fallback cards retain the legacy descendant badge", () => {
+    expect(cardViewModel(placed({ descendantBadge: 3 }), NOW_MS).badge).toBe(3);
   });
 });
 

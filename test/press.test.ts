@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type PressDeps, pressSessionTile } from "../app/src/press";
+import { type PressDeps, pressBoardCard, pressSessionTile } from "../app/src/press";
 import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../src/plugin/ghostty-focus";
 import type { ProjectedSession } from "../src/protocol";
 
@@ -105,5 +105,13 @@ describe("pressSessionTile", () => {
     await pressSessionTile(session({ provider: "grok" }), deps);
     expect(callNames(calls)).toEqual(["ack", "flash"]);
     expect(flashCount(calls)).toBe(1);
+  });
+});
+
+describe("pressBoardCard", () => {
+  test("a display-only card schedules no ack, route, or flash", async () => {
+    const { deps, calls } = makeDeps();
+    await pressBoardCard({ session: session({ provider: "evener" }), displayOnly: true }, deps);
+    expect(calls).toEqual([]);
   });
 });

@@ -1,28 +1,18 @@
 /**
  * Defensive projection from `active_sessions` rows to the published snapshot.
  *
- * `projectRows` is pure: it indexes rows by composite identity, validates
- * every identity, role, slot, and parent edge up front, then walks each
- * top-level tree with a per-root visited set and a total-step bound of
- * `rows.length + 1`. Any invalid topology throws `ProjectionError` — the
- * projection never emits partial output. The grid is an attention inbox:
- * a read-and-idle root is filtered from the snapshot (its registry row
- * persists until its lifecycle ends), and so is an idle Paseo subagent even
- * when unread — its result is consumed by the orchestrating parent agent,
- * not by the user pressing tiles. Paseo lineage spans separate top-level
- * rows (`originRef`/`originParentRef`), so an effectively active Paseo
- * subagent also rolls its status up through every resolvable Paseo ancestor
- * root, retaining read-and-idle ancestors with a lifted effective status
- * while any active descendant remains. Hidden roots and their subtrees still
- * participate in every topology validation. `readProjection` owns the
- * read transaction boundary around the SQLite select: it commits only a
- * fully mapped and projected snapshot and rolls back if mapping or
- * projection throws. The read side issues no writes.
+ * `projectSnapshotRows` validates native topology once, computes native subtree
+ * status bottom-up, then materializes both the legacy root list and unified
+ * agent graph from those shared results. Paseo lineage only links unique root
+ * refs; invalid Paseo lineage is represented as an orphan rather than making a
+ * valid native projection fail. `readProjection` owns the SQLite read
+ * transaction and rolls it back if mapping or projection throws.
  */
 
 import type { Database } from "bun:sqlite";
 import {
   PROVIDER_KEYS,
+  type ProjectedAgentNode,
   type ProjectedSession,
   type Provider,
   type SessionOriginKind,
@@ -41,6 +31,7 @@ export type ProjectionRow = {
   logicalSlot: number | null;
   ghosttyTerminalId: string | null;
   model: string | null;
+  openedAt: string;
   originKind: SessionOriginKind | null;
   originRef: string | null;
   originSubagent: number;
@@ -73,6 +64,19 @@ export class ProjectionError extends Error {
   }
 }
 
+export type ProjectedRows = {
+  sessions: ProjectedSession[];
+  agents: ProjectedAgentNode[];
+};
+
+type NodeResult = {
+  row: ProjectionRow;
+  effectiveStatus: SessionStatus;
+  descendantCount: number;
+};
+
+type RootResult = NodeResult & { slot: number };
+
 const STATUS_PRIORITY: Record<SessionStatus, number> = {
   idle: 0,
   working: 1,
@@ -86,32 +90,33 @@ const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal"]);
 
 const identityKey = (provider: Provider, sessionId: string): string => `${provider}\u0000${sessionId}`;
 
+const isPaseoSubagent = (row: ProjectionRow): boolean => row.originKind === "paseo" && row.originSubagent === 1;
+
+const childStatus = (row: ProjectionRow): SessionStatus => (row.status === "idle" ? "working" : row.status);
+
 /** The higher-priority of two statuses (error > waiting > working > idle). */
 const maxStatus = (a: SessionStatus, b: SessionStatus): SessionStatus =>
   STATUS_PRIORITY[a] > STATUS_PRIORITY[b] ? a : b;
 
+const compareAgents = (a: ProjectedAgentNode, b: ProjectedAgentNode): number => {
+  if (a.openedAt !== b.openedAt) {
+    return a.openedAt < b.openedAt ? -1 : 1;
+  }
+  if (a.provider !== b.provider) {
+    return a.provider < b.provider ? -1 : 1;
+  }
+  if (a.sessionId === b.sessionId) {
+    return 0;
+  }
+  return a.sessionId < b.sessionId ? -1 : 1;
+};
+
 /**
- * Project stored rows to the top-level snapshot session list, ordered by
- * stored logical slot with gaps preserved. A root's effective status is the
- * highest-priority status in its subtree, where a live descendant counts as
- * at least "working": child rows exist only while a subagent runs, and a
- * subagent may never emit its own Activity event. The grid is an attention
- * inbox, so a root is emitted iff its subtree is still active or its last
- * result is unread — except that an idle Paseo subagent root is never
- * emitted: its unread result is the orchestrating parent's to report, not
- * the user's to ack. Paseo lineage crosses top-level rows — an effectively
- * active Paseo subagent propagates its status through every Paseo ancestor
- * resolvable by a unique `originRef`, so a read-and-idle ancestor stays
- * projected as effectively working (or waiting/error) while any descendant
- * is active; stored ledger fields are never rewritten. Ambiguous duplicate
- * refs, missing links, and cycles stop that lineage walk without failing
- * the snapshot. Hidden roots keep their registry rows and still traverse
- * for validation.
- * Pure; throws `ProjectionError` on any invalid topology rather than
- * emitting partial output.
+ * Project validated registry rows to both the legacy top-level session list and
+ * a unified native/Paseo hierarchy. Pure; throws `ProjectionError` on invalid
+ * native topology rather than emitting partial output.
  */
-export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] => {
-  // Index every row by composite identity; duplicates are corrupt.
+export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRows => {
   const byIdentity = new Map<string, ProjectionRow>();
   for (const row of rows) {
     const key = identityKey(row.provider, row.sessionId);
@@ -121,8 +126,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
     byIdentity.set(key, row);
   }
 
-  // Validate roles, slots, and parent edges before any traversal.
-  const roots: { row: ProjectionRow; slot: number }[] = [];
+  const rootRows: { row: ProjectionRow; slot: number }[] = [];
   const childrenOf = new Map<string, ProjectionRow[]>();
   for (const row of rows) {
     if (row.parentSessionId === null) {
@@ -132,7 +136,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
       if (row.logicalSlot === null || !Number.isInteger(row.logicalSlot) || row.logicalSlot < 1) {
         throw new ProjectionError("top-level-without-positive-slot");
       }
-      roots.push({ row, slot: row.logicalSlot });
+      rootRows.push({ row, slot: row.logicalSlot });
       continue;
     }
     if (row.ghosttyTerminalId !== null) {
@@ -156,24 +160,15 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
     }
   }
 
-  // Traverse each top-level tree: per-root visited set plus a total-step
-  // bound of rows.length + 1, so corrupt data can never loop forever.
-  roots.sort((a, b) => a.slot - b.slot);
-  type RootResult = {
-    row: ProjectionRow;
-    slot: number;
-    descendantCount: number;
-    effectiveStatus: SessionStatus;
-  };
-  const rootResults: RootResult[] = [];
+  rootRows.sort((a, b) => a.slot - b.slot);
+  const nativeOrder: ProjectionRow[] = [];
+  const nativeRootByIdentity = new Map<string, string>();
   let totalVisited = 0;
-  for (const { row: root, slot } of roots) {
+  for (const { row: root } of rootRows) {
     const rootKey = identityKey(root.provider, root.sessionId);
     const visited = new Set<string>();
     const stack: ProjectionRow[] = [root];
     let steps = 0;
-    let descendantCount = 0;
-    let effectiveStatus: SessionStatus = root.status;
     for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
       steps += 1;
       if (steps > rows.length + 1) {
@@ -184,111 +179,273 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
         throw new ProjectionError("cycle");
       }
       visited.add(key);
-      if (key !== rootKey) {
-        descendantCount += 1;
-        // A descendant row exists only while its subagent runs (SubagentStop
-        // deletes the row), and a subagent may never emit its own Activity
-        // event — so a live descendant lifts the tree to at least "working".
-        const descendantStatus = current.status === "idle" ? "working" : current.status;
-        if (STATUS_PRIORITY[descendantStatus] > STATUS_PRIORITY[effectiveStatus]) {
-          effectiveStatus = descendantStatus;
-        }
-      }
+      nativeOrder.push(current);
+      nativeRootByIdentity.set(key, rootKey);
       for (const child of childrenOf.get(key) ?? []) {
         stack.push(child);
       }
     }
     totalVisited += visited.size;
-    rootResults.push({ row: root, slot, descendantCount, effectiveStatus });
   }
 
-  // Every valid row is reachable from exactly one root; rows left over form a
-  // cycle detached from any root.
   if (totalVisited !== rows.length) {
     throw new ProjectionError("cycle");
   }
 
-  // Paseo lineage roll-up: link top-level paseo roots by unique originRef and walk
-  // up from every effectively active Paseo subagent, lifting each resolvable
-  // ancestor's effective status (never its stored row). A walk stops at a
-  // missing link, an ambiguous duplicate ref, or a cycle (visited refs), so
-  // corrupt lineage never blackouts otherwise valid rows — those active
-  // subagents simply stay available to the board's orphan-tail handling.
-  const rootByOriginRef = new Map<string, RootResult>();
+  const results = new Map<string, NodeResult>();
+  for (const current of [...nativeOrder].reverse()) {
+    const key = identityKey(current.provider, current.sessionId);
+    let effectiveStatus = current.parentSessionId === null ? current.status : childStatus(current);
+    let descendantCount = 0;
+    for (const child of childrenOf.get(key) ?? []) {
+      const childResult = results.get(identityKey(child.provider, child.sessionId));
+      if (childResult === undefined) {
+        throw new ProjectionError("corrupt-row");
+      }
+      effectiveStatus = maxStatus(effectiveStatus, childResult.effectiveStatus);
+      descendantCount += childResult.descendantCount + 1;
+    }
+    results.set(key, { row: current, effectiveStatus, descendantCount });
+  }
+
+  const rootResults: RootResult[] = [];
+  const rootResultsByIdentity = new Map<string, RootResult>();
+  for (const { row, slot } of rootRows) {
+    const key = identityKey(row.provider, row.sessionId);
+    const result = results.get(key);
+    if (result === undefined) {
+      throw new ProjectionError("corrupt-row");
+    }
+    const rootResult: RootResult = { ...result, slot };
+    rootResults.push(rootResult);
+    rootResultsByIdentity.set(key, rootResult);
+  }
+
+  const rootByOriginRef = new Map<string, string>();
   const ambiguousOriginRefs = new Set<string>();
-  for (const result of rootResults) {
-    // Only paseo roots carry lineage: a terminal- or null-origin ref never
-    // links (and never poisons uniqueness for a valid paseo parent).
-    if (result.row.originKind !== "paseo") {
+  for (const root of rootResults) {
+    if (root.row.originKind !== "paseo" || root.row.originRef === null) {
       continue;
     }
-    const ref = result.row.originRef;
-    if (ref === null || ambiguousOriginRefs.has(ref)) {
+    const ref = root.row.originRef;
+    if (ambiguousOriginRefs.has(ref)) {
       continue;
     }
     if (rootByOriginRef.has(ref)) {
       rootByOriginRef.delete(ref);
       ambiguousOriginRefs.add(ref);
-      continue;
-    }
-    rootByOriginRef.set(ref, result);
-  }
-  for (const result of rootResults) {
-    const { row } = result;
-    if (row.originKind !== "paseo" || row.originSubagent !== 1 || result.effectiveStatus === "idle") {
-      continue;
-    }
-    let carried: SessionStatus = result.effectiveStatus;
-    const walkedRefs = new Set<string>();
-    let parentRef = row.originParentRef;
-    while (parentRef !== null && !walkedRefs.has(parentRef)) {
-      const ancestor = rootByOriginRef.get(parentRef);
-      if (ancestor === undefined) {
-        break;
-      }
-      walkedRefs.add(parentRef);
-      // Both sides take the running maximum: the ancestor's lifted status and
-      // the value carried further upward stay the subtree maximum, so nothing
-      // below the ancestor is lost.
-      const combined = maxStatus(carried, ancestor.effectiveStatus);
-      ancestor.effectiveStatus = combined;
-      carried = combined;
-      parentRef = ancestor.row.originParentRef;
+    } else {
+      rootByOriginRef.set(ref, identityKey(root.row.provider, root.row.sessionId));
     }
   }
 
-  // Visibility applies only after every status roll-up finished.
-  const projected: ProjectedSession[] = [];
-  for (const { row: root, slot, descendantCount, effectiveStatus } of rootResults) {
-    // A finished Paseo subagent never holds the grid: its result is consumed
-    // by the orchestrating parent agent, so idle subagent roots stay hidden
-    // even when unread. Active ones (or idle ones lifted by live children or
-    // active Paseo descendants) still show with their hollow-ring mark.
-    const visible = effectiveStatus !== "idle" || (root.unreadSince !== null && root.originSubagent !== 1);
-    if (visible) {
-      projected.push({
-        provider: root.provider,
-        sessionId: root.sessionId,
-        status: effectiveStatus,
-        title: root.title,
-        project: root.project,
-        descendantCount,
-        logicalSlot: slot,
-        ghosttyTerminalId: root.ghosttyTerminalId,
-        model: root.model,
-        originKind: root.originKind,
-        originRef: root.originRef,
-        originSubagent: root.originSubagent === 1,
-        unreadSince: root.unreadSince,
-        statusSince: root.statusSince,
-        activityLine: root.activityLine,
-        transcriptPath: root.transcriptPath,
-        originParentRef: root.originParentRef,
-      });
+  const paseoParent = new Map<string, string>();
+  for (const root of rootResults) {
+    if (!isPaseoSubagent(root.row) || root.row.originParentRef === null) {
+      continue;
+    }
+    const parentKey = rootByOriginRef.get(root.row.originParentRef);
+    if (parentKey !== undefined) {
+      paseoParent.set(identityKey(root.row.provider, root.row.sessionId), parentKey);
     }
   }
-  return projected;
+
+  const done = new Set<string>();
+  const cycleMembers = new Set<string>();
+  for (const start of paseoParent.keys()) {
+    const path: string[] = [];
+    const indexInPath = new Map<string, number>();
+    let current: string | undefined = start;
+    while (current !== undefined && !done.has(current)) {
+      const cycleStart = indexInPath.get(current);
+      if (cycleStart !== undefined) {
+        for (const member of path.slice(cycleStart)) {
+          cycleMembers.add(member);
+        }
+        break;
+      }
+      indexInPath.set(current, path.length);
+      path.push(current);
+      current = paseoParent.get(current);
+    }
+    for (const member of path) {
+      done.add(member);
+    }
+  }
+  for (const member of cycleMembers) {
+    paseoParent.delete(member);
+  }
+
+  for (const result of rootResults) {
+    let carried = result.effectiveStatus;
+    let parentKey = paseoParent.get(identityKey(result.row.provider, result.row.sessionId));
+    const visited = new Set<string>();
+    while (parentKey !== undefined && !visited.has(parentKey)) {
+      visited.add(parentKey);
+      const ancestor = rootResultsByIdentity.get(parentKey);
+      if (ancestor === undefined) {
+        throw new ProjectionError("corrupt-row");
+      }
+      const combined = maxStatus(carried, ancestor.effectiveStatus);
+      ancestor.effectiveStatus = combined;
+      carried = combined;
+      parentKey = paseoParent.get(parentKey);
+    }
+  }
+
+  const rootVisible = (result: RootResult): boolean =>
+    result.effectiveStatus !== "idle" || (result.row.unreadSince !== null && !isPaseoSubagent(result.row));
+  const visibleRoots = rootResults.filter(rootVisible);
+  const visibleRootKeys = new Set(visibleRoots.map((result) => identityKey(result.row.provider, result.row.sessionId)));
+
+  const rootFacts = (result: RootResult) => ({
+    provider: result.row.provider,
+    sessionId: result.row.sessionId,
+    status: result.effectiveStatus,
+    title: result.row.title,
+    project: result.row.project,
+    model: result.row.model,
+    statusSince: result.row.statusSince,
+    activityLine: result.row.activityLine,
+    unreadSince: result.row.unreadSince,
+    logicalSlot: result.slot,
+    ghosttyTerminalId: result.row.ghosttyTerminalId,
+    transcriptPath: result.row.transcriptPath,
+    originKind: result.row.originKind,
+    originRef: result.row.originRef,
+    originSubagent: isPaseoSubagent(result.row),
+    originParentRef: result.row.originParentRef,
+  });
+
+  const projectedSessions = visibleRoots.map(
+    (result): ProjectedSession => ({
+      ...rootFacts(result),
+      descendantCount: result.descendantCount,
+    }),
+  );
+
+  const rootNode = (result: RootResult): ProjectedAgentNode => {
+    const key = identityKey(result.row.provider, result.row.sessionId);
+    const parentKey = paseoParent.get(key);
+    const parentResult = parentKey === undefined ? undefined : rootResultsByIdentity.get(parentKey);
+    const paseoSubagent = isPaseoSubagent(result.row);
+    return {
+      ...rootFacts(result),
+      role: paseoSubagent ? "subagent" : "primary",
+      lineage: paseoSubagent ? "paseo" : null,
+      parent:
+        paseoSubagent && parentResult !== undefined
+          ? { provider: parentResult.row.provider, sessionId: parentResult.row.sessionId }
+          : null,
+      openedAt: result.row.openedAt,
+    };
+  };
+
+  const nativeNode = (result: NodeResult, parentSessionId: string): ProjectedAgentNode => ({
+    provider: result.row.provider,
+    sessionId: result.row.sessionId,
+    role: "subagent",
+    lineage: "native",
+    parent: { provider: result.row.provider, sessionId: parentSessionId },
+    status: result.effectiveStatus,
+    title: result.row.title,
+    project: result.row.project,
+    model: result.row.model,
+    openedAt: result.row.openedAt,
+    statusSince: result.row.statusSince,
+    activityLine: result.row.activityLine,
+    unreadSince: null,
+    logicalSlot: null,
+    ghosttyTerminalId: null,
+    transcriptPath: null,
+    originKind: null,
+    originRef: null,
+    originSubagent: false,
+    originParentRef: null,
+  });
+
+  const nodesByIdentity = new Map<string, ProjectedAgentNode>();
+  for (const result of visibleRoots) {
+    nodesByIdentity.set(identityKey(result.row.provider, result.row.sessionId), rootNode(result));
+  }
+  for (const current of nativeOrder) {
+    if (current.parentSessionId === null) {
+      continue;
+    }
+    const key = identityKey(current.provider, current.sessionId);
+    const rootKey = nativeRootByIdentity.get(key);
+    if (rootKey === undefined) {
+      throw new ProjectionError("corrupt-row");
+    }
+    if (!visibleRootKeys.has(rootKey)) {
+      continue;
+    }
+    const result = results.get(key);
+    if (result === undefined) {
+      throw new ProjectionError("corrupt-row");
+    }
+    nodesByIdentity.set(key, nativeNode(result, current.parentSessionId));
+  }
+
+  const graphChildren = new Map<string, ProjectedAgentNode[]>();
+  for (const node of nodesByIdentity.values()) {
+    if (node.parent === null) {
+      continue;
+    }
+    const parentKey = identityKey(node.parent.provider, node.parent.sessionId);
+    if (!nodesByIdentity.has(parentKey)) {
+      throw new ProjectionError("corrupt-row");
+    }
+    const children = graphChildren.get(parentKey);
+    if (children === undefined) {
+      graphChildren.set(parentKey, [node]);
+    } else {
+      children.push(node);
+    }
+  }
+
+  const orderedAgents: ProjectedAgentNode[] = [];
+  const orderedKeys = new Set<string>();
+  const appendSubtree = (key: string): void => {
+    if (orderedKeys.has(key)) {
+      throw new ProjectionError("corrupt-row");
+    }
+    const node = nodesByIdentity.get(key);
+    if (node === undefined) {
+      throw new ProjectionError("corrupt-row");
+    }
+    orderedKeys.add(key);
+    orderedAgents.push(node);
+    for (const child of [...(graphChildren.get(key) ?? [])].sort(compareAgents)) {
+      appendSubtree(identityKey(child.provider, child.sessionId));
+    }
+  };
+
+  for (const result of visibleRoots) {
+    if (!isPaseoSubagent(result.row)) {
+      appendSubtree(identityKey(result.row.provider, result.row.sessionId));
+    }
+  }
+  const orphanPaseoRoots = visibleRoots
+    .filter(
+      (result) =>
+        isPaseoSubagent(result.row) &&
+        paseoParent.get(identityKey(result.row.provider, result.row.sessionId)) === undefined,
+    )
+    .map((result) => rootNode(result))
+    .sort(compareAgents);
+  for (const node of orphanPaseoRoots) {
+    appendSubtree(identityKey(node.provider, node.sessionId));
+  }
+
+  if (orderedAgents.length !== nodesByIdentity.size) {
+    throw new ProjectionError("corrupt-row");
+  }
+  return { sessions: projectedSessions, agents: orderedAgents };
 };
+
+/** Compatibility wrapper that preserves the legacy sessions-only projection. */
+export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] => projectSnapshotRows(rows).sessions;
 
 type StoredRow = {
   provider: unknown;
@@ -299,28 +456,46 @@ type StoredRow = {
   project: unknown;
   logical_slot: unknown;
   ghostty_terminal_id: unknown;
+  model: unknown;
+  opened_at: unknown;
   origin_kind: unknown;
   origin_ref: unknown;
   origin_subagent: unknown;
   unread_since: unknown;
-  model: unknown;
   status_since: unknown;
+  activity_line: unknown;
   transcript_path: unknown;
   origin_parent_ref: unknown;
-  activity_line: unknown;
 };
 
 const isStringOrNull = (value: unknown): value is string | null => typeof value === "string" || value === null;
 
+const isProvider = (value: unknown): value is Provider => typeof value === "string" && PROVIDERS.has(value);
+
+const isSessionStatus = (value: unknown): value is SessionStatus =>
+  typeof value === "string" && SESSION_STATUSES.has(value);
+
+const isOriginKindOrNull = (value: unknown): value is SessionOriginKind | null =>
+  value === null || (typeof value === "string" && ORIGIN_KINDS.has(value));
+
+const isBinary = (value: unknown): value is 0 | 1 => value === 0 || value === 1;
+
+const isCanonicalUtcInstant = (value: unknown): value is string => {
+  if (typeof value !== "string" || value.length === 0 || Array.from(value).length > 256) {
+    return false;
+  }
+  const epoch = Date.parse(value);
+  return !Number.isNaN(epoch) && new Date(epoch).toISOString() === value;
+};
+
 /** Map one stored row, validating field shapes defensively. */
 const toProjectionRow = (row: StoredRow): ProjectionRow => {
-  if (typeof row.provider !== "string" || !PROVIDERS.has(row.provider)) {
-    throw new ProjectionError("corrupt-row");
-  }
-  if (typeof row.session_id !== "string" || row.session_id.length === 0) {
-    throw new ProjectionError("corrupt-row");
-  }
-  if (typeof row.status !== "string" || !SESSION_STATUSES.has(row.status)) {
+  if (
+    !isProvider(row.provider) ||
+    typeof row.session_id !== "string" ||
+    row.session_id.length === 0 ||
+    !isSessionStatus(row.status)
+  ) {
     throw new ProjectionError("corrupt-row");
   }
   if (
@@ -344,24 +519,17 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   if (typeof row.model === "string" && (row.model.length === 0 || Array.from(row.model).length > 256)) {
     throw new ProjectionError("corrupt-row");
   }
-  if (row.origin_kind !== null && (typeof row.origin_kind !== "string" || !ORIGIN_KINDS.has(row.origin_kind))) {
+  if (
+    !isCanonicalUtcInstant(row.opened_at) ||
+    !isOriginKindOrNull(row.origin_kind) ||
+    !isStringOrNull(row.origin_ref)
+  ) {
     throw new ProjectionError("corrupt-row");
   }
-  if (!isStringOrNull(row.origin_ref)) {
-    throw new ProjectionError("corrupt-row");
-  }
-  // Bounded like the terminal binding: the value flows into the published
-  // snapshot, whose parser rejects strings over 256 code points.
   if (typeof row.origin_ref === "string" && (row.origin_ref.length === 0 || Array.from(row.origin_ref).length > 256)) {
     throw new ProjectionError("corrupt-row");
   }
-  if (row.origin_subagent !== 0 && row.origin_subagent !== 1) {
-    throw new ProjectionError("corrupt-row");
-  }
-  if (!isStringOrNull(row.unread_since)) {
-    throw new ProjectionError("corrupt-row");
-  }
-  if (!isStringOrNull(row.status_since)) {
+  if (!isBinary(row.origin_subagent) || !isStringOrNull(row.unread_since) || !isStringOrNull(row.status_since)) {
     throw new ProjectionError("corrupt-row");
   }
   if (
@@ -390,16 +558,17 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     throw new ProjectionError("corrupt-row");
   }
   return {
-    provider: row.provider as Provider,
+    provider: row.provider,
     sessionId: row.session_id,
     parentSessionId: row.parent_session_id,
-    status: row.status as SessionStatus,
+    status: row.status,
     title: row.title,
     project: row.project,
     logicalSlot: row.logical_slot,
     ghosttyTerminalId: row.ghostty_terminal_id,
     model: row.model,
-    originKind: row.origin_kind as SessionOriginKind | null,
+    openedAt: row.opened_at,
+    originKind: row.origin_kind,
     originRef: row.origin_ref,
     originSubagent: row.origin_subagent,
     unreadSince: row.unread_since,
@@ -411,7 +580,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, origin_kind, origin_ref, origin_subagent, unread_since, status_since, activity_line, transcript_path, origin_parent_ref";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, opened_at, origin_kind, origin_ref, origin_subagent, unread_since, status_since, activity_line, transcript_path, origin_parent_ref";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:
@@ -422,11 +591,13 @@ export const readProjection = (db: Database): SessionSnapshotV2 => {
   db.exec("BEGIN");
   let committed = false;
   try {
-    const rows = db.query(`SELECT ${PROJECTION_COLUMNS} FROM active_sessions`).all() as StoredRow[];
+    const rows = db.query<StoredRow, []>(`SELECT ${PROJECTION_COLUMNS} FROM active_sessions`).all();
+    const projected = projectSnapshotRows(rows.map(toProjectionRow));
     const snapshot: SessionSnapshotV2 = {
       schemaVersion: 2,
       health: { status: "ok" },
-      sessions: projectRows(rows.map(toProjectionRow)),
+      sessions: projected.sessions,
+      agents: projected.agents,
     };
     db.exec("COMMIT");
     committed = true;

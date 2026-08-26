@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
-import { ProjectionError, type ProjectionRow, projectRows, readProjection } from "../src/core/projection";
+import {
+  ProjectionError,
+  type ProjectionRow,
+  projectRows,
+  projectSnapshotRows,
+  readProjection,
+} from "../src/core/projection";
 import { applyRegistryEvents } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
@@ -25,6 +31,8 @@ const row = (
     project?: string | null;
     slot?: number | null;
     ghosttyTerminalId?: string | null;
+    model?: string | null;
+    openedAt?: string;
     originKind?: SessionOriginKind | null;
     originRef?: string | null;
     originSubagent?: number;
@@ -45,7 +53,8 @@ const row = (
     project: options.project ?? null,
     logicalSlot: options.slot === undefined ? (parent === null ? 1 : null) : options.slot,
     ghosttyTerminalId: options.ghosttyTerminalId ?? null,
-    model: null,
+    model: options.model ?? null,
+    openedAt: options.openedAt ?? "2026-08-26T05:00:00.000Z",
     originKind: options.originKind ?? null,
     originRef: options.originRef ?? null,
     originSubagent: options.originSubagent ?? 0,
@@ -614,6 +623,231 @@ describe("projectRows", () => {
   });
 });
 
+describe("projectSnapshotRows", () => {
+  test("projects mixed native and Paseo hierarchy with per-node facts", () => {
+    const result = projectSnapshotRows([
+      row("root", {
+        provider: "evener",
+        slot: 1,
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-root",
+        model: "gpt-5.6-sol",
+        openedAt: "2026-08-26T05:00:00.000Z",
+      }),
+      row("native", {
+        provider: "evener",
+        parent: "root",
+        status: "idle",
+        model: "claude-opus-4.1",
+        openedAt: "2026-08-26T05:00:02.000Z",
+        statusSince: "2026-08-26T05:00:02.000Z",
+      }),
+      row("native-nested", {
+        provider: "evener",
+        parent: "native",
+        status: "waiting",
+        model: "gpt-5.6-terra",
+        openedAt: "2026-08-26T05:00:03.000Z",
+      }),
+      row("paseo", {
+        provider: "codex",
+        slot: 2,
+        status: "working",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-paseo",
+        originSubagent: 1,
+        originParentRef: "agent-root",
+        openedAt: "2026-08-26T05:00:01.000Z",
+      }),
+      row("paseo-native", {
+        provider: "codex",
+        parent: "paseo",
+        status: "error",
+        model: "gemini-3-pro",
+        openedAt: "2026-08-26T05:00:04.000Z",
+      }),
+    ]);
+
+    expect(result.agents.map((node) => node.sessionId)).toEqual([
+      "root",
+      "paseo",
+      "paseo-native",
+      "native",
+      "native-nested",
+    ]);
+    expect(result.agents.map((node) => [node.sessionId, node.status])).toEqual([
+      ["root", "error"],
+      ["paseo", "error"],
+      ["paseo-native", "error"],
+      ["native", "waiting"],
+      ["native-nested", "waiting"],
+    ]);
+    expect(result.agents.find((node) => node.sessionId === "paseo")?.parent).toEqual({
+      provider: "evener",
+      sessionId: "root",
+    });
+    expect(result.agents.find((node) => node.sessionId === "native")?.parent).toEqual({
+      provider: "evener",
+      sessionId: "root",
+    });
+  });
+
+  test("native nodes remove independent routing and unread facts", () => {
+    const { agents } = projectSnapshotRows([
+      row("root", { status: "working", slot: 1 }),
+      row("child", {
+        parent: "root",
+        title: "Child title",
+        project: "child-project",
+        model: "child-model",
+        openedAt: "2026-08-26T05:00:01.000Z",
+        statusSince: "2026-08-26T05:00:02.000Z",
+        activityLine: "Read child.ts",
+        unreadSince: "2026-08-26T05:01:00.000Z",
+        transcriptPath: "/tmp/child.jsonl",
+        originKind: "paseo",
+        originRef: "should-not-publish",
+        originSubagent: 1,
+        originParentRef: "should-not-publish",
+      }),
+    ]);
+
+    expect(agents.find((node) => node.sessionId === "child")).toMatchObject({
+      role: "subagent",
+      lineage: "native",
+      logicalSlot: null,
+      ghosttyTerminalId: null,
+      transcriptPath: null,
+      originKind: null,
+      originRef: null,
+      originSubagent: false,
+      originParentRef: null,
+      unreadSince: null,
+      title: "Child title",
+      project: "child-project",
+      model: "child-model",
+      openedAt: "2026-08-26T05:00:01.000Z",
+      statusSince: "2026-08-26T05:00:02.000Z",
+      activityLine: "Read child.ts",
+    });
+  });
+
+  test("missing, ambiguous, and cyclic Paseo parentage becomes parentless", () => {
+    const { agents } = projectSnapshotRows([
+      row("missing", {
+        provider: "claude",
+        slot: 1,
+        status: "working",
+        originKind: "paseo",
+        originRef: "missing-child",
+        originSubagent: 1,
+        originParentRef: "absent",
+      }),
+      row("dup-a", { provider: "codex", slot: 2, status: "working", originKind: "paseo", originRef: "dup" }),
+      row("dup-b", { provider: "kimi", slot: 3, status: "working", originKind: "paseo", originRef: "dup" }),
+      row("ambiguous", {
+        provider: "pi",
+        slot: 4,
+        status: "working",
+        originKind: "paseo",
+        originRef: "ambiguous-child",
+        originSubagent: 1,
+        originParentRef: "dup",
+      }),
+      row("cycle-a", {
+        provider: "omp",
+        slot: 5,
+        status: "working",
+        originKind: "paseo",
+        originRef: "cycle-a",
+        originSubagent: 1,
+        originParentRef: "cycle-b",
+      }),
+      row("cycle-b", {
+        provider: "qwen",
+        slot: 6,
+        status: "working",
+        originKind: "paseo",
+        originRef: "cycle-b",
+        originSubagent: 1,
+        originParentRef: "cycle-a",
+      }),
+    ]);
+
+    for (const id of ["missing", "ambiguous", "cycle-a", "cycle-b"]) {
+      expect(agents.find((node) => node.sessionId === id)?.parent).toBeNull();
+    }
+  });
+
+  test("legacy sessions and duplicate graph roots agree", () => {
+    const result = projectSnapshotRows([
+      row("root", { status: "idle", unreadSince: null }),
+      row("child", { parent: "root", status: "waiting", model: "child-model" }),
+    ]);
+    const legacy = result.sessions[0];
+    const graphRoot = result.agents.find((node) => node.sessionId === "root");
+    expect(graphRoot).toMatchObject({
+      provider: legacy?.provider,
+      sessionId: legacy?.sessionId,
+      status: legacy?.status,
+      title: legacy?.title,
+      project: legacy?.project,
+      model: legacy?.model,
+      logicalSlot: legacy?.logicalSlot,
+    });
+    expect(legacy?.descendantCount).toBe(1);
+  });
+
+  test("orders equal-timestamp Paseo siblings by provider then session ID", () => {
+    const { agents } = projectSnapshotRows([
+      row("root", {
+        provider: "evener",
+        slot: 1,
+        status: "working",
+        originKind: "paseo",
+        originRef: "root-agent",
+      }),
+      row("bravo", {
+        provider: "codex",
+        slot: 2,
+        status: "working",
+        originKind: "paseo",
+        originRef: "codex-bravo",
+        originSubagent: 1,
+        originParentRef: "root-agent",
+      }),
+      row("alpha", {
+        provider: "claude",
+        slot: 3,
+        status: "working",
+        originKind: "paseo",
+        originRef: "claude-alpha",
+        originSubagent: 1,
+        originParentRef: "root-agent",
+      }),
+      row("alpha", {
+        provider: "codex",
+        slot: 4,
+        status: "working",
+        originKind: "paseo",
+        originRef: "codex-alpha",
+        originSubagent: 1,
+        originParentRef: "root-agent",
+      }),
+    ]);
+
+    expect(agents.map((node) => [node.provider, node.sessionId])).toEqual([
+      ["evener", "root"],
+      ["claude", "alpha"],
+      ["codex", "alpha"],
+      ["codex", "bravo"],
+    ]);
+  });
+});
+
 describe("readProjection", () => {
   test("projects one consistent snapshot from a separately committed writer", () => {
     const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
@@ -643,6 +877,7 @@ describe("readProjection", () => {
             parentSessionId: "parent",
             title: null,
             project: null,
+            model: null,
             observedAt: "2026-08-06T00:00:02.000Z",
           },
           {
@@ -652,6 +887,7 @@ describe("readProjection", () => {
             parentSessionId: "child",
             title: null,
             project: null,
+            model: null,
             observedAt: "2026-08-06T00:00:03.000Z",
           },
         ]);
@@ -706,6 +942,74 @@ describe("readProjection", () => {
             originParentRef: null,
           },
         ]);
+        expect(snapshot.agents).toEqual([
+          {
+            provider: "claude",
+            sessionId: "parent",
+            role: "primary",
+            lineage: null,
+            parent: null,
+            status: "error",
+            title: "Parent",
+            project: "proj",
+            model: null,
+            openedAt: "2026-08-06T00:00:01.000Z",
+            statusSince: "2026-08-06T00:00:04.000Z",
+            activityLine: null,
+            unreadSince: null,
+            logicalSlot: 1,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            originKind: null,
+            originRef: null,
+            originSubagent: false,
+            originParentRef: null,
+          },
+          {
+            provider: "claude",
+            sessionId: "child",
+            role: "subagent",
+            lineage: "native",
+            parent: { provider: "claude", sessionId: "parent" },
+            status: "error",
+            title: null,
+            project: null,
+            model: null,
+            openedAt: "2026-08-06T00:00:02.000Z",
+            statusSince: "2026-08-06T00:00:05.000Z",
+            activityLine: null,
+            unreadSince: null,
+            logicalSlot: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            originKind: null,
+            originRef: null,
+            originSubagent: false,
+            originParentRef: null,
+          },
+          {
+            provider: "claude",
+            sessionId: "grandchild",
+            role: "subagent",
+            lineage: "native",
+            parent: { provider: "claude", sessionId: "child" },
+            status: "error",
+            title: null,
+            project: null,
+            model: null,
+            openedAt: "2026-08-06T00:00:03.000Z",
+            statusSince: "2026-08-06T00:00:06.000Z",
+            activityLine: null,
+            unreadSince: null,
+            logicalSlot: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            originKind: null,
+            originRef: null,
+            originSubagent: false,
+            originParentRef: null,
+          },
+        ]);
         // The snapshot satisfies the published v2 contract.
         expect(parseSessionSnapshot(snapshot)).toEqual(snapshot);
       } finally {
@@ -754,6 +1058,7 @@ describe("readProjection", () => {
             parentSessionId: "o1",
             title: null,
             project: null,
+            model: null,
             observedAt: "2026-08-06T00:00:03.000Z",
           },
           {
@@ -961,6 +1266,47 @@ describe("readProjection", () => {
       rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  test("rejects corrupt opened_at and rolls back the read transaction", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "bad-opened-at",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-26T05:00:00.000Z",
+          },
+        ]);
+        writer.run("UPDATE active_sessions SET opened_at = 'not-a-time' WHERE session_id = 'bad-opened-at'");
+      } finally {
+        writer.close();
+      }
+
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        expect(() => readProjection(reader)).toThrow(new ProjectionError("corrupt-row"));
+        expect(() => {
+          reader.exec("BEGIN");
+          reader.exec("ROLLBACK");
+        }).not.toThrow();
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("writeSnapshotAtomically", () => {
@@ -968,6 +1314,7 @@ describe("writeSnapshotAtomically", () => {
     schemaVersion: 2,
     health: { status: "ok" },
     sessions: [],
+    agents: [],
   };
   const snapshotB: SessionSnapshotV2 = {
     schemaVersion: 2,
@@ -993,6 +1340,7 @@ describe("writeSnapshotAtomically", () => {
         originParentRef: null,
       },
     ],
+    agents: [],
   };
 
   test("publishes A then B: the file parses as exactly B, mode 0600, no temp sibling", () => {

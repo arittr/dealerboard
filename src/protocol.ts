@@ -64,6 +64,13 @@ export type RegistryEvent =
       observedAt: string;
     }
   | {
+      kind: "SessionModelChanged";
+      provider: Provider;
+      sessionId: string;
+      model: string;
+      observedAt: string;
+    }
+  | {
       /** Authoritative hydration/reconnect status; unlike a terminal event, this never changes unread state. */
       kind: "SessionStatusObserved";
       provider: Provider;
@@ -85,6 +92,7 @@ export type RegistryEvent =
       parentSessionId: string;
       title: string | null;
       project: string | null;
+      model: string | null;
       observedAt: string;
     }
   | { kind: "SubagentStop"; provider: Provider; sessionId: string; observedAt: string };
@@ -114,6 +122,34 @@ export type ProjectedSession = {
   originParentRef: string | null;
 };
 
+export type AgentIdentity = {
+  provider: Provider;
+  sessionId: string;
+};
+
+export type ProjectedAgentNode = {
+  provider: Provider;
+  sessionId: string;
+  role: "primary" | "subagent";
+  lineage: "native" | "paseo" | null;
+  parent: AgentIdentity | null;
+  status: SessionStatus;
+  title: string | null;
+  project: string | null;
+  model: string | null;
+  openedAt: string;
+  statusSince: string | null;
+  activityLine: string | null;
+  unreadSince: string | null;
+  logicalSlot: number | null;
+  ghosttyTerminalId: string | null;
+  transcriptPath: string | null;
+  originKind: SessionOriginKind | null;
+  originRef: string | null;
+  originSubagent: boolean;
+  originParentRef: string | null;
+};
+
 export type SnapshotHealth = {
   status: "ok" | "error";
   message?: string;
@@ -123,6 +159,8 @@ export type SessionSnapshotV2 = {
   schemaVersion: 2;
   health: SnapshotHealth;
   sessions: ProjectedSession[];
+  /** Null for snapshots written before the additive agent graph existed. */
+  agents: ProjectedAgentNode[] | null;
 };
 
 export type SnapshotView = {
@@ -153,6 +191,14 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1;
 
+const isCanonicalUtcInstant = (value: unknown): value is string => {
+  if (!isBoundedString(value) || value.length === 0) {
+    return false;
+  }
+  const epoch = Date.parse(value);
+  return !Number.isNaN(epoch) && new Date(epoch).toISOString() === value;
+};
+
 const invalid = (reason: string): never => {
   throw new Error(`invalid session snapshot: ${reason}`);
 };
@@ -172,6 +218,204 @@ const parseHealth = (value: unknown): SnapshotHealth => {
     health.message = value["message"] as string;
   }
   return health;
+};
+
+const parseAgentIdentity = (value: unknown, field: string): AgentIdentity => {
+  if (!isRecord(value)) {
+    return invalid(`${field} must be an object`);
+  }
+  if (typeof value["provider"] !== "string" || !PROVIDERS.has(value["provider"])) {
+    return invalid(`${field}.provider is not a known provider`);
+  }
+  if (!isBoundedString(value["sessionId"]) || value["sessionId"].length === 0) {
+    return invalid(`${field}.sessionId must be a non-empty bounded string`);
+  }
+  return { provider: value["provider"] as Provider, sessionId: value["sessionId"] };
+};
+
+const parseAgent = (value: unknown): ProjectedAgentNode => {
+  if (!isRecord(value)) {
+    return invalid("agent must be an object");
+  }
+  const identity = parseAgentIdentity(value, "agent");
+  const role = value["role"];
+  if (role !== "primary" && role !== "subagent") {
+    return invalid("agent.role must be primary or subagent");
+  }
+  const lineage = value["lineage"];
+  if (lineage !== null && lineage !== "native" && lineage !== "paseo") {
+    return invalid("agent.lineage must be native, paseo, or null");
+  }
+  const parent = value["parent"] === null ? null : parseAgentIdentity(value["parent"], "agent.parent");
+  const status = value["status"];
+  if (typeof status !== "string" || !SESSION_STATUSES.has(status)) {
+    return invalid("agent.status is not a known status");
+  }
+  const title = value["title"];
+  if (!isNullableBoundedString(title)) {
+    return invalid("agent.title must be null or a bounded string");
+  }
+  const project = value["project"];
+  if (!isNullableBoundedString(project)) {
+    return invalid("agent.project must be null or a bounded string");
+  }
+  const model = value["model"];
+  if (!isNullableBoundedString(model)) {
+    return invalid("agent.model must be null or a bounded string");
+  }
+  const openedAt = value["openedAt"];
+  if (!isCanonicalUtcInstant(openedAt)) {
+    return invalid("agent.openedAt must be a canonical UTC instant");
+  }
+  const statusSince = value["statusSince"];
+  if (!isNullableBoundedString(statusSince)) {
+    return invalid("agent.statusSince must be null or a bounded string");
+  }
+  const activityLine = value["activityLine"];
+  if (!isNullableBoundedString(activityLine)) {
+    return invalid("agent.activityLine must be null or a bounded string");
+  }
+  const unreadSince = value["unreadSince"];
+  if (!isNullableBoundedString(unreadSince)) {
+    return invalid("agent.unreadSince must be null or a bounded string");
+  }
+  const logicalSlot = value["logicalSlot"];
+  if (logicalSlot !== null && (typeof logicalSlot !== "number" || !Number.isInteger(logicalSlot))) {
+    return invalid("agent.logicalSlot must be null or an integer");
+  }
+  const ghosttyTerminalId = value["ghosttyTerminalId"];
+  if (!isNullableNonEmptyBoundedString(ghosttyTerminalId)) {
+    return invalid("agent.ghosttyTerminalId must be null or a non-empty bounded string");
+  }
+  const transcriptPath = value["transcriptPath"];
+  if (!isNullableBoundedString(transcriptPath)) {
+    return invalid("agent.transcriptPath must be null or a bounded string");
+  }
+  const originKind = value["originKind"];
+  if (originKind !== null && (typeof originKind !== "string" || !ORIGIN_KINDS.has(originKind))) {
+    return invalid("agent.originKind must be paseo, terminal, or null");
+  }
+  const originRef = value["originRef"];
+  if (!isNullableBoundedString(originRef)) {
+    return invalid("agent.originRef must be null or a bounded string");
+  }
+  const originSubagent = value["originSubagent"];
+  if (typeof originSubagent !== "boolean") {
+    return invalid("agent.originSubagent must be a boolean");
+  }
+  const originParentRef = value["originParentRef"];
+  if (!isNullableBoundedString(originParentRef)) {
+    return invalid("agent.originParentRef must be null or a bounded string");
+  }
+
+  if (role === "primary") {
+    if (lineage !== null || parent !== null || !isPositiveInteger(logicalSlot) || originSubagent) {
+      return invalid("agent primary role invariants are invalid");
+    }
+  } else if (lineage === "native") {
+    if (
+      parent === null ||
+      parent.provider !== identity.provider ||
+      logicalSlot !== null ||
+      ghosttyTerminalId !== null ||
+      transcriptPath !== null ||
+      originKind !== null ||
+      originRef !== null ||
+      originSubagent ||
+      originParentRef !== null ||
+      unreadSince !== null
+    ) {
+      return invalid("agent native role invariants are invalid");
+    }
+  } else if (lineage === "paseo") {
+    if (!isPositiveInteger(logicalSlot) || originKind !== "paseo" || !originSubagent) {
+      return invalid("agent Paseo role invariants are invalid");
+    }
+  } else {
+    return invalid("agent subagent lineage is invalid");
+  }
+  if (ghosttyTerminalId !== null && identity.provider !== "claude") {
+    return invalid("agent.ghosttyTerminalId is only valid for Claude");
+  }
+
+  return {
+    provider: identity.provider,
+    sessionId: identity.sessionId,
+    role,
+    lineage,
+    parent,
+    status: status as SessionStatus,
+    title,
+    project,
+    model,
+    openedAt,
+    statusSince,
+    activityLine,
+    unreadSince,
+    logicalSlot,
+    ghosttyTerminalId,
+    transcriptPath,
+    originKind: originKind as SessionOriginKind | null,
+    originRef,
+    originSubagent,
+    originParentRef,
+  };
+};
+
+const agentIdentityKey = (identity: AgentIdentity): string => `${identity.provider}\u0000${identity.sessionId}`;
+
+const parseAgents = (values: unknown[]): ProjectedAgentNode[] => {
+  const agents = values.map(parseAgent);
+  const byIdentity = new Map<string, ProjectedAgentNode>();
+  const seenSlots = new Set<number>();
+  for (const agent of agents) {
+    const key = agentIdentityKey(agent);
+    if (byIdentity.has(key)) {
+      return invalid(`duplicate agent identity ${key}`);
+    }
+    byIdentity.set(key, agent);
+    if (agent.logicalSlot !== null) {
+      if (seenSlots.has(agent.logicalSlot)) {
+        return invalid(`duplicate agent logicalSlot ${agent.logicalSlot}`);
+      }
+      seenSlots.add(agent.logicalSlot);
+    }
+  }
+  for (const agent of agents) {
+    if (agent.parent === null) {
+      continue;
+    }
+    const parent = byIdentity.get(agentIdentityKey(agent.parent));
+    if (parent === undefined) {
+      return invalid("agent parent does not exist");
+    }
+    if (agent.lineage === "native" && agent.parent.provider !== agent.provider) {
+      return invalid("native agent parent must use the same provider");
+    }
+    if (agent.lineage === "paseo" && parent.logicalSlot === null) {
+      return invalid("Paseo agent parent must be a registry root");
+    }
+  }
+  const done = new Set<string>();
+  for (const agent of agents) {
+    const path = new Set<string>();
+    let current: ProjectedAgentNode | undefined = agent;
+    while (current !== undefined) {
+      const key = agentIdentityKey(current);
+      if (done.has(key)) {
+        break;
+      }
+      if (path.has(key)) {
+        return invalid("agent graph must be acyclic");
+      }
+      path.add(key);
+      current = current.parent === null ? undefined : byIdentity.get(agentIdentityKey(current.parent));
+    }
+    for (const key of path) {
+      done.add(key);
+    }
+  }
+  return agents;
 };
 
 const parseSession = (value: unknown): ProjectedSession => {
@@ -291,9 +535,17 @@ export const parseSessionSnapshot = (value: unknown): SessionSnapshotV2 => {
     }
     seenSlots.add(session.logicalSlot);
   }
+  let agents: ProjectedAgentNode[] | null = null;
+  if ("agents" in value) {
+    if (!Array.isArray(value["agents"])) {
+      return invalid("agents must be an array when present");
+    }
+    agents = parseAgents(value["agents"]);
+  }
   return {
     schemaVersion: 2,
     health: parseHealth(value["health"]),
     sessions,
+    agents,
   };
 };
