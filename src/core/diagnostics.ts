@@ -27,6 +27,7 @@ export type DiagnosticCode =
   | "clock_jump"
   | "maintenance_failed"
   | "quota_failed"
+  | "quota_accounts_failed"
   | "quota_collector_failed"
   | "token_usage_failed"
   | "token_usage_collector_failed";

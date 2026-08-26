@@ -37,6 +37,12 @@ import {
   type QuotaProviderKey,
   type QuotaSnapshot,
 } from "../quota-snapshot";
+import {
+  CLAUDE_SWAP_ARGS,
+  CLAUDE_SWAP_EXEC_TIMEOUT_MS,
+  claudeSwapBinaryCandidates,
+  parseClaudeSwapAccounts,
+} from "./claude-swap-quota";
 import type { DiagnosticRecord } from "./diagnostics";
 import { writeFileAtomically } from "./snapshot";
 
@@ -326,6 +332,8 @@ export type QuotaCollectorDependencies = {
   /** Defaults to codexbarWidgetSnapshotPath(); tests point at a temp file. */
   widgetSnapshotPath?: string;
   exec?: QuotaExec;
+  /** Injected claude-swap subprocess for tests; production resolves its binary separately. */
+  claudeSwapExec?: QuotaExec;
   fileExists?: (path: string) => boolean;
   readFile?: (path: string) => string | null;
   now?: () => string;
@@ -425,6 +433,11 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
   const diagnostics = dependencies.diagnostics ?? (() => {});
 
   const states = new Map<QuotaProviderKey, ProviderState>();
+  type ClaudeAccountState = {
+    accounts: ProviderQuota["accounts"];
+    failed: boolean;
+  };
+  let claudeAccounts: ClaudeAccountState = { accounts: [], failed: false };
   let lastWrittenJson: string | null = null;
   let polling = false;
   let started = false;
@@ -444,12 +457,16 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     const existing = readFile(dependencies.quotaSnapshotPath);
     if (existing !== null) {
       const seeded = parseQuotaSnapshot(JSON.parse(existing));
+      claudeAccounts = {
+        accounts: seeded.providers["claude"]?.accounts ?? [],
+        failed: false,
+      };
       for (const key of QUOTA_PROVIDER_KEYS) {
         const quota = seeded.providers[key];
         if (quota !== undefined) {
           // A seeded unavailable row is already in the failed state — its
           // continuation must not re-log, only a good→failed transition may.
-          states.set(key, { quota, failed: quota.unavailable });
+          states.set(key, { quota: { ...quota, accounts: [] }, failed: quota.unavailable });
         }
       }
       lastWrittenJson = `${JSON.stringify(seeded)}\n`;
@@ -466,6 +483,56 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     }
     const binaryPath = CODEXBAR_BINARY_CANDIDATES.find((path) => fileExists(path));
     return binaryPath === undefined ? null : spawnExec(binaryPath);
+  };
+
+  // Resolved per pass so installing or removing claude-swap never needs a
+  // daemon restart. The injected exec is for tests only and remains
+  // independent from the CodexBar dependency above.
+  const resolveClaudeSwapExec = (): QuotaExec | null => {
+    if (dependencies.claudeSwapExec !== undefined) {
+      return dependencies.claudeSwapExec;
+    }
+    const binaryPath = claudeSwapBinaryCandidates(homedir()).find((path) => fileExists(path));
+    return binaryPath === undefined ? null : spawnExec(binaryPath);
+  };
+
+  const reportAccountFailure = (): void => {
+    try {
+      diagnostics({
+        timestamp: now(),
+        component: DIAGNOSTIC_COMPONENT,
+        code: "quota_accounts_failed",
+        provider: "claude",
+      });
+    } catch {
+      // Diagnostics must never break the collector.
+    }
+  };
+
+  const pollClaudeAccounts = async (exec: QuotaExec | null): Promise<ProviderQuota["accounts"]> => {
+    if (exec === null) {
+      claudeAccounts = { accounts: [], failed: false };
+      return [];
+    }
+    let result: QuotaExecResult;
+    try {
+      result = await exec([...CLAUDE_SWAP_ARGS], CLAUDE_SWAP_EXEC_TIMEOUT_MS);
+    } catch {
+      result = { exitCode: -1, stdout: "" };
+    }
+    const parsed = result.exitCode === 0 ? parseClaudeSwapAccounts(result.stdout) : { kind: "invalid" as const };
+    if (parsed.kind === "ok") {
+      claudeAccounts = { accounts: parsed.accounts, failed: false };
+      return parsed.accounts;
+    }
+    if (!claudeAccounts.failed) {
+      reportAccountFailure();
+    }
+    claudeAccounts = {
+      accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+      failed: true,
+    };
+    return claudeAccounts.accounts;
   };
 
   const probe = async (exec: QuotaExec, provider: QuotaProviderKey): Promise<FetchOutcome> => {
@@ -560,7 +627,24 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
           providers[provider] = quota;
         }
       }
-      const snapshot: QuotaSnapshot = { schemaVersion: QUOTA_SNAPSHOT_SCHEMA_VERSION, providers };
+      const accounts = await pollClaudeAccounts(resolveClaudeSwapExec());
+      const ambientClaude = providers["claude"];
+      if (ambientClaude !== undefined) {
+        providers["claude"] = { ...ambientClaude, accounts };
+      } else if (accounts.length > 0) {
+        providers["claude"] = { ...emptyQuota(), accounts };
+      }
+      const orderedProviders: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
+      for (const provider of QUOTA_PROVIDER_KEYS) {
+        const quota = providers[provider];
+        if (quota !== undefined) {
+          orderedProviders[provider] = quota;
+        }
+      }
+      const snapshot: QuotaSnapshot = {
+        schemaVersion: QUOTA_SNAPSHOT_SCHEMA_VERSION,
+        providers: orderedProviders,
+      };
       const json = `${JSON.stringify(snapshot)}\n`;
       if (json !== lastWrittenJson) {
         try {
