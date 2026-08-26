@@ -6,7 +6,8 @@
  */
 
 import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../../src/plugin/ghostty-focus";
-import type { ProjectedSession, Provider } from "../../src/protocol";
+import type { Provider } from "../../src/protocol";
+import type { BoardSession } from "./board";
 import { routeForSession } from "./routing";
 
 export type PressDeps = {
@@ -18,7 +19,7 @@ export type PressDeps = {
 };
 
 export type BoardPressTarget = {
-  session: ProjectedSession;
+  session: BoardSession;
   displayOnly: boolean;
 };
 
@@ -29,7 +30,7 @@ export const pressBoardCard = async (card: BoardPressTarget, deps: PressDeps): P
   await pressSessionTile(card.session, deps);
 };
 
-export const pressSessionTile = async (session: ProjectedSession, deps: PressDeps): Promise<void> => {
+export const pressSessionTile = async (session: BoardSession, deps: PressDeps): Promise<void> => {
   void deps.ack(session.provider, session.sessionId).catch(() => {});
   const route = routeForSession(session);
   try {

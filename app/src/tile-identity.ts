@@ -9,13 +9,13 @@
  * resolves to null and the action is cancelled, never retargeted.
  */
 
-import type { ProjectedSession, Provider } from "../../src/protocol";
-import type { PlacedCard } from "./board";
+import type { Provider } from "../../src/protocol";
+import type { BoardSession, PlacedCard } from "./board";
 
 /** The stable identity of a registry row: a session id is unique per provider. */
 export type SessionIdentity = { readonly provider: Provider; readonly sessionId: string };
 
-export const identityOf = (session: ProjectedSession): SessionIdentity => ({
+export const identityOf = (session: BoardSession): SessionIdentity => ({
   provider: session.provider,
   sessionId: session.sessionId,
 });

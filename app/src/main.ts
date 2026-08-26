@@ -18,7 +18,7 @@
  */
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import type { ProjectedSession, SessionSnapshotV2, SnapshotView } from "../../src/protocol";
+import type { SessionSnapshotV2, SnapshotView } from "../../src/protocol";
 import {
   advanceSheetGeneration,
   beginSheetAction,
@@ -30,7 +30,7 @@ import {
   settleSheetAction,
   transcriptPathOf,
 } from "./action-sheet";
-import { type BoardPage, type BoardResult, jumpBoard, type PlacedCard, reduceBoard } from "./board";
+import { type BoardPage, type BoardResult, type BoardSession, jumpBoard, type PlacedCard, reduceBoard } from "./board";
 import {
   ackSession,
   clearSession,
@@ -94,7 +94,7 @@ let pendingLongPress: PendingLongPress | null = null;
 
 type SheetContext = {
   point: GesturePoint;
-  session: ProjectedSession;
+  session: BoardSession;
   label: string;
   tile: HTMLElement;
 };

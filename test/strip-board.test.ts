@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { type BoardGroup, groupedOrder, jumpBoard, packBoard, reduceBoard } from "../app/src/board";
-import type { ProjectedSession } from "../src/protocol";
+import { type BoardGroup, groupedAgentOrder, groupedOrder, jumpBoard, packBoard, reduceBoard } from "../app/src/board";
+import type { ProjectedAgentNode, ProjectedSession } from "../src/protocol";
 
 const session = (slot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
   provider: "claude",
@@ -41,6 +41,30 @@ const sub = (
   });
 
 const ids = (group: BoardGroup): string[] => group.cards.map((card) => card.session.sessionId);
+
+const node = (sessionId: string, overrides: Partial<ProjectedAgentNode> = {}): ProjectedAgentNode => ({
+  provider: "evener",
+  sessionId,
+  role: "primary",
+  lineage: null,
+  parent: null,
+  status: "working",
+  title: sessionId,
+  project: "repo",
+  model: null,
+  openedAt: "2026-08-26T05:00:00.000Z",
+  statusSince: "2026-08-26T05:00:00.000Z",
+  activityLine: null,
+  unreadSince: null,
+  logicalSlot: 1,
+  ghosttyTerminalId: null,
+  transcriptPath: null,
+  originKind: null,
+  originRef: null,
+  originSubagent: false,
+  originParentRef: null,
+  ...overrides,
+});
 
 describe("groupedOrder", () => {
   test("primaries in slot order, each followed by its subs in slot order", () => {
@@ -91,6 +115,106 @@ describe("groupedOrder", () => {
     expect(before.map(ids)).toEqual([["s1"], ["s2"]]);
     const after = groupedOrder([parent(1, "a"), sub(2, "b", "a")]);
     expect(after.map(ids)).toEqual([["s1", "s2"]]);
+  });
+});
+
+describe("groupedAgentOrder", () => {
+  test("graph groups primaries by slot and mixed children depth-first", () => {
+    const root = node("root", { logicalSlot: 2 });
+    const first = node("paseo", {
+      provider: "codex",
+      role: "subagent",
+      lineage: "paseo",
+      parent: { provider: "evener", sessionId: "root" },
+      logicalSlot: 3,
+      openedAt: "2026-08-26T05:00:01.000Z",
+      originKind: "paseo",
+      originRef: "paseo-ref",
+      originSubagent: true,
+    });
+    const firstChild = node("paseo-native", {
+      provider: "codex",
+      role: "subagent",
+      lineage: "native",
+      parent: { provider: "codex", sessionId: "paseo" },
+      logicalSlot: null,
+      openedAt: "2026-08-26T05:00:02.000Z",
+    });
+    const second = node("native", {
+      role: "subagent",
+      lineage: "native",
+      parent: { provider: "evener", sessionId: "root" },
+      logicalSlot: null,
+      openedAt: "2026-08-26T05:00:03.000Z",
+    });
+    const earlierPrimary = node("earlier", { provider: "claude", logicalSlot: 1 });
+
+    const groups = groupedAgentOrder([second, firstChild, root, first, earlierPrimary]);
+    expect(groups.map(ids)).toEqual([["earlier"], ["root", "paseo", "paseo-native", "native"]]);
+    expect(groups[1]?.cards.map((card) => [card.session.sessionId, card.displayOnly])).toEqual([
+      ["root", false],
+      ["paseo", false],
+      ["paseo-native", true],
+      ["native", true],
+    ]);
+    expect(packBoard([groups[1]!], false)[0]?.cards.map((card) => [card.session.sessionId, card.indent])).toEqual([
+      ["root", false],
+      ["paseo", true],
+      ["paseo-native", true],
+      ["native", true],
+    ]);
+  });
+
+  test("equal child timestamps use provider then session identity", () => {
+    const root = node("root");
+    const child = (provider: ProjectedAgentNode["provider"], sessionId: string): ProjectedAgentNode =>
+      node(sessionId, {
+        provider,
+        role: "subagent",
+        lineage: "paseo",
+        parent: { provider: "evener", sessionId: "root" },
+        logicalSlot: provider === "claude" ? (sessionId === "a" ? 2 : 3) : 4,
+        openedAt: "2026-08-26T05:00:01.000Z",
+        originKind: "paseo",
+        originRef: `${provider}-${sessionId}`,
+        originSubagent: true,
+      });
+    expect(ids(groupedAgentOrder([child("codex", "z"), root, child("claude", "b"), child("claude", "a")])[0]!)).toEqual(
+      ["root", "a", "b", "z"],
+    );
+  });
+
+  test("orphan roots keep safe descendants in one full-width atomic tail", () => {
+    const orphanB = node("orphan-b", {
+      provider: "codex",
+      role: "subagent",
+      lineage: "paseo",
+      logicalSlot: 3,
+      openedAt: "2026-08-26T05:00:02.000Z",
+      originKind: "paseo",
+      originRef: "b",
+      originSubagent: true,
+    });
+    const orphanA = node("orphan-a", {
+      role: "subagent",
+      lineage: "paseo",
+      logicalSlot: 2,
+      openedAt: "2026-08-26T05:00:01.000Z",
+      originKind: "paseo",
+      originRef: "a",
+      originSubagent: true,
+    });
+    const native = node("orphan-child", {
+      role: "subagent",
+      lineage: "native",
+      parent: { provider: "evener", sessionId: "orphan-a" },
+      logicalSlot: null,
+      openedAt: "2026-08-26T05:00:03.000Z",
+    });
+    const groups = groupedAgentOrder([orphanB, native, orphanA]);
+    expect(groups.map(ids)).toEqual([["orphan-a", "orphan-child", "orphan-b"]]);
+    const placed = packBoard(groups, false)[0]?.cards ?? [];
+    expect(placed.every((card) => !card.indent && card.spine === "none")).toBe(true);
   });
 });
 
@@ -165,7 +289,7 @@ describe("packBoard", () => {
 
 describe("reduceBoard", () => {
   const view = (sessions: ProjectedSession[], degraded = false) =>
-    ({ snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions }, degraded }) as never;
+    ({ snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions, agents: null }, degraded }) as never;
 
   test("zero sessions produce one empty page (the OFFLINE surface when degraded)", () => {
     const result = reduceBoard(view([], true), null);
@@ -195,11 +319,93 @@ describe("reduceBoard", () => {
     expect(count(13)).toBe(2);
     expect(count(15)).toBe(2);
   });
+
+  test("present empty agents ignore non-empty legacy sessions", () => {
+    const result = reduceBoard(
+      {
+        snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions: [session(1)], agents: [] },
+        degraded: false,
+      } as never,
+      null,
+    );
+    expect(result.pages).toEqual([{ cards: [] }]);
+    expect(result.pageCount).toBe(1);
+  });
+
+  test("null agents retain legacy Paseo grouping and descendant badges", () => {
+    const result = reduceBoard(
+      view([parent(1, "a", { descendantCount: 2 }), sub(2, "b", "a", { descendantCount: 1 })]),
+      null,
+    );
+    expect(result.pages[0]?.cards.map((card) => [card.session.sessionId, card.descendantBadge])).toEqual([
+      ["s1", 2],
+      ["s2", 1],
+    ]);
+  });
+
+  test("present agents suppress every descendant badge", () => {
+    const root = node("root", { logicalSlot: 1 });
+    const child = node("child", {
+      role: "subagent",
+      lineage: "paseo",
+      parent: { provider: "evener", sessionId: "root" },
+      originKind: "paseo",
+      originSubagent: true,
+      originRef: "child",
+    });
+    const result = reduceBoard(
+      {
+        snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions: [session(1)], agents: [root, child] },
+        degraded: false,
+      } as never,
+      null,
+    );
+    expect(result.pages[0]?.cards.every((card) => card.descendantBadge === null)).toBe(true);
+  });
+
+  test("disappearing graph children clamp the persisted page", () => {
+    const root = node("root");
+    const children = Array.from({ length: 12 }, (_, index) =>
+      node(`child-${index}`, {
+        role: "subagent",
+        lineage: "paseo",
+        parent: { provider: "evener", sessionId: "root" },
+        openedAt: `2026-08-26T05:00:${String(index).padStart(2, "0")}.000Z`,
+        originKind: "paseo",
+        originRef: `child-${index}`,
+        originSubagent: true,
+      }),
+    );
+    const stored = { schemaVersion: 1, overflowLatched: false, currentPage: 1 };
+    const result = reduceBoard(
+      {
+        snapshot: {
+          schemaVersion: 2,
+          health: { status: "ok" },
+          sessions: [],
+          agents: [root, ...children.slice(0, 11)],
+        },
+        degraded: false,
+      } as never,
+      stored,
+    );
+    expect(
+      reduceBoard(
+        {
+          snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions: [], agents: [root, ...children] },
+          degraded: false,
+        } as never,
+        stored,
+      ).pageCount,
+    ).toBe(2);
+    expect(result.settings.currentPage).toBe(0);
+    expect(result.dirty).toBe(true);
+  });
 });
 
 describe("jumpBoard", () => {
   const view = (sessions: ProjectedSession[]) =>
-    ({ snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions }, degraded: false }) as never;
+    ({ snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions, agents: null }, degraded: false }) as never;
   const twoPages = () => view(Array.from({ length: 13 }, (_, i) => session(i + 1)));
 
   test("an in-range jump is dirty, so it persists and the next reduce keeps the page", () => {
