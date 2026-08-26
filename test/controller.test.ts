@@ -614,7 +614,7 @@ describe("SessionGridController", () => {
   test("key down routes full provider IDs and ignores every other key model", async () => {
     const fullCodexSessionId = "01900000-0000-7000-8000-000000000001";
     const stableClaudeTerminalId = "ghostty-terminal-id";
-    const fullKimiSessionId = "session_360af549-9129-45c6-af08-08c74ffe25a0";
+    const fullKimiSessionId = "session_00000000-0000-4000-8000-000000000001";
     const { controller, activation, claudeActivation, kimiActivation, alerts, settingsPort } = makeController({
       view: healthyView([
         session(1, {

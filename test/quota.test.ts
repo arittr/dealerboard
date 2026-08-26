@@ -183,17 +183,17 @@ describe("createQuotaCollector", () => {
     const snapshot = parseQuotaSnapshot(JSON.parse(writes[0] ?? ""));
     expect(Object.keys(snapshot.providers)).toEqual([...ALL_PROVIDERS]);
     expect(snapshot.providers["claude"]).toMatchObject({
-      percentRemaining: 98,
-      weeklyPercentRemaining: 37,
+      percentRemaining: 80,
+      weeklyPercentRemaining: 40,
       unavailable: false,
       fetchedAt: NOW,
     });
-    expect(snapshot.providers["claude"]?.history).toEqual([{ fetchedAt: NOW, fractionRemaining: 0.98 }]);
-    expect(snapshot.providers["codex"]).toMatchObject({ percentRemaining: 60, weeklyPercentRemaining: 75 });
-    expect(snapshot.providers["kimi"]).toMatchObject({ percentRemaining: 84, weeklyPercentRemaining: 88 });
-    expect(snapshot.providers["zai"]?.percentRemaining).toBe(100 - 6.833333333333333);
-    expect(snapshot.providers["zai"]?.weeklyPercentRemaining).toBe(100 - 56.364999999999995);
-    expect(snapshot.providers["qwen"]).toMatchObject({ percentRemaining: 60, weeklyPercentRemaining: 90 });
+    expect(snapshot.providers["claude"]?.history).toEqual([{ fetchedAt: NOW, fractionRemaining: 0.8 }]);
+    expect(snapshot.providers["codex"]).toMatchObject({ percentRemaining: 70, weeklyPercentRemaining: 80 });
+    expect(snapshot.providers["kimi"]).toMatchObject({ percentRemaining: 60, weeklyPercentRemaining: 70 });
+    expect(snapshot.providers["zai"]?.percentRemaining).toBe(87.5);
+    expect(snapshot.providers["zai"]?.weeklyPercentRemaining).toBe(62.5);
+    expect(snapshot.providers["qwen"]).toMatchObject({ percentRemaining: 75, weeklyPercentRemaining: 50 });
     expect(harness.calls).toEqual(
       [...ALL_PROVIDERS].map((provider) => [
         "usage",
@@ -258,7 +258,7 @@ describe("createQuotaCollector", () => {
     const harness = makeHarness({ claudeSwapBinaryPresent: false });
     await createQuotaCollector(harness.deps).pollNow();
     const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
-    expect(claude).toMatchObject({ percentRemaining: 98, unavailable: false, accounts: [] });
+    expect(claude).toMatchObject({ percentRemaining: 80, unavailable: false, accounts: [] });
     expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toEqual([]);
   });
 
@@ -380,7 +380,7 @@ describe("createQuotaCollector", () => {
     await collector.pollNow();
     await collector.pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
-    expect(snapshot.providers["claude"]).toMatchObject({ percentRemaining: 98, unavailable: true, fetchedAt: NOW });
+    expect(snapshot.providers["claude"]).toMatchObject({ percentRemaining: 80, unavailable: true, fetchedAt: NOW });
     expect(snapshot.providers["claude"]?.history.length).toBe(1);
     expect(snapshot.providers["kimi"]?.unavailable).toBe(false);
     const failures = harness.diagnostics.filter((record) => record.code === "quota_failed");
@@ -479,8 +479,8 @@ describe("createQuotaCollector", () => {
     });
     await createQuotaCollector(harness.deps).pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
-    // The qwen fixture carries session 60 / weekly 90; the widget says weekly 45.
-    expect(snapshot.providers["qwen"]).toMatchObject({ percentRemaining: 60, weeklyPercentRemaining: 90 });
+    // The qwen fixture carries session 75 / weekly 50; the widget says weekly 45.
+    expect(snapshot.providers["qwen"]).toMatchObject({ percentRemaining: 75, weeklyPercentRemaining: 50 });
   });
 
   test("a weekly-only reading publishes null session fields and appends no history", async () => {
@@ -623,13 +623,13 @@ describe("createQuotaCollector", () => {
       {
         id: "claude-weekly-scoped-fable",
         label: "Fable only",
-        percentRemaining: 99,
-        resetAt: "2026-08-28T01:00:00.000Z",
+        percentRemaining: 70,
+        resetAt: "2030-01-15T00:00:00.000Z",
       },
     ]);
     // Codex's Spark 5-hour is selected as its session window; only Spark Weekly publishes.
     expect(snapshot.providers["codex"]?.extraWindows).toEqual([
-      { id: "codex-spark-weekly", label: "Spark Weekly", percentRemaining: 90, resetAt: "2026-08-27T06:04:44.000Z" },
+      { id: "codex-spark-weekly", label: "Spark Weekly", percentRemaining: 60, resetAt: "2030-01-15T00:00:00.000Z" },
     ]);
     expect(snapshot.providers["kimi"]?.extraWindows).toEqual([]);
   });

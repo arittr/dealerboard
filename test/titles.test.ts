@@ -556,18 +556,18 @@ describe("zcode SQLite titles", () => {
 
 describe("omp session-file titles", () => {
   const FIXTURE_PATH = join(import.meta.dir, "fixtures", "omp-session.jsonl");
-  // The title stored in the captured fixture's head slot, pinned as a literal.
-  const FIXTURE_TITLE = "Write haiku about binary search trees";
+  // The title stored in the synthetic fixture's head slot, pinned as a literal.
+  const FIXTURE_TITLE = "Synthetic OMP title slot for testing.";
 
   // Mirrors omp's slot writer: one JSON record whose "pad" field absorbs the
   // slack so the line is exactly OMP_SLOT_BYTES UTF-8 bytes, newline included.
-  // "source" appears only once a title is set, matching observed captures.
+  // "source" appears only once a title is set, matching the provider format.
   const slotRecord = (title: string): string => {
     const record = (pad: string): string =>
       `${JSON.stringify(
         title === ""
-          ? { type: "title", v: 1, title, updatedAt: "2026-08-16T07:01:52.082Z", pad }
-          : { type: "title", v: 1, title, source: "auto", updatedAt: "2026-08-16T07:01:52.082Z", pad },
+          ? { type: "title", v: 1, title, updatedAt: "2024-01-02T03:04:05.000Z", pad }
+          : { type: "title", v: 1, title, source: "auto", updatedAt: "2024-01-02T03:04:05.000Z", pad },
       )}\n`;
     return record(" ".repeat(OMP_SLOT_BYTES - Buffer.byteLength(record(""), "utf8")));
   };
@@ -582,8 +582,8 @@ describe("omp session-file titles", () => {
     ...overrides,
   });
 
-  test("reads the title slot from a real captured omp session file", () => {
-    // Real defaults, real fixture file — no fs fakes.
+  test("reads the title slot from a synthetic omp session file", () => {
+    // Real filesystem access against synthetic fixture data — no fs fakes.
     const resolver = createSessionFactsResolver({
       codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
       zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
@@ -901,7 +901,7 @@ describe("activity line resolution", () => {
   });
 
   test("resolves a codex function_call's name and cmd head from the rollout tail", () => {
-    // Shape captured from a real rollout: exec_command's arguments are
+    // Provider-compatible shape: exec_command's arguments are
     // stringified JSON carrying the command under `cmd` (a plain string).
     const call = responseItemLine({
       type: "function_call",
@@ -930,8 +930,8 @@ describe("activity line resolution", () => {
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("a captured exec_command emits only the safe command category", () => {
-    // Captured argument keys: cmd (string), workdir, max_output_tokens,
+  test("an exec_command emits only the safe command category", () => {
+    // Representative argument keys: cmd (string), workdir, max_output_tokens,
     // yield_time_ms — only cmd's first line may cross the wire.
     const call = responseItemLine({
       type: "function_call",

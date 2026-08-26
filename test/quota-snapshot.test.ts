@@ -14,13 +14,13 @@ import {
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "quota", "quota-snapshot.json");
 
 const claudeQuota = (): ProviderQuota => ({
-  percentRemaining: 62.5,
-  resetAt: "2026-08-19T22:00:00.000Z",
-  weeklyPercentRemaining: 88,
-  weeklyResetAt: "2026-08-24T00:00:00.000Z",
+  percentRemaining: 50,
+  resetAt: "2030-01-01T05:00:00.000Z",
+  weeklyPercentRemaining: 75,
+  weeklyResetAt: "2030-01-08T00:00:00.000Z",
   unavailable: false,
-  fetchedAt: "2026-08-19T18:00:00.000Z",
-  history: [{ fetchedAt: "2026-08-19T18:00:00.000Z", fractionRemaining: 0.625 }],
+  fetchedAt: "2030-01-01T00:00:00.000Z",
+  history: [{ fetchedAt: "2030-01-01T00:00:00.000Z", fractionRemaining: 0.5 }],
   extraWindows: [],
   accounts: [],
 });
@@ -65,11 +65,11 @@ const snapshot = (): QuotaSnapshot => ({
 });
 
 describe("parseQuotaSnapshot", () => {
-  test("round-trips the captured fixture", () => {
+  test("round-trips the synthetic fixture", () => {
     const parsed = parseQuotaSnapshot(JSON.parse(readFileSync(FIXTURE_PATH, "utf8")));
     expect(parsed.schemaVersion).toBe(1);
     expect(parsed.providers["claude"]).toEqual(claudeQuota());
-    expect(parsed.providers["codex"]?.percentRemaining).toBe(73);
+    expect(parsed.providers["codex"]?.percentRemaining).toBe(80);
   });
 
   test("accepts a snapshot with no providers and one with a single provider", () => {
