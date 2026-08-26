@@ -50,8 +50,9 @@ export const WASH_CYCLE_MS = 8000;
  * Negative CSS animation delay that starts a working tile's wash partway into
  * its cycle. The session offset staggers concurrent tiles so they never
  * breathe in lockstep, and folding in the wall clock keeps the wash
- * phase-continuous across re-renders: renderTiles recreates every tile on any
- * data change, and an undelayed tile would snap back to the dim end each time.
+ * phase-continuous across re-renders: renderBoard recreates every card on
+ * any data change, and an undelayed card would snap back to the dim end
+ * each time.
  */
 export const washAnimationDelay = (sessionId: string, nowMs: number): string => {
   const elapsed = (nowMs + washCycleOffset(sessionId) * WASH_CYCLE_MS) % WASH_CYCLE_MS;

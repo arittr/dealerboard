@@ -450,7 +450,7 @@ Fixed 496px (~19.4%), top to bottom:
   fill, ending in an endpoint dot at the current position, all in a
   matched-aspect 436×80 viewBox. Semantics:
   - The yesterday line renders only when the snapshot's yesterday curve is
-    stamped with the LA calendar day immediately preceding the snapshot's
+    stamped with the LA calendar day immediately preceding the today curve's
     `providerDay`; otherwise only today's line renders. No curves in the
     snapshot → no sparkline (the block keeps total + rates).
   - Each curve maps x by elapsed fraction of its own day's actual length,

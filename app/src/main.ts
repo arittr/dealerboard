@@ -307,47 +307,47 @@ const start = async (): Promise<void> => {
 
 const FLASH_MS = 320;
 
-const flashTile = (tile: HTMLElement): void => {
-  tile.classList.add("flash");
-  setTimeout(() => tile.classList.remove("flash"), FLASH_MS);
+const flashCard = (card: HTMLElement): void => {
+  card.classList.add("flash");
+  setTimeout(() => card.classList.remove("flash"), FLASH_MS);
 };
 
-const onTilesClick = (event: MouseEvent): void => {
+const onBoardClick = (event: MouseEvent): void => {
   if (!(event.target instanceof HTMLElement)) {
     return;
   }
-  const tile = event.target.closest<HTMLElement>("[data-card-index]");
-  if (tile === null) {
+  const card = event.target.closest<HTMLElement>("[data-card-index]");
+  if (card === null) {
     return;
   }
-  const index = Number(tile.dataset["cardIndex"]);
-  const card = currentCards[index];
-  if (card === undefined) {
+  const index = Number(card.dataset["cardIndex"]);
+  const currentCard = currentCards[index];
+  if (currentCard === undefined) {
     return;
   }
-  void pressSessionTile(card.session, {
+  void pressSessionTile(currentCard.session, {
     ack: ackSession,
     openUrl,
     focusGhostty,
     readPaseoServerId,
-    flash: () => flashTile(tile),
+    flash: () => flashCard(card),
   });
 };
 
-const tileFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
+const cardFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
   if (!(event.target instanceof HTMLElement)) {
     return null;
   }
-  const tile = event.target.closest<HTMLElement>("[data-card-index]");
-  if (tile === null) {
+  const card = event.target.closest<HTMLElement>("[data-card-index]");
+  if (card === null) {
     return null;
   }
-  const index = Number(tile.dataset["cardIndex"]);
-  const card = currentCards[index];
-  if (card === undefined) {
+  const index = Number(card.dataset["cardIndex"]);
+  const currentCard = currentCards[index];
+  if (currentCard === undefined) {
     return null;
   }
-  return { identity: identityOf(card.session), point: { x: event.clientX, y: event.clientY } };
+  return { identity: identityOf(currentCard.session), point: { x: event.clientX, y: event.clientY } };
 };
 
 const removeSheetOverlay = (): void => {
@@ -454,7 +454,7 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
         openUrl,
         focusGhostty,
         readPaseoServerId,
-        flash: () => flashTile(tile),
+        flash: () => flashCard(tile),
       });
       return;
     case "ack":
@@ -566,7 +566,7 @@ const onStripPointerDown = (event: PointerEvent): void => {
   // click at all — so any still-unconsumed suppression from the last stroke
   // dies here rather than eating this stroke's taps.
   clickSuppression.beginStroke();
-  pendingLongPress = tileFromPointerEvent(event);
+  pendingLongPress = cardFromPointerEvent(event);
   feedPointer({ kind: "down", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
 
@@ -618,7 +618,7 @@ const onContextMenu = (event: MouseEvent): void => {
 };
 
 const wireInteraction = (): void => {
-  document.querySelector<HTMLElement>("#board")?.addEventListener("click", onTilesClick);
+  document.querySelector<HTMLElement>("#board")?.addEventListener("click", onBoardClick);
   const strip = document.querySelector<HTMLElement>("#strip");
   strip?.addEventListener("pointerdown", onStripPointerDown);
   strip?.addEventListener("pointermove", onStripPointerMove);

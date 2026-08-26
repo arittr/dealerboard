@@ -80,8 +80,9 @@ describe("washAnimationDelay", () => {
   });
 
   test("a re-rendered tile resumes the phase it was already showing", () => {
-    // renderTiles recreates every tile on any data change, so the delay has to
-    // carry the wash forward; otherwise each re-render snaps it to the dim end.
+    // renderBoard recreates every card on any data change, so the delay has
+    // to carry the wash forward; otherwise each re-render snaps it to the dim
+    // end.
     const atCreate = parseDelay(washAnimationDelay("s1", NOW_MS));
     for (const elapsed of [0, 250, 3_100, 7_999, 8_000, 19_400]) {
       const atRerender = parseDelay(washAnimationDelay("s1", NOW_MS + elapsed));

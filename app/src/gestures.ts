@@ -104,8 +104,8 @@ export const createGestureRecognizer = (): GestureRecognizer => {
 /**
  * Stroke-scoped click suppression: the wiring-side counterpart of the
  * "suppress-click" intent. A stroke's trailing click can bubble through
- * #tiles (a tile-to-tile release) or through #strip only (a drag released
- * over the rail fires its click on the common ancestor, bypassing #tiles)
+ * #board (a card-to-card release) or through #strip only (a drag released
+ * over the rail fires its click on the common ancestor, bypassing #board)
  * — and a touch drag fires no click at all. Suppression is therefore bound
  * to the stroke: armed by its release, consumed by the first click after it
  * wherever that click lands, and dropped when the next stroke begins, so it
