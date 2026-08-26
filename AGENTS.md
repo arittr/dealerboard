@@ -321,8 +321,8 @@ stopping it is part of the change.
   retaining safe descendants in depth-first order. Pages still fill
   group-atomically (a ≤6-card group never splits and may backfill a same-page
   gap, a 7–12 group needs a still-empty page and wraps at the six-row seam, a
-  larger group fills whole pages) into two columns of six fixed 966×102 cards
-  that never flex-resize, beside a fixed 600px (~23.4%) rail; page count derives
+  larger group fills whole pages) into two columns of six fixed 886×102 cards
+  that never flex-resize, beside a fixed 760px (~29.7%) rail; page count derives
   from the packing and the persisted current page (`agent-strip.layout.v1`)
   clamps — the strip no longer consumes the shared
   `reduceLayout`/`STRIP_GEOMETRY` paging (the keypad keeps it unchanged). Card
