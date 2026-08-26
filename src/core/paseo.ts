@@ -22,8 +22,9 @@
  *   top-level `.parentAgentId` is honored as a fallback — the id itself is
  *   carried as `parentAgentId` so the registry sync can stamp
  *   `origin_parent_ref`;
- * - `.id` and `.provider`, the latter validated against the canonical
- *   provider keys — records naming an unknown provider are skipped;
+ * - `.id` and `.provider`, the latter resolved through Paseo's provider
+ *   aliases onto the canonical registry keys and then validated — records
+ *   naming a provider with no registry counterpart are skipped;
  * - `.lastStatus`, Paseo's persisted lifecycle, validated against Paseo's
  *   vocabulary (unknown values → null) — the registry sync uses a settled
  *   value as proof that a stuck working row's turn-end was missed.
@@ -44,6 +45,26 @@ import { PROVIDER_KEYS, type Provider } from "../protocol";
 const MAX_STRING_CODE_POINTS = 256;
 const MAX_TITLE_CODE_POINTS = 256;
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
+
+/**
+ * Paseo names some providers per account or CLI distribution where the
+ * registry keeps one canonical key per provider, so those names resolve onto
+ * the key their sessions actually register under. A Paseo provider with no
+ * registry counterpart (copilot, opencode) has no entry and still skips.
+ */
+const PROVIDER_ALIASES: ReadonlyMap<string, Provider> = new Map<string, Provider>([
+  ["qwen-code", "qwen"],
+  ["claude-work", "claude"],
+]);
+
+/** The canonical registry key a record's provider names, or null when it names none. */
+const canonicalProvider = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const canonical = PROVIDER_ALIASES.get(value) ?? value;
+  return PROVIDERS.has(canonical) ? canonical : null;
+};
 
 /** Paseo's agent lifecycle vocabulary as persisted in a record's `lastStatus`. */
 export type PaseoAgentStatus = "initializing" | "idle" | "running" | "error" | "closed";
@@ -174,8 +195,8 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
   if (typeof id !== "string" || id.length === 0) {
     return null;
   }
-  const provider = value["provider"];
-  if (typeof provider !== "string" || !PROVIDERS.has(provider)) {
+  const provider = canonicalProvider(value["provider"]);
+  if (provider === null) {
     return null;
   }
   const sessionId = sessionIdFrom(value, "runtimeInfo") ?? sessionIdFrom(value, "persistence");

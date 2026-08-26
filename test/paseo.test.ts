@@ -423,6 +423,26 @@ describe("createPaseoAgentStateLoader", () => {
     expect(loader(AGENTS_DIR)).toEqual([]);
   });
 
+  test("maps Paseo's qwen-code provider onto the registry's qwen key", () => {
+    const content = agentRecord({ provider: "qwen-code" });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR).map((state) => state.provider)).toEqual(["qwen"]);
+  });
+
+  test("maps Paseo's claude-work provider onto the registry's claude key", () => {
+    const content = agentRecord({ provider: "claude-work" });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR).map((state) => state.provider)).toEqual(["claude"]);
+  });
+
   test("a missing agents directory or empty workspace yields an empty list", () => {
     const { loader } = makeLoader({ dirs: {} });
     expect(loader(AGENTS_DIR)).toEqual([]);
