@@ -9,6 +9,7 @@
 
 import type { QuotaProviderKey } from "../../src/quota-snapshot";
 import {
+  bindingResetPending,
   bindingWindow,
   formatBindingNote,
   formatBindingPercent,
@@ -234,19 +235,18 @@ const quotaMeter = (meter: QuotaMeterModel, nowMs: number, leading: readonly HTM
   }
   const right = document.createElement("span");
   right.className = "quota-right";
-  if (meter.state === "unavailable") {
-    const note = document.createElement("span");
-    note.className = "quota-note";
-    note.textContent = formatBindingNote(meter, nowMs);
-    right.append(note);
-  } else {
-    const note = formatBindingNote(meter, nowMs);
-    if (note !== "") {
-      const noteSpan = document.createElement("span");
-      noteSpan.className = "quota-note";
-      noteSpan.textContent = `${note} ·`;
-      right.append(noteSpan);
-    }
+  // An unavailable meter keeps its last-good percent (dimmed by the state
+  // opacity) only while the binding reset is pending; once it passes the
+  // number is spent and the muted note stands alone.
+  const showPercent = meter.state !== "unavailable" || bindingResetPending(meter, nowMs);
+  const note = formatBindingNote(meter, nowMs);
+  if (note !== "") {
+    const noteSpan = document.createElement("span");
+    noteSpan.className = "quota-note";
+    noteSpan.textContent = showPercent ? `${note} ·` : note;
+    right.append(noteSpan);
+  }
+  if (showPercent) {
     const pct = document.createElement("span");
     pct.className = "quota-pct";
     pct.textContent = formatBindingPercent(meter);

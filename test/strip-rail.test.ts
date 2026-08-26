@@ -142,6 +142,42 @@ test("renders one Claude header, two bars, one active marker, and per-account di
   });
 });
 
+test("an unavailable account keeps its dimmed percent while the binding reset is pending", () => {
+  withFakeDocument((root) => {
+    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
+    const nodes = descendants(root);
+    expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%", "20%"]);
+    expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
+      "2m ·",
+      "resets 2m ·",
+    ]);
+  });
+});
+
+test("an unavailable account drops the percent once the binding reset has passed", () => {
+  const spent = quotaPanel({
+    accounts: [
+      quotaAccount(),
+      quotaAccount({
+        id: "claude-swap:2",
+        label: "2",
+        active: true,
+        state: "unavailable",
+        windows: [{ tag: "session", percentRemaining: 20, resetAtMs: null }],
+      }),
+    ],
+  });
+  withFakeDocument((root) => {
+    renderRail(root as unknown as HTMLElement, model({ quota: [spent] }), { onJumpToPage: () => {} });
+    const nodes = descendants(root);
+    expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%"]);
+    expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
+      "2m ·",
+      "updated 1m ago",
+    ]);
+  });
+});
+
 test("groups Claude account meters in one stack after the shared provider header", () => {
   withFakeDocument((root) => {
     renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });

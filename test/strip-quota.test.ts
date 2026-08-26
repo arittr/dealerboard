@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  bindingResetPending,
   bindingWindow,
   formatBindingNote,
   formatBindingPercent,
@@ -253,10 +254,16 @@ describe("formatBindingPercent and formatBindingNote", () => {
     expect(bindingWindow(bound)?.tag).toBe("weekly");
   });
 
-  test("unavailable panels with a pending reset show its countdown", () => {
+  test("unavailable panels with a pending reset and fresh last-good data show its countdown alone", () => {
     // The default model's binding session window resets 4h out — a reset
     // schedule stays trustworthy after the probe stops, so it displays.
-    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe("resets 4h");
+    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 60_000 }), NOW)).toBe("resets 4h");
+  });
+
+  test("unavailable panels with a pending reset and old last-good data add the age cue", () => {
+    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe(
+      "resets 4h · updated 12m ago",
+    );
   });
 
   test("unavailable panels whose reset has passed show the last-update age", () => {
@@ -267,6 +274,16 @@ describe("formatBindingPercent and formatBindingNote", () => {
       bindingIndex: 0,
     });
     expect(formatBindingNote(passed, NOW)).toBe("updated 12m ago");
+  });
+
+  test("the last-update age reads in hours and minutes past the first hour", () => {
+    const passed = model({
+      state: "unavailable",
+      fetchedAtMs: NOW - 170 * 60_000,
+      windows: [windowModel("weekly", 0, NOW - 60_000)],
+      bindingIndex: 0,
+    });
+    expect(formatBindingNote(passed, NOW)).toBe("updated 2h 50m ago");
   });
 
   test("unavailable panels without a reset instant show the last-update age", () => {
@@ -292,6 +309,20 @@ describe("formatBindingPercent and formatBindingNote", () => {
     const resetting = model({ windows: [windowModel("session", 10, resetAtMs)], bindingIndex: 0 });
     expect(formatBindingNote(resetting, resetAtMs)).toBe("resetting…");
     expect(formatBindingNote(resetting, resetAtMs + 1)).toBe("resetting…");
+  });
+});
+
+describe("bindingResetPending", () => {
+  test("true while the binding window's reset is still ahead", () => {
+    expect(bindingResetPending(model(), NOW)).toBe(true);
+  });
+
+  test("false once the reset has passed, when no reset is published, or with no windows", () => {
+    expect(
+      bindingResetPending(model({ windows: [windowModel("weekly", 0, NOW - 60_000)], bindingIndex: 0 }), NOW),
+    ).toBe(false);
+    expect(bindingResetPending(model({ windows: [windowModel("session", 100)], bindingIndex: 0 }), NOW)).toBe(false);
+    expect(bindingResetPending(model({ windows: [], bindingIndex: null }), NOW)).toBe(false);
   });
 });
 
