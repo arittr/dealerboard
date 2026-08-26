@@ -467,16 +467,15 @@ Fixed 600px (~23.4%), top to bottom:
   the provider chip, the label, and a pill naming the binding window —
   bare, no ` binds` suffix (binding selection — the lowest percent
   remaining, ties session > weekly > extras — is unchanged). The right side
-  reads `<secondary markers> <reset countdown> · <percent>`: every
-  non-binding window renders as a dim inline marker (`wk 90%`,
-  `sess 55%`; extras shorten to their lowercased first word, e.g.
-  `fable 71%`) ahead of the muted countdown, keeping variable-width text
-  left of the numbers so the bright tabular binding percents align flush at
-  the rail's right edge; "resetting…" takes the countdown's muted slot at
-  reset time. The second line is the 8px full-row-width bar filled to the
-  binding window's percent on the headroom palette (green `#4ADE80` above
-  25% remaining, amber `#FFB020` from 10%, red `#FF4D67` below), with a
-  2px neutral tick at each non-binding window's percent.
+  reads `<reset countdown> · <percent>` with the muted countdown first so
+  the bright tabular percents align flush at the rail's right edge
+  regardless of countdown width; "resetting…" takes the countdown's muted
+  slot at reset time. The second line is the 8px full-row-width bar filled
+  to the binding window's percent on the headroom palette (green `#4ADE80`
+  above 25% remaining, amber `#FFB020` from 10%, red `#FF4D67` below),
+  with a 2px neutral tick at each non-binding window's percent — the tick
+  is the whole non-binding treatment; textual readouts proved too busy for
+  the row.
 - **Pager dots**: one per page, tap to jump.
 - Data plumbing is unchanged: quota via `quota-snapshot.json` and token
   usage via `token-usage-snapshot.json`, each its own file with its own

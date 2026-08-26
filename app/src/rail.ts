@@ -212,15 +212,6 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
     note.textContent = formatBindingNote(model, nowMs);
     right.append(note);
   } else {
-    // The non-binding windows ride the head line as dim markers ahead of the
-    // countdown — variable-width text stays left of the numbers, so the
-    // bright binding percent keeps its flush right alignment.
-    for (const marker of secondaryWindows(model)) {
-      const secondary = document.createElement("span");
-      secondary.className = "quota-secondary";
-      secondary.textContent = `${marker.label} ${marker.percent}`;
-      right.append(secondary);
-    }
     const note = formatBindingNote(model, nowMs);
     if (note !== "") {
       const noteSpan = document.createElement("span");
@@ -244,11 +235,12 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
     fill.style.width = `${Math.max(0, Math.min(100, binding.percentRemaining))}%`;
     fill.style.background = quotaBarColor(binding.percentRemaining);
     bar.append(fill);
-    // A neutral tick per non-binding window at its own percent.
-    for (const marker of secondaryWindows(model)) {
+    // A neutral tick per non-binding window at its own percent — the tick is
+    // the whole treatment; textual readouts proved too busy for the row.
+    for (const secondary of secondaryWindows(model)) {
       const tick = document.createElement("span");
       tick.className = "quota-tick";
-      tick.style.left = `${Math.max(0, Math.min(100, marker.percentRemaining))}%`;
+      tick.style.left = `${Math.max(0, Math.min(100, secondary.percentRemaining))}%`;
       bar.append(tick);
     }
   }

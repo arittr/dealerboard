@@ -284,12 +284,12 @@ Notes:
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
 - Quota panels (claude, codex, kimi, GLM/zai, Qwen) ship in the rail as
   compact two-line rows (head: chip, label, a bare tag pill naming the
-  binding window — no ` binds` suffix — then at the right the non-binding
-  windows as dim inline markers (`wk 90%`, extras by lowercased first
-  word), the muted reset countdown (`26m ·`), and the bright tabular
-  binding percent flush at the rail's edge; second line: the
-  status-palette 8px bar filled to the binding window, with a 2px neutral
-  tick at each non-binding window's percent); the binding window is the
+  binding window — no ` binds` suffix — with the muted reset countdown
+  first (`26m ·`) at the right so the bright tabular percent aligns flush
+  at the rail's edge; second line: the status-palette 8px bar filled to
+  the binding window, with a 2px neutral tick at each non-binding
+  window's percent — ticks only, no textual non-binding readouts); the
+  binding window is the
   lowest percent remaining (ties: session > weekly > extras), and the
   daemon-health dot rides inline on the unread row (green ok, red plus
   OFFLINE when degraded) instead of its own line.

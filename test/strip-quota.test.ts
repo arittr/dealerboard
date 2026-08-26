@@ -216,28 +216,20 @@ describe("formatPercentRemaining and quotaBarColor", () => {
 });
 
 describe("secondaryWindows", () => {
-  test("every non-binding window in published order, with abbreviated labels and rounded percents", () => {
+  test("every non-binding window in published order (the bar's tick positions)", () => {
     const panel = model({
       windows: [windowModel("session", 62.5), windowModel("weekly", 88), windowModel("Fable only", 40.4)],
       bindingIndex: 2,
     });
-    expect(secondaryWindows(panel)).toEqual([
-      { label: "sess", percent: "63%", percentRemaining: 62.5 },
-      { label: "wk", percent: "88%", percentRemaining: 88 },
-    ]);
+    expect(secondaryWindows(panel)).toEqual([windowModel("session", 62.5), windowModel("weekly", 88)]);
   });
 
   test("a weekly-binding panel surfaces the session window as the secondary", () => {
     const panel = model({ bindingIndex: 1 });
-    expect(secondaryWindows(panel)).toEqual([{ label: "sess", percent: "63%", percentRemaining: 62.5 }]);
+    expect(secondaryWindows(panel).map((entry) => entry.tag)).toEqual(["session"]);
   });
 
-  test("extra labels shorten to their lowercased first word; a lone window has no secondaries", () => {
-    const panel = model({
-      windows: [windowModel("session", 10), windowModel("Spark Weekly", 84)],
-      bindingIndex: 0,
-    });
-    expect(secondaryWindows(panel)).toEqual([{ label: "spark", percent: "84%", percentRemaining: 84 }]);
+  test("a lone window has no secondaries; no windows, none either", () => {
     expect(secondaryWindows(model({ windows: [windowModel("session", 10)], bindingIndex: 0 }))).toEqual([]);
     expect(secondaryWindows(model({ windows: [], bindingIndex: null }))).toEqual([]);
   });

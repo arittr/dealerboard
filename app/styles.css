@@ -605,12 +605,6 @@ body {
   color: #94a3b8;
   font-size: 1.05vw;
 }
-/* Non-binding windows on the head line: dimmer than the countdown so the
-   binding percent stays the row's one bright number. */
-.quota-secondary {
-  color: #5a6b80;
-  font-size: 0.95vw;
-}
 .quota-bar {
   position: relative;
   height: 1.111vh;
