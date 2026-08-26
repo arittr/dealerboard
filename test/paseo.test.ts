@@ -73,6 +73,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -98,9 +99,20 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: "2026-08-06T00:10:00.000Z",
         updatedAt: "2026-08-06T00:12:00.000Z",
+        archivedAt: null,
         title: null,
       },
     ]);
+  });
+
+  test("parses archivedAt canonically for the sync's viewed-equivalent path", () => {
+    const content = agentRecord({ archivedAt: "2026-08-16T11:25:52.816-07:00" });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect(loader(AGENTS_DIR)[0]?.archivedAt).toBe("2026-08-16T18:25:52.816Z");
   });
 
   test("non-string timestamps parse as null", () => {
@@ -120,6 +132,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -149,6 +162,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: "agent-1",
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -177,6 +191,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: "agent-1",
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -199,6 +214,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -224,6 +240,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: "2026-08-06T00:10:00.000Z",
         updatedAt: "2026-08-06T00:12:00.000Z",
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -246,6 +263,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -291,6 +309,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -343,6 +362,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: null,
       },
     ]);
@@ -388,6 +408,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: "my full title from runtimeInfo",
       },
     ]);
@@ -416,6 +437,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: "title from persistence metadata",
       },
     ]);
@@ -442,6 +464,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: "top-level truncated title",
       },
     ]);
@@ -490,6 +513,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: "a".repeat(256),
       },
     ]);
@@ -521,6 +545,7 @@ describe("createPaseoAgentStateLoader", () => {
         parentAgentId: null,
         attentionTimestamp: null,
         updatedAt: null,
+        archivedAt: null,
         title: "runtime title",
       },
     ]);

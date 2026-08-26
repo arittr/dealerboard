@@ -9,6 +9,8 @@
  *   back to `.runtimeInfo.sessionId` — it must match the registry's provider
  *   session id verbatim (e.g. kimi `session_<uuid>`, claude UUID);
  * - `.requiresAttention`, defaulting to false when absent;
+ * - `.archivedAt`, the optional archive stamp the registry sync treats as
+ *   viewed-equivalent;
  * - `.attentionTimestamp` and `.updatedAt`, both optional ISO-8601 strings
  *   bounded like every other record string, then validated and re-emitted in
  *   canonical UTC form (`Date.parse` + `toISOString`, unparseable → null) —
@@ -49,6 +51,8 @@ export type PaseoAgentState = {
   parentAgentId: string | null;
   attentionTimestamp: string | null;
   updatedAt: string | null;
+  /** When the user archived the agent in Paseo (ISO-8601 UTC), or null while live. */
+  archivedAt: string | null;
   title: string | null;
 };
 
@@ -173,6 +177,7 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
     parentAgentId: parentAgentId === null ? null : boundString(parentAgentId),
     attentionTimestamp: isoTimestampFrom(value["attentionTimestamp"]),
     updatedAt: isoTimestampFrom(value["updatedAt"]),
+    archivedAt: isoTimestampFrom(value["archivedAt"]),
     title: titleFrom(value),
   };
 };

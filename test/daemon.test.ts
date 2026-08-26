@@ -580,6 +580,7 @@ describe("ProjectionDaemon maintenance", () => {
                 parentAgentId: null,
                 attentionTimestamp: NOW,
                 updatedAt: null,
+                archivedAt: null,
                 title: null,
               },
             ])

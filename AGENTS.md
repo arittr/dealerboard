@@ -180,7 +180,10 @@ Notes:
   as a fallback) and the dispatching agent's id as `origin_parent_ref`, and
   mirrors `requiresAttention` both ways — false clears unread (viewed in
   Paseo), true sets it without moving the first-news timestamp and subject
-  to the `acked_at` watermark. The same pass un-stamps the origin metadata
+  to the `acked_at` watermark. An archived record (`archivedAt` set) takes
+  the cleared path even while its attention flag is still up — archiving is
+  the user's terminal gesture — with the later of `archivedAt` and
+  `updatedAt` as the proof-of-viewing time under the same freshness guard. The same pass un-stamps the origin metadata
   of any other top-level row still carrying the agent's ref from a
   rotated-away provider session (the row, its ledger, and its timers stay),
   so a missed SessionEnd never leaves a duplicate ref to ambiguate the
