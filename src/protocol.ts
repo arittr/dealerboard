@@ -122,6 +122,34 @@ export type ProjectedSession = {
   originParentRef: string | null;
 };
 
+export type AgentIdentity = {
+  provider: Provider;
+  sessionId: string;
+};
+
+export type ProjectedAgentNode = {
+  provider: Provider;
+  sessionId: string;
+  role: "primary" | "subagent";
+  lineage: "native" | "paseo" | null;
+  parent: AgentIdentity | null;
+  status: SessionStatus;
+  title: string | null;
+  project: string | null;
+  model: string | null;
+  openedAt: string;
+  statusSince: string | null;
+  activityLine: string | null;
+  unreadSince: string | null;
+  logicalSlot: number | null;
+  ghosttyTerminalId: string | null;
+  transcriptPath: string | null;
+  originKind: SessionOriginKind | null;
+  originRef: string | null;
+  originSubagent: boolean;
+  originParentRef: string | null;
+};
+
 export type SnapshotHealth = {
   status: "ok" | "error";
   message?: string;
