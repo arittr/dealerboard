@@ -44,7 +44,7 @@ import {
   revealTranscript,
   type SnapshotPayload,
 } from "./bridge";
-import { boardRenderSignature, renderBoard } from "./cards";
+import { boardRenderSignature, cardKey, renderBoard } from "./cards";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -54,7 +54,7 @@ import {
   swallowSuppressedClick,
 } from "./gestures";
 import { createIngestGate } from "./ingest-gate";
-import { elapsedLabel } from "./liveness";
+import { elapsedLabel, livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses } from "./liveness";
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
@@ -69,6 +69,7 @@ const SETTINGS_KEY = "agent-strip.layout.v1";
 let lastGood: SessionSnapshotV2 | null = null;
 let renderedSignature = "";
 let railRenderedSignature = "";
+let pulseEntries: ReadonlyMap<string, PulseEntry> = new Map();
 let currentView: SnapshotView | null = null;
 let lastPayload: SnapshotPayload | null = null;
 let currentQuota: QuotaPanelModel[] = [];
@@ -179,6 +180,43 @@ const tickStatusLines = (): void => {
   }
 };
 
+/**
+ * Paint every working card's decay in place from its data-last-event stamp.
+ * Inline styles are written (and removed — quiet and stampless cards must
+ * fall back to the stylesheet) without touching the render signature, so
+ * reconciliation and CSS animations are undisturbed, exactly like the
+ * status-timer tick above.
+ */
+const tickLiveness = (): void => {
+  const nowMs = Date.now();
+  for (const card of document.querySelectorAll<HTMLElement>("#board .card.status-working")) {
+    const stamp = card.dataset["lastEvent"];
+    const frame = livenessFrame(
+      stamp === undefined || stamp === "" ? null : stamp,
+      card.classList.contains("sub"),
+      nowMs,
+    );
+    card.classList.toggle("quiet", frame.quiet);
+    if (frame.edgeColor === null) {
+      card.style.removeProperty("border-left-color");
+    } else {
+      card.style.borderLeftColor = frame.edgeColor;
+    }
+    if (frame.dotColor === null) {
+      card.style.removeProperty("--st");
+    } else {
+      card.style.setProperty("--st", frame.dotColor);
+    }
+    const label = card.querySelector<HTMLElement>(".quiet-elapsed");
+    if (label !== null) {
+      const text = frame.quietLabel ?? "";
+      if (label.textContent !== text) {
+        label.textContent = text;
+      }
+    }
+  }
+};
+
 const applyBoard = (result: BoardResult): void => {
   if (result.dirty) {
     persistSettings(result.settings);
@@ -194,6 +232,30 @@ const applyBoard = (result: BoardResult): void => {
   if (root !== null && signature !== renderedSignature) {
     renderedSignature = signature;
     renderBoard(root, page, degraded);
+    // Pulse on stamp advance: compared against the previous ingest, keyed by
+    // card, gated per card — and animated via element.animate so a re-fire
+    // never has to fight a CSS class retrigger.
+    const plan = planPulses(
+      pulseEntries,
+      page.cards.map((card) => ({ key: cardKey(card), lastEventAt: card.session.lastEventAt })),
+      Date.now(),
+    );
+    pulseEntries = plan.next;
+    // cardKey's NUL separator cannot be expressed in a CSS attribute selector
+    // (escaping maps it to U+FFFD), so firing keys match in JS, not in CSS.
+    const firing = new Set(plan.fire);
+    for (const element of root.querySelectorAll<HTMLElement>("[data-card-key]")) {
+      if (!firing.has(element.dataset["cardKey"] ?? "")) {
+        continue;
+      }
+      element
+        .querySelector<HTMLElement>(".pulse-overlay")
+        ?.animate([{ opacity: 0 }, { opacity: 1, offset: 0.1 }, { opacity: 0 }], {
+          duration: PULSE_SWEEP_MS,
+          easing: "ease-out",
+        });
+    }
+    tickLiveness(); // fresh nodes paint immediately instead of waiting out the 1s tick
   }
 };
 
@@ -311,6 +373,7 @@ const start = async (): Promise<void> => {
   setInterval(() => {
     renderRailNow();
     tickStatusLines();
+    tickLiveness();
   }, 1000);
 };
 
