@@ -341,4 +341,28 @@ describe("Evener AppWire collector", () => {
     expect(calls).toBe(2);
     collector.stop();
   });
+
+  test("abandons a socket that never opens and reconnects", () => {
+    const sockets = [new FakeSocket(), new FakeSocket()];
+    const timers = timerHarness();
+    const diagnostics: string[] = [];
+    let calls = 0;
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "never-log-this" }),
+      socketFactory: () => sockets[calls++]!,
+      schedule: timers.schedule,
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: () => {},
+    });
+
+    collector.start();
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 5_000)).toBe(true);
+    timers.run(5_000);
+    expect(sockets[0]!.closed).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).not.toContain("never-log-this");
+    timers.run(5_000);
+    expect(calls).toBe(2);
+    collector.stop();
+  });
 });

@@ -395,6 +395,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
 
   let stopped = true;
   let socket: EvenerSocket | null = null;
+  let connectTimer: EvenerTimer | null = null;
   let reconnectTimer: EvenerTimer | null = null;
   let refreshTimer: EvenerTimer | null = null;
   let nextRequestId = 1;
@@ -457,6 +458,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       return;
     }
     socket = null;
+    connectTimer = clearTimer(connectTimer);
     refreshTimer = clearTimer(refreshTimer);
     subscribed.clear();
     refreshing = false;
@@ -942,10 +944,16 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       return;
     }
     socket = target;
+    connectTimer = schedule(() => {
+      connectTimer = null;
+      disconnect(target, "Evener AppWire socket open timed out");
+    }, requestTimeoutMs);
+    connectTimer.unref();
     target.onmessage = (event) => handleMessage(target, event);
     target.onerror = () => disconnect(target, "Evener AppWire socket error");
     target.onclose = () => disconnect(target, "Evener AppWire socket closed");
     target.onopen = () => {
+      connectTimer = clearTimer(connectTimer);
       void initialize(target).catch(() => disconnect(target, "Evener AppWire initialize failed"));
     };
   }
@@ -963,6 +971,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         return;
       }
       stopped = true;
+      connectTimer = clearTimer(connectTimer);
       reconnectTimer = clearTimer(reconnectTimer);
       refreshTimer = clearTimer(refreshTimer);
       const target = socket;
