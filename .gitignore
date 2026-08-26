@@ -8,3 +8,26 @@ com.drewritter.dealerboard.sdPlugin/bin/
 .DS_Store
 app/dist/
 app/src-tauri/target/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime state and diagnostics
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.log
+snapshot-v2.json
+quota-snapshot.json
+token-usage-snapshot.json
+
+# Local backups
+*.bak
+*.before-dealerboard

@@ -13,21 +13,21 @@ type ProcessCall = {
 const eligible: ClaudeGhosttyBindingContext = {
   termProgram: "ghostty",
   tmux: undefined,
-  parentPid: 65095,
+  parentPid: 4242,
 };
 
 test("returns one bounded stable ID from the exact direct parent PID", async () => {
   const calls: ProcessCall[] = [];
   const discover = createClaudeGhosttyTerminalDiscoverer((file, args, timeoutMs) => {
     calls.push({ file, args: [...args], timeoutMs });
-    return Promise.resolve("BFCA7AF6-12EF-49C8-BF83-BE0438681348|/dev/ttys000\n");
+    return Promise.resolve("00000000-0000-4000-8000-000000000201|/dev/ttys000\n");
   });
 
-  await expect(discover(eligible)).resolves.toBe("BFCA7AF6-12EF-49C8-BF83-BE0438681348");
+  await expect(discover(eligible)).resolves.toBe("00000000-0000-4000-8000-000000000201");
   expect(calls).toHaveLength(1);
   expect(calls[0]?.file).toBe("/usr/bin/osascript");
   expect(calls[0]?.args[0]).toBe("-e");
-  expect(calls[0]?.args.slice(-2)).toEqual(["--", "65095"]);
+  expect(calls[0]?.args.slice(-2)).toEqual(["--", "4242"]);
   expect(calls[0]?.timeoutMs).toBe(300);
   expect(calls[0]?.args[1]).toContain('application "Ghostty" is not running');
   expect(calls[0]?.args[1]).toContain("pid of candidateTerminal");

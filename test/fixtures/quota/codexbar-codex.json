@@ -4,7 +4,7 @@
     "source": "oauth",
     "usage": {
       "updatedAt": "2026-08-20T06:04:44Z",
-      "identity": { "providerID": "codex", "accountEmail": "drew@example.com", "loginMethod": "pro" },
+      "identity": { "providerID": "codex", "accountEmail": "user@example.invalid", "loginMethod": "pro" },
       "primary": null,
       "secondary": {
         "windowMinutes": 10080,

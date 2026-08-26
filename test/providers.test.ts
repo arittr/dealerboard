@@ -953,15 +953,15 @@ describe("grok native envelopes", () => {
   const grok = (value: unknown): RegistryEvent[] => decode(value, "grok");
 
   test("session_start decodes with project basename and model passthrough", () => {
-    // fixture: session-start.json — the capture carries no model field, so the
+    // Synthetic Grok envelope: session-start.json — the payload carries no model field, so the
     // start registers model: null; the resolver backfills it later.
     expect(
       grok({
         hookEventName: "session_start",
-        sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+        sessionId: "00000000-0000-4000-8000-000000000101",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:51:31.511454+00:00",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
         permissionMode: "auto",
         source: "new",
       }),
@@ -969,7 +969,7 @@ describe("grok native envelopes", () => {
       {
         kind: "SessionStart",
         provider: "grok",
-        sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+        sessionId: "00000000-0000-4000-8000-000000000101",
         title: null,
         project: "project",
         ghosttyTerminalId: null,
@@ -981,119 +981,118 @@ describe("grok native envelopes", () => {
   });
 
   test("user_prompt_submit late-joins with SessionObserved + Activity", () => {
-    // fixture: user-prompt-submit.json — the prompt body is never read.
+    // Synthetic Grok envelope: user-prompt-submit.json — the prompt body is never read.
     const events = grok({
       hookEventName: "user_prompt_submit",
-      sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+      sessionId: "00000000-0000-4000-8000-000000000101",
       cwd: "/Users/you/project",
       workspaceRoot: "/Users/you/project",
-      timestamp: "2026-08-17T06:51:32.020365+00:00",
-      transcriptPath: "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
+      timestamp: "2026-01-01T00:00:00.000000+00:00",
+      transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000101/updates.jsonl",
       permissionMode: "auto",
-      promptId: "037a891e-f1fa-4bfc-ab07-7c3eab9e9ad7",
-      prompt:
-        "<user_query>\nUse the terminal to run this exact command: curl -s --max-time 5 https://example.com — then report the HTTP status only.\n</user_query>",
+      promptId: "00000000-0000-4000-8000-000000000102",
+      prompt: "<user_query>\nRun the harmless test command and report its output.\n</user_query>",
     });
     expect(events.map((event) => event.kind)).toEqual(["SessionObserved", "Activity"]);
   });
 
   test("pre_tool_use and post_tool_use map to Activity", () => {
-    // fixture: pre-tool-use.json — tool input and command text are never read.
+    // Synthetic Grok envelope: pre-tool-use.json — tool input and command text are never read.
     expect(
       grok({
         hookEventName: "pre_tool_use",
-        sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+        sessionId: "00000000-0000-4000-8000-000000000101",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:51:56.637719+00:00",
-        transcriptPath: "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
+        transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000101/updates.jsonl",
         permissionMode: "auto",
         toolName: "run_terminal_command",
-        toolUseId: "call-70ddf75c-98b3-4909-8b01-3ac665ad0b3e-1",
+        toolUseId: "call-00000000-0000-4000-8000-000000000103-1",
         toolInput: {
-          command: 'curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://example.com',
-          description: "Get HTTP status code from example.com",
+          command: "printf ok",
+          description: "Print a test value",
         },
         toolInputTruncated: false,
       }),
     ).toEqual([
-      { kind: "Activity", provider: "grok", sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1", observedAt: NOW },
+      { kind: "Activity", provider: "grok", sessionId: "00000000-0000-4000-8000-000000000101", observedAt: NOW },
     ]);
-    // fixture: post-tool-use.json — the tool result payload is never read.
+    // Synthetic Grok envelope: post-tool-use.json — the tool result payload is never read.
     expect(
       grok({
         hookEventName: "post_tool_use",
-        sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+        sessionId: "00000000-0000-4000-8000-000000000101",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:52:02.690704+00:00",
-        transcriptPath: "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
+        transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000101/updates.jsonl",
         permissionMode: "auto",
         toolName: "run_terminal_command",
-        toolUseId: "call-70ddf75c-98b3-4909-8b01-3ac665ad0b3e-1",
+        toolUseId: "call-00000000-0000-4000-8000-000000000103-1",
         toolInput: {
-          command: 'curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://example.com',
-          description: "Get HTTP status code from example.com",
+          command: "printf ok",
+          description: "Print a test value",
         },
         toolResult: {
           type: "Bash",
-          output: [50, 48, 48],
-          output_for_prompt: "exit: 0\n200",
+          output: [111, 107],
+          output_for_prompt: "exit: 0\nok",
           exit_code: 0,
-          command: 'curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://example.com',
+          command: "printf ok",
           truncated: false,
           signal: null,
           timed_out: false,
-          description: "Get HTTP status code from example.com",
+          description: "Print a test value",
           current_dir: "/Users/you/project",
           output_file:
-            "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/terminal/call-70ddf75c-98b3-4909-8b01-3ac665ad0b3e-1.log",
-          total_bytes: 3,
+            "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000101/terminal/call-00000000-0000-4000-8000-000000000103-1.log",
+          total_bytes: 2,
         },
         toolInputTruncated: false,
         toolResultTruncated: false,
         isBackgrounded: false,
       }),
     ).toEqual([
-      { kind: "Activity", provider: "grok", sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1", observedAt: NOW },
+      { kind: "Activity", provider: "grok", sessionId: "00000000-0000-4000-8000-000000000101", observedAt: NOW },
     ]);
   });
 
   test("stop settles only on a genuine turn end", () => {
-    // fixture: stop-end-turn.json — stopHookActive and the trailing payloads
+    // Synthetic Grok envelope: stop-end-turn.json — stopHookActive and the trailing payloads
     // are irrelevant; the filter keys on reason only.
     expect(
       grok({
         hookEventName: "stop",
-        sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+        sessionId: "00000000-0000-4000-8000-000000000101",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:52:04.675795+00:00",
-        transcriptPath: "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
-        promptId: "037a891e-f1fa-4bfc-ab07-7c3eab9e9ad7",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
+        transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000101/updates.jsonl",
+        promptId: "00000000-0000-4000-8000-000000000102",
         permissionMode: "auto",
         reason: "end_turn",
         stopHookActive: false,
-        lastAssistantMessage: "200",
+        lastAssistantMessage: "ok",
         backgroundTasks: [],
         sessionCrons: [],
       }),
-    ).toEqual([{ kind: "Stop", provider: "grok", sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1", observedAt: NOW }]);
+    ).toEqual([{ kind: "Stop", provider: "grok", sessionId: "00000000-0000-4000-8000-000000000101", observedAt: NOW }]);
     // A stop with no reason at all is still a genuine turn end.
     expect(grok({ hookEventName: "stop", sessionId: "g1" })).toEqual([
       { kind: "Stop", provider: "grok", sessionId: "g1", observedAt: NOW },
     ]);
     expect(grok({ hookEventName: "stop", sessionId: "g1", reason: "channel_closed" })).toEqual([]);
-    // fixture: stop-session-teardown.json — Session-teardown observe fires are
+    // Synthetic Grok envelope: stop-session-teardown.json — Session-teardown observe fires are
     // dropped; SessionEnd owns removal.
     expect(
       grok({
         hookEventName: "stop",
-        sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+        sessionId: "00000000-0000-4000-8000-000000000101",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:52:04.730204+00:00",
-        transcriptPath: "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
+        transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000101/updates.jsonl",
         permissionMode: "auto",
         reason: "shutdown",
         stopHookActive: false,
@@ -1102,34 +1101,34 @@ describe("grok native envelopes", () => {
   });
 
   test("stop_cancelled settles idle like Kimi's Interrupt", () => {
-    // fixture: stop-cancelled.json — reason is irrelevant here: an interrupted
+    // Synthetic Grok envelope: stop-cancelled.json — reason is irrelevant here: an interrupted
     // turn settles idle either way.
     expect(
       grok({
         hookEventName: "stop_cancelled",
-        sessionId: "01a00e7c-2060-7311-9b04-a890bb62949a",
+        sessionId: "00000000-0000-4000-8000-000000000110",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:50:18.125731+00:00",
-        transcriptPath: "/Users/you/project/.grok-sessions/01a00e7c-2060-7311-9b04-a890bb62949a/updates.jsonl",
-        promptId: "df637b2d-e4d1-4f1e-a5c7-fe674957ca09",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
+        transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000110/updates.jsonl",
+        promptId: "00000000-0000-4000-8000-000000000111",
         permissionMode: "auto",
         reason: "max_turns",
         cancelledBy: "runtime",
-        lastAssistantMessage: "I'll run the two echo commands in order, then summarize what each printed.",
+        lastAssistantMessage: "The synthetic command completed.",
       }),
-    ).toEqual([{ kind: "Stop", provider: "grok", sessionId: "01a00e7c-2060-7311-9b04-a890bb62949a", observedAt: NOW }]);
+    ).toEqual([{ kind: "Stop", provider: "grok", sessionId: "00000000-0000-4000-8000-000000000110", observedAt: NOW }]);
   });
 
   test("stop_failure maps to StopFailure", () => {
-    // fixture: stop-failure.json — the error text is never read.
+    // Synthetic Grok envelope: stop-failure.json — the error text is never read.
     expect(
       grok({
         hookEventName: "stop_failure",
         sessionId: "00000000-0000-4000-8000-000000000001",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:55:00.000000+00:00",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
         transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000001/updates.jsonl",
         promptId: "00000000-0000-4000-8000-000000000002",
         permissionMode: "auto",
@@ -1143,14 +1142,14 @@ describe("grok native envelopes", () => {
   });
 
   test("notification maps only permission_prompt to Attention", () => {
-    // fixture: notification-permission-prompt.json — the message body is never read.
+    // Synthetic Grok envelope: notification-permission-prompt.json — the message body is never read.
     expect(
       grok({
         hookEventName: "notification",
         sessionId: "00000000-0000-4000-8000-000000000001",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:55:10.000000+00:00",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
         transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000001/updates.jsonl",
         promptId: "00000000-0000-4000-8000-000000000003",
         permissionMode: "default",
@@ -1160,14 +1159,14 @@ describe("grok native envelopes", () => {
     ).toEqual([
       { kind: "Attention", provider: "grok", sessionId: "00000000-0000-4000-8000-000000000001", observedAt: NOW },
     ]);
-    // fixture: notification-idle-prompt.json
+    // Synthetic Grok envelope: notification-idle-prompt.json
     expect(
       grok({
         hookEventName: "notification",
         sessionId: "00000000-0000-4000-8000-000000000001",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:56:00.000000+00:00",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
         transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000001/updates.jsonl",
         permissionMode: "auto",
         notificationType: "idle_prompt",
@@ -1178,41 +1177,41 @@ describe("grok native envelopes", () => {
   });
 
   test("session_end maps to SessionEnd", () => {
-    // fixture: session-end.json
+    // Synthetic Grok envelope: session-end.json
     expect(
       grok({
         hookEventName: "session_end",
-        sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1",
+        sessionId: "00000000-0000-4000-8000-000000000101",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:52:04.711494+00:00",
-        transcriptPath: "/Users/you/project/.grok-sessions/01a00e7d-588a-7de0-88a1-d9c0848594c1/updates.jsonl",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
+        transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000101/updates.jsonl",
         permissionMode: "auto",
         reason: "shutdown",
       }),
     ).toEqual([
-      { kind: "SessionEnd", provider: "grok", sessionId: "01a00e7d-588a-7de0-88a1-d9c0848594c1", observedAt: NOW },
+      { kind: "SessionEnd", provider: "grok", sessionId: "00000000-0000-4000-8000-000000000101", observedAt: NOW },
     ]);
   });
 
   test("any event carrying subagentType is dropped", () => {
-    // fixture: subagent-activity.json — the captured subagent_stop carries
+    // Synthetic Grok envelope: subagent-activity.json — the subagent_stop carries
     // subagentType; the filter drops it before the unmapped-name path can.
     expect(
       grok({
         hookEventName: "subagent_stop",
-        sessionId: "01a00e7c-9ae8-7940-89d3-1cf71edcbe63",
+        sessionId: "00000000-0000-4000-8000-000000000120",
         cwd: "/Users/you/project",
         workspaceRoot: "/Users/you/project",
-        timestamp: "2026-08-17T06:50:45.135006+00:00",
-        transcriptPath: "/Users/you/project/.grok-sessions/01a00e7c-9ae8-7940-89d3-1cf71edcbe63/updates.jsonl",
-        promptId: "01a00e7c-9ce0-7772-aaf8-c07551e07a9c",
+        timestamp: "2026-01-01T00:00:00.000000+00:00",
+        transcriptPath: "/Users/you/project/.grok-sessions/00000000-0000-4000-8000-000000000120/updates.jsonl",
+        promptId: "00000000-0000-4000-8000-000000000121",
         permissionMode: "auto",
         phase: "gate",
-        subagentId: "01a00e7c-9ae8-7940-89d3-1cf71edcbe63",
+        subagentId: "00000000-0000-4000-8000-000000000120",
         subagentType: "general-purpose",
         stopHookActive: false,
-        lastAssistantMessage: "56\n\n7 times 8 equals 56.",
+        lastAssistantMessage: "The synthetic subagent completed.",
       }),
     ).toEqual([]);
     for (const hookEventName of ["user_prompt_submit", "pre_tool_use", "stop", "session_end"]) {

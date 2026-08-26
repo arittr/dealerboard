@@ -7,21 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.0.0] - 2026-08-26
 
-First versioned release. Dealerboard — daemon plus strip app — is in daily
-production use: a bank of live lines to every coding agent, lamps for who
-needs attention, press to barge in.
-
-### Changed
-
-- Renamed the project from stream-deck-agents to dealerboard: binary,
-  LaunchAgent, data dir, app bundle, provider shims/hooks, and the
-  deprecated Elgato plugin identity (`com.drewritter.dealerboard.sdPlugin`,
-  matching UUIDs, and its bundled profile).
-- Replaced the Tauri scaffold's placeholder `0.1.0` with real semver,
-  synced across `package.json`, `tauri.conf.json`, and `Cargo.toml`.
+First source release of the Dealerboard daemon and macOS strip app.
 
 ### Added
 
-- `scripts/bump-version.sh` + `.version-bump.json` — bump all declared
-  version files in one step, with drift detection (`--check`) and a
-  repo-wide audit for undeclared version strings (`--audit`).
+- Hook-driven session registry and snapshot daemon for ten provider keys.
+- Xeneon Edge-oriented Tauri board with live subagent trees, unread results,
+  timers, safe activity categories, actions, quota meters, and token trends.
+- Managed Pi, oh-my-pi, and Grok adapters plus documented manual setup for
+  Claude, Codex, Kimi, ZCode, and Qwen.
+- Optional Paseo lineage/deep links and Evener AppWire inventory.
+- MIT license, public setup/security documentation, and a source-only release
+  boundary.
+
+### Changed
+
+- Synchronized semantic versioning across `package.json`, Tauri, and Cargo,
+  with `scripts/bump-version.sh` for drift checks and future bumps.
+- Registry schema 14 clears legacy raw activity text; new activity displays
+  use fixed semantic categories only.
+- Evener thread-list hydration is bounded before any registry update.
+- The deprecated Stream Deck source remains build-tested but is not included
+  in supported installation or binary distribution.

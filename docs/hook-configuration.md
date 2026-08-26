@@ -1,12 +1,11 @@
 # Provider hook configuration
 
-This is the final, manual setup step. Drew performs these edits by hand, one
-provider at a time, after `bun run scripts/install-local.ts` has completed and
-been verified — the registry database and the LaunchAgent daemon must already
-exist so that the first hook event has a consumer. pi, oh-my-pi, and grok
-are the exceptions: the installer places their reporting shim or hook file
-itself, so their sections below describe what to expect from the installed
-artifact, not a config edit.
+This is the final setup step for hook-backed providers. Complete manual edits
+one provider at a time after `bun scripts/install-local.ts` succeeds; the
+registry and LaunchAgent daemon must exist before the first hook event arrives.
+Pi, oh-my-pi, and Grok are exceptions: the installer places their reporting
+shim or hook file when their provider directory already exists, so those
+sections describe the managed artifact rather than a config edit.
 
 Evener is a different exception: it needs no hook or plugin configuration at
 all. The daemon observes Evener's supported AppWire feed; see the next section.
@@ -14,9 +13,16 @@ all. The daemon observes Evener's supported AppWire feed; see the next section.
 Every hook-backed provider invokes the same installed helper with one JSON
 event object on standard input:
 
+The snippets use `<dealerboard>` for the installed executable. Replace that
+placeholder with this absolute path, substituting your macOS account name for
+`<username>`:
+
 ```text
-/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard event <provider>
+/Users/<username>/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard
 ```
+
+Every hook ultimately invokes `<dealerboard> event <provider>` with one JSON
+event object on standard input.
 
 The helper reads at most 65,536 bytes of stdin, prints nothing, and always
 exits zero, so a registry problem can never block, delay, or alter a provider
@@ -24,22 +30,14 @@ turn. The snippets below contain no wrapper scripts, no background processes,
 and no standard-output output.
 
 **Privacy note.** Hook payloads can carry message text, session file paths,
-and tool-call details. The helper decodes only the fields needed to place a
-session on the grid — event name, session and subagent identifiers, status
-hints, title, the model id, the working directory's basename, and the
-transcript path — and discards everything else in memory. The transcript
-path is stored so the daemon can resolve the session's title and model id
-from the transcript file; transcript *content* is only ever read for its
-title record and its raw model id. Three signals are classified in place,
-never stored: the Claude-only `run_in_background` boolean
-of a Bash tool input and the constant `<task-notification>` prefix that opens
-a background task's completion prompt, and zcode's `is_interrupt` boolean on
-a `PostToolUseFailure` — whose `error` payload is never read. The only
-transcript-derived facts that persist are the session title (Claude's
-`ai-title` record) and the bounded raw model id, both extracted and bounded
-by design; everything else in the transcript — prompt text, message bodies,
-tool output, whole raw lines — is never written to the registry, the
-snapshot, or the logs.
+and tool-call details. The helper allowlists the fields needed for session
+state and discards the rest. The daemon may read bounded transcript tails to
+resolve a title, model, and recent activity category. It stores only one of
+the fixed activity labels `File`, `Command`, `Search`, `Request`, or `Tool`;
+raw paths, commands, queries, URLs, tool names, prompts, message bodies, and
+tool output are not persisted as activity. The registry stores the transcript
+path itself so the app can offer **Reveal transcript** and the daemon can
+refresh those derived facts.
 
 ---
 
@@ -69,10 +67,13 @@ Dealerboard LaunchAgent. A shell-only environment variable is not
 automatically inherited by an already-loaded LaunchAgent.
 
 The bearer capability is held in memory only. It is never logged, copied to
-the registry, or published in a snapshot. To prevent a plaintext credential
-leak, the collector refuses non-loopback hub addresses. A missing hub or token
-is an optional-provider condition: the collector stays quiet and retries every
-five seconds.
+the registry, or published in a snapshot. The collector refuses non-loopback
+hub addresses. AppWire currently sends the capability in the initial
+WebSocket Authorization header, so this integration assumes the local user
+account is trusted: another process running as the same user could bind the
+configured loopback port and receive it. A missing hub or token is an
+optional-provider condition; the collector stays quiet and retries every five
+seconds.
 
 After the AppWire v3 handshake, the collector lists only Evener's `local`
 source, hydrates roots before live subagents, subscribes to ordered updates,
@@ -108,7 +109,7 @@ behavior as pi and omp; no exact-focus binding is claimed.
 
 ## Claude Code
 
-Target file: `/Users/drewritter/.claude/settings.json` (user level, applies to
+Target file: `$HOME/.claude/settings.json` (user level, applies to
 all projects).
 
 Claude supports the full eleven-event set. Because the installed path contains a
@@ -119,7 +120,7 @@ nothing is shell-interpreted. Each handler sets a one-second `timeout`.
 ### 1. Back up
 
 ```bash
-cp /Users/drewritter/.claude/settings.json /Users/drewritter/.claude/settings.json.before-dealerboard
+cp $HOME/.claude/settings.json $HOME/.claude/settings.json.before-dealerboard
 ```
 
 ### 2. Edit
@@ -136,7 +137,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -148,7 +149,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -160,7 +161,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -172,7 +173,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -184,7 +185,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -197,7 +198,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -209,7 +210,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -221,7 +222,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -233,7 +234,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -245,7 +246,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -257,7 +258,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
+            "command": "<dealerboard>",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -305,8 +306,8 @@ session within one polling interval (see "After every provider" below).
 ### 4. Compare before replace, and restore
 
 ```bash
-diff /Users/drewritter/.claude/settings.json.before-dealerboard /Users/drewritter/.claude/settings.json
-cp /Users/drewritter/.claude/settings.json.before-dealerboard /Users/drewritter/.claude/settings.json
+diff $HOME/.claude/settings.json.before-dealerboard $HOME/.claude/settings.json
+cp $HOME/.claude/settings.json.before-dealerboard $HOME/.claude/settings.json
 ```
 
 Keep the backup until physical verification is complete.
@@ -315,8 +316,8 @@ Keep the backup until physical verification is complete.
 
 ## Kimi Code
 
-Target file: `/Users/drewritter/.kimi-code/config.toml` (current Kimi Code —
-not the legacy `/Users/drewritter/.kimi/config.toml`, which belongs to the
+Target file: `$HOME/.kimi-code/config.toml` (current Kimi Code —
+not the legacy `$HOME/.kimi/config.toml`, which belongs to the
 older Python CLI and will not work).
 
 Kimi supports ten of the eleven events (its `Notification` event signals
@@ -335,7 +336,7 @@ entries below; do not add fields, events, or comments inside the entries.
 ### 1. Back up
 
 ```bash
-cp /Users/drewritter/.kimi-code/config.toml /Users/drewritter/.kimi-code/config.toml.before-dealerboard
+cp $HOME/.kimi-code/config.toml $HOME/.kimi-code/config.toml.before-dealerboard
 ```
 
 ### 2. Edit
@@ -346,66 +347,67 @@ untouched.
 ```toml
 [[hooks]]
 event = "SessionStart"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "UserPromptSubmit"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "PreToolUse"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "PostToolUse"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "PermissionRequest"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "Stop"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "Interrupt"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "StopFailure"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "SessionEnd"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "SubagentStart"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "SubagentStop"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
+command = '"<dealerboard>" event kimi'
 timeout = 1
 ```
 
 Notes:
 
 - Kimi Web emits a titleless `SessionStart` as soon as a blank page opens and
-  may never close that unused session. The helper ignores that start. The first
-  `UserPromptSubmit` creates the registry session and marks it working; a
-  titled `SessionStart` still restores an existing session immediately.
+  may never close that unused session. The helper registers the row so its
+  model is retained, but the idle row stays grid-invisible until the first
+  `UserPromptSubmit` marks it working. A titled `SessionStart` also restores an
+  existing session immediately.
 - A pending `AskUserQuestion` prompt needs no extra entry: `PreToolUse` carries
   `tool_name`, and the helper maps a question call to the waiting color while
   it blocks the turn; the answering `PostToolUse` maps back to working.
@@ -430,8 +432,8 @@ must not add a tile; submitting its first prompt must add one.
 ### 4. Compare before replace, and restore
 
 ```bash
-diff /Users/drewritter/.kimi-code/config.toml.before-dealerboard /Users/drewritter/.kimi-code/config.toml
-cp /Users/drewritter/.kimi-code/config.toml.before-dealerboard /Users/drewritter/.kimi-code/config.toml
+diff $HOME/.kimi-code/config.toml.before-dealerboard $HOME/.kimi-code/config.toml
+cp $HOME/.kimi-code/config.toml.before-dealerboard $HOME/.kimi-code/config.toml
 ```
 
 Keep the backup until physical verification is complete.
@@ -447,8 +449,8 @@ local plugin. Codex has no `Notification` approval event or `StopFailure`;
 the registry does not need the compact hooks. Two locations are user-owned:
 the plugin directory and the personal marketplace file.
 
-- Plugin directory: `/Users/drewritter/.agents/plugins/dealerboard-codex/`
-- Marketplace file: `/Users/drewritter/.agents/plugins/marketplace.json`
+- Plugin directory: `$HOME/.agents/plugins/dealerboard-codex/`
+- Marketplace file: `$HOME/.agents/plugins/marketplace.json`
 
 Codex runs hook command strings through a shell, so the installed path is
 double-quoted inside the JSON string. Each handler sets a one-second
@@ -460,7 +462,7 @@ double-quoted inside the JSON string. Each handler sets a one-second
 The marketplace file may not exist yet. If it does, back it up:
 
 ```bash
-cp /Users/drewritter/.agents/plugins/marketplace.json /Users/drewritter/.agents/plugins/marketplace.json.before-dealerboard
+cp $HOME/.agents/plugins/marketplace.json $HOME/.agents/plugins/marketplace.json.before-dealerboard
 ```
 
 If it does not exist, the edit below creates it, and there is nothing to back
@@ -468,7 +470,7 @@ up. The plugin directory is new; there is nothing to back up there either.
 
 ### 2. Create the plugin
 
-Create `/Users/drewritter/.agents/plugins/dealerboard-codex/.codex-plugin/plugin.json`:
+Create `$HOME/.agents/plugins/dealerboard-codex/.codex-plugin/plugin.json`:
 
 ```json
 {
@@ -482,7 +484,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/.codex-plugin/plugin
 }
 ```
 
-Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
+Create `$HOME/.agents/plugins/dealerboard-codex/hooks/hooks.json`
 (the default hook location, so the manifest needs no `hooks` key):
 
 ```json
@@ -494,7 +496,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -505,7 +507,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -516,7 +518,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -527,7 +529,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -538,7 +540,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -549,7 +551,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -560,7 +562,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -571,7 +573,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -582,7 +584,7 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
+            "command": "\"<dealerboard>\" event codex",
             "timeout": 1
           }
         ]
@@ -594,15 +596,15 @@ Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
 
 ### 3. Register the marketplace
 
-Create or edit `/Users/drewritter/.agents/plugins/marketplace.json`. If it
+Create or edit `$HOME/.agents/plugins/marketplace.json`. If it
 already exists, merge only the `plugins` entry below into the existing
 `plugins` array and keep every existing key:
 
 ```json
 {
-  "name": "drew-local",
+  "name": "dealerboard-local",
   "interface": {
-    "displayName": "Drew Local"
+    "displayName": "Dealerboard Local"
   },
   "plugins": [
     {
@@ -622,14 +624,14 @@ already exists, merge only the `plugins` entry below into the existing
 ```
 
 `source.path` is relative to the **registered marketplace root**, not to the
-marketplace file. The root is `/Users/drewritter` for the personal
+marketplace file. The root is `$HOME` for the personal
 marketplace (Codex discovers the file at `<root>/.agents/plugins/marketplace.json`),
 so the path must reach down through `.agents/plugins/`.
 
 Then register the marketplace once (it is not auto-discovered):
 
 ```bash
-codex plugin marketplace add /Users/drewritter
+codex plugin marketplace add $HOME
 ```
 
 Verify resolution before installing — the printed path must be the real
@@ -641,16 +643,16 @@ codex plugin list
 
 ### 4. Install, enable, and trust
 
-1. Install and enable with `codex plugin add dealerboard-codex@drew-local`,
-   or restart Codex Desktop, open the Plugins Directory, select the **Drew
-   Local** source, install **Dealerboard**, and enable it.
+1. Install and enable with `codex plugin add dealerboard-codex@dealerboard-local`,
+   or restart Codex Desktop, open the Plugins Directory, select the
+   **Dealerboard Local** source, install **Dealerboard**, and enable it.
 2. Codex runs the installed copy under `~/.codex/plugins/cache`, not the local
    marketplace source directly. After changing `hooks/hooks.json`, refresh that
    copy before looking for an approval prompt:
 
    ```bash
-   codex plugin remove dealerboard-codex@drew-local
-   codex plugin add dealerboard-codex@drew-local
+   codex plugin remove dealerboard-codex@dealerboard-local
+   codex plugin add dealerboard-codex@dealerboard-local
    ```
 
 3. **Required trust step.** Codex skips non-managed command hooks until the
@@ -696,12 +698,12 @@ codex plugin list
 ### 6. Compare before replace, and restore
 
 ```bash
-diff /Users/drewritter/.agents/plugins/marketplace.json.before-dealerboard /Users/drewritter/.agents/plugins/marketplace.json
-cp /Users/drewritter/.agents/plugins/marketplace.json.before-dealerboard /Users/drewritter/.agents/plugins/marketplace.json
+diff $HOME/.agents/plugins/marketplace.json.before-dealerboard $HOME/.agents/plugins/marketplace.json
+cp $HOME/.agents/plugins/marketplace.json.before-dealerboard $HOME/.agents/plugins/marketplace.json
 ```
 
 Then disable or remove the plugin in Codex Desktop, delete
-`/Users/drewritter/.agents/plugins/dealerboard-codex/`, and keep the
+`$HOME/.agents/plugins/dealerboard-codex/`, and keep the
 backup until physical verification is complete. (If the marketplace file did
 not exist before, delete it instead of restoring.)
 
@@ -740,7 +742,7 @@ cp ~/.zcode/cli/config.json ~/.zcode/cli/config.json.bak
 
 Merge the following top-level `"hooks"` object into the config, keeping
 every existing key. Replace every `<helper>` with the installed executable
-path — `/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard`,
+path — `<dealerboard>`,
 the same helper every provider above invokes:
 
 ```json
@@ -1029,7 +1031,7 @@ provider" below). To remove grok reporting, delete the file.
 
 ## Qwen Code
 
-Target file: `/Users/drewritter/.qwen/settings.json` (user level, applies to
+Target file: `$HOME/.qwen/settings.json` (user level, applies to
 all projects).
 
 Qwen Code runs command hooks through a shell with the event JSON on stdin,
@@ -1044,7 +1046,7 @@ back it up and merge only the `"hooks"` key.
 ### 1. Back up
 
 ```bash
-cp /Users/drewritter/.qwen/settings.json /Users/drewritter/.qwen/settings.json.before-dealerboard
+cp $HOME/.qwen/settings.json $HOME/.qwen/settings.json.before-dealerboard
 ```
 
 ### 2. Edit
@@ -1060,7 +1062,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1071,7 +1073,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1082,7 +1084,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1093,7 +1095,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1105,7 +1107,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1116,7 +1118,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1127,7 +1129,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1138,7 +1140,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1149,7 +1151,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
+            "command": "\"<dealerboard>\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1186,7 +1188,7 @@ provider" below). To remove Qwen reporting, delete the `"hooks"` key.
 Start a session in each provider, then list what the registry recorded:
 
 ```bash
-"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" sessions list
+"<dealerboard>" sessions list
 ```
 
 Each active session should appear with its provider, title, and project. To
