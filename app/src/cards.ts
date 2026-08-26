@@ -187,10 +187,9 @@ export const boardRenderSignature = (page: BoardPage, degraded: boolean): string
 /** The reconciliation identity: one DOM node per session per page. */
 export const cardKey = (card: PlacedCard): string => `${card.session.provider}\u0000${card.session.sessionId}`;
 
-/** The liveness stamp, when the card's session carries one — agent-graph
- *  nodes have no stamp and render stampless (the stylesheet treatment). */
-export const sessionLastEventAt = (session: BoardSession): string | null =>
-  "lastEventAt" in session ? session.lastEventAt : null;
+/** The liveness stamp; null (an unstamped row, or an old daemon's snapshot)
+ *  renders stampless (the stylesheet treatment). */
+export const sessionLastEventAt = (session: BoardSession): string | null => session.lastEventAt;
 
 /**
  * The per-card rebuild signature: everything cardElement bakes into the node

@@ -182,6 +182,7 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       originRef: null,
       originSubagent: false,
       originParentRef: null,
+      lastEventAt: NOW,
     },
   ],
 };

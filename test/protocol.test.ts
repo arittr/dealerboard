@@ -59,6 +59,7 @@ const agent = (overrides: Partial<ProjectedAgentNode> = {}): ProjectedAgentNode 
   originRef: null,
   originSubagent: false,
   originParentRef: null,
+  lastEventAt: null,
   ...overrides,
 });
 
@@ -118,8 +119,19 @@ describe("parseSessionSnapshot", () => {
     expect(parsed.agents).toEqual([root, child]);
   });
 
+  test("round-trips agent.lastEventAt", () => {
+    const stamped = agent({ lastEventAt: "2026-08-26T05:00:09.000Z" });
+    expect(parseSessionSnapshot({ ...valid, agents: [stamped] }).agents).toEqual([stamped]);
+  });
+
+  test("normalizes an absent agent.lastEventAt to null", () => {
+    const { lastEventAt: _lastEventAt, ...oldDaemonAgent } = agent();
+    expect(parseSessionSnapshot({ ...valid, agents: [oldDaemonAgent] }).agents?.[0]?.lastEventAt).toBeNull();
+  });
+
   test.each([
     ["empty identity", [agent({ sessionId: "" })]],
+    ["non-string lastEventAt", [agent({ lastEventAt: 42 as unknown as string })]],
     ["duplicate identity", [agent(), agent({ logicalSlot: 2 })]],
     ["unknown provider", [agent({ provider: "unknown" as Provider })]],
     ["unknown status", [agent({ status: "stopped" as SessionStatus })]],

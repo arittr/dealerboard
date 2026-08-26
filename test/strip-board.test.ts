@@ -64,6 +64,7 @@ const node = (sessionId: string, overrides: Partial<ProjectedAgentNode> = {}): P
   originRef: null,
   originSubagent: false,
   originParentRef: null,
+  lastEventAt: null,
   ...overrides,
 });
 

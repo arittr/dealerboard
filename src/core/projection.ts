@@ -317,13 +317,13 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     originRef: result.row.originRef,
     originSubagent: isPaseoSubagent(result.row),
     originParentRef: result.row.originParentRef,
+    lastEventAt: result.row.lastEventAt,
   });
 
   const projectedSessions = visibleRoots.map(
     (result): ProjectedSession => ({
       ...rootFacts(result),
       descendantCount: result.descendantCount,
-      lastEventAt: result.row.lastEventAt,
     }),
   );
 
@@ -357,6 +357,7 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     openedAt: result.row.openedAt,
     statusSince: result.row.statusSince,
     activityLine: result.row.activityLine,
+    lastEventAt: result.row.lastEventAt,
     unreadSince: null,
     logicalSlot: null,
     ghosttyTerminalId: null,

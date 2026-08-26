@@ -150,6 +150,8 @@ export type ProjectedAgentNode = {
   originRef: string | null;
   originSubagent: boolean;
   originParentRef: string | null;
+  /** ISO-8601 UTC of the row's last hook event; null when the registry has no stamp. */
+  lastEventAt: string | null;
 };
 
 export type SnapshotHealth = {
@@ -309,6 +311,10 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
   if (!isNullableBoundedString(originParentRef)) {
     return invalid("agent.originParentRef must be null or a bounded string");
   }
+  const lastEventAt = "lastEventAt" in value ? value["lastEventAt"] : null;
+  if (!isNullableBoundedString(lastEventAt)) {
+    return invalid("agent.lastEventAt must be null or a bounded string");
+  }
 
   if (role === "primary") {
     if (lineage !== null || parent !== null || !isPositiveInteger(logicalSlot) || originSubagent) {
@@ -361,6 +367,7 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
     originRef,
     originSubagent,
     originParentRef,
+    lastEventAt,
   };
 };
 

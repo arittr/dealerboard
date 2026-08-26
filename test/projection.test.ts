@@ -744,6 +744,15 @@ describe("projectSnapshotRows", () => {
     });
   });
 
+  test("graph nodes publish the row's lastEventAt", () => {
+    const { agents } = projectSnapshotRows([
+      row("root", { status: "working", slot: 1, lastEventAt: "2026-08-26T20:21:51.337Z" }),
+      row("child", { parent: "root", status: "working", lastEventAt: "2026-08-26T20:21:30.280Z" }),
+    ]);
+    expect(agents.find((node) => node.sessionId === "root")?.lastEventAt).toBe("2026-08-26T20:21:51.337Z");
+    expect(agents.find((node) => node.sessionId === "child")?.lastEventAt).toBe("2026-08-26T20:21:30.280Z");
+  });
+
   test("missing, ambiguous, and cyclic Paseo parentage becomes parentless", () => {
     const { agents } = projectSnapshotRows([
       row("missing", {
@@ -974,6 +983,7 @@ describe("readProjection", () => {
             originRef: null,
             originSubagent: false,
             originParentRef: null,
+            lastEventAt: "2026-08-06T00:00:04.000Z",
           },
           {
             provider: "claude",
@@ -996,6 +1006,7 @@ describe("readProjection", () => {
             originRef: null,
             originSubagent: false,
             originParentRef: null,
+            lastEventAt: "2026-08-06T00:00:05.000Z",
           },
           {
             provider: "claude",
@@ -1018,6 +1029,7 @@ describe("readProjection", () => {
             originRef: null,
             originSubagent: false,
             originParentRef: null,
+            lastEventAt: "2026-08-06T00:00:06.000Z",
           },
         ]);
         // The snapshot satisfies the published v2 contract.

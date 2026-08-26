@@ -107,6 +107,7 @@ describe("reduceSnapshotRead", () => {
         originRef: null,
         originSubagent: false,
         originParentRef: null,
+        lastEventAt: null,
       },
       {
         provider: "claude",
@@ -129,6 +130,7 @@ describe("reduceSnapshotRead", () => {
         originRef: null,
         originSubagent: false,
         originParentRef: null,
+        lastEventAt: null,
       },
     ];
     const result = reduceSnapshotRead(readOf(FRESH, healthy([], cycle)), lastGood, NOW);
@@ -232,6 +234,7 @@ describe("countUnreadSessions", () => {
       originRef: null,
       originSubagent: false,
       originParentRef: null,
+      lastEventAt: null,
     };
     expect(countUnreadSessions(healthy([session({ unreadSince: "2026-08-26T05:00:00.000Z" })], [native]))).toBe(1);
   });

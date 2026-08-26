@@ -99,6 +99,7 @@ describe("reduceLayout without overflow", () => {
       originRef: null,
       originSubagent: false,
       originParentRef: null,
+      lastEventAt: null,
     };
     const result = reduceLayout(healthyView([legacy], false, [native]), DEFAULT_LAYOUT_SETTINGS);
     expect(result.keys.filter((key) => key.kind === "session")).toHaveLength(1);
