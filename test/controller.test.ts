@@ -33,7 +33,7 @@ const range = (from: number, to: number): number[] => Array.from({ length: to - 
 const sessionsAt = (...slots: number[]): ProjectedSession[] => slots.map((slot) => session(slot));
 
 const healthyView = (sessions: ProjectedSession[]): SnapshotView => ({
-  snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions },
+  snapshot: { schemaVersion: 2, health: { status: "ok" }, sessions, agents: null },
   degraded: false,
 });
 

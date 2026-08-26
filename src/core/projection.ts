@@ -444,7 +444,7 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
   return { sessions: projectedSessions, agents: orderedAgents };
 };
 
-/** Compatibility wrapper for legacy callers until snapshot publication adds agents. */
+/** Compatibility wrapper that preserves the legacy sessions-only projection. */
 export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] => projectSnapshotRows(rows).sessions;
 
 type StoredRow = {
@@ -592,10 +592,12 @@ export const readProjection = (db: Database): SessionSnapshotV2 => {
   let committed = false;
   try {
     const rows = db.query<StoredRow, []>(`SELECT ${PROJECTION_COLUMNS} FROM active_sessions`).all();
+    const projected = projectSnapshotRows(rows.map(toProjectionRow));
     const snapshot: SessionSnapshotV2 = {
       schemaVersion: 2,
       health: { status: "ok" },
-      sessions: projectRows(rows.map(toProjectionRow)),
+      sessions: projected.sessions,
+      agents: projected.agents,
     };
     db.exec("COMMIT");
     committed = true;
