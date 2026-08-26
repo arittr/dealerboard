@@ -5,9 +5,10 @@
  * under `~/.paseo/agents/<workspace-dir>/<agentId>.json`. This loader
  * extracts the three facts the registry sync joins on:
  *
- * - the provider-native session id at `.persistence.sessionId`, falling
- *   back to `.runtimeInfo.sessionId` — it must match the registry's provider
- *   session id verbatim (e.g. kimi `session_<uuid>`, claude UUID);
+ * - the current provider-native session id at `.runtimeInfo.sessionId`, falling
+ *   back to `.persistence.sessionId` for records without runtime identity — it
+ *   must match the registry's provider session id verbatim (e.g. kimi
+ *   `session_<uuid>`, claude UUID);
  * - `.requiresAttention`, defaulting to false when absent;
  * - `.archivedAt`, the optional archive stamp the registry sync treats as
  *   viewed-equivalent;
@@ -163,7 +164,7 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
   if (typeof provider !== "string" || !PROVIDERS.has(provider)) {
     return null;
   }
-  const sessionId = sessionIdFrom(value, "persistence") ?? sessionIdFrom(value, "runtimeInfo");
+  const sessionId = sessionIdFrom(value, "runtimeInfo") ?? sessionIdFrom(value, "persistence");
   if (sessionId === null) {
     return null;
   }
