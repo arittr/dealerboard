@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 #[cfg(target_os = "macos")]
-use tauri::menu::{MenuItemBuilder, MenuItemKind};
+use tauri::menu::{MenuItemBuilder, MenuItemKind, PredefinedMenuItem, SubmenuBuilder};
 use tauri::menu::Menu;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -251,21 +251,18 @@ fn watch_snapshot(app: &tauri::App) -> Result<(), String> {
 }
 
 /// Preserve Tauri's standard macOS menu while replacing its predefined
-/// fullscreen item. The predefined item calls Cocoa's `toggleFullScreen:`
-/// selector directly, which is a no-op for borderless windows; a normal item
-/// lets the event handler use Tauri's programmatic path instead.
+/// fullscreen item. The standard Window submenu is rebuilt with a normal ID so
+/// AppKit does not augment it, and View is omitted because AppKit inserts its
+/// own broken `toggleFullScreen:` action into any submenu with that title.
 fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let menu = Menu::default(app)?;
+    let default_menu = Menu::default(app)?;
     #[cfg(target_os = "macos")]
     {
-        let view = menu
-            .items()?
-            .into_iter()
-            .find_map(|item| match item {
-                MenuItemKind::Submenu(submenu) if matches!(submenu.text().as_deref(), Ok("View")) => {
-                    Some(submenu)
-                }
-                _ => None,
+        let items = default_menu.items()?;
+        let view_index = items
+            .iter()
+            .position(|item| {
+                matches!(item, MenuItemKind::Submenu(submenu) if matches!(submenu.text().as_deref(), Ok("View")))
             })
             .ok_or_else(|| {
                 std::io::Error::new(
@@ -273,7 +270,7 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                     "default menu has no View submenu",
                 )
             })?;
-        let view_items = view.items()?;
+        let view_items = items[view_index].as_submenu_unchecked().items()?;
         if view_items.len() != 1 || !matches!(view_items[0], MenuItemKind::Predefined(_)) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -281,14 +278,42 @@ fn build_app_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             )
             .into());
         }
+        let window_index = items
+            .iter()
+            .position(|item| {
+                matches!(item, MenuItemKind::Submenu(submenu) if matches!(submenu.text().as_deref(), Ok("Window")))
+            })
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "default menu has no Window submenu",
+                )
+            })?;
+        let window_items = items[window_index].as_submenu_unchecked().items()?;
 
         let fullscreen = MenuItemBuilder::with_id(TOGGLE_FULLSCREEN_MENU_ID, "Toggle Full Screen")
             .accelerator("Cmd+Ctrl+F")
             .build(app)?;
-        view.remove(&view_items[0])?;
-        view.append(&fullscreen)?;
+        let window = SubmenuBuilder::new(app, "Window").build()?;
+        for item in &window_items {
+            window.append(item)?;
+        }
+        window.append(&PredefinedMenuItem::separator(app)?)?;
+        window.append(&fullscreen)?;
+        let menu = Menu::new(app)?;
+        for (index, item) in items.iter().enumerate() {
+            if index == view_index {
+                continue;
+            } else if index == window_index {
+                menu.append(&window)?;
+            } else {
+                menu.append(item)?;
+            }
+        }
+        return Ok(menu);
     }
-    Ok(menu)
+    #[cfg(not(target_os = "macos"))]
+    Ok(default_menu)
 }
 
 fn main() {
