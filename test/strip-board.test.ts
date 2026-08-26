@@ -50,6 +50,11 @@ describe("groupedOrder", () => {
     expect(groups[1]?.orphanTail).toBe(false);
   });
 
+  test("fallback seeds stay interactive and carry the legacy descendant badge", () => {
+    const card = groupedOrder([session(1, { descendantCount: 3 })])[0]?.cards[0];
+    expect(card).toMatchObject({ displayOnly: false, descendantBadge: 3 });
+  });
+
   test("nested subs flatten to the primary's group, directly after their own parent", () => {
     // primary a ← sub b ← sub c; sibling sub d of a with a later slot than b
     const groups = groupedOrder([parent(1, "a"), sub(2, "b", "a"), sub(4, "d", "a"), sub(3, "c", "b")]);
@@ -95,6 +100,8 @@ const groupOf = (start: number, size: number, orphanTail = false): BoardGroup =>
     label: `t${start + i}`,
     subagent: i > 0 && !orphanTail ? true : orphanTail,
     parentProject: null,
+    displayOnly: false,
+    descendantBadge: 0,
   })),
   orphanTail,
 });

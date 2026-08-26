@@ -19,6 +19,8 @@ export type BoardCardSeed = {
   subagent: boolean;
   /** Anchoring primary's project, for meta-line suppression; null for primaries and orphans. */
   parentProject: string | null;
+  displayOnly: boolean;
+  descendantBadge: number | null;
 };
 
 export type BoardGroup = { cards: BoardCardSeed[]; orphanTail: boolean };
@@ -70,14 +72,28 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
 
   const groups: BoardGroup[] = primaries.map((primary) => {
     const cards: BoardCardSeed[] = [
-      { session: primary, label: labelForSession(primary), subagent: false, parentProject: null },
+      {
+        session: primary,
+        label: labelForSession(primary),
+        subagent: false,
+        parentProject: null,
+        displayOnly: false,
+        descendantBadge: primary.descendantCount,
+      },
     ];
     const walk = (ref: string | null): void => {
       if (ref === null) {
         return;
       }
       for (const child of childrenOf.get(ref) ?? []) {
-        cards.push({ session: child, label: labelForSession(child), subagent: true, parentProject: primary.project });
+        cards.push({
+          session: child,
+          label: labelForSession(child),
+          subagent: true,
+          parentProject: primary.project,
+          displayOnly: false,
+          descendantBadge: child.descendantCount,
+        });
         walk(child.originRef);
       }
     };
@@ -92,6 +108,8 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
         label: labelForSession(entry),
         subagent: true,
         parentProject: null,
+        displayOnly: false,
+        descendantBadge: entry.descendantCount,
       })),
       orphanTail: true,
     });

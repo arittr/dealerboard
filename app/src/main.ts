@@ -54,11 +54,11 @@ import {
   swallowSuppressedClick,
 } from "./gestures";
 import { createIngestGate } from "./ingest-gate";
-import { pressSessionTile } from "./press";
+import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
-import { identityOf, resolveBoardCard, type SessionIdentity } from "./tile-identity";
+import { identityOf, interactiveBoardCard, resolveInteractiveBoardCard, type SessionIdentity } from "./tile-identity";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
 import { startStripWindowManager } from "./window";
 
@@ -329,11 +329,11 @@ const onBoardClick = (event: MouseEvent): void => {
     return;
   }
   const index = Number(card.dataset["cardIndex"]);
-  const currentCard = currentCards[index];
-  if (currentCard === undefined) {
+  const currentCard = interactiveBoardCard(currentCards[index]);
+  if (currentCard === null) {
     return;
   }
-  void pressSessionTile(currentCard.session, {
+  void pressBoardCard(currentCard, {
     ack: ackSession,
     openUrl,
     focusGhostty,
@@ -351,8 +351,8 @@ const cardFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
     return null;
   }
   const index = Number(card.dataset["cardIndex"]);
-  const currentCard = currentCards[index];
-  if (currentCard === undefined) {
+  const currentCard = interactiveBoardCard(currentCards[index]);
+  if (currentCard === null) {
     return null;
   }
   return { identity: identityOf(currentCard.session), point: { x: event.clientX, y: event.clientY } };
@@ -490,7 +490,7 @@ const openActionSheetFor = (pending: PendingLongPress): void => {
   // Resolve by identity against the current cards: if the pressed session
   // left the board during the hold, cancel — never retarget the sheet (and
   // its Clear action) at whichever session shifted into the old index.
-  const ref = resolveBoardCard(currentCards, pending.identity);
+  const ref = resolveInteractiveBoardCard(currentCards, pending.identity);
   if (ref === null) {
     return;
   }
@@ -499,7 +499,7 @@ const openActionSheetFor = (pending: PendingLongPress): void => {
     return;
   }
   sheetActions = advanceSheetGeneration(sheetActions);
-  openActionSheet({ point: pending.point, session: ref.session, label: ref.label, tile });
+  openActionSheet({ point: pending.point, session: ref.card.session, label: ref.card.label, tile });
 };
 
 /**

@@ -17,6 +17,18 @@ export type PressDeps = {
   flash: () => void;
 };
 
+export type BoardPressTarget = {
+  session: ProjectedSession;
+  displayOnly: boolean;
+};
+
+export const pressBoardCard = async (card: BoardPressTarget, deps: PressDeps): Promise<void> => {
+  if (card.displayOnly) {
+    return;
+  }
+  await pressSessionTile(card.session, deps);
+};
+
 export const pressSessionTile = async (session: ProjectedSession, deps: PressDeps): Promise<void> => {
   void deps.ack(session.provider, session.sessionId).catch(() => {});
   const route = routeForSession(session);

@@ -25,11 +25,22 @@ export const identityOf = (session: ProjectedSession): SessionIdentity => ({
 export const resolveBoardCard = (
   cards: readonly PlacedCard[],
   identity: SessionIdentity,
-): { index: number; session: ProjectedSession; label: string } | null => {
+): { index: number; card: PlacedCard } | null => {
   for (const [index, card] of cards.entries()) {
     if (card.session.provider === identity.provider && card.session.sessionId === identity.sessionId) {
-      return { index, session: card.session, label: card.label };
+      return { index, card };
     }
   }
   return null;
+};
+
+export const interactiveBoardCard = (card: PlacedCard | undefined): PlacedCard | null =>
+  card === undefined || card.displayOnly ? null : card;
+
+export const resolveInteractiveBoardCard = (
+  cards: readonly PlacedCard[],
+  identity: SessionIdentity,
+): { index: number; card: PlacedCard } | null => {
+  const resolved = resolveBoardCard(cards, identity);
+  return resolved === null || resolved.card.displayOnly ? null : resolved;
 };

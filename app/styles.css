@@ -80,6 +80,9 @@ body[data-fullscreen] #board {
   border-left: 0.3125vw solid transparent; /* the 8px status-edge slot */
   cursor: pointer;
 }
+.card.display-only {
+  cursor: default;
+}
 
 /* Status edges and motion (colors and semantics mirror
    src/plugin/render.ts): working breathes a shallow staggered wash, waiting
