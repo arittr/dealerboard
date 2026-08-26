@@ -518,7 +518,7 @@ describe("parseSessionSnapshot", () => {
         unreadSince: "2026-08-19T00:00:00.000Z",
         statusSince: "2026-08-19T00:01:00.000Z",
         activityLine: "Bash git status",
-        transcriptPath: "/Users/drew/.claude/projects/p/s1.jsonl",
+        transcriptPath: "/Users/test/.claude/projects/p/s1.jsonl",
         originParentRef: "agent-0",
       }),
     );
@@ -526,7 +526,7 @@ describe("parseSessionSnapshot", () => {
       unreadSince: "2026-08-19T00:00:00.000Z",
       statusSince: "2026-08-19T00:01:00.000Z",
       activityLine: "Bash git status",
-      transcriptPath: "/Users/drew/.claude/projects/p/s1.jsonl",
+      transcriptPath: "/Users/test/.claude/projects/p/s1.jsonl",
       originParentRef: "agent-0",
     });
   });

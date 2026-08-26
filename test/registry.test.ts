@@ -793,11 +793,11 @@ describe("repair commands", () => {
 
 describe("transcript paths", () => {
   test("persists the transcript path on start and refreshes it on restart", () => {
-    applyRegistryEvents(db, [start("s1", { transcriptPath: "/Users/drew/.claude/projects/p/one.jsonl" })]);
-    expect(getRow("s1")?.transcript_path).toBe("/Users/drew/.claude/projects/p/one.jsonl");
+    applyRegistryEvents(db, [start("s1", { transcriptPath: "/Users/test/.claude/projects/p/one.jsonl" })]);
+    expect(getRow("s1")?.transcript_path).toBe("/Users/test/.claude/projects/p/one.jsonl");
 
-    applyRegistryEvents(db, [start("s1", { transcriptPath: "/Users/drew/.claude/projects/p/two.jsonl", at: at(2) })]);
-    expect(getRow("s1")?.transcript_path).toBe("/Users/drew/.claude/projects/p/two.jsonl");
+    applyRegistryEvents(db, [start("s1", { transcriptPath: "/Users/test/.claude/projects/p/two.jsonl", at: at(2) })]);
+    expect(getRow("s1")?.transcript_path).toBe("/Users/test/.claude/projects/p/two.jsonl");
 
     // A late-join insert carries the path too.
     applyRegistryEvents(db, [
@@ -807,12 +807,12 @@ describe("transcript paths", () => {
         sessionId: "c1",
         title: null,
         project: "proj",
-        transcriptPath: "/Users/drew/.codex/sessions/rollout-1.jsonl",
+        transcriptPath: "/Users/test/.codex/sessions/rollout-1.jsonl",
         model: null,
         observedAt: at(3),
       },
     ]);
-    expect(getRow("c1", "codex")?.transcript_path).toBe("/Users/drew/.codex/sessions/rollout-1.jsonl");
+    expect(getRow("c1", "codex")?.transcript_path).toBe("/Users/test/.codex/sessions/rollout-1.jsonl");
 
     // An observed event backfills the path on an existing row that predates
     // it, without touching title, project, or updated_at.
@@ -825,7 +825,7 @@ describe("transcript paths", () => {
           sessionId: "s2",
           title: null,
           project: null,
-          transcriptPath: "/Users/drew/.claude/projects/p/s2.jsonl",
+          transcriptPath: "/Users/test/.claude/projects/p/s2.jsonl",
           model: null,
           observedAt: at(5),
         },
@@ -834,13 +834,13 @@ describe("transcript paths", () => {
     expect(getRow("s2")).toMatchObject({
       title: null,
       project: null,
-      transcript_path: "/Users/drew/.claude/projects/p/s2.jsonl",
+      transcript_path: "/Users/test/.claude/projects/p/s2.jsonl",
       updated_at: at(4),
     });
 
     // Status events never disturb the stored path.
     applyRegistryEvents(db, [simple("Activity", "s1", { at: at(6) })]);
-    expect(getRow("s1")?.transcript_path).toBe("/Users/drew/.claude/projects/p/two.jsonl");
+    expect(getRow("s1")?.transcript_path).toBe("/Users/test/.claude/projects/p/two.jsonl");
   });
 });
 

@@ -117,7 +117,7 @@ describe("field extraction", () => {
         hook_event_name: "SessionStart",
         session_id: "s1",
         cwd: "/users/drew/repo",
-        transcript_path: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        transcript_path: "/Users/test/.claude/projects/-users-test-repo/s1.jsonl",
       }),
     ).toEqual([
       {
@@ -127,7 +127,7 @@ describe("field extraction", () => {
         title: null,
         project: "repo",
         ghosttyTerminalId: null,
-        transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        transcriptPath: "/Users/test/.claude/projects/-users-test-repo/s1.jsonl",
         model: null,
         observedAt: NOW,
       },
@@ -137,7 +137,7 @@ describe("field extraction", () => {
         hook_event_name: "UserPromptSubmit",
         session_id: "s1",
         cwd: "/users/drew/repo",
-        transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        transcriptPath: "/Users/test/.claude/projects/-users-test-repo/s1.jsonl",
       }),
     ).toEqual([
       {
@@ -146,7 +146,7 @@ describe("field extraction", () => {
         sessionId: "s1",
         title: null,
         project: "repo",
-        transcriptPath: "/Users/drew/.claude/projects/-users-drew-repo/s1.jsonl",
+        transcriptPath: "/Users/test/.claude/projects/-users-test-repo/s1.jsonl",
         model: null,
         observedAt: NOW,
       },
@@ -477,7 +477,7 @@ describe("event mapping", () => {
           hook_event_name: "SessionStart",
           session_id: "c1",
           cwd: "/work/app",
-          transcript_path: "/Users/drew/.codex/sessions/rollout-1.jsonl",
+          transcript_path: "/Users/test/.codex/sessions/rollout-1.jsonl",
         },
         "codex",
       ),
@@ -489,7 +489,7 @@ describe("event mapping", () => {
         title: null,
         project: "app",
         ghosttyTerminalId: null,
-        transcriptPath: "/Users/drew/.codex/sessions/rollout-1.jsonl",
+        transcriptPath: "/Users/test/.codex/sessions/rollout-1.jsonl",
         model: null,
         observedAt: NOW,
       },
