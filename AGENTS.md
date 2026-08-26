@@ -345,7 +345,8 @@ stopping it is part of the change.
   the `writeFileAtomically` primitive; the strip reads it through the
   `read_quota_snapshot` Tauri command and renders from the pure view-model in
   `app/src/quota.ts`. A missing CodexBar binary or a provider disabled in the
-  CodexBar app omits that provider entirely. `snapshot-v2.json` and
+  CodexBar app omits that provider entirely, except Claude is synthesized from
+  non-empty claude-swap account rows. `snapshot-v2.json` and
   `src/protocol.ts` stay untouched, and nothing CodexBar prints is ever
   logged or persisted.
 - A token-usage block ships in the rail: the

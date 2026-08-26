@@ -492,7 +492,8 @@ Fixed 600px (~23.4%), top to bottom:
   collection, while old/new daemon-app deployment order remains compatible.
   A provider whose last fetch failed renders dimmed with a last-updated
   age in place of the percent; a provider disabled in CodexBar (or with no
-  binary installed) is omitted; a missing file renders no quota rows /
+  binary installed) is omitted unless Claude has non-empty claude-swap
+  account rows, which synthesize its panel; a missing file renders no quota rows /
   hides the token block. Stale-dimming semantics are unchanged.
 
 The sparkline's data is additive: `token-usage-snapshot.json` gains a
