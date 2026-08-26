@@ -446,7 +446,7 @@ body[data-fullscreen] #board {
 }
 .card.status-working.quiet .status-dot {
   background: transparent;
-  border: max(1px, 0.078vw) solid #55647a;
+  border: max(1px, 0.078vw) solid #55647a; /* 2px native */
   animation: none;
 }
 .quiet-elapsed {
