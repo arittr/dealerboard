@@ -57,7 +57,7 @@ const oneRecordFs = (): Record<string, string[]> => ({
 });
 
 describe("createPaseoAgentStateLoader", () => {
-  test("joins on persistence.sessionId and maps attention and parentage", () => {
+  test("joins on the current session ID and maps attention and parentage", () => {
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
@@ -77,6 +77,21 @@ describe("createPaseoAgentStateLoader", () => {
         title: null,
       },
     ]);
+  });
+
+  test("prefers the current runtime session when it differs from the persisted session", () => {
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: {
+        [join(AGENTS_DIR, "work/agent-1.json")]: agentRecord({
+          persistence: { sessionId: "session_old" },
+          runtimeInfo: { sessionId: "session_current" },
+        }),
+      },
+    });
+
+    expect(loader(AGENTS_DIR)[0]?.sessionId).toBe("session_current");
   });
 
   test("parses attentionTimestamp and updatedAt for the registry watermark", () => {
@@ -138,7 +153,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("falls back to runtimeInfo.sessionId and flags subagents from parentAgentId", () => {
+  test("uses runtimeInfo.sessionId when persistence is absent and flags subagents from parentAgentId", () => {
     const content = agentRecord({
       id: "agent-2",
       persistence: undefined,

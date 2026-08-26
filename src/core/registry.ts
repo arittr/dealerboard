@@ -336,6 +336,24 @@ const applySessionTitleChanged = (
   return result.changes > 0 ? "applied" : "ignored";
 };
 
+/**
+ * Reconcile an authoritative external snapshot without manufacturing a new
+ * result. Live terminal events own unread_since; hydration and reconnect only
+ * repair the current status while preserving that ledger.
+ */
+const applySessionStatusObserved = (
+  db: Database,
+  event: Extract<RegistryEvent, { kind: "SessionStatusObserved" }>,
+): MutationResult => {
+  const result = db.run(
+    `UPDATE active_sessions
+     SET status = ?, status_since = ?, updated_at = ?
+     WHERE provider = ? AND session_id = ? AND status IS NOT ?`,
+    [event.status, event.observedAt, event.observedAt, event.provider, event.sessionId, event.status],
+  );
+  return result.changes > 0 ? "applied" : "ignored";
+};
+
 const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: "SubagentStart" }>): MutationResult => {
   if (!isValidProspectiveParent(db, event.provider, event.sessionId, event.parentSessionId)) {
     return "ignored";
@@ -481,6 +499,8 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
       return applySessionTitleChanged(db, event);
     case "SubagentStart":
       return applySubagentStart(db, event);
+    case "SessionStatusObserved":
+      return applySessionStatusObserved(db, event);
     case "Activity":
       return applyStatusUpdate(db, event, "working");
     case "Attention":
@@ -498,6 +518,7 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
     case "SubagentStop":
       return applySubagentStop(db, event);
   }
+  return "ignored";
 };
 
 /**
@@ -700,11 +721,12 @@ export type PaseoSyncState = {
  * any other top-level row still holding the ref was abandoned by
  * provider-session rotation (its SessionEnd was missed), and the duplicate
  * would make the projection roll-up drop the ref as ambiguous. Each pass
- * clears exactly the origin stamps on such rows — the row itself, its
- * ledger, status, timers, slot, and prune lease stay untouched. The cleanup
- * runs only for a ref whose pass carries exactly one joined provider
- * session: records contradicting each other about an agent's current
- * session are ambiguous evidence, and picking a winner could strip a
+ * retires such rows to idle and clears any stale background-work marker while
+ * preserving their ledger, titles, models, slots, and prune lease. A known
+ * `updatedAt` restamps `status_since` for the retirement; `updated_at` remains
+ * untouched. The cleanup runs only for a ref whose pass carries exactly one
+ * joined provider session: records contradicting each other about an agent's
+ * current session are ambiguous evidence, and picking a winner could strip a
  * still-valid row's routing.
  */
 /** The later of two canonical ISO-8601 UTC instants (lexical order is chronological); null when both are absent. */
@@ -806,10 +828,12 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
       if (joinedByRef.get(state.agentId)?.size === 1) {
         const abandoned = db.run(
           `UPDATE active_sessions
-           SET origin_kind = NULL, origin_ref = NULL, origin_subagent = 0, origin_parent_ref = NULL
+           SET origin_kind = NULL, origin_ref = NULL, origin_subagent = 0, origin_parent_ref = NULL,
+               status = 'idle', background_outstanding = 0,
+               status_since = CASE WHEN status IS NOT 'idle' AND ? IS NOT NULL THEN ? ELSE status_since END
            WHERE origin_kind = 'paseo' AND origin_ref = ? AND parent_session_id IS NULL
              AND NOT (provider = ? AND session_id = ?)`,
-          [state.agentId, state.provider, state.sessionId],
+          [state.updatedAt, state.updatedAt, state.agentId, state.provider, state.sessionId],
         );
         changed += abandoned.changes;
       }

@@ -683,7 +683,7 @@ describe("SessionGridController", () => {
     expect(harness.alerts.contexts).toEqual(["ctx-claude"]);
   });
 
-  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const)(
+  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen", "evener"] as const)(
     "a %s tile press alerts without invoking any activator",
     async (provider) => {
       const harness = makeController({ view: healthyView([session(1, { provider })]) });

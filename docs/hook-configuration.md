@@ -8,8 +8,11 @@ are the exceptions: the installer places their reporting shim or hook file
 itself, so their sections below describe what to expect from the installed
 artifact, not a config edit.
 
-Every provider invokes the same installed helper with one JSON event object on
-standard input:
+Evener is a different exception: it needs no hook or plugin configuration at
+all. The daemon observes Evener's supported AppWire feed; see the next section.
+
+Every hook-backed provider invokes the same installed helper with one JSON
+event object on standard input:
 
 ```text
 /Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents event <provider>
@@ -37,6 +40,68 @@ transcript-derived facts that persist are the session title (Claude's
 by design; everything else in the transcript — prompt text, message bodies,
 tool output, whole raw lines — is never written to the registry, the
 snapshot, or the logs.
+
+---
+
+## Evener (AppWire; no hook configuration)
+
+Do **not** install a Stream Deck Agents hook into Evener. Evener hooks are
+per-session, opt-in plugin behavior and omit authoritative title/model state;
+the supported daemon-wide observer surface is AppWire.
+
+When both daemons are running, Stream Deck Agents automatically connects to
+Evener hub at its documented default `http://127.0.0.1:9180` (WebSocket
+`/rpc`). It follows Evener's own configuration and credential precedence:
+
+- address: `EVENER_HUB_ADDR`, then `addr` in
+  `${XDG_CONFIG_HOME:-~/.config}/evener/hub.toml`, then
+  `127.0.0.1:9180`;
+- capability: `EVENER_HUB_AUTH_TOKEN`, otherwise
+  `<hub_state_root>/auth-token`, where the default root is
+  `${XDG_STATE_HOME:-~/.local/state}/evener` and `hub_state_root` in
+  `hub.toml` overrides it.
+
+Evener's `hub --addr` command-line flag is process-local and is not published
+in its state directory, so no external client can discover that override. If
+you launch the hub with a non-default `--addr`, put the same durable value in
+`hub.toml` (recommended), or expose the same `EVENER_HUB_ADDR` to the
+Stream Deck Agents LaunchAgent. A shell-only environment variable is not
+automatically inherited by an already-loaded LaunchAgent.
+
+The bearer capability is held in memory only. It is never logged, copied to
+the registry, or published in a snapshot. To prevent a plaintext credential
+leak, the collector refuses non-loopback hub addresses. A missing hub or token
+is an optional-provider condition: the collector stays quiet and retries every
+five seconds.
+
+After the AppWire v3 handshake, the collector lists only Evener's `local`
+source, hydrates roots before live subagents, subscribes to ordered updates,
+and refreshes every two seconds to discover new sessions. Status mapping is:
+
+| Evener AppWire | Tile |
+|---|---|
+| `active` | working |
+| `awaiting` | waiting |
+| `warning` / `systemError` | error |
+| `idle` | idle (visible only when unread) |
+| `closed` | removed |
+
+Generated/user-renamed titles and current model changes arrive through
+AppWire. Live turn completion owns the unread transition; reconnect hydration
+repairs status without inventing unread output. An explicit `thread/closed`
+removes the row. List omission does not, because the hub can return a partial
+list while one source is unavailable; the ordinary 24-hour prune covers a
+missed close.
+
+To verify, start an Evener session through the hub, submit a prompt, then run:
+
+```bash
+"$HOME/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" sessions list
+```
+
+An `evener` row should show the session title/model and `working`, `waiting`,
+or `error` status. Evener tile presses currently use the same alert/flash
+behavior as pi and omp; no exact-focus binding is claimed.
 
 ---
 

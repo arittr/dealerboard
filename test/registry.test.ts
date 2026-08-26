@@ -134,6 +134,47 @@ const countRows = (): number => {
 };
 
 describe("applyRegistryEvents", () => {
+  test("reconciles an observed status without changing the unread ledger", () => {
+    applyRegistryEvents(db, [start("evener-1", { provider: "evener", at: at(1) })]);
+    applyRegistryEvents(db, [simple("Stop", "evener-1", { provider: "evener", at: at(2) })]);
+    expect(getRow("evener-1", "evener")).toMatchObject({
+      status: "idle",
+      unread_since: at(2),
+      status_since: at(1),
+    });
+
+    expect(
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStatusObserved",
+          provider: "evener",
+          sessionId: "evener-1",
+          status: "waiting",
+          observedAt: at(3),
+        },
+      ]),
+    ).toEqual(["applied"]);
+    expect(getRow("evener-1", "evener")).toMatchObject({
+      status: "waiting",
+      unread_since: at(2),
+      status_since: at(3),
+      updated_at: at(3),
+    });
+
+    expect(
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStatusObserved",
+          provider: "evener",
+          sessionId: "evener-1",
+          status: "waiting",
+          observedAt: at(4),
+        },
+      ]),
+    ).toEqual(["ignored"]);
+    expect(getRow("evener-1", "evener")?.updated_at).toBe(at(3));
+  });
+
   test("drives one session through idle, working, waiting, idle, error, and absent", () => {
     expect(applyRegistryEvents(db, [start("s1", { title: "First", project: "proj", at: at(1) })])).toEqual(["applied"]);
     expect(getRow("s1")).toEqual({
@@ -1095,9 +1136,9 @@ describe("syncPaseoStates", () => {
       origin_subagent: 1,
       origin_parent_ref: "agent-0",
     });
-    // The abandoned row stays — not deleted, not acknowledged — with only its
-    // origin stamps cleared: ledger, status, timers, slot, metadata, and the
-    // prune lease (updated_at) all keep their values.
+    // The abandoned row stays — not deleted, not acknowledged — with its
+    // origin stamps cleared and retired to idle: its ledger, title, model,
+    // slot, and prune lease (updated_at) keep their values.
     expect(getRow("s1")).toMatchObject({
       origin_kind: null,
       origin_ref: null,
@@ -1120,6 +1161,30 @@ describe("syncPaseoStates", () => {
         paseoState({ sessionId: "s2", isSubagent: true, parentAgentId: "agent-0", attentionTimestamp: FLAG_AT }),
       ]),
     ).toBe(0);
+  });
+
+  test("retires a read active row abandoned by provider-session rotation", () => {
+    applyRegistryEvents(db, [
+      start("s1", { at: at(1), origin: { kind: "paseo", ref: "a1" } }),
+      simple("Activity", "s1", { at: at(3) }),
+      start("s2", { at: at(6) }),
+    ]);
+
+    expect(getRow("s1")).toMatchObject({ status: "working", unread_since: null, status_since: at(3) });
+    db.run("UPDATE active_sessions SET background_outstanding = 1 WHERE provider = 'claude' AND session_id = 's1'");
+
+    expect(syncPaseoStates(db, [paseoState({ sessionId: "s2", requiresAttention: false, updatedAt: at(7) })])).toBe(2);
+
+    expect(getRow("s1")).toMatchObject({
+      origin_kind: null,
+      origin_ref: null,
+      status: "idle",
+      background_outstanding: 0,
+      unread_since: null,
+      status_since: at(7),
+      updated_at: at(3),
+    });
+    expect(getRow("s2")).toMatchObject({ origin_kind: "paseo", origin_ref: "a1" });
   });
 
   test("the rotation cleanup never touches other agents' refs or ref-free rows", () => {

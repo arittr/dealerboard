@@ -3,7 +3,7 @@
  *
  * Grammar (exact):
  *   stream-deck-agents init
- *   stream-deck-agents event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen>
+ *   stream-deck-agents event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen|evener>
  *   stream-deck-agents daemon
  *   stream-deck-agents sessions list
  *   stream-deck-agents sessions clear <provider> <session-id>
@@ -26,6 +26,7 @@ import { PROVIDER_KEYS, type Provider, type RegistryEvent } from "../protocol";
 import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
 import { ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
+import { createEvenerCollector, resolveEvenerHubConnection } from "./evener";
 import { detectOrigin } from "./origin";
 import { createPaseoAgentStateLoader, isKnownProviderState } from "./paseo";
 import { type AppPaths, resolveAppPaths } from "./paths";
@@ -63,6 +64,8 @@ export type CliDependencies = {
   parentPid?: number;
   createQuotaCollector?: typeof createQuotaCollector;
   createTokenUsageCollector?: typeof createTokenUsageCollector;
+  createEvenerCollector?: typeof createEvenerCollector;
+  resolveEvenerHubConnection?: typeof resolveEvenerHubConnection;
   runDaemon?: (paths: AppPaths, diagnostics: (record: DiagnosticRecord) => void) => number | Promise<number>;
 };
 
@@ -411,6 +414,8 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   parentPid: process.ppid,
   createQuotaCollector,
   createTokenUsageCollector,
+  createEvenerCollector,
+  resolveEvenerHubConnection,
   runDaemon: (daemonPaths, diagnostics) => {
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
@@ -428,6 +433,36 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     const syncPaseo = (db: Database) => syncPaseoStates(db, loadPaseoStates(paseoDir).filter(isKnownProviderState));
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
+    // Evener is observed through its supported daemon-wide AppWire feed. The
+    // bearer capability stays in memory and is never logged or persisted.
+    try {
+      const createCollector = dependencies.createEvenerCollector ?? createEvenerCollector;
+      const resolveConnection = dependencies.resolveEvenerHubConnection ?? resolveEvenerHubConnection;
+      const evenerCollector = createCollector({
+        connection: () => resolveConnection({ home: daemonPaths.home, environment }),
+        diagnostics,
+        onUpdate: ({ events }) => {
+          const db = openRegistryDatabase(daemonPaths.database, "readwrite");
+          try {
+            applyRegistryEvents(db, events);
+          } finally {
+            db.close();
+          }
+        },
+      });
+      evenerCollector.start();
+    } catch {
+      try {
+        diagnostics({
+          timestamp: new Date().toISOString(),
+          component: "evener",
+          code: "evener_collector_failed",
+          provider: "evener",
+        });
+      } catch {
+        // A failing sink must never break daemon startup.
+      }
+    }
     // The collector is optional telemetry on its own scheduler: it comes up
     // only after the daemon is publishing, and any failure here is contained
     // to one fixed diagnostic so it can never prevent or unwind session
