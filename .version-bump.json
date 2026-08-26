@@ -1,0 +1,20 @@
+{
+  "files": [
+    { "path": "package.json", "field": "version", "format": "json" },
+    { "path": "app/src-tauri/tauri.conf.json", "field": "version", "format": "json" },
+    { "path": "app/src-tauri/Cargo.toml", "field": "package.version", "format": "toml" }
+  ],
+  "audit": {
+    "exclude": [
+      "docs",
+      "dist",
+      "target",
+      "node_modules",
+      "bun.lock",
+      "Cargo.lock",
+      "CHANGELOG.md",
+      ".worktrees",
+      ".superpowers"
+    ]
+  }
+}
