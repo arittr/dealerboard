@@ -11,6 +11,7 @@ const quotaPanel = (overrides: Partial<QuotaPanelModel> = {}): QuotaPanelModel =
   state: "ok",
   fetchedAtMs: NOW - 60_000,
   history: [],
+  accounts: [],
   ...overrides,
 });
 

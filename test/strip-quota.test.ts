@@ -14,7 +14,7 @@ import {
   secondaryWindows,
   selectBindingIndex,
 } from "../app/src/quota";
-import type { ProviderQuota } from "../src/quota-snapshot";
+import type { ProviderQuota, ProviderQuotaAccount } from "../src/quota-snapshot";
 
 const NOW = Date.parse("2026-08-19T18:00:00.000Z");
 
@@ -28,6 +28,20 @@ const quota = (overrides: Partial<ProviderQuota> = {}): ProviderQuota => ({
   history: [],
   extraWindows: [],
   accounts: [],
+  ...overrides,
+});
+
+const quotaAccount = (overrides: Partial<ProviderQuotaAccount> = {}): ProviderQuotaAccount => ({
+  id: "claude-swap:1",
+  label: "1",
+  active: false,
+  percentRemaining: 70,
+  resetAt: "2026-08-19T22:00:00.000Z",
+  weeklyPercentRemaining: 80,
+  weeklyResetAt: "2026-08-24T00:00:00.000Z",
+  unavailable: false,
+  fetchedAt: "2026-08-19T18:00:00.000Z",
+  extraWindows: [],
   ...overrides,
 });
 
@@ -52,6 +66,7 @@ const model = (overrides: Partial<QuotaPanelModel> = {}): QuotaPanelModel => ({
   state: "ok",
   fetchedAtMs: NOW,
   history: [],
+  accounts: [],
   ...overrides,
 });
 
@@ -69,6 +84,77 @@ describe("reduceQuotaRead", () => {
       { tag: "session", percentRemaining: 62.5, resetAtMs: Date.parse("2026-08-19T22:00:00.000Z") },
       { tag: "weekly", percentRemaining: 88, resetAtMs: Date.parse("2026-08-24T00:00:00.000Z") },
     ]);
+  });
+
+  test("two accounts become stable independent meter models", () => {
+    const accounts = [
+      quotaAccount({
+        id: "claude-swap:2",
+        label: "2",
+        active: true,
+        percentRemaining: 90,
+        extraWindows: [
+          {
+            id: "claude-swap:2:scoped:0",
+            label: "Fable",
+            percentRemaining: 2,
+            resetAt: "2026-08-24T00:00:00.000Z",
+          },
+        ],
+      }),
+      quotaAccount({ id: "claude-swap:1", label: "1", active: false, percentRemaining: 25 }),
+    ];
+    const panel = reduceQuotaRead(read({ claude: quota({ accounts }) }), NOW)[0];
+    expect(panel?.accounts.map((account) => account.id)).toEqual(["claude-swap:1", "claude-swap:2"]);
+    const first = panel?.accounts[0];
+    const second = panel?.accounts[1];
+    if (first === undefined || second === undefined) throw new Error("expected two account meters");
+    expect(first).toMatchObject({ label: "1", active: false, bindingIndex: 0 });
+    expect(bindingWindow(second)?.tag).toBe("Fable");
+    expect(secondaryWindows(second).map((window) => window.tag)).toEqual(["session", "weekly"]);
+  });
+
+  test("zero or one account keeps grouped presentation disabled", () => {
+    expect(reduceQuotaRead(read({ claude: quota() }), NOW)[0]?.accounts).toEqual([]);
+    expect(reduceQuotaRead(read({ claude: quota({ accounts: [quotaAccount()] }) }), NOW)[0]?.accounts).toEqual([]);
+  });
+
+  test("non-Claude provider account input never enables grouped presentation", () => {
+    expect(
+      reduceQuotaRead(
+        read({ codex: quota({ accounts: [quotaAccount(), quotaAccount({ id: "claude-swap:2", label: "2" })] }) }),
+        NOW,
+      )[0]?.accounts,
+    ).toEqual([]);
+  });
+
+  test("derives each account state from its own source instant", () => {
+    const oldFetch = new Date(NOW - STALE_QUOTA_AGE_MS - 1).toISOString();
+    const panel = reduceQuotaRead(
+      read({
+        claude: quota({
+          accounts: [
+            quotaAccount({ fetchedAt: oldFetch }),
+            quotaAccount({ id: "claude-swap:2", label: "2", active: true, unavailable: true }),
+          ],
+        }),
+      }),
+      NOW,
+    )[0];
+    expect(panel?.accounts.map((account) => account.state)).toEqual(["stale", "unavailable"]);
+  });
+
+  test("grouped account derivation leaves the ambient meter and history unchanged", () => {
+    const ambient = quota({
+      percentRemaining: 40,
+      weeklyPercentRemaining: 70,
+      history: [{ fetchedAt: new Date(NOW).toISOString(), fractionRemaining: 0.4 }],
+      accounts: [quotaAccount(), quotaAccount({ id: "claude-swap:2", label: "2", active: true })],
+    });
+    const panel = reduceQuotaRead(read({ claude: ambient }), NOW)[0];
+    expect(panel).toMatchObject({ bindingIndex: 0, history: ambient.history });
+    expect(panel?.windows.map((window) => window.percentRemaining)).toEqual([40, 70]);
+    expect(panel?.accounts.map((account) => account.label)).toEqual(["1", "2"]);
   });
 
   test("a v2 read maps extra windows after session and weekly, and the minimum binds", () => {

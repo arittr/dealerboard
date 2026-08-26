@@ -10,6 +10,7 @@ import {
   type ProviderQuota,
   parseQuotaSnapshot,
   QUOTA_PROVIDER_KEYS,
+  type QuotaExtraWindow,
   type QuotaHistoryPoint,
   type QuotaProviderKey,
   type QuotaSnapshot,
@@ -28,20 +29,40 @@ export type QuotaWindowModel = {
   resetAtMs: number | null;
 };
 
-export type QuotaPanelModel = {
-  provider: QuotaProviderKey;
+export type QuotaMeterModel = {
   /** Session, weekly, then extras in published order; empty when never fetched. */
   windows: readonly QuotaWindowModel[];
   /** Index of the binding (lowest-percent) window; null when windows is empty. */
   bindingIndex: number | null;
   state: QuotaPanelState;
   fetchedAtMs: number | null;
+};
+
+export type QuotaAccountMeterModel = QuotaMeterModel & {
+  id: string;
+  label: string;
+  active: boolean;
+};
+
+export type QuotaPanelModel = QuotaMeterModel & {
+  provider: QuotaProviderKey;
   history: readonly QuotaHistoryPoint[];
+  accounts: readonly QuotaAccountMeterModel[];
 };
 
 const parseInstant = (value: string | null): number | null => (value === null ? null : Date.parse(value));
 
-const panelState = (quota: ProviderQuota, fetchedAtMs: number | null, now: number): QuotaPanelState => {
+type QuotaMeterInput = {
+  percentRemaining: number | null;
+  resetAt: string | null;
+  weeklyPercentRemaining: number | null;
+  weeklyResetAt: string | null;
+  unavailable: boolean;
+  fetchedAt: string | null;
+  extraWindows: readonly QuotaExtraWindow[];
+};
+
+const panelState = (quota: QuotaMeterInput, fetchedAtMs: number | null, now: number): QuotaPanelState => {
   if (quota.unavailable || fetchedAtMs === null) {
     return "unavailable";
   }
@@ -59,7 +80,7 @@ export const selectBindingIndex = (windows: readonly QuotaWindowModel[]): number
   return best;
 };
 
-const panelModel = (provider: QuotaProviderKey, quota: ProviderQuota, now: number): QuotaPanelModel => {
+const meterModel = (quota: QuotaMeterInput, now: number): QuotaMeterModel => {
   const fetchedAtMs = parseInstant(quota.fetchedAt);
   const windows: QuotaWindowModel[] = [];
   if (quota.percentRemaining !== null) {
@@ -80,12 +101,31 @@ const panelModel = (provider: QuotaProviderKey, quota: ProviderQuota, now: numbe
     });
   }
   return {
-    provider,
     windows,
     bindingIndex: selectBindingIndex(windows),
     state: panelState(quota, fetchedAtMs, now),
     fetchedAtMs,
+  };
+};
+
+const panelModel = (provider: QuotaProviderKey, quota: ProviderQuota, now: number): QuotaPanelModel => {
+  const ambient = meterModel(quota, now);
+  const accounts =
+    provider !== "claude" || quota.accounts.length < 2
+      ? []
+      : [...quota.accounts]
+          .sort((a, b) => Number(a.label) - Number(b.label))
+          .map((account) => ({
+            id: account.id,
+            label: account.label,
+            active: account.active,
+            ...meterModel(account, now),
+          }));
+  return {
+    provider,
+    ...ambient,
     history: quota.history,
+    accounts,
   };
 };
 
@@ -128,11 +168,11 @@ export const formatResetCountdown = (resetAtMs: number, now: number): string => 
 };
 
 /** The binding window, or null when the provider has never fetched. */
-export const bindingWindow = (model: QuotaPanelModel): QuotaWindowModel | null =>
+export const bindingWindow = (model: QuotaMeterModel): QuotaWindowModel | null =>
   model.bindingIndex === null ? null : (model.windows[model.bindingIndex] ?? null);
 
 /** Pill text: the binding window's name; null when no data. */
-export const formatBindingTag = (model: QuotaPanelModel): string | null => {
+export const formatBindingTag = (model: QuotaMeterModel): string | null => {
   const binding = bindingWindow(model);
   if (binding === null) {
     return null;
@@ -141,13 +181,13 @@ export const formatBindingTag = (model: QuotaPanelModel): string | null => {
 };
 
 /** Bright right text of the head line: binding percent, em dash when never fetched. */
-export const formatBindingPercent = (model: QuotaPanelModel): string => {
+export const formatBindingPercent = (model: QuotaMeterModel): string => {
   const binding = bindingWindow(model);
   return binding === null ? "—" : formatPercentRemaining(binding.percentRemaining);
 };
 
 /** Muted right text of the head line: unavailable age, binding reset countdown, or empty. */
-export const formatBindingNote = (model: QuotaPanelModel, now: number): string => {
+export const formatBindingNote = (model: QuotaMeterModel, now: number): string => {
   const binding = bindingWindow(model);
   if (model.state === "unavailable") {
     if (model.fetchedAtMs === null || binding === null) {
@@ -170,7 +210,7 @@ export const formatBindingNote = (model: QuotaPanelModel, now: number): string =
  * bright percent and the bar fill, and the bar renders a neutral tick at
  * each of these so the other windows stay visible without any text.
  */
-export const secondaryWindows = (model: QuotaPanelModel): QuotaWindowModel[] =>
+export const secondaryWindows = (model: QuotaMeterModel): QuotaWindowModel[] =>
   model.windows.filter((_, index) => index !== model.bindingIndex);
 
 /** Fill hue follows remaining headroom on the strip's existing status palette. */
