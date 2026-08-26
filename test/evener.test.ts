@@ -77,7 +77,13 @@ const flush = async (): Promise<void> => {
 const thread = (
   sessionId: string,
   status: string,
-  options: { parentRef?: string; kind?: string; name?: string } = {},
+  options: {
+    parentRef?: string;
+    kind?: string;
+    name?: string;
+    askPending?: boolean;
+    pendingEscalations?: number;
+  } = {},
 ): Record<string, unknown> => ({
   id: sessionId,
   sessionId,
@@ -91,6 +97,20 @@ const thread = (
     ref: `local:${sessionId}`,
     ...(options.parentRef === undefined ? {} : { parentRef: options.parentRef }),
     ...(options.kind === undefined ? {} : { kind: options.kind }),
+    ...(options.askPending === undefined ? {} : { askPending: options.askPending }),
+    ...(options.pendingEscalations === undefined
+      ? {}
+      : {
+          pendingEscalations: Array.from({ length: options.pendingEscalations }, (_, index) => ({
+            threadId: sessionId,
+            ref: `local:${sessionId}`,
+            escalationId: `escalation-${String(index + 1)}`,
+            mode: "workspace-write",
+            tool: "write_file",
+            kind: "path",
+            deniedPath: "/work/denied",
+          })),
+        }),
   },
 });
 
@@ -248,6 +268,204 @@ describe("Evener AppWire collector", () => {
     expect(socket.closed).toBe(true);
   });
 
+  test("treats ordinary awaiting as a settled turn during hydration and live updates", async () => {
+    const socket = new FakeSocket();
+    const events: EvenerCollectorUpdate["events"] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      now: () => "2026-08-26T05:00:30.000Z",
+      onUpdate: (update) => events.push(...update.events),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), { data: [thread("root", "awaiting")] });
+    await flush();
+
+    expect(events.find((event) => event.kind === "SessionStatusObserved")).toMatchObject({ status: "idle" });
+
+    events.length = 0;
+    socket.message({
+      method: "turn/completed",
+      params: { ref: "local:root", threadId: "root", turnId: "turn_1", turn: { status: "completed" } },
+    });
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "root", status: { type: "awaiting" } },
+    });
+    expect(events).toEqual([
+      { kind: "Stop", provider: "evener", sessionId: "root", observedAt: "2026-08-26T05:00:30.000Z" },
+      {
+        kind: "SessionStatusObserved",
+        provider: "evener",
+        sessionId: "root",
+        status: "idle",
+        observedAt: "2026-08-26T05:00:30.000Z",
+      },
+    ]);
+    collector.stop();
+  });
+
+  test("hydrates concrete Evener questions and sandbox escalations as waiting", async () => {
+    const socket = new FakeSocket();
+    const events: EvenerCollectorUpdate["events"] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => events.push(...update.events),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), {
+      data: [
+        thread("question", "awaiting", { askPending: true }),
+        thread("escalation", "active", { pendingEscalations: 1 }),
+      ],
+    });
+    await flush();
+
+    expect(
+      events.filter((event) => event.kind === "SessionStatusObserved").map((event) => [event.sessionId, event.status]),
+    ).toEqual([
+      ["question", "waiting"],
+      ["escalation", "waiting"],
+    ]);
+    collector.stop();
+  });
+
+  test("emits idempotent cleanup for settled awaiting subagents", async () => {
+    const socket = new FakeSocket();
+    const events: EvenerCollectorUpdate["events"] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => events.push(...update.events),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), {
+      data: [thread("root", "active"), thread("child", "awaiting", { parentRef: "local:root", kind: "subagent" })],
+    });
+    await flush();
+
+    const rootRead = requestByMethod(socket, "thread/read");
+    respond(socket, rootRead, { thread: thread("root", "active") });
+    await flush();
+    const reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(2);
+    respond(socket, reads[1]!, {
+      thread: thread("child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
+    });
+    await flush();
+
+    expect(events.filter((event) => event.sessionId === "child")).toEqual([
+      {
+        kind: "SubagentStop",
+        provider: "evener",
+        sessionId: "child",
+        observedAt: expect.any(String),
+      },
+    ]);
+    collector.stop();
+  });
+
+  test("re-registers settled subagents when live events resume them", async () => {
+    const socket = new FakeSocket();
+    const events: EvenerCollectorUpdate["events"] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => events.push(...update.events),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), {
+      data: [
+        thread("root", "active"),
+        thread("status-child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
+        thread("turn-child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
+      ],
+    });
+    await flush();
+    events.length = 0;
+
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:status-child", threadId: "status-child", status: { type: "active" } },
+    });
+    socket.message({
+      method: "turn/started",
+      params: { ref: "local:turn-child", threadId: "turn-child", turn: { status: "inProgress" } },
+    });
+
+    for (const sessionId of ["status-child", "turn-child"]) {
+      expect(events.filter((event) => event.sessionId === sessionId).map((event) => event.kind)).toEqual([
+        "SubagentStart",
+        "SessionTitleChanged",
+        "SessionStatusObserved",
+      ]);
+      expect(
+        events.find((event) => event.sessionId === sessionId && event.kind === "SessionStatusObserved"),
+      ).toMatchObject({ status: "working" });
+    }
+    collector.stop();
+  });
+
+  test("keeps waiting until every Evener blocker resolves", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const events: EvenerCollectorUpdate["events"] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => events.push(...update.events),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), {
+      data: [
+        thread("question", "awaiting", { askPending: true, pendingEscalations: 1 }),
+        thread("escalations", "active", { pendingEscalations: 2 }),
+      ],
+    });
+    await flush();
+    events.length = 0;
+
+    socket.message({
+      method: "evener/sandbox/escalation/resolved",
+      params: { ref: "local:question", threadId: "question", escalationId: "escalation-1" },
+    });
+    socket.message({
+      method: "evener/sandbox/escalation/resolved",
+      params: { ref: "local:escalations", threadId: "escalations", escalationId: "escalation-1" },
+    });
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:question", threadId: "question", status: { type: "awaiting" } },
+    });
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:escalations", threadId: "escalations", status: { type: "active" } },
+    });
+
+    expect(events.map((event) => [event.sessionId, event.kind])).toEqual([
+      ["question", "Attention"],
+      ["escalations", "Attention"],
+    ]);
+    collector.stop();
+  });
+
   test("maps ordered live lifecycle, title, model, failure, and child completion events", async () => {
     const socket = new FakeSocket();
     const timers = timerHarness();
@@ -307,7 +525,7 @@ describe("Evener AppWire collector", () => {
 
     expect(events.map((event) => [event.kind, event.sessionId])).toEqual([
       ["Stop", "root"],
-      ["Attention", "root"],
+      ["SessionStatusObserved", "root"],
       ["SessionTitleChanged", "root"],
       ["SessionObserved", "root"],
       ["Activity", "root"],
@@ -316,6 +534,7 @@ describe("Evener AppWire collector", () => {
       ["SubagentStop", "child"],
       ["SessionEnd", "root"],
     ]);
+    expect(events[1]).toMatchObject({ status: "idle" });
     expect(events[3]).toMatchObject({ model: "gpt-5.6-terra", title: "Renamed" });
     expect(events[6]).toMatchObject({ status: "error" });
     collector.stop();

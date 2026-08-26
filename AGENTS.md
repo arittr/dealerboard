@@ -151,11 +151,14 @@ stopping it is part of the change.
   `subagentType` payloads are dropped), and no `SessionTitleChanged` push
   (titles are pulled). A grok `Stop` with a non-`end_turn` reason is the
   session-teardown observe fire and is dropped — `SessionEnd` owns removal.
-  Evener is inventory-backed rather than hook-backed: AppWire `active`,
-  `awaiting`, and `warning`/`systemError` map to working, waiting, and error;
-  ordered `turn/completed` notifications own unread settlement, while cold
-  hydration uses `SessionStatusObserved` to repair status without changing the
-  unread ledger.
+  Evener is inventory-backed rather than hook-backed: AppWire `active` maps to
+  working, plain `awaiting` is the ordinary post-reply state and maps to idle,
+  `warning`/`systemError` map to error, and only `evener.askPending` or a
+  non-empty `pendingEscalations` list maps to waiting. Settled awaiting
+  subagents therefore remain removed instead of lifting their parents to
+  waiting. Ordered `turn/completed` notifications own unread settlement, while
+  cold hydration uses `SessionStatusObserved` to repair status without changing
+  the unread ledger.
   A tile's effective status is the max (`error > waiting > working > idle`)
   over its whole subtree, and any live subagent row lifts it to at least
   `working` (`src/core/projection.ts`). The max also rolls up across

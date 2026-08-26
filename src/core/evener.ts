@@ -205,8 +205,11 @@ type EvenerThreadState = {
   project: string | null;
   model: string | null;
   rawStatus: AppWireStatus;
+  askPending: boolean;
+  pendingEscalationCount: number;
   failedTurn: boolean;
   registered: boolean;
+  cleanupEmitted: boolean;
 };
 
 type PendingRequest = {
@@ -289,19 +292,24 @@ const parseThread = (value: unknown, previous?: EvenerThreadState): EvenerThread
     project: projectFromThread(value),
     model: boundedString(value["modelProvider"]),
     rawStatus,
+    askPending: evener["askPending"] === true,
+    pendingEscalationCount: Array.isArray(evener["pendingEscalations"]) ? evener["pendingEscalations"].length : 0,
     failedTurn: rawStatus === "active" || rawStatus === "awaiting" ? false : (previous?.failedTurn ?? false),
     registered: previous?.registered ?? false,
+    cleanupEmitted: previous?.cleanupEmitted ?? false,
   };
 };
 
 const isChild = (state: EvenerThreadState): boolean => state.kind === "subagent" || state.parentRef !== null;
 
+const requiresAttention = (state: EvenerThreadState): boolean => state.askPending || state.pendingEscalationCount > 0;
+
 const effectiveStatus = (state: EvenerThreadState): SessionStatus => {
   switch (state.rawStatus) {
     case "active":
-      return "working";
+      return requiresAttention(state) ? "waiting" : "working";
     case "awaiting":
-      return "waiting";
+      return requiresAttention(state) ? "waiting" : "idle";
     case "warning":
     case "systemError":
       return "error";
@@ -518,9 +526,10 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
     if (isChild(state)) {
       const parent = rootParent(state);
-      if (parent === null || !parent.registered || state.rawStatus === "idle") {
-        const events = state.registered ? [endEvent(state, observedAt)] : [];
+      if (parent === null || !parent.registered || effectiveStatus(state) === "idle") {
+        const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
         state.registered = false;
+        state.cleanupEmitted = true;
         return events;
       }
       const events: RegistryEvent[] = [];
@@ -535,6 +544,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
           observedAt,
         });
         state.registered = true;
+        state.cleanupEmitted = false;
       }
       const title = titleEvent(state, observedAt);
       if (title !== null) {
@@ -723,17 +733,26 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     if (rawStatus === "active" || rawStatus === "awaiting") {
       state.failedTurn = false;
     }
-    if (isChild(state) && (rawStatus === "idle" || rawStatus === "closed" || rawStatus === "notLoaded")) {
-      state.registered = false;
-      emit([endEvent(state, now())]);
-      return;
+    const observedAt = now();
+    if (isChild(state)) {
+      if (effectiveStatus(state) === "idle") {
+        const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
+        state.registered = false;
+        state.cleanupEmitted = true;
+        emit(events);
+        return;
+      }
+      if (!state.registered) {
+        emit(hydrateState(state, true, observedAt));
+        return;
+      }
     }
     if (rawStatus === "closed" || rawStatus === "notLoaded") {
-      emit([endEvent(state, now())]);
+      emit([endEvent(state, observedAt)]);
       states.delete(state.ref);
       return;
     }
-    emit([liveStatusEvent(state, previousStatus, now())]);
+    emit([liveStatusEvent(state, previousStatus, observedAt)]);
   };
 
   const handleTurnStarted = (params: Record<string, unknown>): void => {
@@ -743,8 +762,14 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       return;
     }
     state.rawStatus = "active";
+    state.askPending = false;
     state.failedTurn = false;
-    emit([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt: now() }]);
+    const observedAt = now();
+    if (isChild(state) && !state.registered) {
+      emit(hydrateState(state, true, observedAt));
+      return;
+    }
+    emit([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt }]);
   };
 
   const handleTurnCompleted = (params: Record<string, unknown>): void => {
@@ -756,8 +781,10 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
     const observedAt = now();
     if (isChild(state)) {
+      const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
       state.registered = false;
-      emit([endEvent(state, observedAt)]);
+      state.cleanupEmitted = true;
+      emit(events);
       return;
     }
     if (turnStatus === "failed") {
@@ -767,7 +794,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     } else if (turnStatus === "completed" || turnStatus === "interrupted") {
       state.failedTurn = false;
       const events: RegistryEvent[] = [{ kind: "Stop", provider: "evener", sessionId: state.sessionId, observedAt }];
-      if (turnStatus === "completed" && state.rawStatus === "awaiting") {
+      if (turnStatus === "completed" && requiresAttention(state)) {
         events.push({ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt });
       }
       emit(events);
@@ -855,13 +882,20 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       case "evener/sandbox/escalation/requested": {
         const state = stateForParams(params);
         if (state !== null) {
-          state.rawStatus = "awaiting";
+          state.pendingEscalationCount += 1;
           state.failedTurn = false;
           emit([{ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt: now() }]);
         }
         return;
       }
-      case "evener/sandbox/escalation/resolved":
+      case "evener/sandbox/escalation/resolved": {
+        const state = stateForParams(params);
+        if (state !== null) {
+          state.pendingEscalationCount = Math.max(0, state.pendingEscalationCount - 1);
+        }
+        scheduleRefresh(0);
+        return;
+      }
       case "evener/thread/resync":
       case "evener/tree/changed":
         scheduleRefresh(0);
