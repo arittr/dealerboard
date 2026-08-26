@@ -154,7 +154,7 @@ test("groups Claude account meters in one stack after the shared provider header
   });
 });
 
-const visibleTokens = (): TokenUsageRailModel => ({
+const visibleTokens = (): Extract<TokenUsageRailModel, { state: "ok" | "stale" }> => ({
   state: "ok",
   totalTokens: 562_700_000,
   hour: { tokens: 31_100_000, trend: "up" },
@@ -180,6 +180,12 @@ describe("token block layout", () => {
   test("stacks the two rates in a column beside the sparkline, no separator", () => {
     withFakeDocument((root) => {
       renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }), { onJumpToPage: () => {} });
+      expect(root.children.map((node) => node.className)).toEqual([
+        "rail-tokens",
+        "rail-unread active",
+        "rail-quota-zone",
+        "rail-pager",
+      ]);
       const tokens = descendants(root).find((node) => node.className === "rail-tokens");
       expect(tokens?.children.map((node) => node.className)).toEqual(["tokens-today", "tokens-flow"]);
       const flow = tokens?.children[1];
@@ -194,11 +200,9 @@ describe("token block layout", () => {
 
   test("without day curves the row renders the rates column alone", () => {
     withFakeDocument((root) => {
-      renderRail(
-        root as unknown as HTMLElement,
-        model({ tokens: { ...visibleTokens(), sparkline: null } as TokenUsageRailModel }),
-        { onJumpToPage: () => {} },
-      );
+      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), sparkline: null } }), {
+        onJumpToPage: () => {},
+      });
       const flow = descendants(root).find((node) => node.className === "tokens-flow");
       expect(flow?.children.map((node) => node.className)).toEqual(["tokens-rate"]);
     });

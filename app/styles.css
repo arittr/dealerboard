@@ -491,7 +491,6 @@ body[data-fullscreen] #rail {
 .rail-tokens {
   display: flex;
   flex-direction: column;
-  gap: 0.4vh;
   font-variant-numeric: tabular-nums;
 }
 .rail-tokens[data-state="stale"] {

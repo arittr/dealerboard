@@ -278,6 +278,7 @@ describe("status word rendering", () => {
         renderBoard(root as unknown as HTMLElement, pageWith(status), false);
         const word = descendants(root).find((node) => hasClass(node, "status-word"));
         expect(word?.textContent).toBe(status);
+        expect(descendants(root).some((node) => hasClass(node, "status-dot"))).toBe(true);
         expect(descendants(root).filter((node) => hasClass(node, "cardtimer"))).toHaveLength(1);
       });
     }
