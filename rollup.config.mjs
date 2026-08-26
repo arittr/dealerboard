@@ -7,7 +7,7 @@ import nodeResolve from "@rollup/plugin-node-resolve";
 import terser from "@rollup/plugin-terser";
 
 const isWatching = !!process.env.ROLLUP_WATCH;
-const sdPlugin = "com.drewritter.stream-deck-agents.sdPlugin";
+const sdPlugin = "com.drewritter.dealerboard.sdPlugin";
 const stageDirectory = "dist/plugin-stage";
 const stageRoot = path.resolve(stageDirectory);
 

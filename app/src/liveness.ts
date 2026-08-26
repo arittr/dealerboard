@@ -77,9 +77,11 @@ export type LivenessFrame = {
   dotColor: string | null;
   /** "quiet 12m" — the silence age as a fact; null while live. */
   quietLabel: string | null;
+  /** The corner gap ("48s"): silence age once the edge starts fading, until quiet owns it. */
+  gapLabel: string | null;
 };
 
-const EMPTY_FRAME: LivenessFrame = { quiet: false, edgeColor: null, dotColor: null, quietLabel: null };
+const EMPTY_FRAME: LivenessFrame = { quiet: false, edgeColor: null, dotColor: null, quietLabel: null, gapLabel: null };
 
 /**
  * One card's liveness for this tick. A null or unparseable stamp paints
@@ -99,13 +101,14 @@ export const livenessFrame = (lastEventAt: string | null, subagent: boolean, now
   const age = nowMs - eventMs;
   const paint = decayPaint(age);
   if (paint.quiet) {
-    return { quiet: true, edgeColor: null, dotColor: null, quietLabel: `quiet ${elapsedLabel(age)}` };
+    return { quiet: true, edgeColor: null, dotColor: null, quietLabel: `quiet ${elapsedLabel(age)}`, gapLabel: null };
   }
   return {
     quiet: false,
     edgeColor: rgb(paint.color, paint.alpha * (subagent ? 0.5 : 1)),
     dotColor: rgb(paint.color, paint.alpha),
     quietLabel: null,
+    gapLabel: age >= FADE_MS ? elapsedLabel(age) : null,
   };
 };
 

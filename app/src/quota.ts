@@ -151,12 +151,8 @@ export const reduceQuotaRead = (read: SnapshotPayload | null, now: number): Quot
 
 export const formatPercentRemaining = (percent: number): string => `${Math.round(percent)}%`;
 
-export const formatResetCountdown = (resetAtMs: number, now: number): string => {
-  const remainingMs = resetAtMs - now;
-  if (remainingMs <= 0) {
-    return "resetting…";
-  }
-  const minutes = Math.ceil(remainingMs / 60_000);
+const formatDuration = (durationMs: number): string => {
+  const minutes = Math.ceil(durationMs / 60_000);
   if (minutes < 60) {
     return `${minutes}m`;
   }
@@ -167,9 +163,21 @@ export const formatResetCountdown = (resetAtMs: number, now: number): string => 
   return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`;
 };
 
+export const formatResetCountdown = (resetAtMs: number, now: number): string =>
+  resetAtMs <= now ? "resetting…" : formatDuration(resetAtMs - now);
+
 /** The binding window, or null when the provider has never fetched. */
 export const bindingWindow = (model: QuotaMeterModel): QuotaWindowModel | null =>
   model.bindingIndex === null ? null : (model.windows[model.bindingIndex] ?? null);
+
+/**
+ * True while the binding window's published reset is still ahead — the
+ * horizon out to which a stopped probe's last-good numbers stay meaningful.
+ */
+export const bindingResetPending = (model: QuotaMeterModel, now: number): boolean => {
+  const binding = bindingWindow(model);
+  return binding !== null && binding.resetAtMs !== null && binding.resetAtMs > now;
+};
 
 /** Pill text: the binding window's name; null when no data. */
 export const formatBindingTag = (model: QuotaMeterModel): string | null => {
@@ -186,6 +194,11 @@ export const formatBindingPercent = (model: QuotaMeterModel): string => {
   return binding === null ? "—" : formatPercentRemaining(binding.percentRemaining);
 };
 
+const formatUpdatedAge = (fetchedAtMs: number, now: number): string => {
+  const ageMs = Math.max(0, now - fetchedAtMs);
+  return ageMs < 60_000 ? "updated just now" : `updated ${formatDuration(ageMs)} ago`;
+};
+
 /** Muted right text of the head line: unavailable age or countdown, binding reset countdown, or empty. */
 export const formatBindingNote = (model: QuotaMeterModel, now: number): string => {
   const binding = bindingWindow(model);
@@ -195,12 +208,16 @@ export const formatBindingNote = (model: QuotaMeterModel, now: number): string =
     }
     // A reset schedule stays trustworthy after the probe stops (the percent
     // does not), so a pending reset keeps its countdown; once it passes the
-    // last-good numbers are spent and only the data age remains honest.
-    if (binding.resetAtMs !== null && binding.resetAtMs > now) {
-      return `resets ${formatResetCountdown(binding.resetAtMs, now)}`;
+    // last-good numbers are spent and only the data age remains honest. The
+    // age rides along once it crosses the stale threshold, so an old reading
+    // never masquerades as a live one.
+    if (binding.resetAtMs !== null && bindingResetPending(model, now)) {
+      const countdown = `resets ${formatResetCountdown(binding.resetAtMs, now)}`;
+      return now - model.fetchedAtMs > STALE_QUOTA_AGE_MS
+        ? `${countdown} · ${formatUpdatedAge(model.fetchedAtMs, now)}`
+        : countdown;
     }
-    const ageMinutes = Math.max(0, Math.round((now - model.fetchedAtMs) / 60_000));
-    return ageMinutes < 1 ? "updated just now" : `updated ${ageMinutes}m ago`;
+    return formatUpdatedAge(model.fetchedAtMs, now);
   }
   if (binding === null || binding.resetAtMs === null) {
     return "";

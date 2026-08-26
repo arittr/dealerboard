@@ -319,6 +319,22 @@ body[data-fullscreen] #board {
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
+/* The working card's silence gap ("· 48s"), dim beside the bright timer; the
+   liveness ticker fills it once the edge starts fading and empties it when
+   the quiet label takes over. */
+.cardgap {
+  color: #7c8ba1;
+  font-size: 0.859vw; /* 22px native */
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.cardgap:empty {
+  display: none;
+}
+.cardgap::before {
+  content: "· ";
+  opacity: 0.55;
+}
 
 /* Provider chip (locked hues below). */
 .chip {
@@ -424,6 +440,9 @@ body[data-fullscreen] #board {
   color: #94a3b8;
   font-size: 0.938vw; /* 24px native */
   font-weight: 600;
+}
+.card.sub .cardgap {
+  font-size: 0.781vw; /* 20px native */
 }
 .card.sub .status-dot {
   width: 0.43vw; /* 11px native */

@@ -48,6 +48,7 @@ describe("livenessFrame", () => {
       edgeColor: "rgb(32 184 255 / 0.55)",
       dotColor: "rgb(32 184 255 / 0.55)",
       quietLabel: null,
+      gapLabel: "30s",
     });
     const sub = livenessFrame(at(30_000), true, NOW);
     expect(sub.edgeColor).toBe("rgb(32 184 255 / 0.275)");
@@ -60,13 +61,22 @@ describe("livenessFrame", () => {
       edgeColor: null,
       dotColor: null,
       quietLabel: "quiet 12m",
+      gapLabel: null,
     });
   });
 
   test("a null or unparseable stamp paints nothing (old-daemon fallback)", () => {
-    const empty = { quiet: false, edgeColor: null, dotColor: null, quietLabel: null };
+    const empty = { quiet: false, edgeColor: null, dotColor: null, quietLabel: null, gapLabel: null };
     expect(livenessFrame(null, false, NOW)).toEqual(empty);
     expect(livenessFrame("not-a-date", false, NOW)).toEqual(empty);
+  });
+
+  test("the corner gap appears at the 30s fade threshold and hands off to quiet", () => {
+    expect(livenessFrame(at(8000), false, NOW).gapLabel).toBeNull();
+    expect(livenessFrame(at(29_999), false, NOW).gapLabel).toBeNull();
+    expect(livenessFrame(at(48_000), false, NOW).gapLabel).toBe("48s");
+    expect(livenessFrame(at(4 * 60_000), false, NOW).gapLabel).toBe("4m");
+    expect(livenessFrame(at(12 * 60_000), false, NOW).gapLabel).toBeNull();
   });
 });
 

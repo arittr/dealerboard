@@ -10,7 +10,7 @@
 
 - `bun test` — run the test suite.
 - `bun run typecheck` — type-check without emitting.
-- `bun run build` — typecheck, compile the core daemon (`dist/dealerboard`), and bundle the plugin (`com.drewritter.stream-deck-agents.sdPlugin/bin/plugin.js` via rollup).
+- `bun run build` — typecheck, compile the core daemon (`dist/dealerboard`), and bundle the plugin (`com.drewritter.dealerboard.sdPlugin/bin/plugin.js` via rollup).
 - `bun run build:plugin` — plugin bundle only (deprecated integration — see
   "Deploying changes locally"; the bundle keeps building but is never
   deployed).
@@ -50,12 +50,12 @@ build being installed.
 installed on this machine, `install-local.ts` neither packages nor installs
 the plugin, and nothing launches or restarts it. The plugin source
 (`src/plugin/`), its bundle directory
-(`com.drewritter.stream-deck-agents.sdPlugin/`), and its tests stay in the
+(`com.drewritter.dealerboard.sdPlugin/`), and its tests stay in the
 repo and must keep passing `bun run check` — but do NOT deploy plugin
 changes, bump the manifest `Version`, or run `bun run pack:plugin` as part
 of any workflow. To revive the integration: the Stream Deck app runs an
 installed copy at `~/Library/Application
-Support/com.elgato.StreamDeck/Plugins/com.drewritter.stream-deck-agents.sdPlugin`
+Support/com.elgato.StreamDeck/Plugins/com.drewritter.dealerboard.sdPlugin`
 (not the repo's `.sdPlugin` directory), accepts updates only when the
 manifest `Version` is bumped, and `bun run pack:plugin` still produces the
 installable package.
