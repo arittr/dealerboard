@@ -57,7 +57,7 @@ const oneRecordFs = (): Record<string, string[]> => ({
 });
 
 describe("createPaseoAgentStateLoader", () => {
-  test("joins on persistence.sessionId and maps attention and parentage", () => {
+  test("joins on the current session ID and maps attention and parentage", () => {
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
@@ -75,8 +75,44 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
+  });
+
+  test("parses lastStatus for the registry's settle repair, dropping unknown values", () => {
+    const path = join(AGENTS_DIR, "work/agent-1.json");
+    const { loader, fs } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [path]: { mtimeMs: 100, size: 500 } },
+      files: { [path]: agentRecord({ lastStatus: "idle" }) },
+    });
+    expect(loader(AGENTS_DIR)[0]?.lastStatus).toBe("idle");
+
+    // A value outside Paseo's lifecycle vocabulary is no settle evidence.
+    fs.stats.set(path, { mtimeMs: 101, size: 501 });
+    fs.files.set(path, agentRecord({ lastStatus: "haywire" }));
+    expect(loader(AGENTS_DIR)[0]?.lastStatus).toBeNull();
+
+    // Records predating the field parse as unreported.
+    fs.stats.set(path, { mtimeMs: 102, size: 502 });
+    fs.files.set(path, agentRecord());
+    expect(loader(AGENTS_DIR)[0]?.lastStatus).toBeNull();
+  });
+
+  test("prefers the current runtime session when it differs from the persisted session", () => {
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: {
+        [join(AGENTS_DIR, "work/agent-1.json")]: agentRecord({
+          persistence: { sessionId: "session_old" },
+          runtimeInfo: { sessionId: "session_current" },
+        }),
+      },
+    });
+
+    expect(loader(AGENTS_DIR)[0]?.sessionId).toBe("session_current");
   });
 
   test("parses attentionTimestamp and updatedAt for the registry watermark", () => {
@@ -101,6 +137,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: "2026-08-06T00:12:00.000Z",
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -134,11 +171,12 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
 
-  test("falls back to runtimeInfo.sessionId and flags subagents from parentAgentId", () => {
+  test("uses runtimeInfo.sessionId when persistence is absent and flags subagents from parentAgentId", () => {
     const content = agentRecord({
       id: "agent-2",
       persistence: undefined,
@@ -164,6 +202,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -193,6 +232,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -216,6 +256,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -242,6 +283,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: "2026-08-06T00:12:00.000Z",
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -265,6 +307,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -311,6 +354,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -364,6 +408,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: null,
+        lastStatus: null,
       },
     ]);
   });
@@ -410,6 +455,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: "my full title from runtimeInfo",
+        lastStatus: null,
       },
     ]);
   });
@@ -439,6 +485,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: "title from persistence metadata",
+        lastStatus: null,
       },
     ]);
   });
@@ -466,6 +513,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: "top-level truncated title",
+        lastStatus: null,
       },
     ]);
   });
@@ -515,6 +563,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: "a".repeat(256),
+        lastStatus: null,
       },
     ]);
   });
@@ -547,6 +596,7 @@ describe("createPaseoAgentStateLoader", () => {
         updatedAt: null,
         archivedAt: null,
         title: "runtime title",
+        lastStatus: null,
       },
     ]);
   });

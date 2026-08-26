@@ -16,6 +16,23 @@ export const QUOTA_HISTORY_LIMIT = 128;
 /** Per-provider cap on published extra rate windows. */
 export const QUOTA_EXTRA_WINDOWS_LIMIT = 8;
 
+/** Maximum number of privacy-safe claude-swap account rows in a snapshot. */
+export const QUOTA_ACCOUNTS_LIMIT = 8;
+
+/** Maximum label length for extra rate windows, measured in Unicode code points. */
+export const QUOTA_EXTRA_WINDOW_LABEL_MAX_CODE_POINTS = 14;
+
+export const capQuotaExtraWindowLabel = (label: string): string => {
+  const codePoints = [...label];
+  if (codePoints.length <= QUOTA_EXTRA_WINDOW_LABEL_MAX_CODE_POINTS) {
+    return label;
+  }
+  return `${codePoints
+    .slice(0, QUOTA_EXTRA_WINDOW_LABEL_MAX_CODE_POINTS - 1)
+    .join("")
+    .trimEnd()}…`;
+};
+
 export const QUOTA_PROVIDER_KEYS = ["claude", "codex", "kimi", "zai", "qwen"] as const;
 
 export type QuotaProviderKey = (typeof QUOTA_PROVIDER_KEYS)[number];
@@ -38,6 +55,19 @@ export type QuotaExtraWindow = {
   resetAt: string | null;
 };
 
+export type ProviderQuotaAccount = {
+  id: string;
+  label: string;
+  active: boolean;
+  percentRemaining: number | null;
+  resetAt: string | null;
+  weeklyPercentRemaining: number | null;
+  weeklyResetAt: string | null;
+  unavailable: boolean;
+  fetchedAt: string | null;
+  extraWindows: QuotaExtraWindow[];
+};
+
 export type ProviderQuota = {
   /** Session (5-hour) window percent remaining, 0..100; null when no fetch has succeeded. */
   percentRemaining: number | null;
@@ -55,6 +85,8 @@ export type ProviderQuota = {
   history: QuotaHistoryPoint[];
   /** Extra rate windows not selected as session/weekly, in CodexBar order; empty for v1 input. */
   extraWindows: QuotaExtraWindow[];
+  /** Privacy-safe claude-swap account rows; empty when the field is absent. */
+  accounts: ProviderQuotaAccount[];
 };
 
 export type QuotaSnapshot = {
@@ -134,6 +166,72 @@ const parseExtraWindows = (value: unknown): QuotaExtraWindow[] => {
   return value.map(parseExtraWindow);
 };
 
+const parseProviderQuotaAccount = (value: unknown): ProviderQuotaAccount => {
+  if (!isRecord(value)) {
+    return invalid("provider account must be an object");
+  }
+  if (typeof value["label"] !== "string") {
+    return invalid("provider account label must be a decimal slot");
+  }
+  const slot = Number(value["label"]);
+  if (!Number.isSafeInteger(slot) || slot <= 0 || String(slot) !== value["label"]) {
+    return invalid("provider account label must be a decimal slot");
+  }
+  if (value["id"] !== `claude-swap:${value["label"]}`) {
+    return invalid("provider account id must match its claude-swap slot");
+  }
+  if (typeof value["active"] !== "boolean") {
+    return invalid("provider account active must be a boolean");
+  }
+  if (!isNullablePercent(value["percentRemaining"])) {
+    return invalid("provider account percentRemaining must be null or a 0..100 number");
+  }
+  if (!isNullableIsoInstant(value["resetAt"])) {
+    return invalid("provider account resetAt must be null or an ISO instant");
+  }
+  if (!isNullablePercent(value["weeklyPercentRemaining"])) {
+    return invalid("provider account weeklyPercentRemaining must be null or a 0..100 number");
+  }
+  if (!isNullableIsoInstant(value["weeklyResetAt"])) {
+    return invalid("provider account weeklyResetAt must be null or an ISO instant");
+  }
+  if (typeof value["unavailable"] !== "boolean") {
+    return invalid("provider account unavailable must be a boolean");
+  }
+  if (!isNullableIsoInstant(value["fetchedAt"])) {
+    return invalid("provider account fetchedAt must be null or an ISO instant");
+  }
+  return {
+    id: value["id"] as string,
+    label: value["label"],
+    active: value["active"],
+    percentRemaining: value["percentRemaining"],
+    resetAt: value["resetAt"],
+    weeklyPercentRemaining: value["weeklyPercentRemaining"],
+    weeklyResetAt: value["weeklyResetAt"],
+    unavailable: value["unavailable"],
+    fetchedAt: value["fetchedAt"],
+    extraWindows: parseExtraWindows(value["extraWindows"]),
+  };
+};
+
+const parseProviderQuotaAccounts = (value: unknown): ProviderQuotaAccount[] => {
+  if (!Array.isArray(value) || value.length > QUOTA_ACCOUNTS_LIMIT) {
+    return invalid(`accounts must be an array of at most ${QUOTA_ACCOUNTS_LIMIT} rows`);
+  }
+  const accounts = value.map(parseProviderQuotaAccount);
+  if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {
+    return invalid("account ids must be unique");
+  }
+  if (new Set(accounts.map((account) => account.label)).size !== accounts.length) {
+    return invalid("account labels must be unique");
+  }
+  if (accounts.filter((account) => account.active).length > 1) {
+    return invalid("at most one account may be active");
+  }
+  return accounts;
+};
+
 const parseProviderQuota = (value: unknown, legacy: boolean): ProviderQuota => {
   if (!isRecord(value)) {
     return invalid("provider quota must be an object");
@@ -168,6 +266,7 @@ const parseProviderQuota = (value: unknown, legacy: boolean): ProviderQuota => {
     fetchedAt: value["fetchedAt"],
     history: value["history"].map(parseHistoryPoint),
     extraWindows: legacy ? [] : parseExtraWindows(value["extraWindows"]),
+    accounts: value["accounts"] === undefined ? [] : parseProviderQuotaAccounts(value["accounts"]),
   };
 };
 

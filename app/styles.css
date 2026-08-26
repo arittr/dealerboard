@@ -36,6 +36,12 @@ body {
   padding: 6.111vh 0 0 0.625vw; /* 44px top clears the menu bar overlay, 16px left */
   min-width: 0;
 }
+/* Native fullscreen (window.ts mirrors it as body[data-fullscreen]) draws no
+   menu-bar overlay: the 44px dodge gives way to centering — six 102px rows
+   and five 12px gaps total 672px, leaving 24px above and below. */
+body[data-fullscreen] #board {
+  padding-top: 3.333vh; /* 24px native */
+}
 .offline {
   color: #94a3b8;
   font-size: 1.4vw;
@@ -366,6 +372,9 @@ body {
 .chip[data-provider="qwen"] {
   background: #ef4444;
 }
+.chip[data-provider="evener"] {
+  background: #a3e635;
+}
 
 .unread-dot {
   /* d6's chip-corner badge: -6px offsets, 18px disc, 3px card-colored ring. */
@@ -454,6 +463,10 @@ body {
   padding: 6.111vh 3.5% 2.222vh;
   color: #94a3b8;
   font-size: 1.3vw;
+}
+/* Fullscreen: match the board's centered top edge (see the #board note). */
+body[data-fullscreen] #rail {
+  padding-top: 3.333vh;
 }
 .dot {
   width: 0.5vw;
@@ -559,6 +572,57 @@ body {
 .rail-quota[data-state="unavailable"] {
   opacity: 0.45;
 }
+.quota-group {
+  gap: 1.389vh; /* 10px native */
+}
+.quota-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.972vh; /* 7px native */
+}
+.quota-provider-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+  font-size: 1.2vw;
+}
+.quota-account-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1.667vh; /* 12px native */
+  padding-left: 0.469vw; /* 12px native */
+}
+.quota-account-stack::before {
+  position: absolute;
+  top: 0.278vh;
+  bottom: 0.278vh;
+  left: 0;
+  width: max(1px, 0.078vw); /* 2px native */
+  border-radius: 0.139vh;
+  background: rgb(217 119 87 / 0.55);
+  content: "";
+}
+.quota-account {
+  display: flex;
+  flex-direction: column;
+}
+.quota-account-marker {
+  flex: none;
+  width: 0.42vw;
+  height: 0.42vw;
+  border-radius: 50%;
+  background: transparent;
+}
+.quota-account-active {
+  background: #d97757;
+}
+.quota-account-label {
+  flex: none;
+  min-width: 0.8vw;
+  color: #e8eef7;
+  font-variant-numeric: tabular-nums;
+}
 .quota-head {
   display: flex;
   align-items: center;
@@ -615,6 +679,12 @@ body {
 .quota-bar-fill {
   height: 100%;
   border-radius: inherit;
+}
+.quota-account[data-state="stale"] .quota-right,
+.quota-account[data-state="stale"] .quota-bar,
+.quota-account[data-state="unavailable"] .quota-right,
+.quota-account[data-state="unavailable"] .quota-bar {
+  opacity: 0.45;
 }
 /* A neutral tick per non-binding window at its own percent. */
 .quota-tick {

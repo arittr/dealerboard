@@ -29,6 +29,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { Provider, RegistryEvent, SessionStatus } from "../protocol";
+import type { PaseoAgentStatus } from "./paseo";
 
 export type MutationResult = "applied" | "ignored";
 
@@ -336,6 +337,24 @@ const applySessionTitleChanged = (
   return result.changes > 0 ? "applied" : "ignored";
 };
 
+/**
+ * Reconcile an authoritative external snapshot without manufacturing a new
+ * result. Live terminal events own unread_since; hydration and reconnect only
+ * repair the current status while preserving that ledger.
+ */
+const applySessionStatusObserved = (
+  db: Database,
+  event: Extract<RegistryEvent, { kind: "SessionStatusObserved" }>,
+): MutationResult => {
+  const result = db.run(
+    `UPDATE active_sessions
+     SET status = ?, status_since = ?, updated_at = ?
+     WHERE provider = ? AND session_id = ? AND status IS NOT ?`,
+    [event.status, event.observedAt, event.observedAt, event.provider, event.sessionId, event.status],
+  );
+  return result.changes > 0 ? "applied" : "ignored";
+};
+
 const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: "SubagentStart" }>): MutationResult => {
   if (!isValidProspectiveParent(db, event.provider, event.sessionId, event.parentSessionId)) {
     return "ignored";
@@ -481,6 +500,8 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
       return applySessionTitleChanged(db, event);
     case "SubagentStart":
       return applySubagentStart(db, event);
+    case "SessionStatusObserved":
+      return applySessionStatusObserved(db, event);
     case "Activity":
       return applyStatusUpdate(db, event, "working");
     case "Attention":
@@ -498,6 +519,7 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
     case "SubagentStop":
       return applySubagentStop(db, event);
   }
+  return "ignored";
 };
 
 /**
@@ -665,6 +687,8 @@ export type PaseoSyncState = {
   archivedAt: string | null;
   /** Title from Paseo's agent record, or null when absent. */
   title: string | null;
+  /** Paseo's persisted lifecycle (`lastStatus`), or null when unreported or unrecognized. */
+  lastStatus: PaseoAgentStatus | null;
 };
 
 /**
@@ -689,6 +713,22 @@ export type PaseoSyncState = {
  *   its attention flag is still up — archiving is the user's terminal
  *   gesture on an agent — with the later of `archivedAt` and `updatedAt` as
  *   the proof-of-viewing time under the same freshness guard.
+ * - A settled record (`lastStatus` idle or closed — no turn can be in
+ *   flight) whose `updatedAt` is strictly newer than the row's last hook
+ *   retires a stuck working or waiting row to idle: its turn-end hook was
+ *   missed (interrupt, host sleep, daemon swap) and Paseo's record is the
+ *   newer witness. Error rows keep their failure visible. `status_since`
+ *   adopts the record's settle time; unread stays the attention mirror's
+ *   business.
+ * - A background-armed row normally outlives its Stop on purpose — the
+ *   shell still acts on the session's behalf, exactly as in applyStop. But
+ *   the disarming edge (TaskStop) can be lost the same way the turn-end
+ *   can, so a settled record may override the claim once the row's last
+ *   hook is older than `backgroundSettleCutoffIso`: the completion is
+ *   presumed lost, the row retires, and the flag disarms so a later Stop
+ *   cannot re-stick it. Real background work that completes after the
+ *   retirement still wakes a turn whose hooks re-raise working. Callers
+ *   that pass no cutoff never settle background-armed rows.
  *
  * Origin stamping (kind/ref/subagent) (and now `origin_parent_ref`) stays
  * unconditional for matched top-level rows. A difference-guard in the WHERE
@@ -700,18 +740,26 @@ export type PaseoSyncState = {
  * any other top-level row still holding the ref was abandoned by
  * provider-session rotation (its SessionEnd was missed), and the duplicate
  * would make the projection roll-up drop the ref as ambiguous. Each pass
- * clears exactly the origin stamps on such rows — the row itself, its
- * ledger, status, timers, slot, and prune lease stay untouched. The cleanup
- * runs only for a ref whose pass carries exactly one joined provider
- * session: records contradicting each other about an agent's current
- * session are ambiguous evidence, and picking a winner could strip a
+ * retires such rows to idle and clears any stale background-work marker while
+ * preserving their ledger, titles, models, slots, and prune lease. A known
+ * `updatedAt` restamps `status_since` for the retirement; `updated_at` remains
+ * untouched. The cleanup runs only for a ref whose pass carries exactly one
+ * joined provider session: records contradicting each other about an agent's
+ * current session are ambiguous evidence, and picking a winner could strip a
  * still-valid row's routing.
  */
 /** The later of two canonical ISO-8601 UTC instants (lexical order is chronological); null when both are absent. */
 const laterInstant = (a: string | null, b: string | null): string | null =>
   a === null ? b : b === null ? a : a > b ? a : b;
 
-export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
+/** Paseo lifecycle values with no turn in flight: proof a working row's turn-end was missed. */
+const SETTLED_PASEO_STATUSES: ReadonlySet<PaseoAgentStatus> = new Set(["idle", "closed"]);
+
+export const syncPaseoStates = (
+  db: Database,
+  states: readonly PaseoSyncState[],
+  backgroundSettleCutoffIso: string | null = null,
+): number =>
   inWriteTransaction(db, () => {
     let changed = 0;
     // The joined provider sessions each ref claims in this pass: rotation
@@ -800,16 +848,45 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
         );
         changed += result.changes;
       }
+      // A settled record strictly newer than the row's last hook repairs a
+      // missed turn-end: retire working/waiting to idle with the record's
+      // settle time as status_since. updated_at (the prune lease) stays put
+      // like every other maintenance write, and the strict comparison keeps
+      // a record written before the row's newest hook from undoing a turn
+      // that genuinely started since. A background-armed row holds out until
+      // its last hook predates the caller's cutoff — then the lost TaskStop
+      // is presumed and the flag disarms with the retirement.
+      if (state.lastStatus !== null && SETTLED_PASEO_STATUSES.has(state.lastStatus) && state.updatedAt !== null) {
+        const settled = db.run(
+          `UPDATE active_sessions
+           SET status = 'idle', status_since = ?, background_outstanding = 0
+           WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+             AND status IN ('working', 'waiting')
+             AND ? > updated_at
+             AND (background_outstanding = 0 OR (? IS NOT NULL AND updated_at < ?))`,
+          [
+            state.updatedAt,
+            state.provider,
+            state.sessionId,
+            state.updatedAt,
+            backgroundSettleCutoffIso,
+            backgroundSettleCutoffIso,
+          ],
+        );
+        changed += settled.changes;
+      }
       // Un-stamp rows abandoned by provider-session rotation: every match
       // carries the stamp being cleared, so the WHERE is its own difference
       // guard, and updated_at (the prune lease) stays put.
       if (joinedByRef.get(state.agentId)?.size === 1) {
         const abandoned = db.run(
           `UPDATE active_sessions
-           SET origin_kind = NULL, origin_ref = NULL, origin_subagent = 0, origin_parent_ref = NULL
+           SET origin_kind = NULL, origin_ref = NULL, origin_subagent = 0, origin_parent_ref = NULL,
+               status = 'idle', background_outstanding = 0,
+               status_since = CASE WHEN status IS NOT 'idle' AND ? IS NOT NULL THEN ? ELSE status_since END
            WHERE origin_kind = 'paseo' AND origin_ref = ? AND parent_session_id IS NULL
              AND NOT (provider = ? AND session_id = ?)`,
-          [state.agentId, state.provider, state.sessionId],
+          [state.updatedAt, state.updatedAt, state.agentId, state.provider, state.sessionId],
         );
         changed += abandoned.changes;
       }

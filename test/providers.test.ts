@@ -6,7 +6,7 @@ const NOW = "2026-08-06T00:00:00.000Z";
 
 const decode = (
   value: unknown,
-  provider: "claude" | "codex" | "kimi" | "pi" | "omp" | "zcode" | "deepseek" | "grok" | "qwen" = "claude",
+  provider: "claude" | "codex" | "kimi" | "pi" | "omp" | "zcode" | "deepseek" | "grok" | "qwen" | "evener" = "claude",
 ): RegistryEvent[] => decodeNativeHook(provider, value, NOW);
 
 describe("field extraction", () => {

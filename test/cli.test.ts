@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { ClaudeGhosttyBindingContext } from "../src/core/claude-ghostty-binding";
 import { type CliDependencies, MAX_STDIN_BYTES, runCli } from "../src/core/cli";
 import { createFileDiagnostics, type DiagnosticRecord } from "../src/core/diagnostics";
+import type { EvenerCollector } from "../src/core/evener";
 import { type AppPaths, resolveAppPaths } from "../src/core/paths";
 import { readProjection } from "../src/core/projection";
 import type { QuotaCollector } from "../src/core/quota";
@@ -117,14 +118,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 12 database and stays silent on stdout", async () => {
+  test("creates a version 13 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 12 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 13 });
     } finally {
       db.close();
     }
@@ -715,21 +716,24 @@ describe("event ingress", () => {
     expect(pulled).toBe(false);
   });
 
-  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const)("event %s is accepted", async (provider) => {
-    initRegistry();
-    const harness = makeHarness({
-      stdin: stdinOf(JSON.stringify({ hook_event_name: "Stop", session_id: `${provider}-1` })),
-    });
+  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen", "evener"] as const)(
+    "event %s is accepted",
+    async (provider) => {
+      initRegistry();
+      const harness = makeHarness({
+        stdin: stdinOf(JSON.stringify({ hook_event_name: "Stop", session_id: `${provider}-1` })),
+      });
 
-    expect(await runCli(["event", provider], harness.deps)).toBe(0);
-    expect(harness.diagnostics).toEqual([]);
-  });
+      expect(await runCli(["event", provider], harness.deps)).toBe(0);
+      expect(harness.diagnostics).toEqual([]);
+    },
+  );
 
   test("usage lists every provider key", async () => {
     const harness = makeHarness();
 
     expect(await runCli(["bogus-command"], harness.deps)).toBe(1);
-    expect(harness.stderr()).toContain("event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen>");
+    expect(harness.stderr()).toContain("event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen|evener>");
   });
 
   test("returns zero for extra event arguments", async () => {
@@ -1225,7 +1229,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 12");
+      restore.exec("PRAGMA user_version = 13");
     } finally {
       restore.close();
     }
@@ -1307,6 +1311,57 @@ const tokenCollectorStub = (overrides: Partial<TokenUsageCollector> = {}): Token
   stop: () => {},
   pollNow: () => Promise.resolve(),
   ...overrides,
+});
+
+const evenerCollectorStub = (overrides: Partial<EvenerCollector> = {}): EvenerCollector => ({
+  start: () => {},
+  stop: () => {},
+  ...overrides,
+});
+
+describe("daemon Evener collector boundary", () => {
+  const stillRunning = (ms: number): Promise<string> =>
+    new Promise((resolve) => setTimeout(() => resolve("still running"), ms));
+
+  test("starts after publication and applies AppWire updates through the registry", async () => {
+    initRegistry();
+    let snapshotExistedAtStart = false;
+    let resolvedConnection = false;
+    const harness = makeHarness({
+      createEvenerCollector: (options) =>
+        evenerCollectorStub({
+          start: () => {
+            snapshotExistedAtStart = existsSync(paths.snapshot);
+            resolvedConnection = options.connection()?.url === "ws://127.0.0.1:9180/rpc";
+            options.onUpdate({
+              events: [
+                {
+                  kind: "SessionObserved",
+                  provider: "evener",
+                  sessionId: "evener-1",
+                  title: "Evener session",
+                  project: "project",
+                  transcriptPath: null,
+                  model: "gpt-5.6-sol",
+                  observedAt: NOW,
+                },
+              ],
+            });
+          },
+        }),
+      resolveEvenerHubConnection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "test-only" }),
+      createQuotaCollector: () => collectorStub(),
+      createTokenUsageCollector: () => tokenCollectorStub(),
+    });
+
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(snapshotExistedAtStart).toBe(true);
+    expect(resolvedConnection).toBe(true);
+    expect(listRows()).toContainEqual(
+      expect.objectContaining({ provider: "evener", sessionId: "evener-1", model: "gpt-5.6-sol" }),
+    );
+  });
 });
 
 describe("daemon quota collector boundary", () => {

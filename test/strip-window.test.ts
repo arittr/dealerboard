@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { logicalPinFrame, stripWindowNeedsPin } from "../app/src/window";
+import { applyFullscreenLayout, logicalPinFrame, stripWindowNeedsPin } from "../app/src/window";
 
 const strip = { position: { x: 1280, y: 0 }, size: { width: 2560, height: 720 } };
 
@@ -11,6 +11,25 @@ describe("stripWindowNeedsPin", () => {
   test("re-pins windowed geometry drift and leaves an exact match alone", () => {
     expect(stripWindowNeedsPin(false, { x: 0, y: 0 }, { width: 1280, height: 360 }, strip)).toBe(true);
     expect(stripWindowNeedsPin(false, strip.position, strip.size, strip)).toBe(false);
+  });
+});
+
+describe("applyFullscreenLayout", () => {
+  test("fullscreen sets the body flag and windowed clears it", () => {
+    const body = { dataset: {} as Record<string, string | undefined> };
+    applyFullscreenLayout(body, true);
+    expect(body.dataset["fullscreen"]).toBe("true");
+    applyFullscreenLayout(body, false);
+    expect("fullscreen" in body.dataset).toBe(false);
+  });
+
+  test("an unknown state keeps the last applied layout instead of flapping", () => {
+    const body = { dataset: {} as Record<string, string | undefined> };
+    applyFullscreenLayout(body, null);
+    expect("fullscreen" in body.dataset).toBe(false);
+    applyFullscreenLayout(body, true);
+    applyFullscreenLayout(body, null);
+    expect(body.dataset["fullscreen"]).toBe("true");
   });
 });
 

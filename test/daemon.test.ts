@@ -257,7 +257,7 @@ describe("ProjectionDaemon", () => {
 
     // Projection error: a child row with a missing parent (inserted with
     // foreign-key enforcement off) fails the defensive topology checks.
-    setUserVersion(12);
+    setUserVersion(13);
     startSession("parent");
     const raw = new Database(paths.database);
     try {
@@ -582,6 +582,7 @@ describe("ProjectionDaemon maintenance", () => {
                 updatedAt: null,
                 archivedAt: null,
                 title: null,
+                lastStatus: null,
               },
             ])
           : 0,

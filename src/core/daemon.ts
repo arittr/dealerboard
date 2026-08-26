@@ -60,6 +60,13 @@ export const STALE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 export const ZCODE_STALE_SESSION_TTL_MS = 60 * 60 * 1000;
 /** A poll gap this large means the host slept or the clock jumped. */
 export const CLOCK_JUMP_MS = 30_000;
+/**
+ * A settled Paseo record may override a row's background-work claim once the
+ * row's last hook is this old: the disarming TaskStop is presumed lost (host
+ * sleep eats hooks), and genuine background work that completes later still
+ * wakes a turn whose hooks re-raise working.
+ */
+export const PASEO_BACKGROUND_SETTLE_GRACE_MS = 10 * 60 * 1000;
 
 const DIAGNOSTIC_COMPONENT = "daemon";
 

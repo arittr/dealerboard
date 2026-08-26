@@ -64,10 +64,10 @@ There is no visible status word or status glyph. A session whose current state i
 
 Each tile also has:
 
-- A provider-colored chip in the upper-left with the provider's one-letter mark in dark text: terracotta `#D97757` C for Claude, fuchsia `#D946EF` X for Codex, blue `#3B82F6` K for Kimi, green `#0EA514` P for pi, cream `#F5F0EA` O for oh-my-pi, gold `#EAB308` Z for zcode, teal `#2DD4BF` D for deepseek, pink `#F472B6` G for grok, and red `#EF4444` Q for Qwen. Hues are chosen for mutual distinctness on the LCD panel, not brand fidelity.
-- The session's model id as small neutral-chrome text right of the provider chip, when known: vendor prefix stripped (`claude-fable-5` shows as `fable-5`, `grok-4.6` as `4.6`), capped at ten code points with an ellipsis. Kimi pushes its model in SessionStart hooks (a titleless start registers too — see the membership rule below — so fresh sessions get their model); pi pushes it through its shim's `session_start`; Qwen pushes it in its SessionStart hook. The daemon resolves Claude and Codex models from transcript/rollout tails (last occurrence wins, so mid-session model switches register). The daemon resolves grok's model (and title) from the session's `summary.json`. omp, zcode, and deepseek have no model source — their tiles show the chip alone.
+- A provider-colored chip in the upper-left with the provider's one-letter mark in dark text: terracotta `#D97757` C for Claude, fuchsia `#D946EF` X for Codex, blue `#3B82F6` K for Kimi, green `#0EA514` P for pi, cream `#F5F0EA` O for oh-my-pi, gold `#EAB308` Z for zcode, teal `#2DD4BF` D for deepseek, pink `#F472B6` G for grok, red `#EF4444` Q for Qwen, and lime `#A3E635` E for Evener. Hues are chosen for mutual distinctness on the LCD panel, not brand fidelity.
+- The session's model id as small neutral-chrome text right of the provider chip, when known: vendor prefix stripped (`claude-fable-5` shows as `fable-5`, `grok-4.6` as `4.6`), capped at ten code points with an ellipsis. Kimi pushes its model in SessionStart hooks (a titleless start registers too — see the membership rule below — so fresh sessions get their model); pi pushes it through its shim's `session_start`; Qwen pushes it in its SessionStart hook. Evener publishes its current model through AppWire snapshots and `thread/model/changed`. The daemon resolves Claude and Codex models from transcript/rollout tails (last occurrence wins, so mid-session model switches register), and resolves grok's model (and title) from `summary.json`. omp, zcode, and deepseek have no model source — their tiles show the chip alone.
 - An origin pip in the free bottom-right corner for Paseo-origin sessions: a filled violet `#A78BFA` disc (center 122,122, radius 9) for a Paseo parent session and a hollow violet ring (stroke width 3) for a Paseo subagent. Terminal-origin and origin-unknown sessions render no pip. Pressing a Paseo-origin tile with a known agent reference routes to the Paseo app deep link `paseo://h/<serverId>/agent/<agentId>` instead of the provider's own activation; a null reference falls back to provider routing. Provider routing is otherwise unchanged: Claude tiles focus their Ghostty terminal, Codex tiles open `codex://threads/<thread>`, and Kimi tiles open the Web session at the fixed local origin.
-- A two-line session title. Kimi pushes `session_title` through its hooks; the daemon resolves Claude titles from the transcript's `ai-title` records and Codex titles from `~/.codex/session_index.jsonl`'s `thread_name`, writing them back to the registry. Grok titles come from the same `summary.json` pull. Title text is word-wrapped into two twelve-code-point lines; a word longer than a line hard-splits, and text that outlives the second line ends in an ellipsis.
+- A two-line session title. Kimi pushes `session_title` through its hooks; Evener publishes generated and user-renamed titles through AppWire snapshots and `evener/thread/name/changed`; the daemon resolves Claude titles from the transcript's `ai-title` records and Codex titles from `~/.codex/session_index.jsonl`'s `thread_name`, writing them back to the registry. Grok titles come from the same `summary.json` pull. Title text is word-wrapped into two twelve-code-point lines; a word longer than a line hard-splits, and text that outlives the second line ends in an ellipsis.
 - Repository or worktree name as the first fallback while no title is known.
 - Provider plus shortened session identifier as the final fallback.
 
@@ -97,7 +97,14 @@ off the grid until its next Activity or unread output.
 
 Source health and session membership are separate. A source outage may preserve its last confirmed membership only for a bounded, provider-specific lease. The session disappears when that lease expires. As implemented, the lease is uniform: the daemon prunes any top-level session whose last hook is older than 24 hours, and a still-live session pruned by mistake reappears at its next prompt (every provider late-joins on `UserPromptSubmit`). The daemon also rewrites the snapshot every five seconds as a heartbeat; the plugin treats a file older than ten seconds as a dead daemon and degrades instead of rendering stale tiles as live.
 
-Membership is also attention-scoped: a tile exists if and only if the session is active (working, waiting, or error) or unread — idle with an unviewed result. One refinement: an idle Paseo subagent (hollow-ring origin) with no active descendant is never admitted, even when unread — a finished subagent's result is consumed by the orchestrating parent agent, not by the user pressing tiles, so completed subagent runs never pile up on the grid. Active subagents still show with their ring. Unread is a per-session ledger (`unread_since`, added in schema v7; the current schema is v11 — v8 repaired pre-merge v7 databases missing the `model` column, v9 added the `acked_at` ack watermark, v10 widened the provider CHECK for grok, and v11 added `status_since`, `origin_parent_ref`, and `activity_line` for the strip's data surface). A turn ending — a Stop that settles to idle, or StopFailure — stamps it, because a result landed; only an explicit view clears it: a tile press acks through the daemon (`sessions ack`, the plugin's sole write path), the Paseo overlay reports the agent viewed in Paseo, or a `SessionStart` reuses the session. The ack is timestamped in `acked_at`, so a Paseo attention flag raised before the view can never resurrect the tile afterwards. Prompting again does not mark the earlier result read. A read-and-idle row persists in the registry — subject to the ordinary prune — and is not projected onto the grid (so on the grid idle implies unread), with one exception: a Paseo ancestor stays projected with its effective status lifted while any Paseo descendant is active, its stored status and unread ledger untouched (the lineage rule in the strip section below). No separate dismiss action exists: viewing the result retires the tile.
+Evener is the inventory-backed exception to hook ingress. The daemon connects to the local Evener hub's authenticated AppWire v3 `/rpc` endpoint, lists the `local` source, hydrates and subscribes to every root and live subagent, and refreshes the inventory every two seconds so newly launched sessions are discovered. Disconnects retry every five seconds; hydration repairs status without manufacturing unread results, while ordered live `turn/completed` events own the unread transition. AppWire `active`, `awaiting`, and `warning`/`systemError` map to working, waiting, and error respectively. List omission is not deletion because one failing hub source can make a list partial; an explicit `thread/closed` removes the row, and the ordinary 24-hour prune remains the missed-close backstop.
+The client address comes from `EVENER_HUB_ADDR`, durable `hub.toml`, or the
+standard loopback default. Evener does not publish a process-local `hub
+--addr` override; a custom flag must therefore be mirrored in `hub.toml` or in
+the LaunchAgent environment rather than guessed or recovered from process
+inspection.
+
+Membership is also attention-scoped: a tile exists if and only if the session is active (working, waiting, or error) or unread — idle with an unviewed result. One refinement: an idle Paseo subagent (hollow-ring origin) with no active descendant is never admitted, even when unread — a finished subagent's result is consumed by the orchestrating parent agent, not by the user pressing tiles, so completed subagent runs never pile up on the grid. Active subagents still show with their ring. Unread is a per-session ledger (`unread_since`, added in schema v7; the current schema is v13 — v8 repaired pre-merge v7 databases missing the `model` column, v9 added the `acked_at` ack watermark, v10 widened the provider CHECK for grok, v11 added `status_since`, `origin_parent_ref`, and `activity_line` for the strip's data surface, v12 widened the provider CHECK for Qwen, and v13 widens it for Evener). A turn ending — a Stop that settles to idle, or StopFailure — stamps it, because a result landed; only an explicit view clears it: a tile press acks through the daemon (`sessions ack`, the plugin's sole write path), the Paseo overlay reports the agent viewed in Paseo, or a `SessionStart` reuses the session. The ack is timestamped in `acked_at`, so a Paseo attention flag raised before the view can never resurrect the tile afterwards. Prompting again does not mark the earlier result read. A read-and-idle row persists in the registry — subject to the ordinary prune — and is not projected onto the grid (so on the grid idle implies unread), with one exception: a Paseo ancestor stays projected with its effective status lifted while any Paseo descendant is active, its stored status and unread ledger untouched (the lineage rule in the strip section below). No separate dismiss action exists: viewing the result retires the tile.
 
 The previous proposal equated unarchived App/Web tasks with active tasks. That is rejected: on 2026-08-05 this host had 288 unarchived top-level Codex threads, which would turn the deck into a historical inbox.
 
@@ -313,8 +320,11 @@ All dimensions below are native 2560×720 pixels, viewport-relative in the
 implementation (px/25.6 → vw, px/7.2 → vh), so the 1280×360 HiDPI mode
 scales proportionally and nothing is pixel-locked; macOS draws its menu bar
 as a ~30px overlay on the strip display (no visibleFrame reservation), so
-the top 44px stays clear of critical content — board and rail alike — and
-thin marks (hairline borders, the 2px spine, the 8px status edge) map
+the top 44px stays clear of critical content — board and rail alike. Native
+fullscreen draws no overlay bar: the window manager mirrors the state onto
+`body[data-fullscreen]` and the top clearance drops to 24px on board and
+rail, centering the 672px board block (six rows, five gaps) in the 720px
+height. Thin marks (hairline borders, the 2px spine, the 8px status edge) map
 per-axis to viewport units and never drop below one physical pixel in the
 HiDPI mode (`max(1px, …)`).
 
@@ -476,13 +486,27 @@ Fixed 600px (~23.4%), top to bottom:
   with a 2px neutral tick at each non-binding window's percent — the tick
   is the whole non-binding treatment; textual readouts proved too busy for
   the row.
+- For Claude only, two or more published claude-swap accounts replace the
+  ambient meter with one shared `[C] Claude` header and one existing-style
+  meter per privacy-safe numeric slot. The account meters sit in one indented
+  stack with a subtle 2px Claude-colored spine: 10px from the provider header
+  to the stack, 12px between account meters, and 7px from each meter's labels
+  to its unchanged 8px bar. Slots stay in ascending order; the active slot has
+  a Claude-orange dot and never reorders. Each account independently selects
+  its binding window and owns its reset, fill, and ticks. Stale or unavailable
+  accounts dim only their right-side metric and bar, so account identity and
+  the active dot remain legible. Zero or one account keeps the ambient row,
+  and a transient account probe failure keeps the last-good meters visible.
 - **Pager dots**: one per page, tap to jump.
-- Data plumbing is unchanged: quota via `quota-snapshot.json` and token
+- Data plumbing remains additive: quota via `quota-snapshot.json` and token
   usage via `token-usage-snapshot.json`, each its own file with its own
   `schemaVersion`, read through Tauri commands, never the session snapshot.
+  The schema-v2 quota sidecar now has an additive Claude `accounts`
+  collection, while old/new daemon-app deployment order remains compatible.
   A provider whose last fetch failed renders dimmed with a last-updated
   age in place of the percent; a provider disabled in CodexBar (or with no
-  binary installed) is omitted; a missing file renders no quota rows /
+  binary installed) is omitted unless Claude has non-empty claude-swap
+  account rows, which synthesize its panel; a missing file renders no quota rows /
   hides the token block. Stale-dimming semantics are unchanged.
 
 The sparkline's data is additive: `token-usage-snapshot.json` gains a

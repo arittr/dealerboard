@@ -1,6 +1,7 @@
 /**
- * Bounded decoder for hook payloads from the eight canonical providers —
- * Claude, Codex, Kimi, pi, oh-my-pi, zcode, the deepseek harness, and grok —
+ * Bounded decoder for hook payloads from the ten canonical providers —
+ * Claude, Codex, Kimi, pi, oh-my-pi, zcode, the deepseek harness, grok, Qwen,
+ * and Evener —
  * native payloads for the first three and zcode, shim-normalized canonical
  * events for pi, omp, and dsh. Grok's native payloads are camelCase-keyed
  * with snake_case event values; a small value-mapping branch (plus its

@@ -106,18 +106,19 @@ stopping it is part of the change.
   idle `#4ADE80`, error `#FF4D67`; `COLOR_NEUTRAL` `#94A3B8` is non-status
   chrome only (NEXT frame, page count, OFFLINE text). Provider corner chips
   carry a one-letter mark (`PROVIDER_LETTERS`: Claude C, Codex X, Kimi K, pi
-  P, omp O, zcode Z, deepseek D, grok G, qwen Q) on hues picked for mutual
+  P, omp O, zcode Z, deepseek D, grok G, qwen Q, Evener E) on hues picked for mutual
   distinctness on the LCD panel, not brand fidelity (`PROVIDER_COLORS`):
   Claude `#D97757`, Codex `#D946EF`, Kimi `#3B82F6`, pi `#0EA514`, omp
   `#F5F0EA`, zcode `#EAB308`, deepseek `#2DD4BF`, grok `#F472B6`, qwen
-  `#EF4444`. Session
+  `#EF4444`, Evener `#A3E635`. Session
   tiles also carry the model id as neutral-chrome text right of the chip
   (vendor prefix stripped, ten-code-point cap); the registry stores the raw
   id (schema v6 `model` column; the v8 repair backfills it into pre-merge v7
   databases that were
   stamped without it, so every v8-or-later database has it), Kimi, pi, and
   qwen push it at session start (pi via its shim's `session_start`), and the daemon
-  resolves Claude/Codex ids (transcript tails) and grok's id (summary.json)
+  resolves Claude/Codex ids (transcript tails) and grok's id (summary.json),
+  while Evener publishes its current model over AppWire
   in the same maintenance pass as titles (last `"model":"…"` in the tail
   wins). Null never clears a stored model.
   The Paseo origin pip uses `COLOR_ORIGIN_PASEO` `#A78BFA` (bottom-right):
@@ -150,6 +151,11 @@ stopping it is part of the change.
   `subagentType` payloads are dropped), and no `SessionTitleChanged` push
   (titles are pulled). A grok `Stop` with a non-`end_turn` reason is the
   session-teardown observe fire and is dropped — `SessionEnd` owns removal.
+  Evener is inventory-backed rather than hook-backed: AppWire `active`,
+  `awaiting`, and `warning`/`systemError` map to working, waiting, and error;
+  ordered `turn/completed` notifications own unread settlement, while cold
+  hydration uses `SessionStatusObserved` to repair status without changing the
+  unread ledger.
   A tile's effective status is the max (`error > waiting > working > idle`)
   over its whole subtree, and any live subagent row lifts it to at least
   `working` (`src/core/projection.ts`). The max also rolls up across
@@ -170,10 +176,10 @@ stopping it is part of the change.
   by live children shows its own timer.
 - Unread ledger and grid visibility: a turn ending — a Stop that settles to
   idle, or StopFailure — stamps `unread_since` (added in schema v7; v8 was a
-  shape-repair stamp; the current latest, v11, adds `status_since`
+  shape-repair stamp; v11 adds `status_since`
   (backfilled from `updated_at`), `origin_parent_ref`, and `activity_line`;
   v10 widened the provider CHECK for grok (v9 added the `acked_at`
-  watermark));
+  watermark), v12 adds Qwen to that CHECK, and the current v13 adds Evener);
   a result landed.
   Only viewing clears it: a tile press acks via `sessions ack` (the plugin's
   sole plugin→daemon write, executed against the installed binary), the Paseo
@@ -222,6 +228,10 @@ stopping it is part of the change.
   `sessions clear`/`clear-all`.
   grok has a real SessionEnd and uses the standard 24h prune — no special
   lease.
+  Evener rows come from the authenticated AppWire v3 feed: explicit
+  `thread/closed` removes them, list omission never does (a hub list may be
+  partial), reconnect hydration repairs retained rows, and the standard 24h
+  prune is the missed-close backstop.
   Every provider late-joins on `UserPromptSubmit` (`SessionObserved`), so a
   session whose start hook was missed — or whose row was pruned while still
   alive — reappears at its next prompt. Kimi fires SessionStart eagerly for
@@ -241,13 +251,24 @@ stopping it is part of the change.
   `~/.grok/hooks/stream-deck-agents.json` is managed the same way (marker
   key `x-stream-deck-agents`, token substitution, atomic 0600 write,
   refusal without the marker).
+- Evener needs no hook or plugin install. `src/core/evener.ts` connects to the
+  local hub's `/rpc`, honoring `EVENER_HUB_ADDR`/`EVENER_HUB_AUTH_TOKEN`, then
+  Evener's `hub.toml` and `<hub_state_root>/auth-token` defaults. The bearer
+  capability stays in memory and is never logged or persisted; non-loopback
+  endpoints are refused. The collector lists only source `local`, hydrates
+  roots before live subagents, subscribes with one replace followed by additive
+  subscriptions, refreshes every 2s, and retries disconnects every 5s.
+  Evener does not publish a process-local `hub --addr` override; custom
+  addresses must also be set durably in `hub.toml` (preferred) or in the
+  Stream Deck Agents LaunchAgent's `EVENER_HUB_ADDR` environment.
 - Tile labels prefer the session title over the project name. Paseo-origin
   rows take titles from the Paseo overlay alone — provider title events,
   resolver write-backs, and reused-start metadata refreshes all skip them,
   so a user's Paseo rename never oscillates with the provider's own title
   stream (which re-pushes its auto title as the session works). Kimi and pi
   push titles via hook events (pi's shim pushes on `session_info_changed`,
-  fired by `/name`); the daemon resolves Claude titles from the transcript's
+  fired by `/name`); Evener publishes generated/user-renamed titles and model
+  changes over AppWire; the daemon resolves Claude titles from the transcript's
   `ai-title` records (path stored in schema v5's `transcript_path`), Codex
   titles from `~/.codex/session_index.jsonl`'s `thread_name`, grok titles
   and models from the `summary.json` under the session directory (globbed
@@ -267,7 +288,8 @@ stopping it is part of the change.
   are written back without touching `updated_at` (the prune's aging signal).
   Titles word-wrap to two 12-code-point lines with an ellipsis on overflow.
 - The daemon is no longer read-only: it owns maintenance (titles, models,
-  and activity lines every 2s, the Paseo overlay every 2s, prune every 60s)
+  and activity lines every 2s, the Paseo overlay every 2s, the Evener AppWire
+  collector, prune every 60s)
   and rewrites the snapshot every 5s as a heartbeat. The plugin treats a
   snapshot older than 10s as a dead daemon and renders the degraded
   treatment (OFFLINE / "!" flags).
@@ -328,14 +350,25 @@ stopping it is part of the change.
   always participates — an extra can be selected as the session window
   (codex's Spark 5-hour), and unselected extras publish as `extraWindows`
   (cap 8) with provider-name-stripped labels (claude's `Fable only`, codex's
-  `Spark Weekly`); the widget-snapshot fallback publishes none — and
-  publishes `quota-snapshot.json` (`schemaVersion` 2; the strip's reader
+  `Spark Weekly`); the widget-snapshot fallback publishes none.
+  The collector still runs CodexBar for all five ambient providers. Once per
+  same 120s pass it also resolves claude-swap from ~/.local/bin/cswap,
+  /opt/homebrew/bin/cswap, then /usr/local/bin/cswap and runs only
+  `list --json` with a 5s timeout. It allowlists numeric slot, active slot,
+  5-hour/7-day/scoped windows, and source instants into Claude's additive
+  `accounts` field; personal and credential fields and raw process output are
+  never stored or logged. Two or more accounts render as stable numeric-slot
+  meters under one Claude header; zero/one account or no binary uses the
+  ambient row. A failed resolved probe keeps last-good account rows
+  unavailable and is independent of ambient Claude.
+  It publishes `quota-snapshot.json` (`schemaVersion` 2; the strip's reader
   also accepts v1, so daemon and app update in either order; bounded history
   ring of session-window samples; contract in `src/quota-snapshot.ts`) via
   the `writeFileAtomically` primitive; the strip reads it through the
   `read_quota_snapshot` Tauri command and renders from the pure view-model in
   `app/src/quota.ts`. A missing CodexBar binary or a provider disabled in the
-  CodexBar app omits that provider entirely. `snapshot-v2.json` and
+  CodexBar app omits that provider entirely, except Claude is synthesized from
+  non-empty claude-swap account rows. `snapshot-v2.json` and
   `src/protocol.ts` stay untouched, and nothing CodexBar prints is ever
   logged or persisted.
 - A token-usage block ships in the rail: the

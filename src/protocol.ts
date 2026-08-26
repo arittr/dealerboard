@@ -5,7 +5,18 @@
  * plugin bundle, so it must stay free of runtime-specific and SDK imports.
  */
 
-export const PROVIDER_KEYS = ["claude", "codex", "kimi", "pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const;
+export const PROVIDER_KEYS = [
+  "claude",
+  "codex",
+  "kimi",
+  "pi",
+  "omp",
+  "zcode",
+  "deepseek",
+  "grok",
+  "qwen",
+  "evener",
+] as const;
 
 export type Provider = (typeof PROVIDER_KEYS)[number];
 
@@ -50,6 +61,14 @@ export type RegistryEvent =
       sessionId: string;
       /** Non-empty; the decoder bounds it to 256 code points like every string. */
       title: string;
+      observedAt: string;
+    }
+  | {
+      /** Authoritative hydration/reconnect status; unlike a terminal event, this never changes unread state. */
+      kind: "SessionStatusObserved";
+      provider: Provider;
+      sessionId: string;
+      status: SessionStatus;
       observedAt: string;
     }
   | {
