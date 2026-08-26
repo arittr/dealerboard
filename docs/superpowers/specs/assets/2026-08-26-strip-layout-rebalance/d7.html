@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+/* ---- inlined strip-common.css ---- */
+/* Shared native-px (2560x720) mockup styles mirroring app/styles.css tokens. */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #10151c;
+  color: #e8eef7;
+  font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+}
+.strip { display: grid; height: 720px; width: 2560px; overflow: hidden; }
+
+/* ---------------- Board / cards ---------------- */
+.board { display: grid; gap: 12px; padding: 44px 0 0 16px; min-width: 0; align-content: start; }
+.card {
+  --st: #94a3b8;
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  row-gap: 6px;
+  column-gap: 14px;
+  min-width: 0;
+  height: 102px;
+  padding: 0 16px 0 24px;
+  border-radius: 12px;
+  background: #1c2430;
+  border-left: 8px solid transparent;
+}
+.card.st-working { --st: #20b8ff; border-left-color: rgb(32 184 255 / 0.9); }
+.card.st-idle    { --st: #4ade80; border-left-color: rgb(74 222 128 / 0.9); }
+.card.st-waiting {
+  --st: #ffb020;
+  border: 2px solid rgb(255 176 32 / 0.75);
+  border-left: 12px solid #ffb020;
+  padding-left: 20px;
+  background: linear-gradient(rgb(255 176 32 / 0.1), rgb(255 176 32 / 0.1)), #1c2430;
+}
+.card.sub {
+  background: #11151d;
+  border: 2px solid #232b38;
+  margin-left: 44px;
+}
+.card.sub.st-working { border-left: 8px solid rgb(32 184 255 / 0.5); }
+.card.sub::before {
+  content: "";
+  position: absolute;
+  left: -32px;
+  top: -13px;
+  width: 24px;
+  height: calc(50% + 13px);
+  border-left: 2px solid rgb(167 139 250 / 0.75);
+  border-bottom: 2px solid rgb(167 139 250 / 0.75);
+}
+.head { grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: 14px; min-width: 0; }
+.title {
+  flex: 1; min-width: 0;
+  color: #e8eef7; font-size: 32px; font-weight: 650; line-height: 1.15;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.title.fallback { font-style: italic; font-weight: 560; }
+.card.sub .title { color: #94a3b8; font-size: 26px; font-weight: 550; }
+.chip {
+  position: relative; flex: none;
+  width: 42px; height: 42px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #10151c; font-size: 25px; font-weight: 800;
+}
+.card.sub .chip { width: 32px; height: 32px; border-radius: 8px; font-size: 20px; opacity: 0.85; }
+.chip[data-p="claude"] { background: #d97757; }
+.chip[data-p="codex"]  { background: #d946ef; }
+.chip[data-p="kimi"]   { background: #3b82f6; }
+.chip[data-p="pi"]     { background: #0ea514; }
+.chip[data-p="qwen"]   { background: #ef4444; }
+.chip[data-p="evener"] { background: #a3e635; }
+.udot {
+  position: absolute; top: -6px; right: -6px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #ffb020; border: 3px solid #1c2430;
+}
+.subpill {
+  flex: none; display: inline-flex; align-items: center; gap: 8px;
+  padding: 3px 10px 3px 8px;
+  border: 1.5px solid rgb(167 139 250 / 0.45); border-radius: 8px;
+  color: #94a3b8; font-size: 20px;
+}
+.subpill::before {
+  content: ""; flex: none; width: 13px; height: 13px;
+  border: 2.5px solid #a78bfa; border-radius: 50%;
+}
+.status { grid-column: 2; grid-row: 1; align-self: center; display: flex; align-items: baseline; gap: 8px; }
+.sdot { align-self: center; flex: none; width: 13px; height: 13px; border-radius: 50%; background: var(--st); }
+.card.sub .sdot { width: 11px; height: 11px; }
+.sword { color: #94a3b8; font-size: 22px; }
+.card.st-waiting .sword { color: #e8eef7; font-weight: 700; }
+.card.sub .sword { color: rgb(148 163 184 / 0.8); font-size: 20px; }
+.stimer { color: #e8eef7; font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.card.sub .stimer { color: #94a3b8; font-size: 24px; font-weight: 600; }
+.meta {
+  grid-column: 1 / -1; grid-row: 2;
+  display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden;
+  margin-left: 56px; color: #94a3b8; font-size: 22px; line-height: 1.2;
+}
+.card.sub .meta { margin-left: 46px; color: rgb(148 163 184 / 0.85); font-size: 20px; }
+.meta > span { flex: none; white-space: nowrap; }
+.meta > span + span:not(.mright)::before { content: "·"; margin-right: 10px; opacity: 0.55; }
+.meta .act {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 20px;
+}
+.mright { flex: none; margin-left: auto; display: flex; align-items: center; gap: 9px; padding-left: 12px; }
+.badge { color: #a78bfa; font-size: 22px; font-weight: 650; }
+.odisc { flex: none; width: 14px; height: 14px; border-radius: 50%; background: #a78bfa; }
+
+/* ---------------- Rail (shared pieces) ---------------- */
+.rail {
+  display: flex; flex-direction: column; min-height: 0;
+  background: #10141c; border: 1px solid #232b38; border-radius: 26px;
+  padding: 44px 25px 16px;
+  color: #94a3b8; font-size: 33px;
+}
+.tok-today { color: #e8eef7; font-size: 41px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tok-rates { display: flex; gap: 13px; color: #94a3b8; font-size: 31px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tok-rates .up { color: #4ade80; }
+.tok-rates .sep { color: #4a5568; }
+.spark { position: relative; }
+.spark svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.unread { display: flex; align-items: center; gap: 15px; font-size: 33px; }
+.unread.active { color: #ffb020; font-weight: 600; }
+.dot-ok { width: 13px; height: 13px; border-radius: 50%; background: #4ade80; }
+.pager { display: flex; gap: 15px; color: #94a3b8; font-size: 15px; }
+
+/* Single-line quota rows: fixed identity/tag/right columns so bars align. */
+.qzone { display: flex; flex-direction: column; }
+.qrow {
+  display: grid;
+  grid-template-columns: var(--qid, 150px) var(--qtag, 104px) 1fr var(--qright, 200px);
+  align-items: center;
+  column-gap: 12px;
+  height: 44px;
+}
+.qid { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.qchip {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 8px;
+  color: #10151c; font-size: 23px; font-weight: 700;
+}
+.qchip[data-p="claude"] { background: #d97757; }
+.qchip[data-p="codex"]  { background: #d946ef; }
+.qchip[data-p="kimi"]   { background: #3b82f6; }
+.qchip[data-p="zai"]    { background: #2dd4bf; }
+.qchip[data-p="qwen"]   { background: #ef4444; }
+.qname { color: #94a3b8; font-size: 31px; white-space: nowrap; }
+.qtag {
+  justify-self: start;
+  padding: 1px 10px; border-radius: 8px;
+  background: #1c2430; color: #94a3b8; font-size: 24px; line-height: 1.3; white-space: nowrap;
+}
+.qbar { position: relative; height: 8px; border-radius: 4px; background: #232b38; overflow: hidden; }
+.qbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; }
+.qbar b { position: absolute; top: 0; width: 2px; height: 100%; background: rgb(148 163 184 / 0.55); }
+.qright { display: flex; align-items: baseline; justify-content: flex-end; gap: 10px; font-variant-numeric: tabular-nums; }
+.qnote { color: #94a3b8; font-size: 27px; white-space: nowrap; }
+.qpct { color: #e8eef7; font-size: 31px; }
+.qrow.dim .qtag, .qrow.dim .qbar, .qrow.dim .qright { opacity: 0.45; }
+/* Claude account rows: index + active dot in the identity column, spine at left. */
+.qacct .qid { padding-left: 14px; }
+.qidx { color: #64748b; font-size: 20px; min-width: 20px; font-variant-numeric: tabular-nums; }
+.qadot { flex: none; width: 11px; height: 11px; border-radius: 50%; background: transparent; }
+.qadot.on { background: #d97757; }
+.qgroup { position: relative; }
+.qgroup::before {
+  content: ""; position: absolute; left: 0; top: 4px; bottom: 4px;
+  width: 2px; border-radius: 1px; background: rgb(217 119 87 / 0.55);
+}
+
+/* ---- variant overrides ---- */
+  /* D2b: D + full-width bars back — two-line meters spread across the freed
+     middle; sparkline trims to 84px; unread text drops to 26px. */
+  .strip { grid-template-columns: 1fr 760px; }
+  .board { grid-template-columns: repeat(2, 886px); grid-template-rows: repeat(6, 102px); }
+  .card.st-working .sword, .card.st-idle .sword { display: none; }
+  .unread { font-size: 26px; }
+  .qzone { flex: 1; justify-content: space-evenly; margin-top: 12px; }
+  .m2 { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .m2 .h { display: flex; align-items: center; gap: 12px; font-size: 31px; }
+  .m2 .h .r { margin-left: auto; display: flex; align-items: baseline; gap: 10px; }
+  .m2.dim .qtag, .m2.dim .qbar, .m2.dim .r { opacity: 0.45; }
+  .qgroup { display: flex; flex-direction: column; gap: 12px; padding-left: 12px; }
+</style></head><body>
+<div class="strip">
+<main class="board">
+  <div class="card st-working" style="grid-column:1;grid-row:1">
+    <div class="head"><span class="chip" data-p="kimi">K</span><span class="title">d3 impl</span>
+      <span class="status"><span class="sdot"></span><span class="sword">working</span><span class="stimer">3m</span></span></div>
+    <div class="meta"><span>kimi-code/k3</span><span>superpowers-evals</span><span class="mright"><span class="odisc"></span></span></div>
+  </div>
+  <div class="card st-working" style="grid-column:1;grid-row:2">
+    <div class="head"><span class="chip" data-p="codex">X<span class="udot"></span></span><span class="title">i want to show both of my claude code sessions in the rail</span>
+      <span class="status"><span class="sdot"></span><span class="sword">working</span><span class="stimer">36s</span></span></div>
+    <div class="meta"><span>5.6-sol</span><span>stream-deck-agents</span><span class="act">wait</span><span class="mright"><span class="badge">4</span><span class="odisc"></span></span></div>
+  </div>
+  <div class="card st-waiting" style="grid-column:1;grid-row:3">
+    <div class="head"><span class="chip" data-p="evener">E<span class="udot"></span></span><span class="title">i dont see evener chips on the agent strip</span>
+      <span class="status"><span class="sdot"></span><span class="sword">waiting</span><span class="stimer">46m</span></span></div>
+    <div class="meta"><span>5.6-sol</span><span>stream-deck-agents</span><span class="mright"><span class="badge">3</span></span></div>
+  </div>
+  <div class="card st-waiting" style="grid-column:1;grid-row:4">
+    <div class="head"><span class="chip" data-p="evener">E<span class="udot"></span></span><span class="title">i want us to add evener support here so we see them</span>
+      <span class="status"><span class="sdot"></span><span class="sword">waiting</span><span class="stimer">1h</span></span></div>
+    <div class="meta"><span>5.6-sol</span><span>stream-deck-agents</span><span class="mright"><span class="badge">4</span></span></div>
+  </div>
+  <div class="card st-idle" style="grid-column:1;grid-row:5">
+    <div class="head"><span class="chip" data-p="qwen">Q</span><span class="title fallback">pri-2952-kernel-d2</span>
+      <span class="status"><span class="sdot"></span><span class="sword">idle</span><span class="stimer">1h</span></span></div>
+    <div class="meta"><span>qwen3.8-max-preview</span><span>pri-2952-kernel-d2</span><span class="mright"><span class="odisc"></span></span></div>
+  </div>
+  <div class="card st-waiting" style="grid-column:1;grid-row:6">
+    <div class="head"><span class="chip" data-p="evener">E<span class="udot"></span></span><span class="title">i wonder if we should be displaying evener supervisors</span>
+      <span class="status"><span class="sdot"></span><span class="sword">waiting</span><span class="stimer">27m</span></span></div>
+    <div class="meta"><span>5.6-sol</span><span>stream-deck-agents</span><span class="mright"><span class="badge">3</span></span></div>
+  </div>
+  <div class="card st-working" style="grid-column:2;grid-row:1">
+    <div class="head"><span class="chip" data-p="claude">C</span><span class="title">we have some zombie sessions and thinks maybe we should fix</span>
+      <span class="status"><span class="sdot"></span><span class="sword">working</span><span class="stimer">6m</span></span></div>
+    <div class="meta"><span>opus-5</span><span>stream-deck-agents</span><span class="act">Bash git log --oneline -2 feat/strip-wo…</span><span class="mright"><span class="odisc"></span></span></div>
+  </div>
+  <div class="card sub st-working" style="grid-column:2;grid-row:2">
+    <div class="head"><span class="chip" data-p="pi">P</span><span class="subpill">sub</span><span class="title">Liveness T1+T2: lastEventAt plumbing</span>
+      <span class="status"><span class="sdot"></span><span class="sword">working</span><span class="stimer">7m</span></span></div>
+    <div class="meta"><span>glm-5.3</span><span>liveness-impl</span></div>
+  </div>
+  <div class="card st-waiting" style="grid-column:2;grid-row:3">
+    <div class="head"><span class="chip" data-p="evener">E<span class="udot"></span></span><span class="title">evener slats are always in the waiting state for some reason</span>
+      <span class="status"><span class="sdot"></span><span class="sword">waiting</span><span class="stimer">4m</span></span></div>
+    <div class="meta"><span>5.6-sol</span><span>stream-deck-agents</span><span class="mright"><span class="badge">3</span></span></div>
+  </div>
+</main>
+<aside class="rail">
+  <div class="tok-today">562.7M today</div>
+  <div style="display:flex;align-items:flex-end;gap:18px;margin-top:10px">
+    <div class="tok-rates" style="flex:none;flex-direction:column;align-items:flex-start;gap:6px;margin-top:0">
+      <span class="up">↑ 31.1M/hr</span><span class="up">↑ 12.2M/10m</span>
+    </div>
+    <div class="spark" style="flex:1;height:84px">
+      <svg viewBox="0 0 460 84">
+        <polygon fill="rgba(232,238,247,0.06)" points="0,78 37,77 78,74 115,71 152,65 193,56 230,45 253,35 276,25 299,13 299,84 0,84"/>
+        <polyline fill="none" stroke="#94A3B8" stroke-opacity="0.6" stroke-width="2" stroke-linejoin="round" points="0,78 46,77 92,75 138,71 184,66 230,58 276,48 299,43 322,37 368,25 414,13 460,4"/>
+        <polyline fill="none" stroke="#E8EEF7" stroke-width="2" stroke-linejoin="round" points="0,78 37,77 78,74 115,71 152,65 193,56 230,45 253,35 276,25 299,13"/>
+        <circle cx="299" cy="13" r="4" fill="#E8EEF7"/>
+        <text x="458" y="48" text-anchor="end" font-size="20" fill="#94A3B8">yda 641M</text>
+      </svg>
+    </div>
+  </div>
+  <div class="unread active" style="margin-top:20px"><span class="dot-ok"></span><span>4 unread</span></div>
+  <div class="qzone">
+    <div class="m2">
+      <div class="h"><span class="qchip" data-p="claude">C</span><span class="qname">Claude</span></div>
+      <div class="qgroup">
+        <div class="m2">
+          <div class="h"><span class="qidx">1</span><span class="qadot"></span><span class="qtag">session</span><span class="r"><span class="qpct">100%</span></span></div>
+          <span class="qbar"><i style="width:100%;background:#4ADE80"></i></span>
+        </div>
+        <div class="m2 dim">
+          <div class="h"><span class="qidx">2</span><span class="qadot on"></span><span class="qtag">Fable</span><span class="r"><span class="qnote">updated 60m ago</span></span></div>
+          <span class="qbar"><i style="width:50%;background:#4ADE80"></i><b style="left:76%"></b><b style="left:62%"></b></span>
+        </div>
+      </div>
+    </div>
+    <div class="m2">
+      <div class="h"><span class="qchip" data-p="codex">X</span><span class="qname">Codex</span><span class="qtag">weekly</span><span class="r"><span class="qnote">6d ·</span><span class="qpct">80%</span></span></div>
+      <span class="qbar"><i style="width:80%;background:#4ADE80"></i><b style="left:99%"></b></span>
+    </div>
+    <div class="m2">
+      <div class="h"><span class="qchip" data-p="kimi">K</span><span class="qname">Kimi</span><span class="qtag">weekly</span><span class="r"><span class="qnote">13h 5m ·</span><span class="qpct">2%</span></span></div>
+      <span class="qbar"><i style="width:2%;background:#FF4D67"></i><b style="left:83%"></b></span>
+    </div>
+    <div class="m2">
+      <div class="h"><span class="qchip" data-p="zai">G</span><span class="qname">GLM</span><span class="qtag">weekly</span><span class="r"><span class="qnote">4d ·</span><span class="qpct">82%</span></span></div>
+      <span class="qbar"><i style="width:82%;background:#4ADE80"></i><b style="left:94%"></b></span>
+    </div>
+    <div class="m2">
+      <div class="h"><span class="qchip" data-p="qwen">Q</span><span class="qname">Qwen</span><span class="qtag">weekly</span><span class="r"><span class="qnote">2d ·</span><span class="qpct">0%</span></span></div>
+      <span class="qbar"></span>
+    </div>
+  </div>
+  <div class="pager" style="margin-top:6px"><span>●</span></div>
+</aside>
+</div>
+</body></html>
