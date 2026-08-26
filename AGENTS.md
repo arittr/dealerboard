@@ -79,6 +79,26 @@ Notes:
   `streamdeck link` to point the app at the repo's `.sdPlugin` instead of
   copying (not currently set up).
 
+## Troubleshooting: exactly one daemon
+
+Exactly one process — the installed daemon — may hold the registry:
+
+```sh
+lsof "$HOME/Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"
+```
+
+Run this first whenever the strip misbehaves in ways no single writer could
+produce (values flapping between two states, titles reverting, phantom
+unread). A daemon run from source (`bun src/core/cli.ts daemon`, e.g. from a
+worktree during testing) uses the same production database and snapshot
+paths as the installed daemon, so the two fight: their 2s maintenance passes
+alternate writes (titles, unread stamps, prunes), both publish
+snapshot-v2.json, and both shell out to the quota/token collectors. A
+worktree daemon also runs whatever half-finished code that checkout holds.
+Kill any stray (`ps -ef | grep "cli.ts daemon"`), and never leave one
+running after a test — if you started a source daemon to verify a change,
+stopping it is part of the change.
+
 ## Conventions
 
 - Tile rendering lives in `src/plugin/render.ts` (pure SVG string functions,
