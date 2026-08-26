@@ -1330,6 +1330,65 @@ describe("SessionTitleChanged", () => {
   });
 });
 
+describe("paseo-owned titles", () => {
+  // A Paseo rename must not oscillate with the provider's own title stream:
+  // the overlay rewrites its record title every pass, so any provider-side
+  // write to a paseo-origin row flashes for up to one pass and then loses.
+  const renameTo = (title: string): number =>
+    syncPaseoStates(db, [
+      {
+        provider: "claude",
+        sessionId: "s1",
+        agentId: "a1",
+        requiresAttention: false,
+        isSubagent: false,
+        parentAgentId: null,
+        attentionTimestamp: null,
+        updatedAt: at(2),
+        archivedAt: null,
+        title,
+      },
+    ]);
+
+  test("a paseo-origin row ignores provider retitle events", () => {
+    applyRegistryEvents(db, [start("s1", { title: "auto", at: at(1), origin: { kind: "paseo", ref: "a1" } })]);
+    renameTo("d2 impl");
+    const event: RegistryEvent = {
+      kind: "SessionTitleChanged",
+      provider: "claude",
+      sessionId: "s1",
+      title: "auto",
+      observedAt: at(5),
+    };
+    expect(applyRegistryEvents(db, [event])).toEqual(["ignored"]);
+    expect(getRow("s1")?.title).toBe("d2 impl");
+  });
+
+  test("the resolver write-back skips paseo-origin rows and still writes plain ones", () => {
+    applyRegistryEvents(db, [
+      start("s1", { title: "auto", at: at(1), origin: { kind: "paseo", ref: "a1" } }),
+      start("s2", { title: "plain", at: at(1) }),
+    ]);
+    renameTo("d2 impl");
+    const changed = updateSessionTitles(db, [
+      { provider: "claude", sessionId: "s1", title: "resolved ai title" },
+      { provider: "claude", sessionId: "s2", title: "resolved ai title" },
+    ]);
+    expect(changed).toBe(1);
+    expect(getRow("s1")?.title).toBe("d2 impl");
+    expect(getRow("s2")?.title).toBe("resolved ai title");
+  });
+
+  test("a reused SessionStart keeps a paseo-origin row's title", () => {
+    applyRegistryEvents(db, [start("s1", { title: "auto", at: at(1), origin: { kind: "paseo", ref: "a1" } })]);
+    renameTo("d2 impl");
+    applyRegistryEvents(db, [start("s1", { title: "auto again", at: at(9), origin: { kind: "paseo", ref: "a1" } })]);
+    expect(getRow("s1")?.title).toBe("d2 impl");
+    // The reuse still resets the rest of its metadata contract.
+    expect(getRow("s1")?.status).toBe("idle");
+  });
+});
+
 describe("status_since", () => {
   test("initializes at SessionStart and restamps on each own-status transition", () => {
     applyRegistryEvents(db, [start("s1", { at: at(1) })]);

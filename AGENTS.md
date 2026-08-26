@@ -221,7 +221,11 @@ Notes:
   `~/.grok/hooks/stream-deck-agents.json` is managed the same way (marker
   key `x-stream-deck-agents`, token substitution, atomic 0600 write,
   refusal without the marker).
-- Tile labels prefer the session title over the project name. Kimi and pi
+- Tile labels prefer the session title over the project name. Paseo-origin
+  rows take titles from the Paseo overlay alone — provider title events,
+  resolver write-backs, and reused-start metadata refreshes all skip them,
+  so a user's Paseo rename never oscillates with the provider's own title
+  stream (which re-pushes its auto title as the session works). Kimi and pi
   push titles via hook events (pi's shim pushes on `session_info_changed`,
   fired by `/name`); the daemon resolves Claude titles from the transcript's
   `ai-title` records (path stored in schema v5's `transcript_path`), Codex
