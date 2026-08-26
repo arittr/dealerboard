@@ -620,7 +620,8 @@ body[data-fullscreen] #rail {
 .quota-account-label {
   flex: none;
   min-width: 0.8vw;
-  color: #e8eef7;
+  color: #64748b;
+  font-size: 0.781vw; /* 20px native */
   font-variant-numeric: tabular-nums;
 }
 .quota-head {

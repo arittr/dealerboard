@@ -491,12 +491,14 @@ Fixed 600px (~23.4%), top to bottom:
   meter per privacy-safe numeric slot. The account meters sit in one indented
   stack with a subtle 2px Claude-colored spine: 10px from the provider header
   to the stack, 12px between account meters, and 7px from each meter's labels
-  to its unchanged 8px bar. Slots stay in ascending order; the active slot has
-  a Claude-orange dot and never reorders. Each account independently selects
-  its binding window and owns its reset, fill, and ticks. Stale or unavailable
-  accounts dim only their right-side metric and bar, so account identity and
-  the active dot remain legible. Zero or one account keeps the ambient row,
-  and a transient account probe failure keeps the last-good meters visible.
+  to its unchanged 8px bar. Each privacy-safe slot number is a muted 20px
+  micro-index in a fixed-width alignment column, not primary data. Slots stay
+  in ascending order; the active slot has a full-contrast Claude-orange dot
+  and never reorders. Each account independently selects its binding window
+  and owns its reset, fill, and ticks. Stale or unavailable accounts dim only
+  their right-side metric and bar, so account identity and the active dot
+  remain legible. Zero or one account keeps the ambient row, and a transient
+  account probe failure keeps the last-good meters visible.
 - **Pager dots**: one per page, tap to jump.
 - Data plumbing remains additive: quota via `quota-snapshot.json` and token
   usage via `token-usage-snapshot.json`, each its own file with its own
