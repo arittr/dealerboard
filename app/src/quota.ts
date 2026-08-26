@@ -165,6 +165,14 @@ export const formatBindingNote = (model: QuotaPanelModel, now: number): string =
   return formatResetCountdown(binding.resetAtMs, now);
 };
 
+/**
+ * The non-binding windows in published order — the binding window owns the
+ * bright percent and the bar fill, and the bar renders a neutral tick at
+ * each of these so the other windows stay visible without any text.
+ */
+export const secondaryWindows = (model: QuotaPanelModel): QuotaWindowModel[] =>
+  model.windows.filter((_, index) => index !== model.bindingIndex);
+
 /** Fill hue follows remaining headroom on the strip's existing status palette. */
 export const quotaBarColor = (percentRemaining: number): string => {
   if (percentRemaining > 25) {

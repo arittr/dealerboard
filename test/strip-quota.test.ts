@@ -11,6 +11,7 @@ import {
   quotaBarColor,
   reduceQuotaRead,
   STALE_QUOTA_AGE_MS,
+  secondaryWindows,
   selectBindingIndex,
 } from "../app/src/quota";
 import type { ProviderQuota } from "../src/quota-snapshot";
@@ -211,5 +212,25 @@ describe("formatPercentRemaining and quotaBarColor", () => {
     expect(quotaBarColor(25)).toBe("#ffb020");
     expect(quotaBarColor(10)).toBe("#ffb020");
     expect(quotaBarColor(9)).toBe("#ff4d67");
+  });
+});
+
+describe("secondaryWindows", () => {
+  test("every non-binding window in published order (the bar's tick positions)", () => {
+    const panel = model({
+      windows: [windowModel("session", 62.5), windowModel("weekly", 88), windowModel("Fable only", 40.4)],
+      bindingIndex: 2,
+    });
+    expect(secondaryWindows(panel)).toEqual([windowModel("session", 62.5), windowModel("weekly", 88)]);
+  });
+
+  test("a weekly-binding panel surfaces the session window as the secondary", () => {
+    const panel = model({ bindingIndex: 1 });
+    expect(secondaryWindows(panel).map((entry) => entry.tag)).toEqual(["session"]);
+  });
+
+  test("a lone window has no secondaries; no windows, none either", () => {
+    expect(secondaryWindows(model({ windows: [windowModel("session", 10)], bindingIndex: 0 }))).toEqual([]);
+    expect(secondaryWindows(model({ windows: [], bindingIndex: null }))).toEqual([]);
   });
 });

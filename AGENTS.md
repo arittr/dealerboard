@@ -180,7 +180,10 @@ Notes:
   as a fallback) and the dispatching agent's id as `origin_parent_ref`, and
   mirrors `requiresAttention` both ways — false clears unread (viewed in
   Paseo), true sets it without moving the first-news timestamp and subject
-  to the `acked_at` watermark. The same pass un-stamps the origin metadata
+  to the `acked_at` watermark. An archived record (`archivedAt` set) takes
+  the cleared path even while its attention flag is still up — archiving is
+  the user's terminal gesture — with the later of `archivedAt` and
+  `updatedAt` as the proof-of-viewing time under the same freshness guard. The same pass un-stamps the origin metadata
   of any other top-level row still carrying the agent's ref from a
   rotated-away provider session (the row, its ledger, and its timers stay),
   so a missed SessionEnd never leaves a duplicate ref to ambiguate the
@@ -258,8 +261,8 @@ Notes:
   tail; pages fill group-atomically (a ≤6-card group never splits and may
   backfill a same-page gap, a 7–12 group needs a still-empty page and
   wraps at the six-row seam, a larger group fills whole pages) into two
-  columns of six fixed 1012×102 cards that never flex-resize, beside a
-  fixed 496px (~19.4%) rail; page count derives from the packing and the
+  columns of six fixed 966×102 cards that never flex-resize, beside a
+  fixed 600px (~23.4%) rail; page count derives from the packing and the
   persisted current page (`agent-strip.layout.v1`) clamps — the strip no
   longer consumes the shared `reduceLayout`/`STRIP_GEOMETRY` paging (the
   keypad keeps it unchanged). Card visuals
@@ -281,11 +284,12 @@ Notes:
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
 - Quota panels (claude, codex, kimi, GLM/zai, Qwen) ship in the rail as
   compact two-line rows (head: chip, label, a bare tag pill naming the
-  binding window — no ` binds` suffix, and only the binding window renders
-  — with the muted reset countdown first (`26m ·`) at the right so the
-  bright tabular percent aligns flush at the rail's edge; second line:
-  the status-palette 8px bar filled to the binding window — no neutral
-  tick at other windows' percents); the binding window is the
+  binding window — no ` binds` suffix — with the muted reset countdown
+  first (`26m ·`) at the right so the bright tabular percent aligns flush
+  at the rail's edge; second line: the status-palette 8px bar filled to
+  the binding window, with a 2px neutral tick at each non-binding
+  window's percent — ticks only, no textual non-binding readouts); the
+  binding window is the
   lowest percent remaining (ties: session > weekly > extras), and the
   daemon-health dot rides inline on the unread row (green ok, red plus
   OFFLINE when degraded) instead of its own line.

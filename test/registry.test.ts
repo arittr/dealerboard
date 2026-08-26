@@ -856,6 +856,7 @@ describe("syncPaseoStates", () => {
     parentAgentId?: string | null;
     attentionTimestamp?: string | null;
     updatedAt?: string | null;
+    archivedAt?: string | null;
   }) => ({
     provider: "claude" as const,
     sessionId: overrides.sessionId ?? "s1",
@@ -865,6 +866,7 @@ describe("syncPaseoStates", () => {
     parentAgentId: overrides.parentAgentId ?? null,
     attentionTimestamp: overrides.attentionTimestamp ?? null,
     updatedAt: overrides.updatedAt ?? null,
+    archivedAt: overrides.archivedAt ?? null,
     title: null,
   });
 
@@ -964,6 +966,41 @@ describe("syncPaseoStates", () => {
     const freshFlag = "2026-08-06T00:00:09.000Z";
     expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: freshFlag })])).toBe(1);
     expect(getRow("s1")?.unread_since).toBe(freshFlag);
+  });
+
+  test("an archived agent behaves as viewed: clears unread despite a live attention flag, never sets it", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(getRow("s1")?.unread_since).toBe(at(5));
+
+    // Archived after the local Stop while requiresAttention is still true:
+    // archiving is the user's terminal gesture, so unread clears.
+    const archived = paseoState({ attentionTimestamp: FLAG_AT, archivedAt: "2026-08-06T00:00:09.000Z" });
+    expect(syncPaseoStates(db, [archived])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBeNull();
+
+    // The still-flagged archived record on a later pass must not resurrect.
+    expect(syncPaseoStates(db, [archived])).toBe(0);
+    expect(getRow("s1")?.unread_since).toBeNull();
+
+    // Local news newer than the archive stamp is kept: a stale archive is
+    // not proof the user saw the newer result.
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(20) })]);
+    expect(syncPaseoStates(db, [archived])).toBe(0);
+    expect(getRow("s1")?.unread_since).toBe(at(20));
+  });
+
+  test("an archive stamp newer than updatedAt is the clear-proof time", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+
+    // updatedAt predates the Stop (stale alone) but archivedAt postdates it:
+    // the later of the two proves the viewing.
+    const archived = paseoState({
+      requiresAttention: false,
+      updatedAt: at(2),
+      archivedAt: at(9),
+    });
+    expect(syncPaseoStates(db, [archived])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBeNull();
   });
 
   test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {

@@ -311,15 +311,17 @@ fallbacks reuse the shared chain. The full behavioral spec is
 
 All dimensions below are native 2560×720 pixels, viewport-relative in the
 implementation (px/25.6 → vw, px/7.2 → vh), so the 1280×360 HiDPI mode
-scales proportionally and nothing is pixel-locked; the top 28px stays clear
-of critical content, and thin marks (hairline borders, the 2px spine, the
-8px status edge) map per-axis to viewport units and never drop below one
-physical pixel in the HiDPI mode (`max(1px, …)`).
+scales proportionally and nothing is pixel-locked; macOS draws its menu bar
+as a ~30px overlay on the strip display (no visibleFrame reservation), so
+the top 44px stays clear of critical content — board and rail alike — and
+thin marks (hairline borders, the 2px spine, the 8px status edge) map
+per-axis to viewport units and never drop below one physical pixel in the
+HiDPI mode (`max(1px, …)`).
 
 ### Geometry
 
-- The session area is the canvas minus the fixed 496px rail (~19.4%) and the
-  outer gutters; the board holds two 1012×102 columns of six rows with 12px
+- The session area is the canvas minus the fixed 600px rail (~23.4%) and the
+  outer gutters; the board holds two 966×102 columns of six rows with 12px
   gaps — up to 12 cards per page.
 - Cards are a fixed standard size and never grow or shrink with session
   count: one session renders one standard card top-left, empty canvas stays
@@ -425,10 +427,10 @@ once stamped, is immutable for the session's lifetime.
 - Subagent cards: dimmed treatment — near-canvas surface, hairline border
   (`max(1px, 0.078125vw)`), 26px muted title, 32px chip, half-opacity
   status edge; a hollow-violet-ring "sub" pill after the chip replaces the
-  corner ring pip. Grouped subagents indent 44px (968×102, right edges
+  corner ring pip. Grouped subagents indent 44px (922×102, right edges
   flush) under their parent, connected by a 2px violet spine from the
   parent's bottom edge with an elbow into each subagent card; orphans keep
-  the dimmed treatment and pill at full 1012px width, no indent or spine.
+  the dimmed treatment and pill at full 966px width, no indent or spine.
   The idle-subagent admission rule is unchanged: an idle Paseo subagent
   with no active descendant is never projected — one retained by an active
   descendant projects as effectively active — so grouped subagent cards are
@@ -437,7 +439,7 @@ once stamped, is immutable for the session's lifetime.
 
 ### Rail
 
-Fixed 496px (~19.4%), top to bottom:
+Fixed 600px (~23.4%), top to bottom:
 
 - **Token block**: today's total (`48.9M today`) with the two trend-colored
   rolling rates on one line (`↑ 32.3M/hr · ↓ 8.5M/10m`) — unchanged
@@ -463,17 +465,17 @@ Fixed 496px (~19.4%), top to bottom:
 - **Quota rows** (claude, codex, kimi, GLM/zai, Qwen — strip-only, no
   keypad equivalent), one compact two-line row each: the head line carries
   the provider chip, the label, and a pill naming the binding window —
-  bare, no ` binds` suffix, because only the binding window renders (the
-  non-binding tick marks and extra-window readouts of the earlier
-  quota-windows contract are retired from the display; the snapshot keeps
-  publishing all windows, and binding selection — the lowest percent
+  bare, no ` binds` suffix (binding selection — the lowest percent
   remaining, ties session > weekly > extras — is unchanged). The right side
   reads `<reset countdown> · <percent>` with the muted countdown first so
   the bright tabular percents align flush at the rail's right edge
   regardless of countdown width; "resetting…" takes the countdown's muted
   slot at reset time. The second line is the 8px full-row-width bar filled
   to the binding window's percent on the headroom palette (green `#4ADE80`
-  above 25% remaining, amber `#FFB020` from 10%, red `#FF4D67` below).
+  above 25% remaining, amber `#FFB020` from 10%, red `#FF4D67` below),
+  with a 2px neutral tick at each non-binding window's percent — the tick
+  is the whole non-binding treatment; textual readouts proved too busy for
+  the row.
 - **Pager dots**: one per page, tap to jump.
 - Data plumbing is unchanged: quota via `quota-snapshot.json` and token
   usage via `token-usage-snapshot.json`, each its own file with its own

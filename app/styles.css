@@ -14,23 +14,26 @@ body {
 }
 #strip {
   display: grid;
-  grid-template-columns: 1fr 19.375%; /* 496px native rail, flush as in d6 */
+  grid-template-columns: 1fr 23.4375%; /* 600px native rail */
   height: 100vh;
   touch-action: none;
   -webkit-touch-callout: none;
 }
 
-/* Board: d6's fixed geometry — two 1012px columns of six 102px rows, 12px
-   gaps, 34px top / 16px left padding (native px converted at 2560x720:
-   px / 25.6 = vw, px / 7.2 = vh). Cards are a fixed standard size and never
+/* Board: fixed geometry — two 966px columns of six 102px rows, 12px gaps,
+   44px top / 16px left padding (native px converted at 2560x720:
+   px / 25.6 = vw, px / 7.2 = vh). macOS draws its menu bar as a ~30px
+   overlay on the strip display (no visibleFrame reservation), so the top
+   padding keeps row one — including the chip's corner unread dot at
+   top -6px — clear of it. Cards are a fixed standard size and never
    flex-resize; the renderer sets each card's grid position inline from its
    placement. */
 #board {
   display: grid;
-  grid-template-columns: repeat(2, 39.531vw); /* 1012px native */
+  grid-template-columns: repeat(2, 37.734vw); /* 966px native */
   grid-template-rows: repeat(6, 14.167vh); /* 102px native */
   gap: 1.667vh 0.469vw; /* 12px native */
-  padding: 4.722vh 0 0 0.625vw; /* 34px top clears the 28px menu bar, 16px left */
+  padding: 6.111vh 0 0 0.625vw; /* 44px top clears the menu bar overlay, 16px left */
   min-width: 0;
 }
 .offline {
@@ -446,7 +449,9 @@ body {
   background: #10141c;
   border: 1px solid #232b38;
   border-radius: 1vw;
-  padding: 3.5%;
+  /* 44px top matches the board's menu-bar clearance; the box itself may sit
+     under the overlay bar, but its content never does. */
+  padding: 6.111vh 3.5% 2.222vh;
   color: #94a3b8;
   font-size: 1.3vw;
 }
@@ -505,7 +510,9 @@ body {
 .rail-sparkline {
   position: relative;
   margin-top: 0.547vw; /* 14px native */
-  height: 11.111vh; /* 80px native */
+  /* Match the 436x80 viewBox's aspect so the uniformly scaled SVG fills the
+     rail's inner width instead of centering with side gaps. */
+  aspect-ratio: 436 / 80;
   overflow: visible; /* the endpoint dot sits at the plot edge */
 }
 .rail-sparkline svg {
@@ -608,6 +615,14 @@ body {
 .quota-bar-fill {
   height: 100%;
   border-radius: inherit;
+}
+/* A neutral tick per non-binding window at its own percent. */
+.quota-tick {
+  position: absolute;
+  top: 0;
+  width: max(1px, 0.078vw); /* 2px native */
+  height: 100%;
+  background: rgb(148 163 184 / 0.55);
 }
 .quota-tag {
   flex: none;

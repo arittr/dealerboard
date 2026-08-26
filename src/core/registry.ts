@@ -650,6 +650,8 @@ export type PaseoSyncState = {
   attentionTimestamp: string | null;
   /** When Paseo last wrote the record (ISO-8601 UTC), or null when unreported. */
   updatedAt: string | null;
+  /** When the user archived the agent in Paseo (ISO-8601 UTC), or null while live. */
+  archivedAt: string | null;
   /** Title from Paseo's agent record, or null when absent. */
   title: string | null;
 };
@@ -672,6 +674,10 @@ export type PaseoSyncState = {
  *   `updatedAt` is present and strictly newer than the stored unread stamp:
  *   a stale or timestamp-less record is not proof of viewing, so an older
  *   clear can never undo a newer Stop and a missing flag never clears.
+ * - An archived record (`archivedAt` set) takes the cleared path even while
+ *   its attention flag is still up — archiving is the user's terminal
+ *   gesture on an agent — with the later of `archivedAt` and `updatedAt` as
+ *   the proof-of-viewing time under the same freshness guard.
  *
  * Origin stamping (kind/ref/subagent) (and now `origin_parent_ref`) stays
  * unconditional for matched top-level rows. A difference-guard in the WHERE
@@ -690,6 +696,10 @@ export type PaseoSyncState = {
  * session are ambiguous evidence, and picking a winner could strip a
  * still-valid row's routing.
  */
+/** The later of two canonical ISO-8601 UTC instants (lexical order is chronological); null when both are absent. */
+const laterInstant = (a: string | null, b: string | null): string | null =>
+  a === null ? b : b === null ? a : a > b ? a : b;
+
 export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
   inWriteTransaction(db, () => {
     let changed = 0;
@@ -712,7 +722,7 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
         );
         changed += titleResult.changes;
       }
-      if (state.requiresAttention) {
+      if (state.requiresAttention && state.archivedAt === null) {
         // Flagged: set unread only when currently null, to the flag time —
         // and only when the flag postdates the last ack, so a stale flag can
         // never resurrect a session the user already marked read.
@@ -748,8 +758,10 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
         );
         changed += result.changes;
       } else {
-        // Cleared or absent flag: only a record written after the local news
-        // is fresh proof that the user viewed the session in Paseo.
+        // Cleared, absent flag, or archived: only a record written (or
+        // archived) after the local news is fresh proof that the user viewed
+        // the session in Paseo.
+        const clearTime = laterInstant(state.updatedAt, state.archivedAt);
         const result = db.run(
           `UPDATE active_sessions
            SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?, origin_parent_ref = ?,
@@ -764,15 +776,15 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
             state.agentId,
             state.isSubagent ? 1 : 0,
             state.parentAgentId,
-            state.updatedAt,
-            state.updatedAt,
+            clearTime,
+            clearTime,
             state.provider,
             state.sessionId,
             state.agentId,
             state.isSubagent ? 1 : 0,
             state.parentAgentId,
-            state.updatedAt,
-            state.updatedAt,
+            clearTime,
+            clearTime,
           ],
         );
         changed += result.changes;
