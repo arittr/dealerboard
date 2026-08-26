@@ -1,12 +1,12 @@
 # Xeneon Live Subagent Tree Design
 
-**Date:** 2026-08-25  
-**Status:** Approved design  
+**Date:** 2026-08-25
+**Status:** Approved design
 **Scope:** Xeneon Edge strip app, daemon projection, and shared snapshot protocol
 
 ## Summary
 
-The Xeneon board will show every live subagent as a child card. This applies equally to provider-native children, including Evener AppWire subagents, and to the existing cross-provider Paseo lineage. Each child card shows its own title, model, status, and timer. Nested execution remains ordered depth-first but renders at one visual indent level. Finished children disappear; the board does not retain subagent history.
+The Xeneon board will show every live subagent as a child card. This applies equally to provider-native children, including Evener AppWire subagents, and to the existing cross-provider Paseo lineage. Each child card shows its own title, model, status, and status timer when known. Nested execution remains ordered depth-first but renders at one visual indent level. Finished children disappear; the board does not retain subagent history.
 
 The current Xeneon descendant-number badge will disappear once the daemon supplies the complete graph. Counts are a compact-surface substitute for hidden topology, and Xeneon has enough room and paging support to render that topology directly. There is no automatic collapse rule. A future explicit user-controlled collapse may show the number of hidden live descendants, but collapse is outside this design.
 
@@ -54,11 +54,12 @@ A live child keeps every resolvable ancestor visible through effective-status ro
 ### Visual hierarchy
 
 - Primary roots retain the current full-size card treatment.
-- Every subagent uses the existing dimmed subagent card, hollow-ring `sub` pill, violet spine, and 44px indent.
+- Every subagent uses the existing dimmed subagent card and hollow-ring `sub` pill. A subagent in a resolved primary group also uses the violet spine and 44px indent.
 - Nested descendants render in depth-first order directly after their immediate parent but flatten to the same single visual indent.
 - Each child shows its own provider chip, model label, title, project suppression, effective status, and the row’s own status timer.
 - An Evener child keeps the lime `E` chip because Evener is the observed session provider; its heterogeneous execution model appears in the model label.
-- Missing or unsafe Paseo parentage places the child in the existing full-width orphan tail.
+- Native child cards never show an unread dot. Their results belong to the orchestrating parent, and the display-only card has no acknowledgement action.
+- Missing or unsafe Paseo parentage places the child in the existing full-width orphan tail. Every orphan-tail card remains unindented and has no spine.
 - The complete-graph view shows no descendant-number badge.
 
 The browser mockup approved during design review showed an Evener parent followed by live child cards on `claude-opus-4.1`, `gpt-5.6-terra`, and `gemini-3-pro`, alongside an existing Paseo group. This textual contract, not the temporary companion file, is authoritative.
@@ -130,6 +131,8 @@ The raw field is absent in old snapshots. `parseSessionSnapshot` returns `agents
 
 Registry roots retain positive logical slots. Native children retain `logicalSlot: null`. Paseo subagents are registry roots and may retain their logical slot even though the Xeneon graph classifies them as subagents.
 
+A native node also has `unreadSince: null`, no origin metadata, no transcript path, and no terminal binding. These are deliberate projection invariants: native children are live execution detail, not independently actionable or acknowledgeable sessions. Paseo nodes retain their existing root-row facts.
+
 ### Compatibility transition
 
 The daemon produces `sessions` and `agents` from one read transaction and one validated projection pass.
@@ -153,9 +156,21 @@ After the Stream Deck consumer is removed, a separate contract cleanup may make 
 
 ### Model changes
 
-Add a model-change registry event that updates only an existing row, regardless of whether that row is a root or child. It must never create membership or change role, parentage, status, unread state, timers, or the prune lease.
+Add this registry event:
 
-Evener child hydration emits this safe update after membership is established, and `thread/model/changed` no longer drops child notifications. Unchanged models are ignored by the registry difference guard. Null never clears a stored model.
+```ts
+{
+  kind: "SessionModelChanged";
+  provider: Provider;
+  sessionId: string;
+  model: string;
+  observedAt: string;
+}
+```
+
+`SessionModelChanged` accepts a non-empty bounded model and updates only an existing row, regardless of whether that row is a root or child. It must never create membership or change role, parentage, status, unread state, timers, or the prune lease.
+
+Evener child hydration emits this safe update after membership is established, and `thread/model/changed` no longer drops child notifications. Unchanged models are ignored by the registry difference guard. A null `SubagentStart` model never clears a stored model; the model-change event does not accept null.
 
 If a child start is rejected because its parent is invalid or absent, the following model update is also ignored; it cannot accidentally create a top-level session.
 
@@ -205,9 +220,9 @@ Before publication, detect cycles in the resolved Paseo graph. Clear unsafe cycl
 - Immediate children sort by `openedAt`, then provider, then session ID.
 - The identity tie-breaker makes equal batch timestamps deterministic without a database migration.
 - Traverse children depth-first in pre-order so each descendant follows its immediate parent.
-- Render every descendant at one visual indent level.
+- Render every descendant in a resolved primary group at one visual indent level.
 - A top-level Paseo subagent may own native children; both stay in the nearest resolvable primary’s group.
-- All orphans form one atomic tail block after ordinary groups, ordered by `openedAt` and composite identity.
+- All orphans form one atomic tail block after ordinary groups. Parentless Paseo subagents are orphan roots, sorted by `openedAt` and composite identity. Traverse each orphan root’s still-safe child edges depth-first before the next orphan root, so native children of an orphan remain directly after that parent without violating deterministic root order. Render the whole tail full-width with no indent or spine.
 
 The existing group-atomic packing rules remain unchanged. A group may span pages under the existing greater-than-12 rule. Page settings clamp when disappearing children reduce the page count.
 
@@ -234,6 +249,7 @@ Missing, duplicate, or cyclic Paseo lineage is not evidence that otherwise valid
 The parser validates:
 
 - bounded field shapes and known enums;
+- a non-empty canonical UTC `openedAt` timestamp for every node;
 - unique composite node identities;
 - role/lineage combinations;
 - required same-provider parents for native children;
@@ -261,7 +277,7 @@ Implementation follows test-driven development.
 ### Registry and providers
 
 - `SubagentStart` stores and backfills a non-null model without null-clearing.
-- Model changes update existing root and child rows only.
+- `SessionModelChanged` updates existing root and child rows only.
 - A model change for an unknown identity is ignored.
 - Generic providers emit null child models where no source exists.
 
@@ -280,6 +296,7 @@ Implementation follows test-driven development.
 - Nested native status rolls up at every node and through Paseo ancestry.
 - Live idle children project as working.
 - Models, timestamps, and display facts survive projection.
+- Native nodes publish `unreadSince: null` and no independent routing facts.
 - Equal timestamps use deterministic identity ordering.
 - Missing/ambiguous/cyclic Paseo lineage becomes orphaned.
 - Native corruption still fails atomically.
@@ -290,7 +307,7 @@ Implementation follows test-driven development.
 - Primary groups retain logical-slot order.
 - Mixed child types sort and traverse depth-first.
 - Nested descendants flatten to one indent.
-- Orphans remain one atomic tail.
+- Orphan roots sort deterministically, retain safe descendants in depth-first order, and render as one full-width unspined tail.
 - Group packing and page clamping retain current behavior.
 - Graph-backed cards show no descendant badge.
 - Evener children show distinct model labels and status treatments.
