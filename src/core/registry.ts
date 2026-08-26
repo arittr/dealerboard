@@ -189,10 +189,14 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
     // the subagent bit and clearing the parent ref.
     // A null event model never clears the stored one (COALESCE): providers
     // that omit the field on resume must not erase what an earlier start
-    // stored.
+    // stored. A paseo-origin row keeps its stored title — the overlay owns
+    // it (see applySessionTitleChanged), and a restarted provider process
+    // would re-push its own title over a user's Paseo rename.
     db.run(
       `UPDATE active_sessions
-       SET status = 'idle', title = ?, project = ?, ghostty_terminal_id = ?, transcript_path = ?,
+       SET status = 'idle',
+           title = CASE WHEN origin_kind IS 'paseo' THEN title ELSE ? END,
+           project = ?, ghostty_terminal_id = ?, transcript_path = ?,
            background_outstanding = 0, unread_since = NULL,
            status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
            origin_kind = COALESCE(?, origin_kind),
@@ -321,8 +325,12 @@ const applySessionTitleChanged = (
   db: Database,
   event: Extract<RegistryEvent, { kind: "SessionTitleChanged" }>,
 ): MutationResult => {
+  // Paseo-origin rows take titles from the overlay alone: its record title
+  // (which carries user renames) rewrites every pass, so a provider-side
+  // title would only flash for one pass and then lose — oscillating forever
+  // against a provider that keeps re-pushing its own title.
   const result = db.run(
-    "UPDATE active_sessions SET title = ? WHERE provider = ? AND session_id = ? AND title IS NOT ?",
+    "UPDATE active_sessions SET title = ? WHERE provider = ? AND session_id = ? AND title IS NOT ? AND origin_kind IS NOT 'paseo'",
     [event.title, event.provider, event.sessionId, event.title],
   );
   return result.changes > 0 ? "applied" : "ignored";
@@ -628,8 +636,11 @@ export const updateSessionTitles = (db: Database, updates: readonly SessionTitle
   inWriteTransaction(db, () => {
     let changed = 0;
     for (const update of updates) {
+      // Paseo-origin rows are the overlay's to title (see
+      // applySessionTitleChanged); a resolved provider title would only
+      // oscillate against the overlay's per-pass rewrite.
       const result = db.run(
-        "UPDATE active_sessions SET title = ? WHERE provider = ? AND session_id = ? AND title IS NOT ?",
+        "UPDATE active_sessions SET title = ? WHERE provider = ? AND session_id = ? AND title IS NOT ? AND origin_kind IS NOT 'paseo'",
         [update.title, update.provider, update.sessionId, update.title],
       );
       changed += result.changes;
