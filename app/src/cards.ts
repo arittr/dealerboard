@@ -6,10 +6,10 @@
  * through textContent; no innerHTML anywhere.
  */
 
-import { modelLabel, PROVIDER_LETTERS, washCycleOffset } from "../../src/plugin/render";
+import { modelLabel, PROVIDER_LETTERS } from "../../src/plugin/render";
 import type { ProjectedSession, SessionStatus } from "../../src/protocol";
 import type { BoardPage, PlacedCard, SpineSegment } from "./board";
-import { elapsedLabel } from "./liveness";
+import { breathAnimationDelay, elapsedLabel } from "./liveness";
 
 /**
  * The per-tile status timer text ("working 12m"), or null when the row's own
@@ -24,23 +24,6 @@ export const statusLineText = (status: SessionStatus, statusSince: string | null
     return null;
   }
   return `${status} ${elapsedLabel(nowMs - startedMs)}`;
-};
-
-/** The wash alternates over four seconds each way (styles.css), so one full
- *  round trip takes eight. */
-export const WASH_CYCLE_MS = 8000;
-
-/**
- * Negative CSS animation delay that starts a working tile's wash partway into
- * its cycle. The session offset staggers concurrent tiles so they never
- * breathe in lockstep, and folding in the wall clock keeps the wash
- * phase-continuous across re-renders: renderBoard recreates every card on
- * any data change, and an undelayed card would snap back to the dim end
- * each time.
- */
-export const washAnimationDelay = (sessionId: string, nowMs: number): string => {
-  const elapsed = (nowMs + washCycleOffset(sessionId) * WASH_CYCLE_MS) % WASH_CYCLE_MS;
-  return `-${(elapsed / 1000).toFixed(3)}s`;
 };
 
 /** The board's meta line has room for full model ids; the tile 10-point cap does not apply. */
@@ -114,9 +97,9 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   element.dataset["cardIndex"] = String(index);
   element.style.gridColumn = String(card.column + 1);
   element.style.gridRow = String(card.row + 1);
-  if (model.status === "working") {
-    element.style.setProperty("--wash-delay", washAnimationDelay(card.session.sessionId, nowMs));
-  }
+  // Every card carries the shared wall-clock breath phase; the stylesheet
+  // scopes which dots animate on it.
+  element.style.setProperty("--breath-delay", breathAnimationDelay(nowMs));
 
   const head = document.createElement("div");
   head.className = "card-head";
@@ -156,6 +139,8 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   if (model.badge > 0) {
     appendText(metaRight, "badge", String(model.badge));
   }
+  // The quiet label slot stays empty while live; the 1s ticker owns its text.
+  appendText(meta, "meta-item quiet-elapsed", "");
   meta.append(metaRight);
   element.append(meta);
 
@@ -174,6 +159,10 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   if (model.degraded) {
     appendText(element, "flag", "!");
   }
+  // A permanent, invisible layer the ingest path animates on stamp advance.
+  const pulse = document.createElement("span");
+  pulse.className = "pulse-overlay";
+  element.append(pulse);
   return element;
 };
 
@@ -190,12 +179,26 @@ export const cardKey = (card: PlacedCard): string => `${card.session.provider}\u
 
 /**
  * The per-card rebuild signature: everything cardElement bakes into the node
- * except its page position (grid column/row and the dense index), which the
- * reconciler (re)applies on every pass — so a card that merely moves keeps
- * its DOM node, its CSS animation phase, and its in-place-ticked timer.
+ * except its page position and its liveness stamp — both are (re)applied on
+ * every pass by applyCardFrame, so a card that merely moves or ticks keeps
+ * its DOM node, its CSS animation phase, and its in-place-painted decay.
  */
-export const cardContentSignature = ({ column: _column, row: _row, ...content }: PlacedCard): string =>
-  JSON.stringify(content);
+export const cardContentSignature = ({ column: _column, row: _row, ...content }: PlacedCard): string => {
+  const { lastEventAt: _lastEventAt, ...session } = content.session;
+  return JSON.stringify({ ...content, session });
+};
+
+/**
+ * Everything outside the rebuild signature, (re)written on every pass: grid
+ * position, the dense index, and the liveness stamp the 1s decay ticker
+ * reads. A reused node gets fresh values without re-inserting.
+ */
+export const applyCardFrame = (element: HTMLElement, card: PlacedCard, index: number): void => {
+  element.dataset["cardIndex"] = String(index);
+  element.style.gridColumn = String(card.column + 1);
+  element.style.gridRow = String(card.row + 1);
+  element.dataset["lastEvent"] = card.session.lastEventAt ?? "";
+};
 
 export type CardPatch = {
   card: PlacedCard;
@@ -258,11 +261,7 @@ export const renderBoard = (root: HTMLElement, page: BoardPage, degraded: boolea
         root.append(element);
       }
     }
-    // Position and index sit outside the content signature: applied on every
-    // pass, so a reused node moves by grid style alone, never re-inserting.
-    element.dataset["cardIndex"] = String(index);
-    element.style.gridColumn = String(patch.card.column + 1);
-    element.style.gridRow = String(patch.card.row + 1);
+    applyCardFrame(element, patch.card, index);
     kept.add(element);
   }
   for (const child of Array.from(root.children)) {

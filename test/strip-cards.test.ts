@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PlacedCard } from "../app/src/board";
 import {
+  applyCardFrame,
   boardRenderSignature,
   CARD_MODEL_LABEL_MAX_CODE_POINTS,
   cardContentSignature,
@@ -8,10 +9,9 @@ import {
   cardViewModel,
   planCardPatches,
   statusLineText,
-  WASH_CYCLE_MS,
-  washAnimationDelay,
 } from "../app/src/cards";
 import type { ProjectedSession } from "../src/protocol";
+import { FakeElement } from "./support/fake-dom";
 
 const session = (slot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
   provider: "claude",
@@ -63,37 +63,6 @@ describe("statusLineText", () => {
     expect(statusLineText("working", "2026-08-20T00:00:00.000Z", NOW_MS)).toBe("working 0s");
     expect(statusLineText("working", null, NOW_MS)).toBeNull();
     expect(statusLineText("working", "not a timestamp", NOW_MS)).toBeNull();
-  });
-});
-
-describe("washAnimationDelay", () => {
-  const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
-
-  const parseDelay = (delay: string): number => {
-    expect(delay).toMatch(/^-\d+\.\d{3}s$/);
-    return Math.round(Number.parseFloat(delay.slice(1, -1)) * 1000);
-  };
-
-  test("seats each session at its own point in the wash cycle", () => {
-    const phases = ["s1", "s2", "s3", "s4"].map((id) => parseDelay(washAnimationDelay(id, NOW_MS)));
-    expect(new Set(phases).size).toBe(phases.length);
-    for (const phase of phases) {
-      expect(phase).toBeGreaterThanOrEqual(0);
-      expect(phase).toBeLessThan(WASH_CYCLE_MS);
-    }
-  });
-
-  test("a re-rendered tile resumes the phase it was already showing", () => {
-    // renderBoard recreates every card on any data change, so the delay has
-    // to carry the wash forward; otherwise each re-render snaps it to the dim
-    // end.
-    const atCreate = parseDelay(washAnimationDelay("s1", NOW_MS));
-    for (const elapsed of [0, 250, 3_100, 7_999, 8_000, 19_400]) {
-      const atRerender = parseDelay(washAnimationDelay("s1", NOW_MS + elapsed));
-      const drift = (((atCreate + elapsed - atRerender) % WASH_CYCLE_MS) + WASH_CYCLE_MS) % WASH_CYCLE_MS;
-      // One millisecond of slack for the delay string's millisecond precision.
-      expect(Math.min(drift, WASH_CYCLE_MS - drift)).toBeLessThanOrEqual(1);
-    }
   });
 });
 
@@ -212,5 +181,26 @@ describe("card reconciliation plan", () => {
     ]);
     expect(plan.map((patch) => patch.action)).toEqual(["replace", "create"]);
     expect(planCardPatches(previous, [placed({ column: 1, row: 4 }, { sessionId: "a" })])[0]?.action).toBe("reuse");
+  });
+});
+
+describe("liveness reconciliation", () => {
+  test("a changed lastEventAt alone reuses the DOM node", () => {
+    const before = placed({}, { lastEventAt: "2026-08-25T00:00:01.000Z" });
+    const after = placed({}, { lastEventAt: "2026-08-25T00:00:09.000Z" });
+    expect(cardContentSignature(before)).toBe(cardContentSignature(after));
+    const previous = new Map([[cardKey(before), cardContentSignature(before)]]);
+    expect(planCardPatches(previous, [after])[0]?.action).toBe("reuse");
+  });
+
+  test("applyCardFrame writes the stamp, position, and index on every pass", () => {
+    const element = new FakeElement("div") as unknown as HTMLElement;
+    applyCardFrame(element, placed({ column: 2, row: 1 }, { lastEventAt: "2026-08-25T00:00:01.000Z" }), 5);
+    expect(element.dataset["lastEvent"]).toBe("2026-08-25T00:00:01.000Z");
+    expect(element.dataset["cardIndex"]).toBe("5");
+    expect(element.style.gridColumn).toBe("3");
+    expect(element.style.gridRow).toBe("2");
+    applyCardFrame(element, placed({ column: 2, row: 1 }, { lastEventAt: null }), 5);
+    expect(element.dataset["lastEvent"]).toBe("");
   });
 });
