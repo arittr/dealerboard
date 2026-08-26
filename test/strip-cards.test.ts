@@ -178,6 +178,12 @@ describe("boardRenderSignature", () => {
   });
 });
 
+describe("cardKey", () => {
+  test("joins provider and session id with a NUL separator that cannot appear in either", () => {
+    expect(cardKey(placed({}, { provider: "claude", sessionId: "s1" }))).toBe("claude\u0000s1");
+  });
+});
+
 describe("card reconciliation plan", () => {
   test("the content signature ignores page position, so a moved card reuses its node", () => {
     expect(cardContentSignature(placed({ column: 1, row: 5 }))).toBe(
