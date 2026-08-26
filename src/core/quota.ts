@@ -26,6 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  capQuotaExtraWindowLabel,
   type ProviderQuota,
   parseQuotaSnapshot,
   QUOTA_EXTRA_WINDOWS_LIMIT,
@@ -122,22 +123,12 @@ const CODEXBAR_DISPLAY_NAMES: Record<string, string> = {
   alibabatokenplan: "Qwen",
 };
 
-const EXTRA_WINDOW_LABEL_MAX_CODE_POINTS = 14;
-
 /** Extra-window tag: title minus the provider's own name, capped at 14 code points with an ellipsis. */
 const extraWindowLabel = (title: string, codexbarProvider: string): string => {
   const displayName = CODEXBAR_DISPLAY_NAMES[codexbarProvider] ?? codexbarProvider;
   const stripped = title.replace(new RegExp(`^${displayName}\\s+`, "iu"), "").trim();
   const source = stripped.length === 0 ? title.trim() : stripped;
-  const codePoints = [...source];
-  if (codePoints.length <= EXTRA_WINDOW_LABEL_MAX_CODE_POINTS) {
-    return source;
-  }
-  // The ellipsis is the 14th code point, so the slice leaves room for it.
-  return `${codePoints
-    .slice(0, EXTRA_WINDOW_LABEL_MAX_CODE_POINTS - 1)
-    .join("")
-    .trimEnd()}…`;
+  return capQuotaExtraWindowLabel(source);
 };
 
 type WindowSelection = { session: RawCodexbarWindow | null; weekly: RawCodexbarWindow | null };
@@ -369,6 +360,7 @@ const emptyQuota = (): ProviderQuota => ({
   fetchedAt: null,
   history: [],
   extraWindows: [],
+  accounts: [],
 });
 
 const defaultReadFile = (path: string): string | null => {
@@ -535,6 +527,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         fetchedAt,
         history,
         extraWindows: outcome.reading.extras,
+        accounts: [],
       };
       states.set(provider, { quota, failed: false });
       return quota;

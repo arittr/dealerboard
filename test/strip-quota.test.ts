@@ -27,6 +27,7 @@ const quota = (overrides: Partial<ProviderQuota> = {}): ProviderQuota => ({
   fetchedAt: "2026-08-19T18:00:00.000Z",
   history: [],
   extraWindows: [],
+  accounts: [],
   ...overrides,
 });
 
