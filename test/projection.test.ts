@@ -33,6 +33,7 @@ const row = (
     activityLine?: string | null;
     transcriptPath?: string | null;
     originParentRef?: string | null;
+    lastEventAt?: string | null;
   } = {},
 ): ProjectionRow => {
   const parent = options.parent ?? null;
@@ -56,6 +57,7 @@ const row = (
     activityLine: options.activityLine ?? null,
     transcriptPath: options.transcriptPath ?? null,
     originParentRef: options.originParentRef ?? null,
+    lastEventAt: options.lastEventAt ?? null,
   };
 };
 
@@ -111,7 +113,14 @@ describe("projectRows", () => {
       activityLine: null,
       transcriptPath: null,
       originParentRef: null,
+      lastEventAt: null,
     });
+  });
+
+  test("publishes the row's lastEventAt on the projected session", () => {
+    const projected = projectRows([row("s1", { status: "working", lastEventAt: "2026-08-25T05:10:08.055Z" })]);
+    expect(projected[0]?.lastEventAt).toBe("2026-08-25T05:10:08.055Z");
+    expect(projectRows([row("s1", { status: "working", lastEventAt: null })])[0]?.lastEventAt).toBeNull();
   });
 
   test("lifts an idle root with live descendants to at least working", () => {
@@ -704,6 +713,7 @@ describe("readProjection", () => {
             activityLine: null,
             transcriptPath: null,
             originParentRef: null,
+            lastEventAt: "2026-08-06T00:00:04.000Z",
           },
         ]);
         // The snapshot satisfies the published v2 contract.
@@ -991,6 +1001,7 @@ describe("writeSnapshotAtomically", () => {
         activityLine: null,
         transcriptPath: null,
         originParentRef: null,
+        lastEventAt: null,
       },
     ],
   };

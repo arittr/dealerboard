@@ -31,6 +31,7 @@ const valid: SessionSnapshotV2 = {
       activityLine: null,
       transcriptPath: null,
       originParentRef: null,
+      lastEventAt: null,
     },
   ],
 };
@@ -328,6 +329,26 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot(withSession({ transcriptPath: 0 as unknown as string }))).toThrow();
     // A present undefined is an invalid value, not a missing key.
     expect(() => parseSessionSnapshot(withSession({ originParentRef: undefined as unknown as string }))).toThrow();
+  });
+
+  test("lastEventAt parses when present, defaults to null when the key is absent", () => {
+    const withStamp = {
+      ...valid,
+      sessions: [{ ...firstSession(), lastEventAt: "2026-08-25T05:10:08.055Z" }],
+    };
+    expect(parseSessionSnapshot(withStamp).sessions[0]?.lastEventAt).toBe("2026-08-25T05:10:08.055Z");
+    // Cross-version tolerance: a snapshot written before the field existed
+    // carries no key at all (not a present null) and parses to null.
+    const absent = { ...firstSession() } as Partial<ProjectedSession>;
+    delete absent.lastEventAt;
+    expect(parseSessionSnapshot({ ...valid, sessions: [absent] }).sessions[0]?.lastEventAt).toBeNull();
+  });
+
+  test("lastEventAt rejects non-string non-null values", () => {
+    const malformed = { ...valid, sessions: [{ ...firstSession(), lastEventAt: 12 }] };
+    expect(() => parseSessionSnapshot(malformed)).toThrow("session.lastEventAt");
+    const explicitNull = { ...valid, sessions: [{ ...firstSession(), lastEventAt: null }] };
+    expect(parseSessionSnapshot(explicitNull).sessions[0]?.lastEventAt).toBeNull();
   });
 });
 

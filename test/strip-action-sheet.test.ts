@@ -28,6 +28,7 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   activityLine: null,
   transcriptPath: null,
   originParentRef: null,
+  lastEventAt: null,
   ...overrides,
 });
 

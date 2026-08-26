@@ -18,7 +18,6 @@ import { writeSnapshotAtomically } from "../src/core/snapshot";
 import { parseSessionSnapshot, type RegistryEvent, type SessionSnapshotV2 } from "../src/protocol";
 
 const NOW = "2026-08-06T00:00:00.000Z";
-const LATER = "2026-08-06T00:00:01.000Z";
 
 let tempHome: string;
 let paths: AppPaths;
@@ -158,6 +157,7 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       activityLine: null,
       transcriptPath: null,
       originParentRef: null,
+      lastEventAt: NOW,
     },
   ],
 };
@@ -223,10 +223,18 @@ describe("ProjectionDaemon", () => {
     harness.daemon.start();
     try {
       const before = statSync(paths.snapshot).ino;
-      // BackgroundWorkStarted moves only updated_at and the (unprojected)
-      // background flag: the commit bumps data_version without changing any
-      // projected column — flag events never restamp status_since.
-      apply([{ kind: "BackgroundWorkStarted", provider: "claude", sessionId: "s1", observedAt: LATER }]);
+      // Every hook event restamps updated_at, which the projection now
+      // publishes as lastEventAt — so the unchanged-projection probe writes
+      // the (unprojected) background flag directly: the separate-connection
+      // commit bumps data_version without changing any projected column.
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        writer.run(
+          "UPDATE active_sessions SET background_outstanding = 1 WHERE provider = 'claude' AND session_id = 's1'",
+        );
+      } finally {
+        writer.close();
+      }
       harness.tick();
       expect(harness.readCount()).toBe(2);
       expect(harness.writes).toHaveLength(1);

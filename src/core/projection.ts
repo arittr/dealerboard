@@ -49,6 +49,8 @@ export type ProjectionRow = {
   activityLine: string | null;
   transcriptPath: string | null;
   originParentRef: string | null;
+  /** ISO-8601 UTC of the row's last hook event (`updated_at`); null tolerated defensively. */
+  lastEventAt: string | null;
 };
 
 export type ProjectionErrorCode =
@@ -284,6 +286,7 @@ export const projectRows = (rows: readonly ProjectionRow[]): ProjectedSession[] 
         activityLine: root.activityLine,
         transcriptPath: root.transcriptPath,
         originParentRef: root.originParentRef,
+        lastEventAt: root.lastEventAt,
       });
     }
   }
@@ -308,6 +311,7 @@ type StoredRow = {
   transcript_path: unknown;
   origin_parent_ref: unknown;
   activity_line: unknown;
+  updated_at: unknown;
 };
 
 const isStringOrNull = (value: unknown): value is string | null => typeof value === "string" || value === null;
@@ -367,7 +371,8 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   if (
     !isStringOrNull(row.transcript_path) ||
     !isStringOrNull(row.origin_parent_ref) ||
-    !isStringOrNull(row.activity_line)
+    !isStringOrNull(row.activity_line) ||
+    !isStringOrNull(row.updated_at)
   ) {
     throw new ProjectionError("corrupt-row");
   }
@@ -407,11 +412,12 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     activityLine: row.activity_line,
     transcriptPath: row.transcript_path,
     originParentRef: row.origin_parent_ref,
+    lastEventAt: row.updated_at,
   };
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, origin_kind, origin_ref, origin_subagent, unread_since, status_since, activity_line, transcript_path, origin_parent_ref";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, origin_kind, origin_ref, origin_subagent, unread_since, status_since, activity_line, transcript_path, origin_parent_ref, updated_at";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:

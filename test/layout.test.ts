@@ -31,6 +31,7 @@ const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {})
   activityLine: null,
   transcriptPath: null,
   originParentRef: null,
+  lastEventAt: null,
   ...overrides,
 });
 

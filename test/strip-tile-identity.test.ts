@@ -21,6 +21,7 @@ const session = (provider: string, sessionId: string, title: string): ProjectedS
   activityLine: null,
   transcriptPath: null,
   originParentRef: null,
+  lastEventAt: null,
 });
 
 describe("identityOf", () => {

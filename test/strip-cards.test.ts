@@ -31,6 +31,7 @@ const session = (slot: number, overrides: Partial<ProjectedSession> = {}): Proje
   ghosttyTerminalId: null,
   descendantCount: 0,
   logicalSlot: slot,
+  lastEventAt: null,
   ...overrides,
 });
 

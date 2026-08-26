@@ -112,6 +112,8 @@ export type ProjectedSession = {
   transcriptPath: string | null;
   /** The dispatching Paseo agent's id for a paseo subagent; null otherwise. */
   originParentRef: string | null;
+  /** ISO-8601 UTC of the row's last hook event; null when the registry has no stamp. */
+  lastEventAt: string | null;
 };
 
 export type SnapshotHealth = {
@@ -248,6 +250,10 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (!isNullableBoundedString(originParentRef)) {
     return invalid("session.originParentRef must be null or a bounded string");
   }
+  const lastEventAt = "lastEventAt" in value ? value["lastEventAt"] : null;
+  if (!isNullableBoundedString(lastEventAt)) {
+    return invalid("session.lastEventAt must be null or a bounded string");
+  }
   return {
     provider: value["provider"] as Provider,
     sessionId: value["sessionId"],
@@ -266,6 +272,7 @@ const parseSession = (value: unknown): ProjectedSession => {
     activityLine,
     transcriptPath,
     originParentRef,
+    lastEventAt,
   };
 };
 
