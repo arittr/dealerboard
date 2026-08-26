@@ -51,6 +51,16 @@ export type CardViewModel = {
   degraded: boolean;
 };
 
+const SAFE_ACTIVITY_LABELS = new Set(["File", "Command", "Search", "Request", "Tool", "Activity"]);
+
+/** Old daemons may publish raw targets; never render those on the physical display. */
+const safeActivityLabel = (activityLine: string | null): string | null => {
+  if (activityLine === null) {
+    return null;
+  }
+  return SAFE_ACTIVITY_LABELS.has(activityLine) ? activityLine : "Activity";
+};
+
 export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel => {
   const { session } = card;
   return {
@@ -62,7 +72,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     modelLabel: session.model === null ? null : modelLabel(session.model, CARD_MODEL_LABEL_MAX_CODE_POINTS),
     project:
       card.subagent && card.parentProject !== null && card.parentProject === session.project ? null : session.project,
-    activity: session.activityLine,
+    activity: safeActivityLabel(session.activityLine),
     status: session.status,
     statusSince: session.statusSince,
     timer: statusLineText(session.status, session.statusSince, nowMs),

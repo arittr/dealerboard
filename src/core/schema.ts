@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 13;
+export const LATEST_SCHEMA_VERSION = 14;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -432,6 +432,11 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
   WHERE logical_slot IS NOT NULL;
 `;
 
+/** v14 removes activity text that older builds derived from private tool arguments. */
+const SCHEMA_VERSION_14 = `
+UPDATE active_sessions SET activity_line = NULL;
+`;
+
 /**
  * Ordered migrations keyed by the schema version each one produces. Entries
  * below v5 alter the original table and run in one transaction before the
@@ -679,6 +684,14 @@ export const initializeDatabase = (paths: AppPaths): void => {
       // re-enter its unconditional-stamp rebuild.
       if (version < 13) {
         migrateToV13(db);
+      }
+      // v14 removes legacy raw activity values after every table rebuild.
+      if (version < 14) {
+        const migrateToV14 = db.transaction(() => {
+          db.exec(SCHEMA_VERSION_14);
+          db.exec("PRAGMA user_version = 14");
+        });
+        migrateToV14();
       }
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
