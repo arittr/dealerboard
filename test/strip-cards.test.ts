@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PlacedCard } from "../app/src/board";
 import {
   boardRenderSignature,
@@ -52,6 +54,13 @@ const placed = (overrides: Partial<PlacedCard> = {}, sessionOverrides: Partial<P
     ...overrides,
   };
 };
+
+describe("card source hygiene", () => {
+  test("contains no literal NUL bytes", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "app", "src", "cards.ts"));
+    expect(source.includes(0x00)).toBe(false);
+  });
+});
 
 describe("statusLineText", () => {
   const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
