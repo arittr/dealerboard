@@ -3,7 +3,10 @@ import type { PlacedCard } from "../app/src/board";
 import {
   boardRenderSignature,
   CARD_MODEL_LABEL_MAX_CODE_POINTS,
+  cardContentSignature,
+  cardKey,
   cardViewModel,
+  planCardPatches,
   statusLineText,
   WASH_CYCLE_MS,
   washAnimationDelay,
@@ -171,5 +174,36 @@ describe("boardRenderSignature", () => {
     expect(boardRenderSignature({ cards: [placed({ degraded: true })] }, false)).not.toBe(healthy);
     expect(boardRenderSignature({ cards: [placed({ column: 1, row: 3 })] }, false)).not.toBe(healthy);
     expect(boardRenderSignature({ cards: [placed()] }, true)).not.toBe(healthy);
+  });
+});
+
+describe("card reconciliation plan", () => {
+  test("the content signature ignores page position, so a moved card reuses its node", () => {
+    expect(cardContentSignature(placed({ column: 1, row: 5 }))).toBe(
+      cardContentSignature(placed({ column: 0, row: 2 })),
+    );
+    expect(cardContentSignature(placed({}, { activityLine: "Read a.ts" }))).not.toBe(cardContentSignature(placed()));
+  });
+
+  test("an activity-line change replaces only that card; every other card reuses", () => {
+    const a = placed({}, { sessionId: "a", activityLine: "Bash ls" });
+    const b = placed({}, { sessionId: "b" });
+    const previous = new Map([
+      [cardKey(a), cardContentSignature(a)],
+      [cardKey(b), cardContentSignature(b)],
+    ]);
+    const aChanged = placed({}, { sessionId: "a", activityLine: "Read foo.ts" });
+    expect(planCardPatches(previous, [aChanged, b]).map((patch) => patch.action)).toEqual(["replace", "reuse"]);
+  });
+
+  test("unknown keys create; a degraded flip replaces; position-only moves reuse", () => {
+    const a = placed({}, { sessionId: "a" });
+    const previous = new Map([[cardKey(a), cardContentSignature(a)]]);
+    const plan = planCardPatches(previous, [
+      placed({ degraded: true }, { sessionId: "a" }),
+      placed({}, { sessionId: "b" }),
+    ]);
+    expect(plan.map((patch) => patch.action)).toEqual(["replace", "create"]);
+    expect(planCardPatches(previous, [placed({ column: 1, row: 4 }, { sessionId: "a" })])[0]?.action).toBe("reuse");
   });
 });
