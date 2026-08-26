@@ -33,6 +33,11 @@ body {
   padding: 4.722vh 0 0 0.625vw; /* 34px top clears the 28px menu bar, 16px left */
   min-width: 0;
 }
+.offline {
+  color: #94a3b8;
+  font-size: 1.4vw;
+  letter-spacing: 0.2em;
+}
 #board > .offline {
   grid-column: 1 / -1;
   grid-row: 1 / -1;
@@ -431,12 +436,6 @@ body {
   color: #ffb020;
   font-size: 1.6vw;
   font-weight: 700;
-}
-
-.offline {
-  color: #94a3b8;
-  font-size: 1.4vw;
-  letter-spacing: 0.2em;
 }
 
 #rail {
