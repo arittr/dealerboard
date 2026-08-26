@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { claudeSwapBinaryCandidates, parseClaudeSwapAccounts } from "../src/core/claude-swap-quota";
+import {
+  CLAUDE_SWAP_ARGS,
+  CLAUDE_SWAP_EXEC_TIMEOUT_MS,
+  claudeSwapBinaryCandidates,
+  parseClaudeSwapAccounts,
+} from "../src/core/claude-swap-quota";
+import { QUOTA_EXTRA_WINDOWS_LIMIT } from "../src/quota-snapshot";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures", "quota", name), "utf8");
 
@@ -113,6 +119,43 @@ describe("parseClaudeSwapAccounts", () => {
     });
   });
 
+  test("caps scoped extras without discarding valid account-wide windows", () => {
+    const parsed = parseClaudeSwapAccounts(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [
+          {
+            number: 1,
+            usageStatus: "ok",
+            usageFetchedAt: "2026-08-25T20:00:00Z",
+            usage: {
+              fiveHour: { pct: 10 },
+              sevenDay: { pct: 20 },
+              scoped: Array.from({ length: QUOTA_EXTRA_WINDOWS_LIMIT + 2 }, (_, index) => ({
+                name: `scope-${index}`,
+                pct: index,
+              })),
+            },
+          },
+        ],
+      }),
+    );
+    expect(parsed).toMatchObject({
+      kind: "ok",
+      accounts: [
+        {
+          percentRemaining: 90,
+          weeklyPercentRemaining: 80,
+          extraWindows: Array.from({ length: QUOTA_EXTRA_WINDOWS_LIMIT }, (_, index) => ({
+            label: `scope-${index}`,
+            percentRemaining: 100 - index,
+          })),
+        },
+      ],
+    });
+  });
+
   test.each([
     ["invalid JSON", "{"],
     ["non-object", "[]"],
@@ -141,5 +184,10 @@ describe("parseClaudeSwapAccounts", () => {
       "/opt/homebrew/bin/cswap",
       "/usr/local/bin/cswap",
     ]);
+  });
+
+  test("exposes the exact read-only invocation contract", () => {
+    expect(CLAUDE_SWAP_ARGS).toEqual(["list", "--json"]);
+    expect(CLAUDE_SWAP_EXEC_TIMEOUT_MS).toBe(5_000);
   });
 });

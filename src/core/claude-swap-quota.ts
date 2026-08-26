@@ -3,6 +3,7 @@ import {
   capQuotaExtraWindowLabel,
   type ProviderQuotaAccount,
   QUOTA_ACCOUNTS_LIMIT,
+  QUOTA_EXTRA_WINDOWS_LIMIT,
   type QuotaExtraWindow,
 } from "../quota-snapshot";
 
@@ -68,6 +69,7 @@ const normalizeUsage = (value: unknown, slot: number): NormalizedUsage => {
     if (!isRecord(entry) || typeof entry["name"] !== "string" || entry["name"].trim().length === 0) continue;
     const window = parseWindow(entry);
     if (window === null) continue;
+    if (extras.length >= QUOTA_EXTRA_WINDOWS_LIMIT) break;
     extras.push({
       id: `claude-swap:${slot}:scoped:${index}`,
       label: capQuotaExtraWindowLabel(entry["name"].trim()),
