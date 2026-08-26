@@ -17,9 +17,12 @@ const NOW = "2026-08-20T17:00:00.000Z"; // 10:00 in Los Angeles (UTC-7)
 const NOW_MS = Date.parse(NOW);
 const DAY = "2026-08-20";
 
-const report = (total: { input: number; output: number; cacheCreation: number; cacheRead: number }): string =>
+const report = (
+  total: { input: number; output: number; cacheCreation: number; cacheRead: number },
+  schemaVersion = 4,
+): string =>
   JSON.stringify({
-    schema_version: 4,
+    schema_version: schemaVersion,
     daily: [
       {
         date: DAY,
@@ -45,6 +48,13 @@ describe("laProviderDay", () => {
 describe("normalizeAgentsviewDaily", () => {
   test("sums input + output + cacheCreation + cacheRead for the day's row", () => {
     expect(normalizeAgentsviewDaily(FULL, DAY)).toBe(1000);
+  });
+
+  test("accepts only the known v4 and v5 report schemas", () => {
+    const totals = { input: 100, output: 200, cacheCreation: 300, cacheRead: 400 };
+    expect(normalizeAgentsviewDaily(report(totals, 4), DAY)).toBe(1000);
+    expect(normalizeAgentsviewDaily(report(totals, 5), DAY)).toBe(1000);
+    expect(normalizeAgentsviewDaily(report(totals, 6), DAY)).toBeNull();
   });
 
   test("a report with no row for the day is a legitimate zero", () => {

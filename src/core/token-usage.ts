@@ -120,7 +120,11 @@ export const normalizeAgentsviewDaily = (body: string, providerDay: string): num
   } catch {
     return null;
   }
-  if (!isRecord(parsed) || parsed["schema_version"] !== 4 || !Array.isArray(parsed["daily"])) {
+  if (!isRecord(parsed)) {
+    return null;
+  }
+  const schemaVersion = parsed["schema_version"];
+  if ((schemaVersion !== 4 && schemaVersion !== 5) || !Array.isArray(parsed["daily"])) {
     return null;
   }
   // Pass one: every element must be a record with a YYYY-MM-DD date, no
