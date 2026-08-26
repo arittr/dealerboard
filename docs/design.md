@@ -336,8 +336,8 @@ HiDPI mode (`max(1px, …)`).
 
 ### Geometry
 
-- The session area is the canvas minus the fixed 600px rail (~23.4%) and the
-  outer gutters; the board holds two 966×102 columns of six rows with 12px
+- The session area is the canvas minus the fixed 760px rail (~29.7%) and the
+  outer gutters; the board holds two 886×102 columns of six rows with 12px
   gaps — up to 12 cards per page.
 - Cards are a fixed standard size and never grow or shrink with session
   count: one session renders one standard card top-left, empty canvas stays
@@ -445,19 +445,20 @@ once stamped, is immutable for the session's lifetime.
   show the legacy bare badge (`2`, never `+2`) when `descendantCount > 0`;
   that count remains live provider-native descendants for Stream Deck
   compatibility, not the number of grouped Paseo cards.
-- Right-aligned on the head line: status dot + status word + tabular-numeral
-  elapsed timer (`statusSince`, the row's own status stamp), ticking in
-  place on the 1s rail cadence so the render-signature skip and CSS
-  animations are never disturbed. Every child uses its own provider, model,
-  title, effective status, and timer rather than inheriting display facts
-  from its parent.
+- Right-aligned on the head line: status dot + tabular-numeral elapsed
+  timer (`statusSince`, the row's own status stamp), ticking in place on
+  the 1s rail cadence so the render-signature skip and CSS animations are
+  never disturbed. Working and idle cards render no status word — the dot
+  and edge color carry the state; waiting and error keep their bright bold
+  word. Every child uses its own provider, model, title, effective status,
+  and timer rather than inheriting display facts from its parent.
 - Subagent cards: dimmed treatment — near-canvas surface, hairline border
   (`max(1px, 0.078125vw)`), 26px muted title, 32px chip, half-opacity
   status edge; a hollow-violet-ring "sub" pill after the chip replaces the
-  corner ring pip. Grouped subagents indent 44px (922×102, right edges
+  corner ring pip. Grouped subagents indent 44px (842×102, right edges
   flush) under their parent, connected by a 2px violet spine from the
   parent's bottom edge with an elbow into each subagent card; orphans keep
-  the dimmed treatment and pill at full 966px width, no indent or spine.
+  the dimmed treatment and pill at full 886px width, no indent or spine.
   The idle-subagent admission rule is unchanged: an idle Paseo subagent
   with no active descendant is never projected — one retained by an active
   descendant projects as effectively active — so grouped subagent cards are
@@ -467,18 +468,20 @@ once stamped, is immutable for the session's lifetime.
 
 ### Rail
 
-Fixed 600px (~23.4%), top to bottom:
+Fixed 760px (~29.7%), top to bottom:
 
-- **Token block**: today's total (`48.9M today`) with the two trend-colored
-  rolling rates on one line (`↑ 32.3M/hr · ↓ 8.5M/10m`) — unchanged
-  semantics, still computed from the 288-sample ring, which is retained
-  unchanged and remains the sole input to the rates.
-- **Day-over-day sparkline** below the rates: a midnight-anchored LA-day
+- **Token block**: today's total (`48.9M today`) over a row that puts the
+  two trend-colored rolling rates — stacked vertically in a fixed 240px
+  column, no separator — beside the day-over-day sparkline. Rate semantics
+  are unchanged, still computed from the 288-sample ring, which is retained
+  unchanged and remains the sole input to the rates. With no day curves the
+  row renders the rates column alone.
+- **Day-over-day sparkline** beside the rates: a midnight-anchored LA-day
   x-axis with yesterday's complete cumulative curve as a dim 2px line
   ending in a `yda <total>` micro-label (an SVG `<text>` at the mockup's
   baseline) and today's partial curve as a bright 2px line with a faint
   fill, ending in an endpoint dot at the current position, all in a
-  matched-aspect 436×80 viewBox. Semantics:
+  matched-aspect 446×84 viewBox. Semantics:
   - The yesterday line renders only when the snapshot's yesterday curve is
     stamped with the LA calendar day immediately preceding the today curve's
     `providerDay`; otherwise only today's line renders. No curves in the
@@ -489,7 +492,8 @@ Fixed 600px (~23.4%), top to bottom:
   - The block's existing stale-dimming applies to the sparkline with it.
 - **Unread row**: the daemon-health dot (green ok; red plus OFFLINE when
   degraded) inline before the exact unread count (sessions with a non-null
-  `unreadSince`).
+  `unreadSince`). The unread text renders at 26px — quieter than the token
+  totals.
 - **Quota rows** (claude, codex, kimi, GLM/zai, Qwen — strip-only, no
   keypad equivalent), one compact two-line row each: the head line carries
   the provider chip, the label, and a pill naming the binding window —
@@ -517,6 +521,9 @@ Fixed 600px (~23.4%), top to bottom:
   their right-side metric and bar, so account identity and the active dot
   remain legible. Zero or one account keeps the ambient row, and a transient
   account probe failure keeps the last-good meters visible.
+- The five quota panels share one flex zone that absorbs the rail's free
+  height, spreading the meters evenly; tokens, unread, and pager keep
+  fixed spacing.
 - **Pager dots**: one per page, tap to jump.
 - Data plumbing remains additive: quota via `quota-snapshot.json` and token
   usage via `token-usage-snapshot.json`, each its own file with its own
