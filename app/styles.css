@@ -449,6 +449,9 @@ body[data-fullscreen] #board {
   border: max(1px, 0.078vw) solid #55647a; /* 2px native */
   animation: none;
 }
+.card.status-working.quiet .unread-dot {
+  border-color: #171e28; /* the ring stays card-colored on the sunk surface */
+}
 .quiet-elapsed {
   color: #5c6b80;
 }
