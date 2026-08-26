@@ -844,8 +844,7 @@ top-level keys, mirroring the enabled provider entry from that file:
   when one arrives, but the live probes on 0.16.3 never saw one: stopping a
   session both mid-tool-call and between tool calls delivered no hook event
   at all, leaving the tile working until the next event or the 1-hour
-  lease. That is the behavior to expect from an interrupt (recorded in the
-  [dated verification record](verification/2026-08-15-zcode-p1.md)).
+  lease. That is the behavior to expect from an interrupt.
 - In a headless `--mode plan` run, denying a permission prompt strands the
   tile at waiting until the next event or the 1-hour lease — the deny path
   delivers no event after `PermissionRequest` (observed live on 0.16.3);
