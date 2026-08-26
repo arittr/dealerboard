@@ -291,7 +291,8 @@ const quotaSection = (panel: QuotaPanelModel, nowMs: number): HTMLElement => {
   const providerHead = document.createElement("div");
   providerHead.className = "quota-provider-head";
   providerHead.append(...quotaProviderIdentity(panel.provider));
-  section.append(providerHead);
+  const accountStack = document.createElement("div");
+  accountStack.className = "quota-account-stack";
   for (const entry of render.meters) {
     const account = document.createElement("div");
     account.className = "quota-account";
@@ -303,8 +304,9 @@ const quotaSection = (panel: QuotaPanelModel, nowMs: number): HTMLElement => {
     label.className = "quota-account-label";
     label.textContent = entry.label;
     account.append(quotaMeter(entry.meter, nowMs, [marker, label]));
-    section.append(account);
+    accountStack.append(account);
   }
+  section.append(providerHead, accountStack);
   return section;
 };
 

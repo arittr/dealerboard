@@ -573,12 +573,12 @@ body[data-fullscreen] #rail {
   opacity: 0.45;
 }
 .quota-group {
-  gap: 0.35vh;
+  gap: 1.389vh; /* 10px native */
 }
 .quota-meter {
   display: flex;
   flex-direction: column;
-  gap: 0.5vh;
+  gap: 0.972vh; /* 7px native */
 }
 .quota-provider-head {
   display: flex;
@@ -586,16 +586,26 @@ body[data-fullscreen] #rail {
   gap: 0.6vw;
   font-size: 1.2vw;
 }
+.quota-account-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1.667vh; /* 12px native */
+  padding-left: 0.469vw; /* 12px native */
+}
+.quota-account-stack::before {
+  position: absolute;
+  top: 0.278vh;
+  bottom: 0.278vh;
+  left: 0;
+  width: max(1px, 0.078vw); /* 2px native */
+  border-radius: 0.139vh;
+  background: rgb(217 119 87 / 0.55);
+  content: "";
+}
 .quota-account {
   display: flex;
   flex-direction: column;
-}
-.quota-account .quota-meter {
-  gap: 0.35vh;
-}
-.quota-account[data-state="stale"],
-.quota-account[data-state="unavailable"] {
-  opacity: 0.45;
 }
 .quota-account-marker {
   flex: none;
@@ -669,6 +679,12 @@ body[data-fullscreen] #rail {
 .quota-bar-fill {
   height: 100%;
   border-radius: inherit;
+}
+.quota-account[data-state="stale"] .quota-right,
+.quota-account[data-state="stale"] .quota-bar,
+.quota-account[data-state="unavailable"] .quota-right,
+.quota-account[data-state="unavailable"] .quota-bar {
+  opacity: 0.45;
 }
 /* A neutral tick per non-binding window at its own percent. */
 .quota-tick {
