@@ -11,7 +11,9 @@
 - `bun test` — run the test suite.
 - `bun run typecheck` — type-check without emitting.
 - `bun run build` — typecheck, compile the core daemon (`dist/stream-deck-agents`), and bundle the plugin (`com.drewritter.stream-deck-agents.sdPlugin/bin/plugin.js` via rollup).
-- `bun run build:plugin` — plugin bundle only (sufficient for render/layout changes).
+- `bun run build:plugin` — plugin bundle only (deprecated integration — see
+  "Deploying changes locally"; the bundle keeps building but is never
+  deployed).
 
 ## Lint, format, and hooks
 
@@ -36,48 +38,27 @@
   nothing — keep the `*.ts` / `*.{ts,json,mjs}` forms in `lefthook.yml`.
 
 
-## Deploying plugin changes locally
+## Deploying changes locally
 
-The Stream Deck app does NOT run the repo's `.sdPlugin` directory. It runs an
-installed copy at:
+Core changes under `src/core/` deploy with `bun scripts/install-local.ts`
+(reinstalls the daemon executable, plist, pi/omp shims, and grok hook). The
+installer fails safe: it refuses up front — before the executable swap or
+daemon bootout — when the installed database's schema is newer than the
+build being installed.
 
-```
-~/Library/Application Support/com.elgato.StreamDeck/Plugins/com.drewritter.stream-deck-agents.sdPlugin
-```
-
-Source edits are invisible on the device until the bundle is rebuilt, copied
-over, and the plugin process restarted. Bump `Version` in
-`com.drewritter.stream-deck-agents.sdPlugin/manifest.json` first — the Stream
-Deck app ignores updates whose version is not newer:
-
-```sh
-# edit manifest.json: bump "Version"
-bun run build:plugin
-cp com.drewritter.stream-deck-agents.sdPlugin/manifest.json \
-  "$HOME/Library/Application Support/com.elgato.StreamDeck/Plugins/com.drewritter.stream-deck-agents.sdPlugin/manifest.json"
-cp com.drewritter.stream-deck-agents.sdPlugin/bin/plugin.js{,.map} \
-  "$HOME/Library/Application Support/com.elgato.StreamDeck/Plugins/com.drewritter.stream-deck-agents.sdPlugin/bin/"
-bun node_modules/@elgato/cli/bin/streamdeck.mjs restart com.drewritter.stream-deck-agents
-```
-
-Notes:
-
-- Only the plugin process restarts; the launchd daemon is untouched. Core
-  changes under `src/core/` instead need `bun scripts/install-local.ts` (full
-  reinstall: daemon, plist, packaged plugin).
-- The installer fails safe on two deploy hazards: it refuses up front —
-  before the executable swap or daemon bootout — when the installed
-  database's schema is newer than the build being installed, and it waits
-  for the Stream Deck app to actually install the packaged plugin version
-  (accept the app's confirmation dialog; at 120s unconfirmed it fails, and
-  a re-run converges).
-- The plugin and daemon deploy in lockstep: the plugin's snapshot parser
-  rejects unknown provider keys, so a new daemon with an old plugin degrades
-  the grid — and the manifest `Version` bump above is what makes the plugin
-  update actually stick.
-- If the deployed copy and repo should stay in sync permanently, use
-  `streamdeck link` to point the app at the repo's `.sdPlugin` instead of
-  copying (not currently set up).
+**The Elgato Stream Deck integration is deprecated.** The Elgato app is not
+installed on this machine, `install-local.ts` neither packages nor installs
+the plugin, and nothing launches or restarts it. The plugin source
+(`src/plugin/`), its bundle directory
+(`com.drewritter.stream-deck-agents.sdPlugin/`), and its tests stay in the
+repo and must keep passing `bun run check` — but do NOT deploy plugin
+changes, bump the manifest `Version`, or run `bun run pack:plugin` as part
+of any workflow. To revive the integration: the Stream Deck app runs an
+installed copy at `~/Library/Application
+Support/com.elgato.StreamDeck/Plugins/com.drewritter.stream-deck-agents.sdPlugin`
+(not the repo's `.sdPlugin` directory), accepts updates only when the
+manifest `Version` is bumped, and `bun run pack:plugin` still produces the
+installable package.
 
 ## Troubleshooting: exactly one daemon
 

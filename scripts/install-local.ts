@@ -1,6 +1,10 @@
 /**
  * Explicit macOS-local installer for the hook-driven session registry.
  *
+ * The Elgato Stream Deck plugin is deprecated: `bun run build` still bundles
+ * it, but this installer neither packages nor installs it — it manages the
+ * daemon, LaunchAgent, shims, and grok hook only.
+ *
  * Step order (any pre-hook failure exits nonzero immediately; this script
  * installs its own managed artifacts — the pi/omp shims and the grok hook
  * file — into provider dirs; it still never edits provider **config files**):
@@ -8,8 +12,7 @@
  *   2. Preflight: an existing database newer than this build aborts the
  *      install before anything is clobbered — init would throw
  *      UnsupportedSchemaVersion only after the swap and bootout.
- *   3. Run the repository build and plugin validate/package commands with an
- *      explicit working directory.
+ *   3. Run the repository build with an explicit working directory.
  *   4. Create or correct the application directories to mode 0700.
  *   5. Copy the compiled core to the canonical executable, chmod 0700.
  *   6. Boot out the exact existing service only if present, so the schema
@@ -18,13 +21,9 @@
  *   8. Replace the exact executable/log tokens in the plist template, write
  *      the canonical plist at mode 0600, and validate with plutil -lint.
  *   9. Bootstrap and kickstart the exact label.
- *   10. Install the single packaged plugin from dist, wait until the
- *       installed copy reaches this build's version (the app's install
- *       confirmation dialog can otherwise park the install silently), and
- *       restart it through the official Stream Deck CLI.
- *   11. Install the managed shims and grok hook file into the provider
+ *   10. Install the managed shims and grok hook file into the provider
  *       dirs that exist; never overwrite unmarked user files.
- *   12. Print the canonical paths; the Claude/Kimi/Codex hooks remain a
+ *   11. Print the canonical paths; the Claude/Kimi/Codex hooks remain a
  *       manual step.
  *
  * Every subprocess runs through spawnSync with an argument array — no shell
@@ -33,16 +32,7 @@
 
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AppPaths } from "../src/core/paths";
@@ -52,9 +42,7 @@ import { GROK_HOOK_NAME, type GrokHookInstallOutcome, installGrokHookFile } from
 
 const LABEL = "com.drewritter.stream-deck-agents";
 const PLIST_TEMPLATE = "launchd/com.drewritter.stream-deck-agents.plist.template";
-const STREAMDECK_CLI = "node_modules/@elgato/cli/bin/streamdeck.mjs";
 const BUILT_CORE = "dist/stream-deck-agents";
-const PACKAGE_SUFFIX = ".streamDeckPlugin";
 
 const EXECUTABLE_TOKEN = "__STREAM_DECK_AGENTS_EXECUTABLE__";
 const LOGS_TOKEN = "__STREAM_DECK_AGENTS_LOGS_DIRECTORY__";
@@ -75,11 +63,6 @@ const GROK_HOOK_TEMPLATE = join("extensions", "grok", "stream-deck-agents.hook.j
 
 const LAUNCHCTL = "/bin/launchctl";
 const PLUTIL = "/usr/bin/plutil";
-const OPEN = "/usr/bin/open";
-
-const PLUGIN_DIR_NAME = "com.drewritter.stream-deck-agents.sdPlugin";
-const PLUGIN_INSTALL_TIMEOUT_MS = 120_000;
-const PLUGIN_INSTALL_POLL_MS = 2_000;
 
 /** Repository root: this script lives at <root>/scripts/install-local.ts. */
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -187,50 +170,6 @@ const installGrokHook = (paths: AppPaths): void => {
   }
 };
 
-/** The `"Version"` field of a plugin manifest, or null when unreadable or absent. */
-const manifestVersion = (manifestPath: string): string | null => {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
-    if (typeof parsed !== "object" || parsed === null || !("Version" in parsed)) {
-      return null;
-    }
-    const version = (parsed as { Version: unknown }).Version;
-    return typeof version === "string" && version.length > 0 ? version : null;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * Block until the Stream Deck app's installed copy of the plugin reaches the
- * expected version. The app installs behind a confirmation dialog whenever it
- * chooses to show one; polling the installed manifest (rather than trusting
- * `open`'s immediate return) keeps a parked dialog from leaving the old
- * plugin running under a "complete" report. On timeout the step fails with
- * instructions — every install step is idempotent, so accepting the dialog
- * and re-running this installer converges.
- */
-const awaitPluginInstall = (installedManifest: string, expectedVersion: string): void => {
-  const deadline = Date.now() + PLUGIN_INSTALL_TIMEOUT_MS;
-  let announced = false;
-  while (manifestVersion(installedManifest) !== expectedVersion) {
-    if (Date.now() >= deadline) {
-      fail(
-        "install-plugin",
-        `plugin v${expectedVersion} was not installed within 120s — accept the Stream Deck confirmation dialog and re-run this installer`,
-      );
-    }
-    if (!announced) {
-      process.stdout.write(
-        `install-local: waiting for the Stream Deck app to install plugin v${expectedVersion} (accept its confirmation dialog if shown)\n`,
-      );
-      announced = true;
-    }
-    Bun.sleepSync(PLUGIN_INSTALL_POLL_MS);
-  }
-  process.stdout.write(`install-local: plugin v${expectedVersion} confirmed installed\n`);
-};
-
 const main = (): void => {
   // 1. macOS only; resolveAppPaths resolves the home directory via node:os.
   if (process.platform !== "darwin") {
@@ -260,9 +199,8 @@ const main = (): void => {
     }
   }
 
-  // 3. Core/plugin build, then plugin validate + package.
+  // 3. Repository build (the deprecated plugin bundle rides along in `bun run build`).
   run("build", process.execPath, ["run", "build"]);
-  run("package-plugin", process.execPath, ["run", "pack:plugin"]);
 
   // 4. Application directories, created or corrected to 0700.
   ensureAppDirectories(paths);
@@ -314,34 +252,12 @@ const main = (): void => {
   run("launchagent", LAUNCHCTL, ["bootstrap", `gui/${uid}`, paths.launchAgent]);
   run("launchagent", LAUNCHCTL, ["kickstart", "-k", serviceTarget]);
 
-  // 10. Install the single packaged plugin and start it through the official
-  // Stream Deck CLI. @elgato/cli (1.7.4, the latest) ships no install verb,
-  // so the package is opened: LaunchServices hands the registered
-  // .streamDeckPlugin document to the Stream Deck app, which installs it.
-  // The restart waits until the installed copy reaches this build's version.
-  const packages = readdirSync(join(repositoryRoot, "dist")).filter((name) => name.endsWith(PACKAGE_SUFFIX));
-  const packageName =
-    packages.length === 1 && packages[0] !== undefined
-      ? packages[0]
-      : fail("install-plugin", `expected exactly one ${PACKAGE_SUFFIX} package in dist, found ${packages.length}`);
-  const packagePath = join(repositoryRoot, "dist", packageName);
-  const expectedVersion =
-    manifestVersion(join(repositoryRoot, PLUGIN_DIR_NAME, "manifest.json")) ??
-    fail("install-plugin", "the repository plugin manifest has no readable Version");
-  run("install-plugin", OPEN, [packagePath]);
-  awaitPluginInstall(
-    join(paths.home, "Library/Application Support/com.elgato.StreamDeck/Plugins", PLUGIN_DIR_NAME, "manifest.json"),
-    expectedVersion,
-  );
-  run("install-plugin", process.execPath, [STREAMDECK_CLI, "restart", LABEL]);
-
-  // 11. Install the managed shims and the grok hook file last — managed
-  // artifacts must never activate before the compatible daemon and plugin
-  // are live.
+  // 10. Install the managed shims and the grok hook file last — managed
+  // artifacts must never activate before the compatible daemon is live.
   installShims(paths);
   installGrokHook(paths);
 
-  // 12. Report canonical paths; the Claude/Kimi/Codex hooks remain manual.
+  // 11. Report canonical paths; the Claude/Kimi/Codex hooks remain manual.
   process.stdout.write(
     [
       "install-local: complete",
@@ -350,7 +266,6 @@ const main = (): void => {
       `  snapshot:    ${paths.snapshot}`,
       `  logs:        ${paths.logsDirectory}`,
       `  launchagent: ${paths.launchAgent}`,
-      `  plugin:      ${packagePath}`,
       `  service:     ${serviceTarget}`,
       "",
       "Managed pi/omp shims and the grok hook file were installed where their",
