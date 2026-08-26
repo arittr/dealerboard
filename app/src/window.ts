@@ -6,7 +6,13 @@
  * window is left alone as a normal floating window.
  */
 
-import { availableMonitors, getCurrentWindow, type Monitor } from "@tauri-apps/api/window";
+import {
+  availableMonitors,
+  getCurrentWindow,
+  LogicalPosition,
+  LogicalSize,
+  type Monitor,
+} from "@tauri-apps/api/window";
 import { isStripMonitor } from "./monitors";
 
 const REPIN_INTERVAL_MS = 5000;
@@ -14,6 +20,24 @@ const REPIN_INTERVAL_MS = 5000;
 type Point = { readonly x: number; readonly y: number };
 type Dimensions = { readonly width: number; readonly height: number };
 type WindowGeometry = { readonly position: Point; readonly size: Dimensions };
+
+/**
+ * A monitor's frame in logical pixels, divided by its own scale factor.
+ * Monitor frames arrive physical, but plain physical values fed to
+ * setPosition/setSize are interpreted against the window's CURRENT display —
+ * from the 2x main display the strip's coordinates would halve, landing the
+ * window mid-main at half size, and the re-pin loop never converges. Logical
+ * coordinates are scale-independent, so the move lands regardless of where
+ * the window starts.
+ */
+export const logicalPinFrame = (monitor: {
+  position: Point;
+  size: Dimensions;
+  scaleFactor: number;
+}): WindowGeometry => ({
+  position: { x: monitor.position.x / monitor.scaleFactor, y: monitor.position.y / monitor.scaleFactor },
+  size: { width: monitor.size.width / monitor.scaleFactor, height: monitor.size.height / monitor.scaleFactor },
+});
 
 export const stripWindowNeedsPin = (
   isFullscreen: boolean,
@@ -34,8 +58,9 @@ const findStripMonitor = async (): Promise<Monitor | undefined> =>
 
 const pinTo = async (target: Monitor): Promise<void> => {
   const window = getCurrentWindow();
-  await window.setPosition(target.position);
-  await window.setSize(target.size);
+  const frame = logicalPinFrame(target);
+  await window.setPosition(new LogicalPosition(frame.position.x, frame.position.y));
+  await window.setSize(new LogicalSize(frame.size.width, frame.size.height));
 };
 
 export const startStripWindowManager = async (): Promise<void> => {
