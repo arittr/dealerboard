@@ -141,7 +141,8 @@ Notes:
   status, `unread_since`, and own `status_since` timer unchanged — and
   ordinary visibility resumes once the last active descendant ends;
   missing, ambiguous, or cyclic lineage stops the walk safely, leaving
-  those active subagents as orphans. `status_since` (schema v11) records
+  those active subagents projected and available to the strip board's
+  orphan-tail handling. `status_since` (schema v11) records
   the row's own last status transition: Activity/Attention/Stop/StopFailure
   restamp it only when the status value actually changes, BackgroundWork
   events never restamp it, starts initialize it, and the projection's
