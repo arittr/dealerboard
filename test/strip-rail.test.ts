@@ -46,4 +46,14 @@ describe("railRenderSignature", () => {
     const moved = quotaPanel({ windows: [{ tag: "session", percentRemaining: 54, resetAtMs: NOW + 90_000 }] });
     expect(railRenderSignature(model({ quota: [moved] }))).not.toBe(railRenderSignature(model()));
   });
+
+  test("changes when a non-binding window's marker moves, even with the binding untouched", () => {
+    const windows = (weekly: number) => [
+      { tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 },
+      { tag: "weekly", percentRemaining: weekly, resetAtMs: null },
+    ];
+    const before = model({ quota: [quotaPanel({ windows: windows(90) })] });
+    const after = model({ quota: [quotaPanel({ windows: windows(89) })] });
+    expect(railRenderSignature(after)).not.toBe(railRenderSignature(before));
+  });
 });

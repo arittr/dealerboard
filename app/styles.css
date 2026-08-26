@@ -605,6 +605,12 @@ body {
   color: #94a3b8;
   font-size: 1.05vw;
 }
+/* Non-binding windows on the head line: dimmer than the countdown so the
+   binding percent stays the row's one bright number. */
+.quota-secondary {
+  color: #5a6b80;
+  font-size: 0.95vw;
+}
 .quota-bar {
   position: relative;
   height: 1.111vh;
@@ -615,6 +621,14 @@ body {
 .quota-bar-fill {
   height: 100%;
   border-radius: inherit;
+}
+/* A neutral tick per non-binding window at its own percent. */
+.quota-tick {
+  position: absolute;
+  top: 0;
+  width: max(1px, 0.078vw); /* 2px native */
+  height: 100%;
+  background: rgb(148 163 184 / 0.55);
 }
 .quota-tag {
   flex: none;

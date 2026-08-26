@@ -165,6 +165,33 @@ export const formatBindingNote = (model: QuotaPanelModel, now: number): string =
   return formatResetCountdown(binding.resetAtMs, now);
 };
 
+export type SecondaryWindowMarker = {
+  /** Short muted label: "sess", "wk", or an extra's lowercased first word. */
+  label: string;
+  /** Rounded display percent ("84%"). */
+  percent: string;
+  percentRemaining: number;
+};
+
+const SECONDARY_LABELS: Record<string, string> = { session: "sess", weekly: "wk" };
+
+const secondaryLabel = (tag: string): string =>
+  SECONDARY_LABELS[tag.toLowerCase()] ?? (tag.split(" ")[0] ?? tag).toLowerCase();
+
+/**
+ * The non-binding windows in published order, formatted for the head line's
+ * muted inline markers and the bar's neutral ticks — the binding window owns
+ * the bright percent and the fill, but the other windows stay visible.
+ */
+export const secondaryWindows = (model: QuotaPanelModel): SecondaryWindowMarker[] =>
+  model.windows
+    .filter((_, index) => index !== model.bindingIndex)
+    .map((entry) => ({
+      label: secondaryLabel(entry.tag),
+      percent: formatPercentRemaining(entry.percentRemaining),
+      percentRemaining: entry.percentRemaining,
+    }));
+
 /** Fill hue follows remaining headroom on the strip's existing status palette. */
 export const quotaBarColor = (percentRemaining: number): string => {
   if (percentRemaining > 25) {

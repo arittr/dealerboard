@@ -11,6 +11,7 @@ import {
   quotaBarColor,
   reduceQuotaRead,
   STALE_QUOTA_AGE_MS,
+  secondaryWindows,
   selectBindingIndex,
 } from "../app/src/quota";
 import type { ProviderQuota } from "../src/quota-snapshot";
@@ -211,5 +212,33 @@ describe("formatPercentRemaining and quotaBarColor", () => {
     expect(quotaBarColor(25)).toBe("#ffb020");
     expect(quotaBarColor(10)).toBe("#ffb020");
     expect(quotaBarColor(9)).toBe("#ff4d67");
+  });
+});
+
+describe("secondaryWindows", () => {
+  test("every non-binding window in published order, with abbreviated labels and rounded percents", () => {
+    const panel = model({
+      windows: [windowModel("session", 62.5), windowModel("weekly", 88), windowModel("Fable only", 40.4)],
+      bindingIndex: 2,
+    });
+    expect(secondaryWindows(panel)).toEqual([
+      { label: "sess", percent: "63%", percentRemaining: 62.5 },
+      { label: "wk", percent: "88%", percentRemaining: 88 },
+    ]);
+  });
+
+  test("a weekly-binding panel surfaces the session window as the secondary", () => {
+    const panel = model({ bindingIndex: 1 });
+    expect(secondaryWindows(panel)).toEqual([{ label: "sess", percent: "63%", percentRemaining: 62.5 }]);
+  });
+
+  test("extra labels shorten to their lowercased first word; a lone window has no secondaries", () => {
+    const panel = model({
+      windows: [windowModel("session", 10), windowModel("Spark Weekly", 84)],
+      bindingIndex: 0,
+    });
+    expect(secondaryWindows(panel)).toEqual([{ label: "spark", percent: "84%", percentRemaining: 84 }]);
+    expect(secondaryWindows(model({ windows: [windowModel("session", 10)], bindingIndex: 0 }))).toEqual([]);
+    expect(secondaryWindows(model({ windows: [], bindingIndex: null }))).toEqual([]);
   });
 });
