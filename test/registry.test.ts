@@ -134,6 +134,47 @@ const countRows = (): number => {
 };
 
 describe("applyRegistryEvents", () => {
+  test("reconciles an observed status without changing the unread ledger", () => {
+    applyRegistryEvents(db, [start("evener-1", { provider: "evener", at: at(1) })]);
+    applyRegistryEvents(db, [simple("Stop", "evener-1", { provider: "evener", at: at(2) })]);
+    expect(getRow("evener-1", "evener")).toMatchObject({
+      status: "idle",
+      unread_since: at(2),
+      status_since: at(1),
+    });
+
+    expect(
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStatusObserved",
+          provider: "evener",
+          sessionId: "evener-1",
+          status: "waiting",
+          observedAt: at(3),
+        },
+      ]),
+    ).toEqual(["applied"]);
+    expect(getRow("evener-1", "evener")).toMatchObject({
+      status: "waiting",
+      unread_since: at(2),
+      status_since: at(3),
+      updated_at: at(3),
+    });
+
+    expect(
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStatusObserved",
+          provider: "evener",
+          sessionId: "evener-1",
+          status: "waiting",
+          observedAt: at(4),
+        },
+      ]),
+    ).toEqual(["ignored"]);
+    expect(getRow("evener-1", "evener")?.updated_at).toBe(at(3));
+  });
+
   test("drives one session through idle, working, waiting, idle, error, and absent", () => {
     expect(applyRegistryEvents(db, [start("s1", { title: "First", project: "proj", at: at(1) })])).toEqual(["applied"]);
     expect(getRow("s1")).toEqual({

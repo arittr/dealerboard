@@ -266,10 +266,13 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot({ ...valid, health: "ok" as unknown as object })).toThrow();
   });
 
-  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const)("accepts provider %s", (provider) => {
-    const result = parseSessionSnapshot(withSession({ provider, ghosttyTerminalId: null }));
-    expect(result.sessions[0]?.provider).toBe(provider);
-  });
+  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen", "evener"] as const)(
+    "accepts provider %s",
+    (provider) => {
+      const result = parseSessionSnapshot(withSession({ provider, ghosttyTerminalId: null }));
+      expect(result.sessions[0]?.provider).toBe(provider);
+    },
+  );
 
   test("still rejects an unknown provider", () => {
     expect(() => parseSessionSnapshot(withSession({ provider: "vscode" as never }))).toThrow(

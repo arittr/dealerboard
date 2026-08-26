@@ -366,6 +366,9 @@ body {
 .chip[data-provider="qwen"] {
   background: #ef4444;
 }
+.chip[data-provider="evener"] {
+  background: #8b5cf6;
+}
 
 .unread-dot {
   /* d6's chip-corner badge: -6px offsets, 18px disc, 3px card-colored ring. */

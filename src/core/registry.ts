@@ -336,6 +336,24 @@ const applySessionTitleChanged = (
   return result.changes > 0 ? "applied" : "ignored";
 };
 
+/**
+ * Reconcile an authoritative external snapshot without manufacturing a new
+ * result. Live terminal events own unread_since; hydration and reconnect only
+ * repair the current status while preserving that ledger.
+ */
+const applySessionStatusObserved = (
+  db: Database,
+  event: Extract<RegistryEvent, { kind: "SessionStatusObserved" }>,
+): MutationResult => {
+  const result = db.run(
+    `UPDATE active_sessions
+     SET status = ?, status_since = ?, updated_at = ?
+     WHERE provider = ? AND session_id = ? AND status IS NOT ?`,
+    [event.status, event.observedAt, event.observedAt, event.provider, event.sessionId, event.status],
+  );
+  return result.changes > 0 ? "applied" : "ignored";
+};
+
 const applySubagentStart = (db: Database, event: Extract<RegistryEvent, { kind: "SubagentStart" }>): MutationResult => {
   if (!isValidProspectiveParent(db, event.provider, event.sessionId, event.parentSessionId)) {
     return "ignored";
@@ -481,6 +499,8 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
       return applySessionTitleChanged(db, event);
     case "SubagentStart":
       return applySubagentStart(db, event);
+    case "SessionStatusObserved":
+      return applySessionStatusObserved(db, event);
     case "Activity":
       return applyStatusUpdate(db, event, "working");
     case "Attention":
