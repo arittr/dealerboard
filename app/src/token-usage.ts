@@ -179,7 +179,7 @@ export const reduceSparkline = (snapshot: TokenUsageSnapshot): SparklineModel | 
   };
 };
 
-/* SVG geometry for the sparkline (d7's exact 500x84 box: curve baseline y=78,
+/* SVG geometry for the sparkline (fixed 500x84 box: curve baseline y=78,
    curve max y=4). Pure and DOM-free so rail.ts stays a thin attribute shell. */
 
 export const SPARKLINE_VIEWBOX = { width: 500, height: 84 } as const;

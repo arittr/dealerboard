@@ -1,7 +1,7 @@
 /**
  * Per-card view model and DOM renderer for the board: the pure derived
  * fields (fallback title, model label cap, project suppression, origin disc)
- * plus the card assembler that turns a BoardPage into the d6 card anatomy
+ * plus the card assembler that turns a BoardPage into the documented card anatomy
  * (status edge, head/meta/status rows, sub pill, spine). All text goes
  * through textContent; no innerHTML anywhere.
  */
@@ -122,7 +122,7 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   const chip = appendText(head, "chip", model.letter);
   chip.dataset["provider"] = model.provider;
   if (model.unread) {
-    // d6's corner badge: absolutely positioned on the chip, card-colored ring.
+    // Corner badge: absolutely positioned on the chip, card-colored ring.
     const dot = document.createElement("span");
     dot.className = "unread-dot";
     chip.append(dot);

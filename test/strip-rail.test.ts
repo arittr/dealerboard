@@ -244,7 +244,7 @@ describe("token block layout", () => {
     });
   });
 
-  test("the yda label and viewBox carry d7's 500x84 geometry", () => {
+  test("the yda label and viewBox carry the fixed 500x84 geometry", () => {
     withFakeDocument((root) => {
       renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }), { onJumpToPage: () => {} });
       const svg = descendants(root).find((node) => node.tagName === "svg");

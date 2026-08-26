@@ -27,19 +27,22 @@ leave the board.
 ## How it works
 
 ```text
-provider hooks / Evener AppWire
-              |
-              v
-LaunchAgent daemon -> SQLite registry -> atomic JSON snapshots
-                                         |          |
-                                         v          v
-                                  macOS strip   deprecated
-                                     app        Stream Deck UI
+provider hooks -> event helper -----\
+app ack/clear -> session helper ------> SQLite registry
+Evener + maintenance -> daemon ------/
+                                      |
+                                      v
+                              daemon snapshots
+                                  |       |
+                                  v       v
+                            macOS strip  deprecated
+                               app       Stream Deck UI
 ```
 
-The daemon is the only writer. Provider hooks send bounded JSON events; an
-authenticated loopback AppWire client observes Evener. The daemon maintains
-session state in SQLite and publishes read-only snapshots for the UI.
+Short-lived event/session helpers and the daemon write through independent
+SQLite connections. Provider hooks send bounded JSON events; an authenticated
+loopback AppWire client inside the daemon observes Evener. The daemon is the
+only long-lived maintenance process and snapshot publisher.
 
 ## Requirements
 
@@ -99,8 +102,8 @@ source checkout.
 | Claude Code | Manual hooks | Work, wait, finish, failure, background work, subagents | Focus the bound direct Ghostty terminal; otherwise flash |
 | Codex | Manual local plugin plus hook trust | Work, approval wait, finish, subagents | Open `codex://threads/<session-id>` |
 | Kimi Code/Web | Manual hooks | Work, question wait, finish, failure, interrupt, subagents | Open the local Kimi Web session |
-| Pi | Installer-managed shim when `~/.pi` exists | Work and finish | Flash |
-| oh-my-pi | Installer-managed shim when `~/.omp` exists | Work and finish | Flash |
+| Pi | Installer-managed shim when `~/.pi` exists | Work, finish, and failure | Flash |
+| oh-my-pi | Installer-managed shim when `~/.omp` exists | Work, question/approval wait, finish, native subagents | Flash |
 | ZCode | Manual hooks | Work, approval wait, finish; one-hour stale lease | Flash |
 | Grok | Installer-managed hook when `~/.grok` exists | Work, permission wait, finish, failure | Flash |
 | Qwen Code | Manual hooks | Work, permission wait, finish, failure | Flash |

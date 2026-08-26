@@ -103,12 +103,12 @@ const sparkPolyline = (points: string, stroke: string, strokeOpacity?: string): 
   return polyline;
 };
 
-/** d6's day-over-day sparkline: faint fill under today's curve, dim yesterday line with its yda label, bright today line, endpoint dot. */
+/** Day-over-day sparkline: faint fill under today's curve, dim yesterday line with its yda label, bright today line, endpoint dot. */
 const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
   const block = document.createElement("div");
   block.className = "rail-sparkline";
   const svg = document.createElementNS(SVG_NAMESPACE, "svg");
-  // d7's matched-aspect geometry: the 500x84 viewBox scales uniformly (no
+  // Matched-aspect geometry: the 500x84 viewBox scales uniformly (no
   // preserveAspectRatio) so strokes and the endpoint circle stay true.
   svg.setAttribute("viewBox", `0 0 ${SPARKLINE_VIEWBOX.width} ${SPARKLINE_VIEWBOX.height}`);
   const fill = sparklineFillPoints(sparkline.today.points);
@@ -133,7 +133,7 @@ const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
   }
   if (sparkline.yesterday !== null) {
     const label = document.createElementNS(SVG_NAMESPACE, "text");
-    // d7's baseline: y=48 of the 84px box, right-anchored at x=498.
+    // The label baseline is y=48 of the 84px box, right-anchored at x=498.
     label.setAttribute("x", "498");
     label.setAttribute("y", "48");
     label.setAttribute("text-anchor", "end");

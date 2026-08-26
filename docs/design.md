@@ -10,13 +10,15 @@ Dealerboard has three layers:
 
 1. Provider hooks and the Evener AppWire observer translate provider-specific
    lifecycle signals into a small normalized event union.
-2. One per-user LaunchAgent daemon owns SQLite, maintenance, lineage
-   projection, quota/token collectors, and atomic snapshot publication.
+2. One per-user LaunchAgent daemon runs maintenance, lineage projection,
+   quota/token collectors, and atomic snapshot publication.
 3. Thin consumers render snapshots. The Tauri strip app is current; the
    Stream Deck consumer is deprecated but remains build-tested.
 
-Only the daemon writes the registry. Hooks never read it and always exit zero
-after bounded input handling, so display failures do not block provider turns.
+Short-lived event/session helpers and the daemon write through independent
+SQLite connections. The daemon is the only long-lived maintenance process and
+snapshot publisher. Hook helpers always exit zero after bounded input handling,
+so display failures do not block provider turns.
 
 ## Session model
 
