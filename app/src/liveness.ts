@@ -4,6 +4,8 @@
  * breath phase. No DOM here — main.ts applies frames, cards.ts stamps nodes.
  */
 
+import type { SessionStatus } from "../../src/protocol";
+
 /** Compact elapsed label shared by the status timer and the quiet label: 42s, 12m, 3h, 2d. */
 export const elapsedLabel = (elapsedMs: number): string => {
   const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
@@ -129,20 +131,28 @@ export type PulseEntry = { lastEventAt: string | null; lastPulseAtMs: number | n
 
 /**
  * One ingest's pulse decisions against the previous ingest, keyed by card.
- * The returned map holds exactly the current page's cards, so entries for
- * departed cards never accumulate — and a card returning to the page reseeds
- * silently instead of pulsing on arrival.
+ * Every card's stamp is tracked whatever its status, but only a working card
+ * fires and consumes its gate — the spec leaves the waiting, idle, and error
+ * treatments unchanged. Tracking through a non-working interlude matters:
+ * dropping those cards would reseed them on their return to working and
+ * swallow the first real pulse. The returned map holds exactly the current
+ * page's cards, so entries for departed cards never accumulate — and a card
+ * returning to the page reseeds silently instead of pulsing on arrival.
  */
 export const planPulses = (
   prior: ReadonlyMap<string, PulseEntry>,
-  cards: readonly { key: string; lastEventAt: string | null }[],
+  cards: readonly { key: string; lastEventAt: string | null; status: SessionStatus }[],
   nowMs: number,
 ): { fire: string[]; next: Map<string, PulseEntry> } => {
   const fire: string[] = [];
   const next = new Map<string, PulseEntry>();
-  for (const { key, lastEventAt } of cards) {
+  for (const { key, lastEventAt, status } of cards) {
     const entry = prior.get(key);
-    if (entry !== undefined && shouldPulse(entry.lastEventAt, lastEventAt, entry.lastPulseAtMs, nowMs)) {
+    if (
+      status === "working" &&
+      entry !== undefined &&
+      shouldPulse(entry.lastEventAt, lastEventAt, entry.lastPulseAtMs, nowMs)
+    ) {
       fire.push(key);
       next.set(key, { lastEventAt, lastPulseAtMs: nowMs });
       continue;

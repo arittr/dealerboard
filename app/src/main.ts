@@ -232,12 +232,17 @@ const applyBoard = (result: BoardResult): void => {
   if (root !== null && signature !== renderedSignature) {
     renderedSignature = signature;
     renderBoard(root, page, degraded);
-    // Pulse on stamp advance: compared against the previous ingest, keyed by
-    // card, gated per card — and animated via element.animate so a re-fire
-    // never has to fight a CSS class retrigger.
+    // Pulse on stamp advance (working cards only — planPulses gates on the
+    // status): compared against the previous ingest, keyed by card, gated per
+    // card — and animated via element.animate so a re-fire never has to fight
+    // a CSS class retrigger.
     const plan = planPulses(
       pulseEntries,
-      page.cards.map((card) => ({ key: cardKey(card), lastEventAt: card.session.lastEventAt })),
+      page.cards.map((card) => ({
+        key: cardKey(card),
+        lastEventAt: card.session.lastEventAt,
+        status: card.session.status,
+      })),
       Date.now(),
     );
     pulseEntries = plan.next;

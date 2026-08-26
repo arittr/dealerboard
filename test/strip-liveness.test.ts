@@ -91,17 +91,92 @@ describe("planPulses", () => {
   const CARD = "claude s1";
 
   test("seeds silently, fires on advance, and stamps the gate", () => {
-    const seeded = planPulses(new Map(), [{ key: CARD, lastEventAt: "2026-08-25T00:00:01.000Z" }], 1000);
+    const seeded = planPulses(
+      new Map(),
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:01.000Z", status: "working" }],
+      1000,
+    );
     expect(seeded.fire).toEqual([]);
 
-    const advanced = planPulses(seeded.next, [{ key: CARD, lastEventAt: "2026-08-25T00:00:02.000Z" }], 2000);
+    const advanced = planPulses(
+      seeded.next,
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:02.000Z", status: "working" }],
+      2000,
+    );
     expect(advanced.fire).toEqual([CARD]);
     expect(advanced.next.get(CARD)).toEqual({ lastEventAt: "2026-08-25T00:00:02.000Z", lastPulseAtMs: 2000 });
 
     // A second advance inside the gate updates the stamp but does not fire.
-    const gated = planPulses(advanced.next, [{ key: CARD, lastEventAt: "2026-08-25T00:00:03.000Z" }], 3000);
+    const gated = planPulses(
+      advanced.next,
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:03.000Z", status: "working" }],
+      3000,
+    );
     expect(gated.fire).toEqual([]);
     expect(gated.next.get(CARD)?.lastEventAt).toBe("2026-08-25T00:00:03.000Z");
+  });
+
+  test("an advance on a waiting, idle, or error card never fires", () => {
+    // The spec's non-goals: those three treatments are unchanged — an
+    // Attention/Stop/StopFailure event must not bloom a non-working card.
+    for (const status of ["waiting", "idle", "error"] as const) {
+      const seeded = planPulses(new Map(), [{ key: CARD, lastEventAt: "2026-08-25T00:00:01.000Z", status }], 1000);
+      const advanced = planPulses(seeded.next, [{ key: CARD, lastEventAt: "2026-08-25T00:00:02.000Z", status }], 8000);
+      expect(advanced.fire).toEqual([]);
+    }
+  });
+
+  test("keeps a non-working card's stamp history, so its next working advance fires", () => {
+    const seeded = planPulses(
+      new Map(),
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:01.000Z", status: "working" }],
+      1000,
+    );
+    // Advance while idle: silent, but the stamp is tracked, not dropped.
+    const idled = planPulses(
+      seeded.next,
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:02.000Z", status: "idle" }],
+      8000,
+    );
+    expect(idled.fire).toEqual([]);
+    expect(idled.next.get(CARD)?.lastEventAt).toBe("2026-08-25T00:00:02.000Z");
+    // Returning to working with no advance is not an advance — a reseeded
+    // (history-lost) card would also stay silent here, so the fire below is
+    // what proves the history survived.
+    const returned = planPulses(
+      idled.next,
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:02.000Z", status: "working" }],
+      9000,
+    );
+    expect(returned.fire).toEqual([]);
+    const advanced = planPulses(
+      returned.next,
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:03.000Z", status: "working" }],
+      20_000,
+    );
+    expect(advanced.fire).toEqual([CARD]);
+  });
+
+  test("a non-working advance leaves the two-second gate unconsumed", () => {
+    const seeded = planPulses(
+      new Map(),
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:01.000Z", status: "working" }],
+      1000,
+    );
+    const errored = planPulses(
+      seeded.next,
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:02.000Z", status: "error" }],
+      2000,
+    );
+    expect(errored.fire).toEqual([]);
+    expect(errored.next.get(CARD)?.lastPulseAtMs).toBeNull();
+    // 500ms later — inside the window the silent advance would have gated.
+    const working = planPulses(
+      errored.next,
+      [{ key: CARD, lastEventAt: "2026-08-25T00:00:03.000Z", status: "working" }],
+      2500,
+    );
+    expect(working.fire).toEqual([CARD]);
   });
 
   test("drops entries for cards no longer on the page", () => {
