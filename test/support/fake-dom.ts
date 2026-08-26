@@ -12,6 +12,15 @@ export class FakeElement {
 
   constructor(tagName: string) {
     this.tagName = tagName;
+    // renderBoard sets custom properties (--wash-delay) via the CSSOM API;
+    // mirror them into the same record reads use, kept non-enumerable so
+    // style-content assertions see only real declarations.
+    Object.defineProperty(this.style, "setProperty", {
+      enumerable: false,
+      value: (name: string, value: string): void => {
+        this.style[name] = value;
+      },
+    });
   }
 
   get classList(): { add: (...tokens: string[]) => void } {
