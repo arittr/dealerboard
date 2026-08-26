@@ -403,16 +403,32 @@ once stamped, is immutable for the session's lifetime.
 
 ### Card anatomy
 
-- Left status edge (8px) in the status color — working `#20B8FF`, waiting
-  `#FFB020`, idle `#4ADE80`, error `#FF4D67`; waiting and error cards
-  additionally get a full status-colored border and a faint status-tinted
-  surface wash so they pop from working/idle cards.
-- Status animation semantics carry over unchanged from the tile contract
-  (opacity-only; working's staggered shallow wash breathe 0.04→0.14,
-  waiting's border breathe, error's 2s pulse, idle static), retargeted to
-  edge/border/wash — including the wall-clock-seeded negative
-  animation-delay so a recreated card resumes mid-wash instead of snapping
-  to the dim end.
+- Left status edge (8px) in the status color — waiting `#FFB020`, idle
+  `#4ADE80`, error `#FF4D67`; waiting and error cards additionally get a
+  full status-colored border and a faint status-tinted surface wash so they
+  pop from working/idle cards. A working card's edge and status dot instead
+  carry liveness: a continuous function of time since the session's last
+  hook event (`lastEventAt`) — `#20B8FF` at full alpha through 3s, fading
+  to alpha 0.55 by 30s, then desaturating toward slate `#55647A` at alpha
+  0.28 by ten minutes — repainted in place on the 1s rail cadence, outside
+  the render signature, exactly like the status timers. Subagent cards
+  halve the edge's decayed alpha (their half-strength edge language); their
+  dots keep full decayed alpha.
+- Working-card motion means work happened. When a working card's
+  `lastEventAt` advances at ingest, a blue bloom crosses the card once and
+  fades over 520ms, coalesced to at most one per card per two seconds;
+  stamp advances on waiting, idle, and error cards are tracked but never
+  bloom. Every live working dot breathes on one shared wall-clock
+  four-second cycle — opacity multiplying the decayed alpha (never
+  replacing it), scale 0.92→1.08 — so all dots inhale together and the one
+  still dot is the salient thing. Waiting's border breathe, error's 2s
+  pulse, and idle's static treatment carry over unchanged from the tile
+  contract.
+- A working card silent for ten minutes or more goes quiet: the edge
+  becomes a 2px inset `#55647A` rule, the dot hollows to a `#55647A` ring
+  and stops breathing, the surface sinks to `#171E28`, the title dims to
+  `#8B9BB0`, and the meta row gains `quiet <elapsed>` (`quiet 12m`) in the
+  compact elapsed form — a fact, never a claim like "stalled".
 - Provider chip (42px, one-letter mark on the locked hues) with the amber
   unread dot on its corner (an 18px `#FFB020` disc on a 3px card-colored
   ring) whenever `unreadSince` is set — on the grid, idle ⟺ unread,
