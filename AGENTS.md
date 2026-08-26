@@ -10,7 +10,7 @@
 
 - `bun test` — run the test suite.
 - `bun run typecheck` — type-check without emitting.
-- `bun run build` — typecheck, compile the core daemon (`dist/stream-deck-agents`), and bundle the plugin (`com.drewritter.stream-deck-agents.sdPlugin/bin/plugin.js` via rollup).
+- `bun run build` — typecheck, compile the core daemon (`dist/dealerboard`), and bundle the plugin (`com.drewritter.stream-deck-agents.sdPlugin/bin/plugin.js` via rollup).
 - `bun run build:plugin` — plugin bundle only (deprecated integration — see
   "Deploying changes locally"; the bundle keeps building but is never
   deployed).
@@ -65,7 +65,7 @@ installable package.
 Exactly one process — the installed daemon — may hold the registry:
 
 ```sh
-lsof "$HOME/Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"
+lsof "$HOME/Library/Application Support/com.drewritter.dealerboard/registry.sqlite3"
 ```
 
 Run this first whenever the strip misbehaves in ways no single writer could
@@ -225,17 +225,17 @@ stopping it is part of the change.
   stores the session's model) but stay grid-invisible — idle and never
   unread — until the first prompt, and an abandoned page's row ages out via
   the prune.
-- The pi/omp shims (`extensions/{pi,omp}/stream-deck-agents.ts`) are
+- The pi/omp shims (`extensions/{pi,omp}/dealerboard.ts`) are
   dependency-free structural host files (no host imports — jiti loads them
   bare) that spawn the helper detached, serialized through a FIFO queue so
   wire order matches emission order; wire payloads carry only canonical
   event names and allowlisted keys, omitted rather than nulled when absent
   (omit-don't-null); the installer substitutes the
-  `__STREAM_DECK_AGENTS_EXECUTABLE__` token, writes atomically at mode 0600,
+  `__DEALERBOARD_EXECUTABLE__` token, writes atomically at mode 0600,
   and refuses to overwrite a same-named file lacking the managed marker
-  (`// stream-deck-agents: managed shim v1`). The grok hook file
-  `~/.grok/hooks/stream-deck-agents.json` is managed the same way (marker
-  key `x-stream-deck-agents`, token substitution, atomic 0600 write,
+  (`// dealerboard: managed shim v1`). The grok hook file
+  `~/.grok/hooks/dealerboard.json` is managed the same way (marker
+  key `x-dealerboard`, token substitution, atomic 0600 write,
   refusal without the marker).
 - Evener needs no hook or plugin install. `src/core/evener.ts` connects to the
   local hub's `/rpc`, honoring `EVENER_HUB_ADDR`/`EVENER_HUB_AUTH_TOKEN`, then
@@ -248,7 +248,7 @@ stopping it is part of the change.
   and retries disconnects every 5s.
   Evener does not publish a process-local `hub --addr` override; custom
   addresses must also be set durably in `hub.toml` (preferred) or in the
-  Stream Deck Agents LaunchAgent's `EVENER_HUB_ADDR` environment.
+  Dealerboard LaunchAgent's `EVENER_HUB_ADDR` environment.
 - Tile labels prefer the session title over the project name. Paseo-origin
   rows take titles from the Paseo overlay alone — provider title events,
   resolver write-backs, and reused-start metadata refreshes all skip them,

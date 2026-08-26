@@ -23,7 +23,7 @@ let tempHome: string;
 let paths: AppPaths;
 
 beforeEach(() => {
-  tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-daemon-"));
+  tempHome = mkdtempSync(join(tmpdir(), "dealerboard-daemon-"));
   paths = resolveAppPaths(tempHome);
   initializeDatabase(paths);
 });

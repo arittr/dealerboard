@@ -19,12 +19,9 @@ import {
 } from "../scripts/grok-hook-install";
 
 /** The real repository template, exercised so the shipped artifact is what the assertions cover. */
-const REPO_TEMPLATE = readFileSync(
-  join(import.meta.dir, "..", "extensions", "grok", "stream-deck-agents.hook.json"),
-  "utf8",
-);
+const REPO_TEMPLATE = readFileSync(join(import.meta.dir, "..", "extensions", "grok", "dealerboard.hook.json"), "utf8");
 
-const EXECUTABLE = "/usr/local/libexec/stream-deck-agents-test";
+const EXECUTABLE = "/usr/local/libexec/dealerboard-test";
 
 type HookCommand = { type: string; command: string; timeout: number };
 type HookEntry = { hooks: HookCommand[] };
@@ -56,7 +53,7 @@ describe("grok hook file install", () => {
     expect(outcome).toBe("installed");
     const installed = readFileSync(destination, "utf8");
     expect(installed).toContain(EXECUTABLE);
-    expect(installed).not.toContain("__STREAM_DECK_AGENTS_EXECUTABLE__");
+    expect(installed).not.toContain("__DEALERBOARD_EXECUTABLE__");
     expect(statSync(destination).mode & 0o777).toBe(0o600);
     const hookFile = JSON.parse(installed) as HookFile;
     const eventNames = Object.keys(hookFile.hooks).sort();

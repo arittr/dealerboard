@@ -18,7 +18,7 @@ const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {})
   sessionId: `session-${logicalSlot}`,
   status: "idle",
   title: `Session ${logicalSlot}`,
-  project: "stream-deck-agents",
+  project: "dealerboard",
   descendantCount: 0,
   logicalSlot,
   ghosttyTerminalId: null,

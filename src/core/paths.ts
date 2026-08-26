@@ -25,19 +25,19 @@ export type AppPaths = {
 const APPLICATION_DIRECTORY_MODE = 0o700;
 
 export const resolveAppPaths = (home: string = homedir()): AppPaths => {
-  const root = join(home, "Library/Application Support/com.drewritter.stream-deck-agents");
+  const root = join(home, "Library/Application Support/com.drewritter.dealerboard");
   const binDirectory = join(root, "bin");
   return {
     home,
     root,
     binDirectory,
-    executable: join(binDirectory, "stream-deck-agents"),
+    executable: join(binDirectory, "dealerboard"),
     database: join(root, "registry.sqlite3"),
     snapshot: join(root, "snapshot-v2.json"),
     quotaSnapshot: join(root, "quota-snapshot.json"),
     tokenUsageSnapshot: join(root, "token-usage-snapshot.json"),
     logsDirectory: join(root, "logs"),
-    launchAgent: join(home, "Library/LaunchAgents/com.drewritter.stream-deck-agents.plist"),
+    launchAgent: join(home, "Library/LaunchAgents/com.drewritter.dealerboard.plist"),
   };
 };
 

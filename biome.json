@@ -67,7 +67,7 @@
       }
     },
     {
-      "includes": ["extensions/pi/stream-deck-agents.ts", "extensions/omp/stream-deck-agents.ts"],
+      "includes": ["extensions/pi/dealerboard.ts", "extensions/omp/dealerboard.ts"],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     }
   ]

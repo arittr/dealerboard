@@ -19,7 +19,7 @@ const session = (
   sessionId,
   status: "idle",
   title,
-  project: "stream-deck-agents",
+  project: "dealerboard",
   descendantCount: 0,
   logicalSlot: 1,
   ghosttyTerminalId: null,

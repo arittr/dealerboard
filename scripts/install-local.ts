@@ -40,26 +40,26 @@ import { ensureAppDirectories, resolveAppPaths } from "../src/core/paths";
 import { LATEST_SCHEMA_VERSION } from "../src/core/schema";
 import { GROK_HOOK_NAME, type GrokHookInstallOutcome, installGrokHookFile } from "./grok-hook-install";
 
-const LABEL = "com.drewritter.stream-deck-agents";
-const PLIST_TEMPLATE = "launchd/com.drewritter.stream-deck-agents.plist.template";
-const BUILT_CORE = "dist/stream-deck-agents";
+const LABEL = "com.drewritter.dealerboard";
+const PLIST_TEMPLATE = "launchd/com.drewritter.dealerboard.plist.template";
+const BUILT_CORE = "dist/dealerboard";
 
-const EXECUTABLE_TOKEN = "__STREAM_DECK_AGENTS_EXECUTABLE__";
-const LOGS_TOKEN = "__STREAM_DECK_AGENTS_LOGS_DIRECTORY__";
-const TOKEN_MARKER = "__STREAM_DECK_AGENTS_";
+const EXECUTABLE_TOKEN = "__DEALERBOARD_EXECUTABLE__";
+const LOGS_TOKEN = "__DEALERBOARD_LOGS_DIRECTORY__";
+const TOKEN_MARKER = "__DEALERBOARD_";
 
 const EXECUTABLE_MODE = 0o700;
 const PLIST_MODE = 0o600;
 
-const SHIM_MARKER = "// stream-deck-agents: managed shim v1";
-const SHIM_NAME = "stream-deck-agents.ts";
+const SHIM_MARKER = "// dealerboard: managed shim v1";
+const SHIM_NAME = "dealerboard.ts";
 const SHIM_TARGETS = [
   { provider: "pi", homeDir: ".pi" },
   { provider: "omp", homeDir: ".omp" },
 ] as const;
 const SHIM_MODE = 0o600;
 
-const GROK_HOOK_TEMPLATE = join("extensions", "grok", "stream-deck-agents.hook.json");
+const GROK_HOOK_TEMPLATE = join("extensions", "grok", "dealerboard.hook.json");
 
 const LAUNCHCTL = "/bin/launchctl";
 const PLUTIL = "/usr/bin/plutil";

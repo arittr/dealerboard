@@ -1,6 +1,6 @@
-// stream-deck-agents: managed shim v1
+// dealerboard: managed shim v1
 /**
- * Reports oh-my-pi (omp) session lifecycle to the stream-deck-agents daemon.
+ * Reports oh-my-pi (omp) session lifecycle to the dealerboard daemon.
  *
  * Dependency-free by contract (jiti loads this file bare); the host surface
  * is declared as local structural interfaces. omp hosts MANY sessions per
@@ -18,7 +18,7 @@
 import { spawn } from "node:child_process";
 
 /** Substituted by scripts/install-local.ts at copy time. */
-const HELPER = "__STREAM_DECK_AGENTS_EXECUTABLE__";
+const HELPER = "__DEALERBOARD_EXECUTABLE__";
 const HELPER_ARGS = ["event", "omp"] as const;
 
 /**

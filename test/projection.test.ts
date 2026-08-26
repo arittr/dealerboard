@@ -868,7 +868,7 @@ describe("projectSnapshotRows", () => {
 
 describe("readProjection", () => {
   test("projects one consistent snapshot from a separately committed writer", () => {
-    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
     try {
       const paths = resolveAppPaths(tempHome);
       initializeDatabase(paths);
@@ -1043,7 +1043,7 @@ describe("readProjection", () => {
   });
 
   test("projects the widened provider set end to end (grid-blackout regression)", () => {
-    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
     try {
       const paths = resolveAppPaths(tempHome);
       initializeDatabase(paths);
@@ -1171,7 +1171,7 @@ describe("readProjection", () => {
   });
 
   test("carries the stored model through to the snapshot", () => {
-    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
     try {
       const paths = resolveAppPaths(tempHome);
       initializeDatabase(paths);
@@ -1239,7 +1239,7 @@ describe("readProjection", () => {
   });
 
   test("carries the data-surface columns through to the snapshot end to end", () => {
-    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
     try {
       const paths = resolveAppPaths(tempHome);
       initializeDatabase(paths);
@@ -1290,7 +1290,7 @@ describe("readProjection", () => {
   });
 
   test("rejects corrupt opened_at and rolls back the read transaction", () => {
-    const tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-projection-"));
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
     try {
       const paths = resolveAppPaths(tempHome);
       initializeDatabase(paths);
@@ -1367,7 +1367,7 @@ describe("writeSnapshotAtomically", () => {
   };
 
   test("publishes A then B: the file parses as exactly B, mode 0600, no temp sibling", () => {
-    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-snapshot-"));
+    const dir = mkdtempSync(join(tmpdir(), "dealerboard-snapshot-"));
     try {
       const target = join(dir, "snapshot-v2.json");
 
@@ -1394,7 +1394,7 @@ describe("writeSnapshotAtomically", () => {
   });
 
   test("cleans the temporary sibling in finally when publication fails", () => {
-    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-snapshot-"));
+    const dir = mkdtempSync(join(tmpdir(), "dealerboard-snapshot-"));
     try {
       // A directory at the target path makes renameSync over it fail.
       const target = join(dir, "snapshot-v2.json");

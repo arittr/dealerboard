@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.drewritter.stream-deck-agents</string>
+	<string>com.drewritter.dealerboard</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>__STREAM_DECK_AGENTS_EXECUTABLE__</string>
+		<string>__DEALERBOARD_EXECUTABLE__</string>
 		<string>daemon</string>
 	</array>
 	<key>RunAtLoad</key>
@@ -14,8 +14,8 @@
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>__STREAM_DECK_AGENTS_LOGS_DIRECTORY__/daemon.stdout.log</string>
+	<string>__DEALERBOARD_LOGS_DIRECTORY__/daemon.stdout.log</string>
 	<key>StandardErrorPath</key>
-	<string>__STREAM_DECK_AGENTS_LOGS_DIRECTORY__/daemon.stderr.log</string>
+	<string>__DEALERBOARD_LOGS_DIRECTORY__/daemon.stderr.log</string>
 </dict>
 </plist>

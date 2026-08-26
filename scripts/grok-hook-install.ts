@@ -15,12 +15,12 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const GROK_HOOK_MARKER = "x-stream-deck-agents";
+export const GROK_HOOK_MARKER = "x-dealerboard";
 export const GROK_HOOK_MARKER_VALUE = "managed hook v1";
-export const GROK_HOOK_NAME = "stream-deck-agents.json";
+export const GROK_HOOK_NAME = "dealerboard.json";
 export const GROK_HOOK_MODE = 0o600;
 
-const EXECUTABLE_TOKEN = "__STREAM_DECK_AGENTS_EXECUTABLE__";
+const EXECUTABLE_TOKEN = "__DEALERBOARD_EXECUTABLE__";
 
 export type GrokHookInstallOutcome = "installed" | "skipped-no-grok-home" | "skipped-user-content" | "unchanged";
 

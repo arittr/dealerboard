@@ -437,7 +437,7 @@ describe("zcode SQLite titles", () => {
     rows: readonly { id: string; title: string | null }[],
     run: (dbPath: string) => void,
   ): void => {
-    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-zcode-titles-"));
+    const dir = mkdtempSync(join(tmpdir(), "dealerboard-zcode-titles-"));
     try {
       const dbPath = join(dir, "db.sqlite");
       const setup = new Database(dbPath, { create: true, readwrite: true });
@@ -504,7 +504,7 @@ describe("zcode SQLite titles", () => {
   });
 
   test("sees a WAL commit that has not checkpointed (no stat cache)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-zcode-titles-"));
+    const dir = mkdtempSync(join(tmpdir(), "dealerboard-zcode-titles-"));
     try {
       const dbPath = join(dir, "db.sqlite");
       const writer = new Database(dbPath, { create: true, readwrite: true });
@@ -540,7 +540,7 @@ describe("zcode SQLite titles", () => {
     const missing = makeResolver();
     expect(missing.resolver.resolve([zcodeTarget("z1")]).titles).toEqual([]);
 
-    const dir = mkdtempSync(join(tmpdir(), "stream-deck-agents-zcode-titles-"));
+    const dir = mkdtempSync(join(tmpdir(), "dealerboard-zcode-titles-"));
     try {
       const dbPath = join(dir, "db.sqlite");
       const wrong = new Database(dbPath, { create: true, readwrite: true });

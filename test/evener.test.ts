@@ -205,7 +205,7 @@ describe("Evener AppWire collector", () => {
     const initialize = requestByMethod(socket, "initialize");
     expect(initialize["params"]).toEqual({
       protocolVersion: "evener-appwire-v3",
-      clientInfo: { name: "stream-deck-agents", version: "1" },
+      clientInfo: { name: "dealerboard", version: "1" },
       capabilities: {
         experimentalApi: false,
         optOutNotificationMethods: [

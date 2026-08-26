@@ -2,14 +2,14 @@
  * Compiled-binary entry point and command router.
  *
  * Grammar (exact):
- *   stream-deck-agents init
- *   stream-deck-agents event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen|evener>
- *   stream-deck-agents daemon
- *   stream-deck-agents sessions list
- *   stream-deck-agents sessions clear <provider> <session-id>
- *   stream-deck-agents sessions ack <provider> <session-id>
- *   stream-deck-agents sessions clear-all
- *   stream-deck-agents sessions prune [max-age-hours]
+ *   dealerboard init
+ *   dealerboard event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen|evener>
+ *   dealerboard daemon
+ *   dealerboard sessions list
+ *   dealerboard sessions clear <provider> <session-id>
+ *   dealerboard sessions ack <provider> <session-id>
+ *   dealerboard sessions clear-all
+ *   dealerboard sessions prune [max-age-hours]
  *
  * The event path is fail-open for provider hooks: it reads at most 65,536
  * stdin bytes, parses one JSON object, applies the decoded events in one
@@ -123,7 +123,7 @@ const readBoundedStdin = async (stdin: AsyncIterable<Uint8Array>, limit: number)
   return result;
 };
 
-const USAGE = `usage: stream-deck-agents <command>
+const USAGE = `usage: dealerboard <command>
 
 commands:
   init

@@ -1,5 +1,5 @@
 {
-  "name": "stream-deck-agents",
+  "name": "dealerboard",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,7 +12,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "check": "biome ci . && bun run build && bun test",
-    "build:core": "bun build --compile --minify --outfile dist/stream-deck-agents src/core/cli.ts",
+    "build:core": "bun build --compile --minify --outfile dist/dealerboard src/core/cli.ts",
     "build:plugin": "rollup --config",
     "build": "bun run typecheck && bun run build:core && bun run build:plugin",
     "pack:plugin": "bun ./node_modules/@elgato/cli/bin/streamdeck.mjs validate --no-update-check com.drewritter.stream-deck-agents.sdPlugin && bun ./node_modules/@elgato/cli/bin/streamdeck.mjs pack --no-update-check com.drewritter.stream-deck-agents.sdPlugin --output dist --force",

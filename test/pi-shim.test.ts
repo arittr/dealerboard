@@ -7,7 +7,7 @@ import {
   type PiHost,
   type SettleTimerFactory,
   type SpawnPort,
-} from "../extensions/pi/stream-deck-agents";
+} from "../extensions/pi/dealerboard";
 
 type WirePayload = Record<string, unknown>;
 type Handler = (event: unknown, ctx: PiContext) => void;

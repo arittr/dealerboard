@@ -23,7 +23,7 @@ let tempHome: string;
 let paths: AppPaths;
 
 beforeEach(() => {
-  tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-cli-"));
+  tempHome = mkdtempSync(join(tmpdir(), "dealerboard-cli-"));
   paths = resolveAppPaths(tempHome);
 });
 

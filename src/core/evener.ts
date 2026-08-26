@@ -971,7 +971,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   const initialize = async (target: EvenerSocket): Promise<void> => {
     const result = await request(target, "initialize", {
       protocolVersion: EVENER_APPWIRE_PROTOCOL_VERSION,
-      clientInfo: { name: "stream-deck-agents", version: "1" },
+      clientInfo: { name: "dealerboard", version: "1" },
       capabilities: {
         experimentalApi: false,
         optOutNotificationMethods: [...HIGH_VOLUME_NOTIFICATIONS],

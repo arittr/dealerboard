@@ -15,7 +15,7 @@ Every hook-backed provider invokes the same installed helper with one JSON
 event object on standard input:
 
 ```text
-/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents event <provider>
+/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard event <provider>
 ```
 
 The helper reads at most 65,536 bytes of stdin, prints nothing, and always
@@ -45,11 +45,11 @@ snapshot, or the logs.
 
 ## Evener (AppWire; no hook configuration)
 
-Do **not** install a Stream Deck Agents hook into Evener. Evener hooks are
+Do **not** install a Dealerboard hook into Evener. Evener hooks are
 per-session, opt-in plugin behavior and omit authoritative title/model state;
 the supported daemon-wide observer surface is AppWire.
 
-When both daemons are running, Stream Deck Agents automatically connects to
+When both daemons are running, Dealerboard automatically connects to
 Evener hub at its documented default `http://127.0.0.1:9180` (WebSocket
 `/rpc`). It follows Evener's own configuration and credential precedence:
 
@@ -65,7 +65,7 @@ Evener's `hub --addr` command-line flag is process-local and is not published
 in its state directory, so no external client can discover that override. If
 you launch the hub with a non-default `--addr`, put the same durable value in
 `hub.toml` (recommended), or expose the same `EVENER_HUB_ADDR` to the
-Stream Deck Agents LaunchAgent. A shell-only environment variable is not
+Dealerboard LaunchAgent. A shell-only environment variable is not
 automatically inherited by an already-loaded LaunchAgent.
 
 The bearer capability is held in memory only. It is never logged, copied to
@@ -97,7 +97,7 @@ missed close.
 To verify, start an Evener session through the hub, submit a prompt, then run:
 
 ```bash
-"$HOME/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" sessions list
+"$HOME/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" sessions list
 ```
 
 An `evener` row should show the session title/model and `idle`, `working`,
@@ -119,7 +119,7 @@ nothing is shell-interpreted. Each handler sets a one-second `timeout`.
 ### 1. Back up
 
 ```bash
-cp /Users/drewritter/.claude/settings.json /Users/drewritter/.claude/settings.json.before-stream-deck-agents
+cp /Users/drewritter/.claude/settings.json /Users/drewritter/.claude/settings.json.before-dealerboard
 ```
 
 ### 2. Edit
@@ -136,7 +136,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -148,7 +148,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -160,7 +160,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -172,7 +172,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -184,7 +184,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -197,7 +197,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -209,7 +209,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -221,7 +221,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -233,7 +233,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -245,7 +245,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -257,7 +257,7 @@ event arrays inside it without removing any existing entries.
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents",
+            "command": "/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard",
             "args": ["event", "claude"],
             "timeout": 1
           }
@@ -299,14 +299,14 @@ unchanged; no wrapper is installed.
 ### 3. Validate
 
 Start a new Claude Code session and run `/hooks`. Each of the eleven events
-should list the stream-deck-agents command. The registry should show the
+should list the dealerboard command. The registry should show the
 session within one polling interval (see "After every provider" below).
 
 ### 4. Compare before replace, and restore
 
 ```bash
-diff /Users/drewritter/.claude/settings.json.before-stream-deck-agents /Users/drewritter/.claude/settings.json
-cp /Users/drewritter/.claude/settings.json.before-stream-deck-agents /Users/drewritter/.claude/settings.json
+diff /Users/drewritter/.claude/settings.json.before-dealerboard /Users/drewritter/.claude/settings.json
+cp /Users/drewritter/.claude/settings.json.before-dealerboard /Users/drewritter/.claude/settings.json
 ```
 
 Keep the backup until physical verification is complete.
@@ -335,7 +335,7 @@ entries below; do not add fields, events, or comments inside the entries.
 ### 1. Back up
 
 ```bash
-cp /Users/drewritter/.kimi-code/config.toml /Users/drewritter/.kimi-code/config.toml.before-stream-deck-agents
+cp /Users/drewritter/.kimi-code/config.toml /Users/drewritter/.kimi-code/config.toml.before-dealerboard
 ```
 
 ### 2. Edit
@@ -346,57 +346,57 @@ untouched.
 ```toml
 [[hooks]]
 event = "SessionStart"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "UserPromptSubmit"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "PreToolUse"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "PostToolUse"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "PermissionRequest"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "Stop"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "Interrupt"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "StopFailure"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "SessionEnd"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "SubagentStart"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 
 [[hooks]]
 event = "SubagentStop"
-command = '"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" event kimi'
+command = '"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" event kimi'
 timeout = 1
 ```
 
@@ -430,8 +430,8 @@ must not add a tile; submitting its first prompt must add one.
 ### 4. Compare before replace, and restore
 
 ```bash
-diff /Users/drewritter/.kimi-code/config.toml.before-stream-deck-agents /Users/drewritter/.kimi-code/config.toml
-cp /Users/drewritter/.kimi-code/config.toml.before-stream-deck-agents /Users/drewritter/.kimi-code/config.toml
+diff /Users/drewritter/.kimi-code/config.toml.before-dealerboard /Users/drewritter/.kimi-code/config.toml
+cp /Users/drewritter/.kimi-code/config.toml.before-dealerboard /Users/drewritter/.kimi-code/config.toml
 ```
 
 Keep the backup until physical verification is complete.
@@ -447,7 +447,7 @@ local plugin. Codex has no `Notification` approval event or `StopFailure`;
 the registry does not need the compact hooks. Two locations are user-owned:
 the plugin directory and the personal marketplace file.
 
-- Plugin directory: `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/`
+- Plugin directory: `/Users/drewritter/.agents/plugins/dealerboard-codex/`
 - Marketplace file: `/Users/drewritter/.agents/plugins/marketplace.json`
 
 Codex runs hook command strings through a shell, so the installed path is
@@ -460,7 +460,7 @@ double-quoted inside the JSON string. Each handler sets a one-second
 The marketplace file may not exist yet. If it does, back it up:
 
 ```bash
-cp /Users/drewritter/.agents/plugins/marketplace.json /Users/drewritter/.agents/plugins/marketplace.json.before-stream-deck-agents
+cp /Users/drewritter/.agents/plugins/marketplace.json /Users/drewritter/.agents/plugins/marketplace.json.before-dealerboard
 ```
 
 If it does not exist, the edit below creates it, and there is nothing to back
@@ -468,33 +468,33 @@ up. The plugin directory is new; there is nothing to back up there either.
 
 ### 2. Create the plugin
 
-Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/.codex-plugin/plugin.json`:
+Create `/Users/drewritter/.agents/plugins/dealerboard-codex/.codex-plugin/plugin.json`:
 
 ```json
 {
-  "name": "stream-deck-agents-codex",
+  "name": "dealerboard-codex",
   "version": "1.0.0",
-  "description": "Reports Codex session lifecycle events to the local Stream Deck Agents registry.",
+  "description": "Reports Codex session lifecycle events to the local Dealerboard registry.",
   "interface": {
-    "displayName": "Stream Deck Agents",
+    "displayName": "Dealerboard",
     "category": "Productivity"
   }
 }
 ```
 
-Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.json`
+Create `/Users/drewritter/.agents/plugins/dealerboard-codex/hooks/hooks.json`
 (the default hook location, so the manifest needs no `hooks` key):
 
 ```json
 {
-  "description": "Stream Deck Agents session registry hooks.",
+  "description": "Dealerboard session registry hooks.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -505,7 +505,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -516,7 +516,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -527,7 +527,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -538,7 +538,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -549,7 +549,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -560,7 +560,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -571,7 +571,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -582,7 +582,7 @@ Create `/Users/drewritter/.agents/plugins/stream-deck-agents-codex/hooks/hooks.j
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event codex",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event codex",
             "timeout": 1
           }
         ]
@@ -606,10 +606,10 @@ already exists, merge only the `plugins` entry below into the existing
   },
   "plugins": [
     {
-      "name": "stream-deck-agents-codex",
+      "name": "dealerboard-codex",
       "source": {
         "source": "local",
-        "path": "./.agents/plugins/stream-deck-agents-codex"
+        "path": "./.agents/plugins/dealerboard-codex"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -641,16 +641,16 @@ codex plugin list
 
 ### 4. Install, enable, and trust
 
-1. Install and enable with `codex plugin add stream-deck-agents-codex@drew-local`,
+1. Install and enable with `codex plugin add dealerboard-codex@drew-local`,
    or restart Codex Desktop, open the Plugins Directory, select the **Drew
-   Local** source, install **Stream Deck Agents**, and enable it.
+   Local** source, install **Dealerboard**, and enable it.
 2. Codex runs the installed copy under `~/.codex/plugins/cache`, not the local
    marketplace source directly. After changing `hooks/hooks.json`, refresh that
    copy before looking for an approval prompt:
 
    ```bash
-   codex plugin remove stream-deck-agents-codex@drew-local
-   codex plugin add stream-deck-agents-codex@drew-local
+   codex plugin remove dealerboard-codex@drew-local
+   codex plugin add dealerboard-codex@drew-local
    ```
 
 3. **Required trust step.** Codex skips non-managed command hooks until the
@@ -659,7 +659,7 @@ codex plugin list
    `hooks/hooks.json` later leaves the existing entries trusted, but the new
    entries are silently skipped until approved, and editing an existing entry
    rehashes that entry and requires its re-approval. Open the Codex CLI, run
-   `/hooks`, review the stream-deck-agents-codex hooks, and approve every
+   `/hooks`, review the dealerboard-codex hooks, and approve every
    listed event. Codex prints a startup warning while review is pending.
    Without this step the untrusted events silently never fire — a tile that
    never receives `Stop` stays working forever, so the review must cover all
@@ -696,12 +696,12 @@ codex plugin list
 ### 6. Compare before replace, and restore
 
 ```bash
-diff /Users/drewritter/.agents/plugins/marketplace.json.before-stream-deck-agents /Users/drewritter/.agents/plugins/marketplace.json
-cp /Users/drewritter/.agents/plugins/marketplace.json.before-stream-deck-agents /Users/drewritter/.agents/plugins/marketplace.json
+diff /Users/drewritter/.agents/plugins/marketplace.json.before-dealerboard /Users/drewritter/.agents/plugins/marketplace.json
+cp /Users/drewritter/.agents/plugins/marketplace.json.before-dealerboard /Users/drewritter/.agents/plugins/marketplace.json
 ```
 
 Then disable or remove the plugin in Codex Desktop, delete
-`/Users/drewritter/.agents/plugins/stream-deck-agents-codex/`, and keep the
+`/Users/drewritter/.agents/plugins/dealerboard-codex/`, and keep the
 backup until physical verification is complete. (If the marketplace file did
 not exist before, delete it instead of restoring.)
 
@@ -740,7 +740,7 @@ cp ~/.zcode/cli/config.json ~/.zcode/cli/config.json.bak
 
 Merge the following top-level `"hooks"` object into the config, keeping
 every existing key. Replace every `<helper>` with the installed executable
-path — `/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents`,
+path — `/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard`,
 the same helper every provider above invokes:
 
 ```json
@@ -869,7 +869,7 @@ Keep the backup until physical verification is complete.
 
 ## pi
 
-Target file: `~/.pi/agent/extensions/stream-deck-agents.ts` — placed by the
+Target file: `~/.pi/agent/extensions/dealerboard.ts` — placed by the
 installer, not by hand.
 
 pi needs no config edits. The installer copies one extension file into pi's
@@ -878,7 +878,7 @@ reports session lifecycle to the daemon through the same helper every
 provider above invokes.
 
 **Ownership marker.** The file's first line is
-`// stream-deck-agents: managed shim v1`. The installer re-copies any
+`// dealerboard: managed shim v1`. The installer re-copies any
 same-named file that still starts with that marker line — customizations kept
 beneath a retained marker are overwritten on the next install. To customize
 the file, delete its first-line marker: the installer then treats the file as
@@ -923,13 +923,13 @@ below). To remove pi reporting, delete the file.
 
 ## oh-my-pi (omp)
 
-Target file: `~/.omp/agent/extensions/stream-deck-agents.ts` — placed by the
+Target file: `~/.omp/agent/extensions/dealerboard.ts` — placed by the
 installer, not by hand.
 
 Same shape as pi: omp needs no config edits, the installer places one
 extension file in omp's auto-discovered extensions directory, and omp loads it
 on every start. The same ownership-marker rule applies — the file's first line
-is `// stream-deck-agents: managed shim v1`; the installer re-copies any
+is `// dealerboard: managed shim v1`; the installer re-copies any
 same-named file that still starts with that line, and to customize the file
 you delete the marker, making it yours (untouched, and no longer updated).
 
@@ -971,14 +971,14 @@ below). To remove omp reporting, delete the file.
 
 ## grok
 
-Target file: `~/.grok/hooks/stream-deck-agents.json` — written by the
+Target file: `~/.grok/hooks/dealerboard.json` — written by the
 installer, not by hand.
 
 grok needs no config edits. The installer manages this one hook file: it
 renders the template, substitutes the installed executable path, and writes
 the file atomically at mode 0600 — but only when `~/.grok` exists (a machine
 without grok is skipped entirely). The file carries the marker key
-`"x-stream-deck-agents": "managed hook v1"`; the installer refuses to
+`"x-dealerboard": "managed hook v1"`; the installer refuses to
 overwrite a same-named file that lacks that exact marker key and value, so a
 user-owned file named the same is never clobbered.
 
@@ -1044,7 +1044,7 @@ back it up and merge only the `"hooks"` key.
 ### 1. Back up
 
 ```bash
-cp /Users/drewritter/.qwen/settings.json /Users/drewritter/.qwen/settings.json.before-stream-deck-agents
+cp /Users/drewritter/.qwen/settings.json /Users/drewritter/.qwen/settings.json.before-dealerboard
 ```
 
 ### 2. Edit
@@ -1060,7 +1060,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1071,7 +1071,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1082,7 +1082,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1093,7 +1093,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1105,7 +1105,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1116,7 +1116,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1127,7 +1127,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1138,7 +1138,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1149,7 +1149,7 @@ keeping every existing key.
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents\" event qwen",
+            "command": "\"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard\" event qwen",
             "timeout": 5000
           }
         ]
@@ -1186,7 +1186,7 @@ provider" below). To remove Qwen reporting, delete the `"hooks"` key.
 Start a session in each provider, then list what the registry recorded:
 
 ```bash
-"/Users/drewritter/Library/Application Support/com.drewritter.stream-deck-agents/bin/stream-deck-agents" sessions list
+"/Users/drewritter/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" sessions list
 ```
 
 Each active session should appear with its provider, title, and project. To

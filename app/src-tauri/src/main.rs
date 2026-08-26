@@ -42,7 +42,7 @@ struct SnapshotPayload {
 
 fn app_support_root() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|error| error.to_string())?;
-    Ok(PathBuf::from(home).join("Library/Application Support/com.drewritter.stream-deck-agents"))
+    Ok(PathBuf::from(home).join("Library/Application Support/com.drewritter.dealerboard"))
 }
 
 /// The daemon's atomic rename never writes the target in place, but it also
@@ -161,7 +161,7 @@ fn run(program: &str, args: &[&str]) -> Result<(), String> {
 /// session-ack: the installed binary, fixed subcommand argv, no shell.
 #[tauri::command]
 async fn ack_session(provider: &str, session_id: &str) -> Result<(), String> {
-    let executable = app_support_root()?.join("bin/stream-deck-agents");
+    let executable = app_support_root()?.join("bin/dealerboard");
     let path = executable.to_string_lossy().to_string();
     run(&path, &["sessions", "ack", provider, session_id])
 }
@@ -178,7 +178,7 @@ async fn reveal_transcript(path: &str) -> Result<(), String> {
 /// validated in src/core/cli.ts). The webview gates this behind a confirm.
 #[tauri::command]
 async fn clear_session(provider: &str, session_id: &str) -> Result<(), String> {
-    let executable = app_support_root()?.join("bin/stream-deck-agents");
+    let executable = app_support_root()?.join("bin/dealerboard");
     let path = executable.to_string_lossy().to_string();
     run(&path, &["sessions", "clear", provider, session_id])
 }
@@ -354,7 +354,7 @@ fn main() {
             focus_ghostty
         ])
         .run(tauri::generate_context!())
-        .expect("error while running agent-strip");
+        .expect("error while running dealerboard");
 }
 
 #[cfg(test)]
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn generation_identity_tracks_publications() {
         let directory =
-            std::env::temp_dir().join(format!("agent-strip-generation-{}", std::process::id()));
+            std::env::temp_dir().join(format!("dealerboard-generation-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
 
@@ -433,7 +433,7 @@ mod tests {
     /// publication emitting again as its own generation.
     #[test]
     fn one_publication_emits_exactly_one_event() {
-        let directory = std::env::temp_dir().join(format!("agent-strip-watch-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("dealerboard-watch-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
 
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn two_distinct_publications_inside_the_coalesce_window_both_emit() {
         let directory =
-            std::env::temp_dir().join(format!("agent-strip-two-{}", std::process::id()));
+            std::env::temp_dir().join(format!("dealerboard-two-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
 
@@ -537,7 +537,7 @@ mod tests {
     /// emit and the publication still delivers exactly once.
     #[test]
     fn failed_emit_retries_on_a_later_burst_event() {
-        let directory = std::env::temp_dir().join(format!("agent-strip-retry-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("dealerboard-retry-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
 
@@ -582,7 +582,7 @@ mod tests {
     /// the emitted generation still suppresses them regardless of timing.
     #[test]
     fn slow_successful_sink_does_not_double_emit() {
-        let directory = std::env::temp_dir().join(format!("agent-strip-slow-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("dealerboard-slow-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join(SNAPSHOT_FILE_NAME), r#"{"n":0}"#).unwrap();
 

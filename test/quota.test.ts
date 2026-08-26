@@ -46,7 +46,7 @@ describe("createQuotaCollector", () => {
   let quotaPath: string;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), "stream-deck-agents-quota-"));
+    tempDir = mkdtempSync(join(tmpdir(), "dealerboard-quota-"));
     quotaPath = join(tempDir, "quota-snapshot.json");
   });
 

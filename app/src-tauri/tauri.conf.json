@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agent Strip",
+  "productName": "Dealerboard",
   "version": "0.1.0",
-  "identifier": "com.drewritter.agent-strip",
+  "identifier": "com.drewritter.dealerboard.app",
   "build": {
     "frontendDist": "../dist"
   },
@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Agent Strip",
+        "title": "Dealerboard",
         "decorations": false,
         "resizable": true,
         "width": 1280,

@@ -23,7 +23,7 @@ let tempHome: string;
 let db: Database;
 
 beforeEach(() => {
-  tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-registry-"));
+  tempHome = mkdtempSync(join(tmpdir(), "dealerboard-registry-"));
   const paths = resolveAppPaths(tempHome);
   initializeDatabase(paths);
   db = openRegistryDatabase(paths.database, "readwrite");

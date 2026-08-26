@@ -8,7 +8,7 @@ import {
   type SettleTimerFactory,
   type SpawnPort,
   TOOL_EVENTS,
-} from "../extensions/omp/stream-deck-agents";
+} from "../extensions/omp/dealerboard";
 
 type WirePayload = Record<string, unknown>;
 

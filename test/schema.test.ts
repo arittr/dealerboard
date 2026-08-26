@@ -10,7 +10,7 @@ import { PROVIDER_KEYS } from "../src/protocol";
 let tempHome: string;
 
 beforeEach(() => {
-  tempHome = mkdtempSync(join(tmpdir(), "stream-deck-agents-schema-"));
+  tempHome = mkdtempSync(join(tmpdir(), "dealerboard-schema-"));
 });
 
 afterEach(() => {
@@ -92,22 +92,22 @@ const createVersion1Database = (path: string): void => {
 
 describe("resolveAppPaths", () => {
   test("returns the exact canonical per-user paths under the given home", () => {
-    const root = join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents");
+    const root = join(tempHome, "Library/Application Support/com.drewritter.dealerboard");
     const paths = resolveAppPaths(tempHome);
     expect(paths.root).toBe(root);
     expect(paths.binDirectory).toBe(join(root, "bin"));
-    expect(paths.executable).toBe(join(root, "bin/stream-deck-agents"));
+    expect(paths.executable).toBe(join(root, "bin/dealerboard"));
     expect(paths.database).toBe(join(root, "registry.sqlite3"));
     expect(paths.snapshot).toBe(join(root, "snapshot-v2.json"));
     expect(paths.quotaSnapshot).toBe(join(root, "quota-snapshot.json"));
     expect(paths.tokenUsageSnapshot).toBe(join(root, "token-usage-snapshot.json"));
     expect(paths.logsDirectory).toBe(join(root, "logs"));
-    expect(paths.launchAgent).toBe(join(tempHome, "Library/LaunchAgents/com.drewritter.stream-deck-agents.plist"));
+    expect(paths.launchAgent).toBe(join(tempHome, "Library/LaunchAgents/com.drewritter.dealerboard.plist"));
   });
 
   test("defaults to the current user's home directory", () => {
     expect(resolveAppPaths().database).toBe(
-      join(homedir(), "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
+      join(homedir(), "Library/Application Support/com.drewritter.dealerboard/registry.sqlite3"),
     );
   });
 });
@@ -116,7 +116,7 @@ describe("initializeDatabase", () => {
   test("initializes a WAL database at user_version 13 with foreign keys on every connection", () => {
     const paths = resolveAppPaths(tempHome);
     expect(paths.database).toBe(
-      join(tempHome, "Library/Application Support/com.drewritter.stream-deck-agents/registry.sqlite3"),
+      join(tempHome, "Library/Application Support/com.drewritter.dealerboard/registry.sqlite3"),
     );
 
     initializeDatabase(paths);

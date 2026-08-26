@@ -7,7 +7,7 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   sessionId: "session-1",
   status: "idle",
   title: "A session",
-  project: "stream-deck-agents",
+  project: "dealerboard",
   descendantCount: 0,
   logicalSlot: 1,
   ghosttyTerminalId: null,
