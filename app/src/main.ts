@@ -44,7 +44,7 @@ import {
   revealTranscript,
   type SnapshotPayload,
 } from "./bridge";
-import { boardRenderSignature, elapsedLabel, renderBoard } from "./cards";
+import { boardRenderSignature, renderBoard } from "./cards";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -54,6 +54,7 @@ import {
   swallowSuppressedClick,
 } from "./gestures";
 import { createIngestGate } from "./ingest-gate";
+import { elapsedLabel } from "./liveness";
 import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
