@@ -179,7 +179,7 @@ describe("renderKey output contract", () => {
     expect(decode(sessionModel({ provider: "deepseek" }), 0)).toContain("#2DD4BF");
     expect(decode(sessionModel({ provider: "grok" }), 0)).toContain("#F472B6");
     expect(decode(sessionModel({ provider: "qwen" }), 0)).toContain("#EF4444");
-    expect(decode(sessionModel({ provider: "evener" }), 0)).toContain("#8B5CF6");
+    expect(decode(sessionModel({ provider: "evener" }), 0)).toContain("#A3E635");
   });
 
   test("renders the stripped model label right of the provider chip", () => {

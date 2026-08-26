@@ -63,7 +63,7 @@ const PROVIDER_COLORS: Record<Provider, string> = {
   deepseek: "#2DD4BF",
   grok: "#F472B6",
   qwen: "#EF4444",
-  evener: "#8B5CF6",
+  evener: "#A3E635",
 };
 
 export const PROVIDER_LETTERS: Record<Provider, string> = {
