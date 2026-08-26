@@ -70,4 +70,67 @@ describe("parseTokenUsageSnapshot", () => {
     const ring = Array.from({ length: TOKEN_USAGE_SAMPLE_LIMIT + 1 }, () => sample());
     expect(() => parseTokenUsageSnapshot(snapshot({ samples: ring }))).toThrow("samples");
   });
+
+  const curves = {
+    today: {
+      providerDay: "2026-08-25",
+      points: [
+        { fetchedAt: "2026-08-25T15:00:00.000Z", totalTokens: 10 },
+        { fetchedAt: "2026-08-25T15:00:30.000Z", totalTokens: 20 },
+      ],
+    },
+    yesterday: { providerDay: "2026-08-24", points: [{ fetchedAt: "2026-08-24T20:00:00.000Z", totalTokens: 5 }] },
+  };
+
+  test("accepts a snapshot with dayCurves and preserves them", () => {
+    const parsed = parseTokenUsageSnapshot({ ...snapshot(), dayCurves: curves });
+    expect(parsed.dayCurves).toEqual(curves);
+  });
+
+  test("a snapshot without dayCurves stays legal (old daemon)", () => {
+    expect(parseTokenUsageSnapshot(snapshot()).dayCurves).toBeUndefined();
+  });
+
+  test("an old reader's behavior: unknown top-level keys are still ignored", () => {
+    expect(() => parseTokenUsageSnapshot({ ...snapshot(), someFutureKey: 1 })).not.toThrow();
+  });
+
+  test("rejects malformed dayCurves: out-of-order times, decreasing totals, oversize, bad day", () => {
+    const bad = (dayCurves: unknown) => () => parseTokenUsageSnapshot({ ...snapshot(), dayCurves });
+    expect(
+      bad({
+        today: { providerDay: "2026-08-25", points: [curves.today.points[1], curves.today.points[0]] },
+        yesterday: null,
+      }),
+    ).toThrow();
+    expect(
+      bad({
+        today: {
+          providerDay: "2026-08-25",
+          points: [
+            { fetchedAt: "2026-08-25T15:00:00.000Z", totalTokens: 20 },
+            { fetchedAt: "2026-08-25T15:00:30.000Z", totalTokens: 10 },
+          ],
+        },
+        yesterday: null,
+      }),
+    ).toThrow();
+    const oversized = Array.from({ length: 97 }, (_, i) => ({
+      fetchedAt: new Date(Date.UTC(2026, 7, 25, 10, 0, i)).toISOString(),
+      totalTokens: i,
+    }));
+    expect(bad({ today: { providerDay: "2026-08-25", points: oversized }, yesterday: null })).toThrow();
+    expect(bad({ today: { providerDay: "2026-13-99", points: [] }, yesterday: null })).toThrow();
+  });
+
+  test("rejects a sparse points array whose holes bypass per-point validation", () => {
+    const sparse: unknown[] = new Array(1);
+    expect(0 in sparse).toBe(false); // a real hole, not an undefined element
+    expect(() =>
+      parseTokenUsageSnapshot({
+        ...snapshot(),
+        dayCurves: { today: { providerDay: "2026-08-25", points: sparse }, yesterday: null },
+      }),
+    ).toThrow("day-curve point");
+  });
 });

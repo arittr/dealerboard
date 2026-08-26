@@ -1,9 +1,10 @@
 /**
  * Pure paging reducer: maps live sessions onto a fixed tile grid in dense
- * slot-rank order. Geometry is parameterized: the 5x3 Stream Deck keypad is
- * the default; the Xeneon strip pages full-density with no NEXT tile (its
- * rail pages externally). Sessions sort by their stable logical slot and pack
- * onto tiles by rank, so the grid never shows holes; the overflow latch
+ * slot-rank order. Geometry is parameterized; the 5x3 Stream Deck keypad is
+ * the default and the sole production consumer (the Xeneon strip pages its
+ * board in app/src/board.ts and no longer consumes this module). Sessions
+ * sort by their stable logical slot and pack onto tiles by rank, so the
+ * grid never shows holes; the overflow latch
  * engages above the geometry's unpaged capacity, holds at or above it, and
  * releases below it. An out-of-range current page clamps to the last page.
  *
@@ -25,7 +26,7 @@ export type LayoutGeometry = {
   pageSessionKeys: number;
   /** Overflow engages above this live count and holds at or above it. */
   maxUnpagedSessions: number;
-  /** True: a paged grid's last tile is NEXT. False: paging is external (strip rail). */
+  /** True: a paged grid's last tile is NEXT. False: pages run at full density with no NEXT tile. */
   nextKey: boolean;
 };
 
@@ -36,6 +37,9 @@ export const KEYPAD_GEOMETRY: LayoutGeometry = {
   nextKey: true,
 };
 
+/** Keypad-sized full-density geometry (no NEXT tile). No longer consumed by
+ *  the strip — kept as a coverage fixture for the `nextKey: false` paging
+ *  path used by test/layout.test.ts. */
 export const STRIP_GEOMETRY: LayoutGeometry = {
   keyCount: 15,
   pageSessionKeys: 15,
@@ -56,7 +60,7 @@ export type LayoutResult = {
   dirty: boolean;
   /** Exactly geometry.keyCount models, one per tile, row-major. */
   keys: KeyModel[];
-  /** Total pages; 1 when unpaged. Exposed for external pagers (the strip rail). */
+  /** Total pages; 1 when unpaged. Mirrored onto the NEXT key model for rendering. */
   pageCount: number;
 };
 
@@ -68,7 +72,7 @@ export const DEFAULT_LAYOUT_SETTINGS: LayoutSettingsV1 = {
 
 const SHORT_SESSION_ID_LENGTH = 8;
 
-const labelForSession = (session: ProjectedSession): string => {
+export const labelForSession = (session: ProjectedSession): string => {
   if (session.title !== null && session.title.length > 0) {
     return session.title;
   }
@@ -112,7 +116,7 @@ const buildKeys = (
   return keys;
 };
 
-type ValidatedSettings = {
+export type ValidatedSettings = {
   settings: LayoutSettingsV1;
   defaulted: boolean;
 };
@@ -120,7 +124,7 @@ type ValidatedSettings = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const validateStoredSettings = (stored: unknown): ValidatedSettings => {
+export const validateLayoutSettings = (stored: unknown): ValidatedSettings => {
   if (isRecord(stored)) {
     const value = stored;
     if (
@@ -150,7 +154,7 @@ const sortedSessions = (view: SnapshotView): ProjectedSession[] =>
 const reduceInternal = (view: SnapshotView, storedState: unknown, geometry: LayoutGeometry): LayoutResult => {
   const sessions = sortedSessions(view);
   const count = sessions.length;
-  const { settings: restored, defaulted } = validateStoredSettings(storedState);
+  const { settings: restored, defaulted } = validateLayoutSettings(storedState);
 
   // The latch engages only when the live count exceeds the unpaged capacity;
   // once engaged it holds while at least that many sessions remain live.

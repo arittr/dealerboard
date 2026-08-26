@@ -678,10 +678,29 @@ export type PaseoSyncState = {
  * — its terms mirror the guarded writes exactly — keeps unchanged rows from
  * counting (the daemon's maintenance-changed signal feeds the reprojection
  * fast-path). Never creates rows and never touches updated_at.
+ *
+ * The agent's joined provider session is its ref's sole legitimate carrier:
+ * any other top-level row still holding the ref was abandoned by
+ * provider-session rotation (its SessionEnd was missed), and the duplicate
+ * would make the projection roll-up drop the ref as ambiguous. Each pass
+ * clears exactly the origin stamps on such rows — the row itself, its
+ * ledger, status, timers, slot, and prune lease stay untouched. The cleanup
+ * runs only for a ref whose pass carries exactly one joined provider
+ * session: records contradicting each other about an agent's current
+ * session are ambiguous evidence, and picking a winner could strip a
+ * still-valid row's routing.
  */
 export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[]): number =>
   inWriteTransaction(db, () => {
     let changed = 0;
+    // The joined provider sessions each ref claims in this pass: rotation
+    // cleanup runs only for refs with exactly one (see the contract above).
+    const joinedByRef = new Map<string, Set<string>>();
+    for (const state of states) {
+      const joined = joinedByRef.get(state.agentId) ?? new Set<string>();
+      joined.add(`${state.provider} ${state.sessionId}`);
+      joinedByRef.set(state.agentId, joined);
+    }
     for (const state of states) {
       // Update title when Paseo provides one and it differs from the stored value.
       // This runs unconditionally before the attention sync so a title change
@@ -757,6 +776,19 @@ export const syncPaseoStates = (db: Database, states: readonly PaseoSyncState[])
           ],
         );
         changed += result.changes;
+      }
+      // Un-stamp rows abandoned by provider-session rotation: every match
+      // carries the stamp being cleared, so the WHERE is its own difference
+      // guard, and updated_at (the prune lease) stays put.
+      if (joinedByRef.get(state.agentId)?.size === 1) {
+        const abandoned = db.run(
+          `UPDATE active_sessions
+           SET origin_kind = NULL, origin_ref = NULL, origin_subagent = 0, origin_parent_ref = NULL
+           WHERE origin_kind = 'paseo' AND origin_ref = ? AND parent_session_id IS NULL
+             AND NOT (provider = ? AND session_id = ?)`,
+          [state.agentId, state.provider, state.sessionId],
+        );
+        changed += abandoned.changes;
       }
     }
     return changed;

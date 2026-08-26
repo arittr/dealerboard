@@ -10,16 +10,15 @@
  * token-usage-snapshot.json, every 30s), whose files the watch
  * does not cover. Reads and pushes order through an ingest gate, so an
  * asynchronous read that completes after a newer push — or a newer read —
- * is dropped instead of regressing the view. Layout reduces with the strip
- * geometry and re-renders only when the serialized key models change (so
- * CSS status animations are never restarted). Page settings persist to
- * localStorage; the reducer validates them on every read. A 1s timer ticks
- * the per-tile status timers in place.
+ * is dropped instead of regressing the view. The board reduces from the
+ * snapshot (grouped, paged) and re-renders only when the serialized page
+ * cards change (so CSS status animations are never restarted). Page settings
+ * persist to localStorage; the reducer validates them on every read. A 1s
+ * timer ticks the per-card status timers in place.
  */
 
 import { enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { type KeyModel, type LayoutResult, reduceLayout, STRIP_GEOMETRY } from "../../src/plugin/layout";
-import type { ProjectedSession, SessionSnapshotV2, SessionStatus, SnapshotView } from "../../src/protocol";
+import type { ProjectedSession, SessionSnapshotV2, SnapshotView } from "../../src/protocol";
 import {
   advanceSheetGeneration,
   beginSheetAction,
@@ -31,6 +30,7 @@ import {
   settleSheetAction,
   transcriptPathOf,
 } from "./action-sheet";
+import { type BoardPage, type BoardResult, type PlacedCard, reduceBoard } from "./board";
 import {
   ackSession,
   clearSession,
@@ -44,6 +44,7 @@ import {
   revealTranscript,
   type SnapshotPayload,
 } from "./bridge";
+import { boardRenderSignature, elapsedLabel, renderBoard } from "./cards";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -57,8 +58,7 @@ import { pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
-import { identityOf, resolveSessionTile, type SessionIdentity } from "./tile-identity";
-import { renderTiles, statusLineText, stripGridLayout, visibleStripKeys } from "./tiles";
+import { identityOf, resolveBoardCard, type SessionIdentity } from "./tile-identity";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
 import { startStripWindowManager } from "./window";
 
@@ -74,7 +74,8 @@ let currentTokenUsage: TokenUsageRailModel = { state: "hidden" };
 let stalenessTimer: ReturnType<typeof setTimeout> | null = null;
 let currentPage = 0;
 let currentPageCount = 1;
-let currentKeys: readonly KeyModel[] = [];
+let currentPages: readonly BoardPage[] = [];
+let currentCards: readonly PlacedCard[] = [];
 const ingestGate = createIngestGate();
 
 /**
@@ -121,10 +122,8 @@ const jumpToPage = (page: number): void => {
   if (currentView === null) {
     return;
   }
-  applyLayout(
-    reduceLayout(currentView, { schemaVersion: 1, overflowLatched: true, currentPage: page }, STRIP_GEOMETRY),
-  );
-  // renderRailNow is declared below; referenced here only at click time.
+  applyBoard(reduceBoard(currentView, { schemaVersion: 1, overflowLatched: false, currentPage: page }));
+  // renderRailNow is declared below; referenced here at click time.
   renderRailNow();
 };
 
@@ -155,44 +154,37 @@ const renderRailNow = (): void => {
  */
 const tickStatusLines = (): void => {
   const nowMs = Date.now();
-  for (const line of document.querySelectorAll<HTMLElement>("#tiles .statusline")) {
-    const status = line.dataset["status"];
-    const since = line.dataset["since"];
-    if (status === undefined || since === undefined) {
+  for (const timer of document.querySelectorAll<HTMLElement>("#board .cardtimer")) {
+    const since = timer.dataset["since"];
+    if (since === undefined) {
       continue;
     }
-    const text = statusLineText(status as SessionStatus, since, nowMs);
-    if (text !== null && line.textContent !== text) {
-      line.textContent = text;
+    const startedMs = Date.parse(since);
+    if (Number.isNaN(startedMs)) {
+      continue;
+    }
+    const text = elapsedLabel(nowMs - startedMs);
+    if (timer.textContent !== text) {
+      timer.textContent = text;
     }
   }
 };
 
-const applyLayout = (layout: LayoutResult): void => {
-  if (layout.dirty) {
-    persistSettings(layout.settings);
+const applyBoard = (result: BoardResult): void => {
+  if (result.dirty) {
+    persistSettings(result.settings);
   }
-  currentPage = layout.settings.currentPage;
-  currentPageCount = layout.pageCount;
-  const visible = visibleStripKeys(layout.keys);
-  currentKeys = visible;
-  const signature = JSON.stringify(visible);
-  const root = document.querySelector<HTMLElement>("#tiles");
-  if (root !== null) {
-    const computedStyle = getComputedStyle(root);
-    const gap = Number.parseFloat(computedStyle.columnGap);
-    const grid = stripGridLayout(visible.length, {
-      width: root.clientWidth,
-      height: root.clientHeight,
-      gap: Number.isFinite(gap) ? gap : 0,
-    });
-    root.style.setProperty("--tile-columns", String(grid.columnCount));
-    root.style.setProperty("--tile-rows", String(grid.rowCount));
-    root.style.setProperty("--tile-size", `${grid.tileSize}px`);
-    if (signature !== renderedSignature) {
-      renderedSignature = signature;
-      renderTiles(root, visible);
-    }
+  currentPage = result.settings.currentPage;
+  currentPageCount = result.pageCount;
+  currentPages = result.pages;
+  const page = currentPages[currentPage] ?? { cards: [] };
+  currentCards = page.cards;
+  const degraded = currentView?.degraded ?? false;
+  const signature = boardRenderSignature(page, degraded);
+  const root = document.querySelector<HTMLElement>("#board");
+  if (root !== null && signature !== renderedSignature) {
+    renderedSignature = signature;
+    renderBoard(root, page, degraded);
   }
 };
 
@@ -232,7 +224,7 @@ const ingest = (payload: SnapshotPayload | null): void => {
   const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
   lastGood = reduction.lastGood;
   currentView = reduction.view;
-  applyLayout(reduceLayout(reduction.view, loadStoredSettings(), STRIP_GEOMETRY));
+  applyBoard(reduceBoard(reduction.view, loadStoredSettings()));
   // A healthy view arms the one-shot expiry check; a degraded one disarms it
   // — the slow pass owns re-reads until a fresh payload re-arms it.
   if (payload !== null && !reduction.view.degraded) {
@@ -315,47 +307,47 @@ const start = async (): Promise<void> => {
 
 const FLASH_MS = 320;
 
-const flashTile = (tile: HTMLElement): void => {
-  tile.classList.add("flash");
-  setTimeout(() => tile.classList.remove("flash"), FLASH_MS);
+const flashCard = (card: HTMLElement): void => {
+  card.classList.add("flash");
+  setTimeout(() => card.classList.remove("flash"), FLASH_MS);
 };
 
-const onTilesClick = (event: MouseEvent): void => {
+const onBoardClick = (event: MouseEvent): void => {
   if (!(event.target instanceof HTMLElement)) {
     return;
   }
-  const tile = event.target.closest<HTMLElement>("[data-key-index]");
-  if (tile === null) {
+  const card = event.target.closest<HTMLElement>("[data-card-index]");
+  if (card === null) {
     return;
   }
-  const index = Number(tile.dataset["keyIndex"]);
-  const model = currentKeys[index];
-  if (model === undefined || model.kind !== "session") {
+  const index = Number(card.dataset["cardIndex"]);
+  const currentCard = currentCards[index];
+  if (currentCard === undefined) {
     return;
   }
-  void pressSessionTile(model.session, {
+  void pressSessionTile(currentCard.session, {
     ack: ackSession,
     openUrl,
     focusGhostty,
     readPaseoServerId,
-    flash: () => flashTile(tile),
+    flash: () => flashCard(card),
   });
 };
 
-const tileFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
+const cardFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
   if (!(event.target instanceof HTMLElement)) {
     return null;
   }
-  const tile = event.target.closest<HTMLElement>("[data-key-index]");
-  if (tile === null) {
+  const card = event.target.closest<HTMLElement>("[data-card-index]");
+  if (card === null) {
     return null;
   }
-  const index = Number(tile.dataset["keyIndex"]);
-  const model = currentKeys[index];
-  if (model === undefined || model.kind !== "session") {
+  const index = Number(card.dataset["cardIndex"]);
+  const currentCard = currentCards[index];
+  if (currentCard === undefined) {
     return null;
   }
-  return { identity: identityOf(model.session), point: { x: event.clientX, y: event.clientY } };
+  return { identity: identityOf(currentCard.session), point: { x: event.clientX, y: event.clientY } };
 };
 
 const removeSheetOverlay = (): void => {
@@ -462,7 +454,7 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
         openUrl,
         focusGhostty,
         readPaseoServerId,
-        flash: () => flashTile(tile),
+        flash: () => flashCard(tile),
       });
       return;
     case "ack":
@@ -487,14 +479,14 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
 };
 
 const openActionSheetFor = (pending: PendingLongPress): void => {
-  // Resolve by identity against the current keys: if the pressed session
-  // left the grid during the hold, cancel — never retarget the sheet (and
+  // Resolve by identity against the current cards: if the pressed session
+  // left the board during the hold, cancel — never retarget the sheet (and
   // its Clear action) at whichever session shifted into the old index.
-  const ref = resolveSessionTile(currentKeys, pending.identity);
+  const ref = resolveBoardCard(currentCards, pending.identity);
   if (ref === null) {
     return;
   }
-  const tile = document.querySelector<HTMLElement>(`#tiles [data-key-index="${ref.index}"]`);
+  const tile = document.querySelector<HTMLElement>(`#board [data-card-index="${ref.index}"]`);
   if (tile === null) {
     return;
   }
@@ -574,7 +566,7 @@ const onStripPointerDown = (event: PointerEvent): void => {
   // click at all — so any still-unconsumed suppression from the last stroke
   // dies here rather than eating this stroke's taps.
   clickSuppression.beginStroke();
-  pendingLongPress = tileFromPointerEvent(event);
+  pendingLongPress = cardFromPointerEvent(event);
   feedPointer({ kind: "down", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
 
@@ -626,7 +618,7 @@ const onContextMenu = (event: MouseEvent): void => {
 };
 
 const wireInteraction = (): void => {
-  document.querySelector<HTMLElement>("#tiles")?.addEventListener("click", onTilesClick);
+  document.querySelector<HTMLElement>("#board")?.addEventListener("click", onBoardClick);
   const strip = document.querySelector<HTMLElement>("#strip");
   strip?.addEventListener("pointerdown", onStripPointerDown);
   strip?.addEventListener("pointermove", onStripPointerMove);

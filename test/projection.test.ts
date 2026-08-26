@@ -254,6 +254,273 @@ describe("projectRows", () => {
     ]);
   });
 
+  test("a working paseo subagent retains its read-idle paseo parent across top-level rows", () => {
+    // Paseo lineage spans separate top-level rows via originRef/originParentRef,
+    // not parentSessionId: the parent's stored row stays read-and-idle, but the
+    // active descendant holds it on the grid with a lifted effective status.
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        statusSince: "2026-08-25T00:00:00.000Z",
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("sub", {
+        status: "working",
+        unreadSince: null,
+        statusSince: "2026-08-25T00:00:05.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+    ]);
+
+    expect(sessions.map((session) => [session.sessionId, session.status])).toEqual([
+      ["parent", "working"],
+      ["sub", "working"],
+    ]);
+    // Only the effective status rolls up; stored ledger fields are untouched.
+    expect(sessions[0]).toMatchObject({
+      unreadSince: null,
+      statusSince: "2026-08-25T00:00:00.000Z",
+    });
+  });
+
+  test("nested cross-provider paseo lineage retains every ancestor with priority aggregation", () => {
+    const sessions = projectRows([
+      row("grand", {
+        provider: "claude",
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-g",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("mid", {
+        provider: "codex",
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-m",
+        originSubagent: 1,
+        originParentRef: "agent-g",
+        slot: 2,
+      }),
+      row("waiter", {
+        provider: "kimi",
+        status: "waiting",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-w",
+        originSubagent: 1,
+        originParentRef: "agent-m",
+        slot: 3,
+      }),
+      row("failed", {
+        provider: "pi",
+        status: "error",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-e",
+        originSubagent: 1,
+        originParentRef: "agent-m",
+        slot: 4,
+      }),
+    ]);
+
+    expect(sessions.map((session) => [session.sessionId, session.status])).toEqual([
+      ["grand", "error"],
+      ["mid", "error"],
+      ["waiter", "waiting"],
+      ["failed", "error"],
+    ]);
+  });
+
+  test("an idle paseo subagent retains neither itself nor its read-idle parent; losing the last active descendant hides the parent again", () => {
+    const parent = () =>
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      });
+    const sub = (status: SessionStatus, unreadSince: string | null) =>
+      row("sub", {
+        status,
+        unreadSince,
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      });
+
+    // An unread-idle subagent is the parent's result to report: neither row shows.
+    expect(projectRows([parent(), sub("idle", "2026-08-25T00:00:09.000Z")])).toEqual([]);
+
+    // While the subagent works, both show.
+    expect(projectRows([parent(), sub("working", null)]).map((session) => session.sessionId)).toEqual([
+      "parent",
+      "sub",
+    ]);
+
+    // Once the last active descendant is gone, ordinary visibility applies again.
+    expect(projectRows([parent()])).toEqual([]);
+  });
+
+  test("missing, ambiguous, and cyclic paseo lineage stays bounded without blacking out active rows", () => {
+    // A dangling originParentRef stops that walk; the subagent still projects.
+    expect(
+      projectRows([
+        row("orphan", {
+          status: "working",
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-1",
+          originSubagent: 1,
+          originParentRef: "ghost",
+          slot: 1,
+        }),
+      ]).map((session) => session.sessionId),
+    ).toEqual(["orphan"]);
+
+    // Ambiguous duplicate originRefs never link, so no ancestor is lifted.
+    expect(
+      projectRows([
+        row("dup-a", {
+          status: "idle",
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-0",
+          originSubagent: 0,
+          slot: 1,
+        }),
+        row("dup-b", {
+          status: "idle",
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-0",
+          originSubagent: 0,
+          slot: 2,
+        }),
+        row("sub", {
+          status: "working",
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-1",
+          originSubagent: 1,
+          originParentRef: "agent-0",
+          slot: 3,
+        }),
+      ]).map((session) => session.sessionId),
+    ).toEqual(["sub"]);
+
+    // Lineage cycles (self-referencing and mutual) terminate and leave
+    // otherwise valid active rows projected.
+    expect(
+      projectRows([
+        row("self-loop", {
+          status: "working",
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-s",
+          originSubagent: 1,
+          originParentRef: "agent-s",
+          slot: 1,
+        }),
+        row("loop-a", {
+          status: "working",
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-x",
+          originSubagent: 1,
+          originParentRef: "agent-y",
+          slot: 2,
+        }),
+        row("loop-b", {
+          status: "working",
+          unreadSince: null,
+          originKind: "paseo",
+          originRef: "agent-y",
+          originSubagent: 1,
+          originParentRef: "agent-x",
+          slot: 3,
+        }),
+        row("healthy", { status: "working", unreadSince: null, slot: 4 }),
+      ]).map((session) => session.sessionId),
+    ).toEqual(["self-loop", "loop-a", "loop-b", "healthy"]);
+  });
+
+  test("a non-paseo root with a matching originRef is never treated as a paseo ancestor", () => {
+    // Lineage is paseo-only: a terminal-origin row whose ref collides with
+    // an active subagent's originParentRef must stay a read-and-idle hidden
+    // root, not be lifted and projected as working.
+    const sessions = projectRows([
+      row("terminal-root", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "terminal",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("sub", {
+        status: "working",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["sub"]);
+  });
+
+  test("a non-paseo root sharing a ref does not poison a valid paseo parent's unique link", () => {
+    // Malformed metadata — a ref with no origin kind — is not a paseo root,
+    // so it must not make agent-0 ambiguous for the valid paseo parent.
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("kindless", {
+        status: "idle",
+        unreadSince: null,
+        originKind: null,
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 2,
+      }),
+      row("sub", {
+        status: "working",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 3,
+      }),
+    ]);
+    expect(sessions.map((session) => [session.sessionId, session.status])).toEqual([
+      ["parent", "working"],
+      ["sub", "working"],
+    ]);
+  });
+
   test("reduces effective status by error > waiting > working > idle across the subtree", () => {
     const effective = (rows: ProjectionRow[]): SessionStatus | undefined => projectRows(rows)[0]?.status;
 

@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
 import {
+  appendDayCurvePoint,
   createTokenUsageCollector,
   laProviderDay,
   normalizeAgentsviewDaily,
+  previousProviderDay,
+  reconcileSeededDayCurves,
   resolveAgentsviewBin,
   TOKEN_USAGE_SAMPLE_LIMIT,
   type TokenUsageCollectorDependencies,
 } from "../src/core/token-usage";
-import { parseTokenUsageSnapshot } from "../src/token-usage-snapshot";
+import { parseTokenUsageSnapshot, TOKEN_USAGE_DAY_CURVE_POINT_LIMIT } from "../src/token-usage-snapshot";
 
 const NOW = "2026-08-20T17:00:00.000Z"; // 10:00 in Los Angeles (UTC-7)
 const NOW_MS = Date.parse(NOW);
@@ -160,6 +163,10 @@ describe("createTokenUsageCollector", () => {
       unavailable: false,
       fetchedAt: NOW,
       samples: [{ fetchedAt: NOW, totalTokens: 1000, providerDay: DAY }],
+      dayCurves: {
+        today: { providerDay: DAY, points: [{ fetchedAt: NOW, totalTokens: 1000 }] },
+        yesterday: null,
+      },
     });
   });
 
@@ -224,5 +231,188 @@ describe("createTokenUsageCollector", () => {
     await collector.pollNow();
     await collector.pollNow(); // identical unavailable snapshot — no second write
     expect(harness.writes.length).toBe(1);
+  });
+});
+
+const point = (second: number, total: number) => ({
+  fetchedAt: new Date(Date.UTC(2026, 7, 25, 10, 0, second)).toISOString(),
+  totalTokens: total,
+});
+
+describe("previousProviderDay", () => {
+  test("steps calendar days including month and year seams", () => {
+    expect(previousProviderDay("2026-08-25")).toBe("2026-08-24");
+    expect(previousProviderDay("2026-08-01")).toBe("2026-07-31");
+    expect(previousProviderDay("2026-01-01")).toBe("2025-12-31");
+  });
+});
+
+describe("appendDayCurvePoint", () => {
+  test("same-day points append with a running max (a helper correction never dips the curve)", () => {
+    const first = appendDayCurvePoint(undefined, "2026-08-25", point(0, 100));
+    const second = appendDayCurvePoint(first, "2026-08-25", point(30, 90));
+    expect(second.today.points.map((p) => p.totalTokens)).toEqual([100, 100]);
+    expect(second.yesterday).toBeNull();
+  });
+
+  test("a new adjacent day promotes today to yesterday; a gap drops it", () => {
+    const monday = appendDayCurvePoint(undefined, "2026-08-24", point(0, 5));
+    const tuesday = appendDayCurvePoint(monday, "2026-08-25", point(0, 1));
+    expect(tuesday.yesterday?.providerDay).toBe("2026-08-24");
+    const thursday = appendDayCurvePoint(monday, "2026-08-27", point(0, 1));
+    expect(thursday.yesterday).toBeNull();
+  });
+
+  test("drops a same-day point whose fetchedAt does not advance (a stepped-back clock never breaks the curve)", () => {
+    // The reader rejects a curve whose timestamps are not strictly
+    // increasing, so a repeated or backward instant must never be published.
+    const base = appendDayCurvePoint(undefined, "2026-08-25", point(10, 100));
+    expect(appendDayCurvePoint(base, "2026-08-25", point(10, 150))).toEqual(base);
+    expect(appendDayCurvePoint(base, "2026-08-25", point(5, 200))).toEqual(base);
+    const advanced = appendDayCurvePoint(base, "2026-08-25", point(11, 120));
+    expect(advanced.today.points.map((p) => p.totalTokens)).toEqual([100, 120]);
+  });
+
+  test("downsampling keeps at most the limit and always the first and latest points", () => {
+    let curves = appendDayCurvePoint(undefined, "2026-08-25", point(0, 0));
+    for (let i = 1; i <= 200; i++) {
+      curves = appendDayCurvePoint(curves, "2026-08-25", point(i, i));
+    }
+    expect(curves.today.points.length).toBeLessThanOrEqual(TOKEN_USAGE_DAY_CURVE_POINT_LIMIT);
+    expect(curves.today.points[0]?.totalTokens).toBe(0);
+    expect(curves.today.points.at(-1)?.totalTokens).toBe(200);
+  });
+});
+
+describe("reconcileSeededDayCurves", () => {
+  const seeded = appendDayCurvePoint(undefined, "2026-08-24", point(0, 7));
+
+  test("same-day seed passes through; adjacent-day seed rotates; a gap drops everything", () => {
+    expect(reconcileSeededDayCurves(seeded, "2026-08-24")).toEqual(seeded);
+    const rotated = reconcileSeededDayCurves(seeded, "2026-08-25");
+    expect(rotated?.yesterday?.providerDay).toBe("2026-08-24");
+    expect(rotated?.today).toEqual({ providerDay: "2026-08-25", points: [] });
+    expect(reconcileSeededDayCurves(seeded, "2026-08-27")).toBeUndefined();
+    expect(reconcileSeededDayCurves(undefined, "2026-08-25")).toBeUndefined();
+  });
+});
+
+describe("createTokenUsageCollector day curves", () => {
+  const dayReport = (day: string, total: number): string =>
+    JSON.stringify({
+      schema_version: 4,
+      daily: [{ date: day, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: total }],
+    });
+
+  // The base harness pins time, but day-curve points must be strictly
+  // increasing in fetchedAt, so this fixture carries an advancing clock.
+  const makeDayCurveHarness = (files: Record<string, string> = {}) => {
+    let clockMs = Date.parse("2026-08-25T17:00:00.000Z"); // 10:00 in Los Angeles
+    let throws = false;
+    const writes: string[] = [];
+    const deps: TokenUsageCollectorDependencies = {
+      agentsviewBin: "agentsview",
+      tokenUsageSnapshotPath: "/tmp/token-usage-snapshot.json",
+      run: async () => {
+        if (throws) {
+          throw new Error("spawn failed");
+        }
+        return dayReport("2026-08-25", 1000);
+      },
+      readFile: (path) => files[path] ?? null,
+      now: () => new Date(clockMs).toISOString(),
+      nowMs: () => clockMs,
+      writeFile: (_path, payload) => {
+        writes.push(payload);
+      },
+    };
+    return {
+      deps,
+      writes,
+      advanceMinutes: (minutes: number) => {
+        clockMs += minutes * 60_000;
+      },
+      fail: () => {
+        throws = true;
+      },
+    };
+  };
+
+  test("two successful polls on one day publish a snapshot whose today curve has both points", async () => {
+    const harness = makeDayCurveHarness();
+    const collector = createTokenUsageCollector(harness.deps);
+    await collector.pollNow();
+    harness.advanceMinutes(15);
+    await collector.pollNow();
+    const snapshot = parseTokenUsageSnapshot(JSON.parse(harness.writes.at(-1) ?? ""));
+    expect(snapshot.dayCurves?.today).toEqual({
+      providerDay: "2026-08-25",
+      points: [
+        { fetchedAt: "2026-08-25T17:00:00.000Z", totalTokens: 1000 },
+        { fetchedAt: "2026-08-25T17:15:00.000Z", totalTokens: 1000 },
+      ],
+    });
+    expect(snapshot.dayCurves?.yesterday).toBeNull();
+  });
+
+  test("a seeded curve from yesterday rotates into yesterday on today's poll", async () => {
+    const seededCurve = {
+      today: { providerDay: "2026-08-24", points: [{ fetchedAt: "2026-08-24T22:00:00.000Z", totalTokens: 700 }] },
+      yesterday: null,
+    };
+    const seededFile = `${JSON.stringify({
+      schemaVersion: 1,
+      providerDay: "2026-08-24",
+      totalTokens: 700,
+      unavailable: false,
+      fetchedAt: "2026-08-24T22:00:00.000Z",
+      samples: [],
+      dayCurves: seededCurve,
+    })}\n`;
+    const harness = makeDayCurveHarness({ "/tmp/token-usage-snapshot.json": seededFile });
+    await createTokenUsageCollector(harness.deps).pollNow();
+    const snapshot = parseTokenUsageSnapshot(JSON.parse(harness.writes.at(-1) ?? ""));
+    expect(snapshot.dayCurves?.yesterday).toEqual(seededCurve.today);
+    expect(snapshot.dayCurves?.today).toEqual({
+      providerDay: "2026-08-25",
+      points: [{ fetchedAt: "2026-08-25T17:00:00.000Z", totalTokens: 1000 }],
+    });
+  });
+
+  test("a failed first poll still publishes the reconciled seed state, not the stale curve", async () => {
+    const staleSeed = (day: string): string =>
+      `${JSON.stringify({
+        schemaVersion: 1,
+        providerDay: day,
+        totalTokens: 700,
+        unavailable: true, // already failed — a failed first poll must still reconcile
+        fetchedAt: `${day}T22:00:00.000Z`,
+        samples: [],
+        dayCurves: {
+          today: { providerDay: day, points: [{ fetchedAt: `${day}T22:00:00.000Z`, totalTokens: 700 }] },
+          yesterday: null,
+        },
+      })}\n`;
+
+    // Adjacent-day seed rotates: the stale curve lands in yesterday, today starts empty.
+    const adjacent = makeDayCurveHarness({ "/tmp/token-usage-snapshot.json": staleSeed("2026-08-24") });
+    const adjacentCollector = createTokenUsageCollector(adjacent.deps);
+    adjacent.fail();
+    await adjacentCollector.pollNow();
+    expect(adjacent.writes.length).toBe(1); // the reconciled state must reach the file, not just memory
+    const rotated = parseTokenUsageSnapshot(JSON.parse(adjacent.writes[0] ?? ""));
+    expect(rotated.unavailable).toBe(true);
+    expect(rotated.dayCurves?.yesterday?.providerDay).toBe("2026-08-24");
+    expect(rotated.dayCurves?.today).toEqual({ providerDay: "2026-08-25", points: [] });
+
+    // Gapped seed drops the stale curve entirely.
+    const gapped = makeDayCurveHarness({ "/tmp/token-usage-snapshot.json": staleSeed("2026-08-22") });
+    const gappedCollector = createTokenUsageCollector(gapped.deps);
+    gapped.fail();
+    await gappedCollector.pollNow();
+    expect(gapped.writes.length).toBe(1);
+    const dropped = parseTokenUsageSnapshot(JSON.parse(gapped.writes[0] ?? ""));
+    expect(dropped.unavailable).toBe(true);
+    expect(dropped.dayCurves).toBeUndefined();
   });
 });

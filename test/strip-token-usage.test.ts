@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { formatTokensCompact, reduceTokenUsageRead, STALE_TOKEN_USAGE_AGE_MS } from "../app/src/token-usage";
+import {
+  formatTokensCompact,
+  laDayBoundsMs,
+  reduceSparkline,
+  reduceTokenUsageRead,
+  SPARKLINE_VIEWBOX,
+  STALE_TOKEN_USAGE_AGE_MS,
+  sparklineEndpoint,
+  sparklineFillPoints,
+  sparklinePolylinePoints,
+} from "../app/src/token-usage";
 import type { TokenUsageSample, TokenUsageSnapshot } from "../src/token-usage-snapshot";
 
 const NOW = Date.parse("2026-08-20T18:00:00.000Z"); // 11:00 in Los Angeles
@@ -148,5 +158,99 @@ describe("reduceTokenUsageRead", () => {
     const oldFetch = iso(NOW - STALE_TOKEN_USAGE_AGE_MS - 1);
     expect(reduceTokenUsageRead(read(snapshot({ fetchedAt: oldFetch })), NOW)).toMatchObject({ state: "stale" });
     expect(reduceTokenUsageRead(read(snapshot()), NOW)).toMatchObject({ state: "ok" });
+  });
+});
+
+describe("laDayBoundsMs", () => {
+  test("a standard LA day is 24h (UTC-7 in August)", () => {
+    const bounds = laDayBoundsMs("2026-08-25");
+    expect(bounds.startMs).toBe(Date.parse("2026-08-25T07:00:00.000Z"));
+    expect(bounds.endMs - bounds.startMs).toBe(24 * 3_600_000);
+  });
+
+  test("DST days are 23h (spring forward) and 25h (fall back)", () => {
+    const spring = laDayBoundsMs("2026-03-08");
+    expect(spring.endMs - spring.startMs).toBe(23 * 3_600_000);
+    const fall = laDayBoundsMs("2026-11-01");
+    expect(fall.endMs - fall.startMs).toBe(25 * 3_600_000);
+  });
+});
+
+describe("reduceSparkline", () => {
+  const snapshotWith = (dayCurves: unknown) => ({ ...snapshot(), dayCurves }) as never;
+
+  test("no curves → no sparkline; empty today with no yesterday → no sparkline", () => {
+    expect(reduceSparkline(snapshot())).toBeNull();
+    expect(
+      reduceSparkline(snapshotWith({ today: { providerDay: "2026-08-25", points: [] }, yesterday: null })),
+    ).toBeNull();
+  });
+
+  test("today normalizes x by elapsed day fraction and y by the shared max", () => {
+    const model = reduceSparkline(
+      snapshotWith({
+        today: {
+          providerDay: "2026-08-25",
+          points: [
+            { fetchedAt: "2026-08-25T07:00:00.000Z", totalTokens: 0 },
+            { fetchedAt: "2026-08-25T19:00:00.000Z", totalTokens: 50 },
+          ],
+        },
+        yesterday: {
+          providerDay: "2026-08-24",
+          points: [{ fetchedAt: "2026-08-25T06:00:00.000Z", totalTokens: 100 }],
+        },
+      }),
+    );
+    expect(model).not.toBeNull();
+    expect(model?.today.points.at(-1)?.x).toBeCloseTo(0.5, 5); // noon of a 24h day
+    expect(model?.today.points.at(-1)?.y).toBeCloseTo(0.5, 5); // shared max is yesterday's 100
+    expect(model?.yesterday?.label).toBe("yda 100");
+  });
+
+  test("a non-adjacent yesterday is dropped from the model", () => {
+    const model = reduceSparkline(
+      snapshotWith({
+        today: { providerDay: "2026-08-25", points: [{ fetchedAt: "2026-08-25T07:00:00.000Z", totalTokens: 10 }] },
+        yesterday: { providerDay: "2026-08-22", points: [{ fetchedAt: "2026-08-22T08:00:00.000Z", totalTokens: 99 }] },
+      }),
+    );
+    expect(model?.yesterday).toBeNull();
+  });
+});
+
+describe("sparkline SVG geometry", () => {
+  test("polyline points map to d6's 436x80 viewBox: x*436, baseline 70 minus y*66", () => {
+    expect(
+      sparklinePolylinePoints([
+        { x: 0, y: 0 },
+        { x: 0.5, y: 0.5 },
+        { x: 1, y: 1 },
+      ]),
+    ).toBe("0.00,70.00 218.00,37.00 436.00,4.00");
+  });
+
+  test("fill closes today's curve along the baseline at both ends; no points → null", () => {
+    expect(
+      sparklineFillPoints([
+        { x: 0.25, y: 0 },
+        { x: 0.75, y: 1 },
+      ]),
+    ).toBe("109.00,70.00 327.00,4.00 327.00,70.00 109.00,70.00");
+    expect(sparklineFillPoints([])).toBeNull();
+  });
+
+  test("endpoint is the mapped last point; none when empty", () => {
+    expect(
+      sparklineEndpoint([
+        { x: 0, y: 1 },
+        { x: 0.5, y: 0.5 },
+      ]),
+    ).toEqual({ cx: 218, cy: 37 });
+    expect(sparklineEndpoint([])).toBeNull();
+  });
+
+  test("the viewBox matches d6's 436x80 box", () => {
+    expect(SPARKLINE_VIEWBOX).toEqual({ width: 436, height: 80 });
   });
 });

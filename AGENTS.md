@@ -132,7 +132,17 @@ Notes:
   session-teardown observe fire and is dropped — `SessionEnd` owns removal.
   A tile's effective status is the max (`error > waiting > working > idle`)
   over its whole subtree, and any live subagent row lifts it to at least
-  `working` (`src/core/projection.ts`). `status_since` (schema v11) records
+  `working` (`src/core/projection.ts`). The max also rolls up across
+  separate top-level rows through Paseo lineage: every effectively active
+  Paseo subagent aggregates its status upward along unique
+  `originRef`/`originParentRef` ancestry (nested chains and cross-provider
+  links included), so a done/read Paseo ancestor stays projected with a
+  lifted effective status while any descendant is active — its stored
+  status, `unread_since`, and own `status_since` timer unchanged — and
+  ordinary visibility resumes once the last active descendant ends;
+  missing, ambiguous, or cyclic lineage stops the walk safely, leaving
+  those active subagents projected and available to the strip board's
+  orphan-tail handling. `status_since` (schema v11) records
   the row's own last status transition: Activity/Attention/Stop/StopFailure
   restamp it only when the status value actually changes, BackgroundWork
   events never restamp it, starts initialize it, and the projection's
@@ -154,7 +164,11 @@ Notes:
   active or unread — except that an idle Paseo subagent is never admitted
   (its result is the orchestrating parent's to report, not the user's to
   ack) — so a read-and-idle row stays in the registry (the prune is
-  storage hygiene, not visibility) and on the grid idle ⟺ unread.
+  storage hygiene, not visibility) and on the grid idle ⟺ unread; the
+  Paseo lineage roll-up (see the status rule) is the one exception — a
+  done/read Paseo ancestor, subagent or not, stays admitted with a lifted,
+  never-idle effective status while any descendant is active, its
+  `unread_since` untouched.
 - Origin (added in schema v7): hooks detect it at ingest (`src/core/origin.ts` —
   `PASEO_AGENT_ID` → paseo with the agent id as `origin_ref`, `TERM_PROGRAM`
   → terminal, else null) into `origin_kind`/`origin_ref`/`origin_subagent`.
@@ -166,7 +180,12 @@ Notes:
   as a fallback) and the dispatching agent's id as `origin_parent_ref`, and
   mirrors `requiresAttention` both ways — false clears unread (viewed in
   Paseo), true sets it without moving the first-news timestamp and subject
-  to the `acked_at` watermark; a difference-guard keeps
+  to the `acked_at` watermark. The same pass un-stamps the origin metadata
+  of any other top-level row still carrying the agent's ref from a
+  rotated-away provider session (the row, its ledger, and its timers stay),
+  so a missed SessionEnd never leaves a duplicate ref to ambiguate the
+  lineage roll-up — skipped when the pass names more than one current
+  session for the ref, which is ambiguous evidence; a difference-guard keeps
   unchanged rows from dirtying the maintenance signal. The loader normalizes
   record timestamps to canonical UTC (`Date.parse` + `toISOString`,
   unparseable → null) so the watermark's string comparisons stay
@@ -230,27 +249,43 @@ Notes:
   crate. `bun run build:app` bundles the frontend, `dev:app` runs the Tauri
   dev shell, `bundle:app` produces the release `.app` bundle, and
   `install:app` installs it into /Applications. It reads the same snapshot
-  file as the plugin — the daemon and the plugin are unchanged. Strip
-  geometry is a second `LayoutGeometry`, `STRIP_GEOMETRY` in
-  `src/plugin/layout.ts` (up to 15 square tiles per page; the measured tile
-  area chooses the largest packing across at most 3 rows, capped at the
-  three-across square size; rail pages, no NEXT tile; the rail occupies 32%
-  of the strip width). Tile visuals
-  live in `app/styles.css` + `app/src/tiles.ts`, a web-native port of
-  `render.ts` — keep the two in sync via `docs/design.md`. Strip-only tile
-  extras (no keypad counterpart): an amber unread dot (the exact
-  `unreadSince` ledger flag), a ticking `statusSince` timer line, and an
-  `activityLine` footer; the timer rewrites `textContent` in place on the
-  1s rail cadence so the `renderedSignature` skip is never disturbed. The
+  file as the plugin — the daemon and the plugin are unchanged. The
+  strip's board is an app-local grouped reducer (`app/src/board.ts`, per
+  `docs/superpowers/specs/2026-08-25-strip-board-redesign-design.md`,
+  summarized in `docs/design.md`'s strip section): subagents join under
+  their nearest on-grid Paseo parent (`originParentRef` = `originRef`),
+  nested subs flatten to one indent level, and orphans form one atomic
+  tail; pages fill group-atomically (a ≤6-card group never splits and may
+  backfill a same-page gap, a 7–12 group needs a still-empty page and
+  wraps at the six-row seam, a larger group fills whole pages) into two
+  columns of six fixed 1012×102 cards that never flex-resize, beside a
+  fixed 496px (~19.4%) rail; page count derives from the packing and the
+  persisted current page (`agent-strip.layout.v1`) clamps — the strip no
+  longer consumes the shared `reduceLayout`/`STRIP_GEOMETRY` paging (the
+  keypad keeps it unchanged). Card visuals
+  live in `app/styles.css` + `app/src/cards.ts`, a web-native contract of
+  `render.ts`'s status/chip system (status edge with border+wash on
+  waiting/error, chip-corner unread dot with a ring, one-line
+  italic-fallback title, 24-code-point model cap, meta-line project
+  suppression for grouped subs, origin disc then bare descendant badge,
+  sub pill + indent + violet spine) — keep them aligned via
+  `docs/design.md`. Strip-only card extras (no keypad counterpart): the
+  amber unread dot (the exact
+  `unreadSince` ledger flag), a ticking `statusSince` timer in the status
+  row, and an `activityLine` footer; the timer rewrites `textContent` in
+  place on the 1s rail cadence so the `renderedSignature` skip is never
+  disturbed. The
   window pins to the monitor whose model string matches "xeneon edge" or
   whose physical resolution is 2560×720 (physical, so a scaled 1280×360
   HiDPI mode still matches), re-pins on reconnect, and autostarts at login.
   The rail's unread count is exact: sessions with a non-null `unreadSince`.
 - Quota panels (claude, codex, kimi, GLM/zai, Qwen) ship in the rail as
-  compact two-line rows (head: chip, label, a tag pill naming the binding
-  window, percent remaining plus its reset countdown; second line: the
-  status-palette bar filled to the binding window with a neutral tick at
-  every other window's percent — no sparkline); the binding window is the
+  compact two-line rows (head: chip, label, a bare tag pill naming the
+  binding window — no ` binds` suffix, and only the binding window renders
+  — with the muted reset countdown first (`26m ·`) at the right so the
+  bright tabular percent aligns flush at the rail's edge; second line:
+  the status-palette 8px bar filled to the binding window — no neutral
+  tick at other windows' percents); the binding window is the
   lowest percent remaining (ties: session > weekly > extras), and the
   daemon-health dot rides inline on the unread row (green ok, red plus
   OFFLINE when degraded) instead of its own line.
@@ -275,18 +310,33 @@ Notes:
   CodexBar app omits that provider entirely. `snapshot-v2.json` and
   `src/protocol.ts` stay untouched, and nothing CodexBar prints is ever
   logged or persisted.
-- A token-usage block ships in the rail in place of the old clock: the
+- A token-usage block ships in the rail: the
   daemon's token-usage collector (`src/core/token-usage.ts`, started from
   `cli.ts`, 30s cadence, 15s run timeout) shells out to the local
   `agentsview` helper (`AGENTSVIEW_BIN` override, else /opt/homebrew/bin,
   else PATH) for the America/Los_Angeles day's cumulative total — input +
   output + cacheCreation + cacheRead across all agents — keeps a 288-sample
-  ring (~2.4h), and publishes `token-usage-snapshot.json` (own
-  `schemaVersion`; contract in `src/token-usage-snapshot.ts`); the strip
+  ring (~2.4h, the sole input to the rates), and publishes
+  `token-usage-snapshot.json` (contract in `src/token-usage-snapshot.ts`)
+  carrying date-keyed per-day cumulative curves in an additive top-level
+  `dayCurves` key — `schemaVersion` stays 1 and the parser ignores unknown
+  top-level keys, so daemon and app update in either order (an old app
+  ignores the key; a new app on an old daemon renders no sparkline): points
+  oldest-first with totals clamped to a running maximum (a sample at a
+  repeated or stepped-back instant is dropped, so a backward clock never
+  publishes a curve the parser rejects), at most 96 per
+  day retaining first and latest, and rollover date-keyed (today promotes
+  to yesterday only on the immediately preceding LA day, else yesterday
+  nulls — an outage across midnight never promotes a stale curve, and
+  restart seeding reconciles the same way); the strip
   reads it through the `read_token_usage_snapshot` Tauri command and renders
   today's total and, on one line below it, both rolling rates
   (`↑ 4.7M/hr · ↑ 1.3M/10m`), each rate colored by its own trend (deadband
-  max(1000, 10% of the previous window)) from the pure view-model in
+  max(1000, 10% of the previous window)), plus a day-over-day sparkline
+  (yesterday's adjacent complete curve dim with a `yda` micro-label under
+  today's partial bright curve with a faint fill, x mapped by elapsed
+  fraction of each day's actual length — DST-safe — on one shared zero-based
+  y-scale) from the pure view-model in
   `app/src/token-usage.ts`. agentsview output is never logged or persisted.
 - Update `docs/design.md` when changing the visible tile contract (colors,
   layout, marks). Dated files under `docs/superpowers/` and

@@ -13,7 +13,14 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { parseTokenUsageSnapshot, TOKEN_USAGE_SAMPLE_LIMIT, type TokenUsageSnapshot } from "../token-usage-snapshot";
+import {
+  parseTokenUsageSnapshot,
+  TOKEN_USAGE_DAY_CURVE_POINT_LIMIT,
+  TOKEN_USAGE_SAMPLE_LIMIT,
+  type TokenUsageDayCurvePoint,
+  type TokenUsageDayCurves,
+  type TokenUsageSnapshot,
+} from "../token-usage-snapshot";
 import type { TextProcessExecutor } from "./claude-ghostty-binding";
 import type { DiagnosticRecord } from "./diagnostics";
 import { writeFileAtomically } from "./snapshot";
@@ -150,6 +157,76 @@ const emptySnapshot = (providerDay: string): TokenUsageSnapshot => ({
   samples: [],
 });
 
+/** Calendar-day arithmetic on the YYYY-MM-DD string is timezone-free. */
+export const previousProviderDay = (day: string): string =>
+  new Date(Date.parse(`${day}T00:00:00.000Z`) - 86_400_000).toISOString().slice(0, 10);
+
+const downsampleDayPoints = (points: readonly TokenUsageDayCurvePoint[]): TokenUsageDayCurvePoint[] => {
+  if (points.length <= TOKEN_USAGE_DAY_CURVE_POINT_LIMIT) {
+    return [...points];
+  }
+  const picked: TokenUsageDayCurvePoint[] = [];
+  const last = points.length - 1;
+  let previousIndex = -1;
+  for (let i = 0; i < TOKEN_USAGE_DAY_CURVE_POINT_LIMIT; i++) {
+    const index = Math.round((i * last) / (TOKEN_USAGE_DAY_CURVE_POINT_LIMIT - 1));
+    if (index === previousIndex) {
+      continue;
+    }
+    previousIndex = index;
+    const entry = points[index];
+    if (entry !== undefined) {
+      picked.push(entry);
+    }
+  }
+  return picked;
+};
+
+/** Append a sample to the day curves: same day extends with a running max; a new day rotates date-keyed. */
+export const appendDayCurvePoint = (
+  curves: TokenUsageDayCurves | undefined,
+  day: string,
+  point: TokenUsageDayCurvePoint,
+): TokenUsageDayCurves => {
+  if (curves !== undefined && curves.today.providerDay === day) {
+    const last = curves.today.points.at(-1);
+    // The reader rejects a curve whose timestamps are not strictly
+    // increasing, so a sample at a repeated or stepped-back instant is
+    // dropped: keeping the last parseable curve beats manufacturing a
+    // timestamp (canonical UTC ISO strings compare chronologically).
+    if (last !== undefined && point.fetchedAt <= last.fetchedAt) {
+      return curves;
+    }
+    const points = downsampleDayPoints([
+      ...curves.today.points,
+      { fetchedAt: point.fetchedAt, totalTokens: Math.max(point.totalTokens, last?.totalTokens ?? 0) },
+    ]);
+    return { today: { providerDay: day, points }, yesterday: curves.yesterday };
+  }
+  const yesterday =
+    curves !== undefined && curves.today.providerDay === previousProviderDay(day) && curves.today.points.length > 0
+      ? curves.today
+      : null;
+  return { today: { providerDay: day, points: [point] }, yesterday };
+};
+
+/** Date-key a seeded publication against the current LA day: pass, rotate, or drop — never mislabel. */
+export const reconcileSeededDayCurves = (
+  curves: TokenUsageDayCurves | undefined,
+  currentDay: string,
+): TokenUsageDayCurves | undefined => {
+  if (curves === undefined) {
+    return undefined;
+  }
+  if (curves.today.providerDay === currentDay) {
+    return curves;
+  }
+  if (curves.today.providerDay === previousProviderDay(currentDay)) {
+    return { today: { providerDay: currentDay, points: [] }, yesterday: curves.today };
+  }
+  return undefined;
+};
+
 const defaultRunner: TokenUsageRunner = (file, args, timeoutMs) =>
   new Promise<string>((resolve, reject) => {
     execFile(
@@ -215,9 +292,22 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
     const existing = readFile(dependencies.tokenUsageSnapshotPath);
     if (existing !== null) {
       const seeded = parseTokenUsageSnapshot(JSON.parse(existing));
+      // Date-key the seeded curves against the current LA day — a daemon
+      // that slept through midnight must never mislabel a stale curve.
+      const reconciled = reconcileSeededDayCurves(seeded.dayCurves, laProviderDay(new Date(nowMs())));
+      let snapshot: TokenUsageSnapshot = { ...seeded, ...(reconciled === undefined ? {} : { dayCurves: reconciled }) };
+      if (reconciled === undefined && seeded.dayCurves !== undefined) {
+        // A gapped seed is dropped, not carried — destructure the key away.
+        const { dayCurves: _dropped, ...rest } = seeded;
+        snapshot = rest;
+      }
       // A seeded unavailable snapshot is already in the failed state — its
       // continuation must not re-log, only a good→failed transition may.
-      state = { snapshot: seeded, failed: seeded.unavailable };
+      state = { snapshot, failed: seeded.unavailable };
+      // The write guard tracks the bytes actually on disk, not the
+      // reconciled in-memory state — those were never written, so seeding
+      // with them would let a failed first poll suppress publishing the
+      // reconciled (rotated or dropped) curve across an outage.
       lastWrittenJson = `${JSON.stringify(seeded)}\n`;
     }
   } catch {
@@ -249,8 +339,17 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
         const samples = [...state.snapshot.samples, { fetchedAt, totalTokens: total, providerDay }].slice(
           -TOKEN_USAGE_SAMPLE_LIMIT,
         );
+        const dayCurves = appendDayCurvePoint(state.snapshot.dayCurves, providerDay, { fetchedAt, totalTokens: total });
         state = {
-          snapshot: { schemaVersion: 1, providerDay, totalTokens: total, unavailable: false, fetchedAt, samples },
+          snapshot: {
+            schemaVersion: 1,
+            providerDay,
+            totalTokens: total,
+            unavailable: false,
+            fetchedAt,
+            samples,
+            dayCurves,
+          },
           failed: false,
         };
       }

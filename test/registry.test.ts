@@ -1035,6 +1035,70 @@ describe("syncPaseoStates", () => {
     ).toBe(1);
     expect(getRow("s1")).toMatchObject({ unread_since: null, origin_parent_ref: "agent-0" });
   });
+
+  test("un-stamps a row abandoned by provider-session rotation so the agent's ref has one carrier", () => {
+    // The agent's provider session rotated s1 → s2 without a SessionEnd for
+    // s1, so both rows carry the hook-stamped ref — the duplicate that makes
+    // the projection roll-up drop the ref as ambiguous.
+    applyRegistryEvents(db, [
+      start("s1", { title: "Old life", model: "m1", at: at(1), origin: { kind: "paseo", ref: "a1" } }),
+      simple("Activity", "s1", { at: at(3) }),
+      simple("Stop", "s1", { at: at(5) }),
+      start("s2", { at: at(6), origin: { kind: "paseo", ref: "a1" } }),
+    ]);
+
+    const changed = syncPaseoStates(db, [
+      paseoState({ sessionId: "s2", isSubagent: true, parentAgentId: "agent-0", attentionTimestamp: FLAG_AT }),
+    ]);
+
+    // The current joined row carries the agent's metadata.
+    expect(getRow("s2")).toMatchObject({
+      origin_kind: "paseo",
+      origin_ref: "a1",
+      origin_subagent: 1,
+      origin_parent_ref: "agent-0",
+    });
+    // The abandoned row stays — not deleted, not acknowledged — with only its
+    // origin stamps cleared: ledger, status, timers, slot, metadata, and the
+    // prune lease (updated_at) all keep their values.
+    expect(getRow("s1")).toMatchObject({
+      origin_kind: null,
+      origin_ref: null,
+      origin_subagent: 0,
+      origin_parent_ref: null,
+      status: "idle",
+      title: "Old life",
+      model: "m1",
+      logical_slot: 1,
+      unread_since: at(5),
+      status_since: at(5),
+      updated_at: at(5),
+    });
+    expect(countRows()).toBe(2);
+    expect(changed).toBe(2);
+
+    // An identical later pass changes nothing (the reprojection fast-path stays quiet).
+    expect(
+      syncPaseoStates(db, [
+        paseoState({ sessionId: "s2", isSubagent: true, parentAgentId: "agent-0", attentionTimestamp: FLAG_AT }),
+      ]),
+    ).toBe(0);
+  });
+
+  test("the rotation cleanup never touches other agents' refs or ref-free rows", () => {
+    applyRegistryEvents(db, [
+      start("s1", { at: at(1), origin: { kind: "paseo", ref: "b1" } }),
+      start("s2", { at: at(2), origin: { kind: "paseo", ref: "a1" } }),
+      start("s3", { at: at(3) }),
+    ]);
+
+    // No duplicate exists: the current joined row is a1's only carrier, so the
+    // sync writes exactly the attention mirror and nothing else.
+    expect(syncPaseoStates(db, [paseoState({ sessionId: "s2", attentionTimestamp: FLAG_AT })])).toBe(1);
+    expect(getRow("s1")).toMatchObject({ origin_kind: "paseo", origin_ref: "b1" });
+    expect(getRow("s2")).toMatchObject({ origin_kind: "paseo", origin_ref: "a1", unread_since: FLAG_AT });
+    expect(getRow("s3")).toMatchObject({ origin_kind: null, origin_ref: null });
+  });
 });
 
 describe("pruneStaleSessions", () => {

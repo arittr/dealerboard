@@ -2,7 +2,7 @@
  * The strip's fixed right rail: token usage (today's total with rolling /hr
  * and /10m rates), the unread count carrying the daemon-health dot (red plus
  * OFFLINE when degraded), per-provider quota panels (binding window, tag
- * pill, bar ticks), and page dots. Rebuilt
+ * pill, bar), and page dots. Rebuilt
  * wholesale on each render — the rail is small and has no CSS animations to
  * disturb.
  */
@@ -14,9 +14,17 @@ import {
   formatBindingTag,
   type QuotaPanelModel,
   quotaBarColor,
-  tickPercents,
 } from "./quota";
-import { formatTokensCompact, type TokenUsageRailModel, type TokenUsageRateLine } from "./token-usage";
+import {
+  formatTokensCompact,
+  SPARKLINE_VIEWBOX,
+  type SparklineModel,
+  sparklineEndpoint,
+  sparklineFillPoints,
+  sparklinePolylinePoints,
+  type TokenUsageRailModel,
+  type TokenUsageRateLine,
+} from "./token-usage";
 
 export type RailModel = {
   degraded: boolean;
@@ -76,6 +84,64 @@ const rateSpan = (line: TokenUsageRateLine, unit: string): HTMLSpanElement => {
   return span;
 };
 
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+const sparkPolyline = (points: string, stroke: string, strokeOpacity?: string): SVGElement => {
+  const polyline = document.createElementNS(SVG_NAMESPACE, "polyline");
+  polyline.setAttribute("fill", "none");
+  polyline.setAttribute("points", points);
+  polyline.setAttribute("stroke", stroke);
+  if (strokeOpacity !== undefined) {
+    polyline.setAttribute("stroke-opacity", strokeOpacity);
+  }
+  polyline.setAttribute("stroke-width", "2");
+  polyline.setAttribute("stroke-linejoin", "round");
+  return polyline;
+};
+
+/** d6's day-over-day sparkline: faint fill under today's curve, dim yesterday line with its yda label, bright today line, endpoint dot. */
+const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
+  const block = document.createElement("div");
+  block.className = "rail-sparkline";
+  const svg = document.createElementNS(SVG_NAMESPACE, "svg");
+  // d6's matched-aspect geometry: the 436x80 viewBox scales uniformly (no
+  // preserveAspectRatio) so strokes and the endpoint circle stay true.
+  svg.setAttribute("viewBox", `0 0 ${SPARKLINE_VIEWBOX.width} ${SPARKLINE_VIEWBOX.height}`);
+  const fill = sparklineFillPoints(sparkline.today.points);
+  if (fill !== null) {
+    const polygon = document.createElementNS(SVG_NAMESPACE, "polygon");
+    polygon.setAttribute("fill", "rgba(232,238,247,0.08)");
+    polygon.setAttribute("points", fill);
+    svg.append(polygon);
+  }
+  if (sparkline.yesterday !== null) {
+    svg.append(sparkPolyline(sparklinePolylinePoints(sparkline.yesterday.points), "#94A3B8", "0.6"));
+  }
+  svg.append(sparkPolyline(sparklinePolylinePoints(sparkline.today.points), "#E8EEF7"));
+  const endpoint = sparklineEndpoint(sparkline.today.points);
+  if (endpoint !== null) {
+    const dot = document.createElementNS(SVG_NAMESPACE, "circle");
+    dot.setAttribute("cx", endpoint.cx.toFixed(2));
+    dot.setAttribute("cy", endpoint.cy.toFixed(2));
+    dot.setAttribute("r", "4");
+    dot.setAttribute("fill", "#E8EEF7");
+    svg.append(dot);
+  }
+  if (sparkline.yesterday !== null) {
+    const label = document.createElementNS(SVG_NAMESPACE, "text");
+    // d6.html:444 — the exact baseline: y=30 of the 80px box, right-aligned at x=434.
+    label.setAttribute("x", "434");
+    label.setAttribute("y", "30");
+    label.setAttribute("text-anchor", "end");
+    label.setAttribute("font-size", "20");
+    label.setAttribute("fill", "#94A3B8");
+    label.textContent = sparkline.yesterday.label;
+    svg.append(label);
+  }
+  block.append(svg);
+  return block;
+};
+
 const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   if (model.state === "hidden") {
     return null;
@@ -93,6 +159,9 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   separator.textContent = "·";
   rates.append(rateSpan(model.hour, "hr"), separator, rateSpan(model.tenMin, "10m"));
   section.append(today, rates);
+  if (model.sparkline !== null) {
+    section.append(sparklineBlock(model.sparkline));
+  }
   return section;
 };
 
@@ -111,7 +180,7 @@ const pagerSection = (model: RailModel, actions: RailActions): HTMLElement => {
   return section;
 };
 
-/** Two-line compact panel: head (chip, label, binding-window tag, percent + note) over a bar that fills to the binding window and ticks every other window. */
+/** Two-line compact panel: head (chip, label, binding-window tag, muted countdown then bright percent) over a bar that fills to the binding window. */
 const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
   const section = document.createElement("section");
   section.className = "rail-quota";
@@ -142,17 +211,17 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
     note.textContent = formatBindingNote(model, nowMs);
     right.append(note);
   } else {
-    const pct = document.createElement("span");
-    pct.className = "quota-pct";
-    pct.textContent = formatBindingPercent(model);
-    right.append(pct);
     const note = formatBindingNote(model, nowMs);
     if (note !== "") {
       const noteSpan = document.createElement("span");
       noteSpan.className = "quota-note";
-      noteSpan.textContent = `· ${note}`;
+      noteSpan.textContent = `${note} ·`;
       right.append(noteSpan);
     }
+    const pct = document.createElement("span");
+    pct.className = "quota-pct";
+    pct.textContent = formatBindingPercent(model);
+    right.append(pct);
   }
   head.append(right);
 
@@ -165,12 +234,6 @@ const quotaSection = (model: QuotaPanelModel, nowMs: number): HTMLElement => {
     fill.style.width = `${Math.max(0, Math.min(100, binding.percentRemaining))}%`;
     fill.style.background = quotaBarColor(binding.percentRemaining);
     bar.append(fill);
-    for (const percent of tickPercents(model)) {
-      const tick = document.createElement("span");
-      tick.className = "quota-tick";
-      tick.style.left = `${Math.max(0, Math.min(100, percent))}%`;
-      bar.append(tick);
-    }
   }
   section.append(head, bar);
   return section;
