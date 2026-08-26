@@ -61,12 +61,13 @@ body[data-fullscreen] #board {
  * grid: the head and status rows share the first row (the status block
  * right-aligns against the title, as d6's .trow/.stat pair) and the meta
  * row spans below. The status edge is the left border; the sub spine is
- * ::before and the wash overlay is ::after.
+ * ::before and the waiting/error tint is ::after; .pulse-overlay is the
+ * working card's event flash.
  */
 .card {
   --st: #94a3b8;
   position: relative;
-  isolation: isolate; /* keeps the wash ::after over the surface, under text */
+  isolation: isolate; /* keeps the waiting/error tint and pulse overlay over the surface, under text */
   display: grid;
   grid-template-columns: 1fr auto;
   grid-template-rows: auto auto;
@@ -82,10 +83,13 @@ body[data-fullscreen] #board {
 }
 
 /* Status edges and motion (colors and semantics mirror
-   src/plugin/render.ts): working breathes a shallow staggered wash, waiting
-   breathes its full frame, error pulses at 2s, idle is static. Waiting and
-   error widen the edge to 12px and lay a static surface tint. The negative
-   z-index paints the wash under the text, inside the isolation context. */
+   src/plugin/render.ts): working carries the liveness treatment: the 1s
+   ticker decays the edge and dot from data-last-event, the shared-phase
+   breath animates the dot, and ten silent minutes hollow the card to
+   quiet; waiting breathes its full frame, error pulses at 2s, idle is
+   static. Waiting and error widen the edge to 12px and lay a static
+   surface tint. The negative z-index paints the tint under the text,
+   inside the isolation context. */
 .card.status-working {
   --st: #20b8ff;
   border-left-color: rgb(32 184 255 / 0.9);
@@ -108,7 +112,6 @@ body[data-fullscreen] #board {
   padding-left: 0.781vw;
   animation: pulse 2s ease-in-out infinite alternate;
 }
-.card.status-working::after,
 .card.status-waiting::after,
 .card.status-error::after {
   content: "";
@@ -117,24 +120,11 @@ body[data-fullscreen] #board {
   z-index: -1;
   border-radius: inherit;
 }
-.card.status-working::after {
-  background: #20b8ff;
-  opacity: 0.04;
-  animation: wash 4s ease-in-out infinite alternate;
-}
 .card.status-waiting::after {
   background: rgb(255 176 32 / 0.1);
 }
 .card.status-error::after {
   background: rgb(255 77 103 / 0.1);
-}
-@keyframes wash {
-  from {
-    opacity: 0.04;
-  }
-  to {
-    opacity: 0.14;
-  }
 }
 @keyframes breathe {
   from {
@@ -435,6 +425,67 @@ body[data-fullscreen] #board {
 .card.sub .status-dot {
   width: 0.43vw; /* 11px native */
   height: 0.43vw;
+}
+
+/* Liveness (working cards only; waiting/idle/error treatments unchanged).
+   Decay: the 1s ticker inline-paints border-left-color and --st from
+   data-last-event; these rules carry only what the ticker cannot. Placed
+   after the sub blocks so the quiet edge wins the (0,3,0) order tie with
+   .card.sub.status-working's border-left shorthand. */
+
+/* Quiet: ≥10 silent minutes. The solid edge gives way to a 2px inset rule,
+   the dot hollows, the surface sinks, and the meta row states the silence
+   as a fact ("quiet 12m") — never a claim like "stalled". */
+.card.status-working.quiet {
+  background: #171e28;
+  border-left-color: transparent;
+  box-shadow: inset 0.078vw 0 0 #55647a; /* 2px native rule in the edge slot */
+}
+.card.status-working.quiet .card-title {
+  color: #8b9bb0;
+}
+.card.status-working.quiet .status-dot {
+  background: transparent;
+  border: max(1px, 0.078vw) solid #55647a;
+  animation: none;
+}
+.quiet-elapsed {
+  color: #5c6b80;
+}
+.quiet-elapsed:empty {
+  display: none;
+}
+
+/* Pulse: a one-shot bloom fired by main.ts via element.animate when the
+   card's stamp advances (coalesced per card); at rest it is invisible. */
+.pulse-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(32 184 255 / 0.34), transparent 46%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Breath: proof of life on one shared four-second cycle — the phase comes
+   from the wall clock (--breath-delay), so every dot on the board inhales
+   together and the one still dot (a quiet card) is the salient thing.
+   opacity MULTIPLIES the decayed --st alpha; it must never replace it. */
+.card.status-working:not(.quiet) .status-dot {
+  animation: breath 4s ease-in-out infinite;
+  animation-delay: var(--breath-delay, 0s);
+}
+@keyframes breath {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(0.92);
+  }
 }
 
 .flag {
