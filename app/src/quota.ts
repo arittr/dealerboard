@@ -186,12 +186,18 @@ export const formatBindingPercent = (model: QuotaMeterModel): string => {
   return binding === null ? "—" : formatPercentRemaining(binding.percentRemaining);
 };
 
-/** Muted right text of the head line: unavailable age, binding reset countdown, or empty. */
+/** Muted right text of the head line: unavailable age or countdown, binding reset countdown, or empty. */
 export const formatBindingNote = (model: QuotaMeterModel, now: number): string => {
   const binding = bindingWindow(model);
   if (model.state === "unavailable") {
     if (model.fetchedAtMs === null || binding === null) {
       return "unavailable";
+    }
+    // A reset schedule stays trustworthy after the probe stops (the percent
+    // does not), so a pending reset keeps its countdown; once it passes the
+    // last-good numbers are spent and only the data age remains honest.
+    if (binding.resetAtMs !== null && binding.resetAtMs > now) {
+      return `resets ${formatResetCountdown(binding.resetAtMs, now)}`;
     }
     const ageMinutes = Math.max(0, Math.round((now - model.fetchedAtMs) / 60_000));
     return ageMinutes < 1 ? "updated just now" : `updated ${ageMinutes}m ago`;

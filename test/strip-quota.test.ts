@@ -253,10 +253,30 @@ describe("formatBindingPercent and formatBindingNote", () => {
     expect(bindingWindow(bound)?.tag).toBe("weekly");
   });
 
-  test("unavailable panels with last-good data show the last-update age", () => {
-    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe(
-      "updated 12m ago",
-    );
+  test("unavailable panels with a pending reset show its countdown", () => {
+    // The default model's binding session window resets 4h out — a reset
+    // schedule stays trustworthy after the probe stops, so it displays.
+    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe("resets 4h");
+  });
+
+  test("unavailable panels whose reset has passed show the last-update age", () => {
+    const passed = model({
+      state: "unavailable",
+      fetchedAtMs: NOW - 12 * 60_000,
+      windows: [windowModel("weekly", 0, NOW - 60_000)],
+      bindingIndex: 0,
+    });
+    expect(formatBindingNote(passed, NOW)).toBe("updated 12m ago");
+  });
+
+  test("unavailable panels without a reset instant show the last-update age", () => {
+    const noReset = model({
+      state: "unavailable",
+      fetchedAtMs: NOW - 12 * 60_000,
+      windows: [windowModel("session", 100)],
+      bindingIndex: 0,
+    });
+    expect(formatBindingNote(noReset, NOW)).toBe("updated 12m ago");
   });
 
   test("unavailable panels without data say so", () => {
