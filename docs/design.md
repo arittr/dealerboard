@@ -426,7 +426,13 @@ once stamped, is immutable for the session's lifetime.
   0.28 by ten minutes — repainted in place on the 1s rail cadence, outside
   the render signature, exactly like the status timers. Subagent cards
   halve the edge's decayed alpha (their half-strength edge language); their
-  dots keep full decayed alpha.
+  dots keep full decayed alpha. Once the silence crosses the 30s fade
+  threshold, the status corner states it as a number beside the timer
+  (`44m · 4m` — 22px dim `#7C8BA1` gap after the bright timer), painted by
+  the same ticker; the gap stands down when the quiet treatment's meta
+  label takes over. Waiting, idle, and error cards never show a gap —
+  their `statusSince` and `lastEventAt` coincide, so it would only echo
+  the timer.
 - Working-card motion means work happened. When a working card's
   `lastEventAt` advances at ingest, a blue bloom crosses the card once and
   fades over 520ms, coalesced to at most one per card per two seconds;

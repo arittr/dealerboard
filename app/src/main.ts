@@ -214,6 +214,13 @@ const tickLiveness = (): void => {
         label.textContent = text;
       }
     }
+    const gap = card.querySelector<HTMLElement>(".cardgap");
+    if (gap !== null) {
+      const text = frame.gapLabel ?? "";
+      if (gap.textContent !== text) {
+        gap.textContent = text;
+      }
+    }
   }
 };
 

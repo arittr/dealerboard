@@ -164,6 +164,10 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
     const timer = appendText(statusRow, "cardtimer", model.timer.slice(model.status.length + 1));
     timer.dataset["since"] = model.statusSince;
   }
+  if (model.status === "working") {
+    // The gap slot stays empty while fresh; the 1s liveness ticker owns its text.
+    appendText(statusRow, "cardgap", "");
+  }
   element.append(statusRow);
 
   if (model.degraded) {

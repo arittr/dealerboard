@@ -251,11 +251,11 @@ describe("liveness reconciliation", () => {
   });
 });
 
-describe("status word rendering", () => {
-  const pageWith = (status: ProjectedSession["status"]) => ({
-    cards: [placed({}, { status, statusSince: "2026-08-25T00:08:00.000Z" })],
-  });
+const pageWith = (status: ProjectedSession["status"]) => ({
+  cards: [placed({}, { status, statusSince: "2026-08-25T00:08:00.000Z" })],
+});
 
+describe("status word rendering", () => {
   test("working and idle cards render dot and timer with no status word", () => {
     for (const status of ["working", "idle"] as const) {
       withFakeDocument((root) => {
@@ -276,6 +276,26 @@ describe("status word rendering", () => {
         expect(word?.textContent).toBe(status);
         expect(descendants(root).some((node) => hasClass(node, "status-dot"))).toBe(true);
         expect(descendants(root).filter((node) => hasClass(node, "cardtimer"))).toHaveLength(1);
+      });
+    }
+  });
+});
+
+describe("status gap slot", () => {
+  test("a working card renders an empty gap slot for the liveness ticker", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, pageWith("working"), false);
+      const gaps = descendants(root).filter((node) => hasClass(node, "cardgap"));
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0]?.textContent).toBe("");
+    });
+  });
+
+  test("waiting, idle, and error cards render no gap slot", () => {
+    for (const status of ["waiting", "idle", "error"] as const) {
+      withFakeDocument((root) => {
+        renderBoard(root as unknown as HTMLElement, pageWith(status), false);
+        expect(descendants(root).some((node) => hasClass(node, "cardgap"))).toBe(false);
       });
     }
   });
