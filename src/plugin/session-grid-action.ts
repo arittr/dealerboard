@@ -19,7 +19,7 @@ import streamDeck, {
 import type { DiagnosticRecord } from "../core/diagnostics";
 import type { SessionGridController } from "./controller";
 
-export const SESSION_GRID_ACTION_UUID = "com.drewritter.stream-deck-agents.session-grid";
+export const SESSION_GRID_ACTION_UUID = "com.drewritter.dealerboard.session-grid";
 
 @action({ UUID: SESSION_GRID_ACTION_UUID })
 export class SessionGridAction extends SingletonAction {

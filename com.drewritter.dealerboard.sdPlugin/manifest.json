@@ -1,11 +1,11 @@
 {
-	"Name": "Stream Deck Agents",
+	"Name": "Dealerboard",
 	"Version": "0.4.2.2",
 	"Author": "Drew Ritter",
 	"Actions": [
 		{
 			"Name": "Session Grid",
-			"UUID": "com.drewritter.stream-deck-agents.session-grid",
+			"UUID": "com.drewritter.dealerboard.session-grid",
 			"Icon": "imgs/action-icon",
 			"Tooltip": "Shows live agent sessions; press Claude, Codex, or Kimi tiles to focus or open them.",
 			"Controllers": [
@@ -18,7 +18,7 @@
 			]
 		}
 	],
-	"Category": "Stream Deck Agents",
+	"Category": "Dealerboard",
 	"CategoryIcon": "imgs/category-icon",
 	"CodePath": "bin/plugin.js",
 	"Description": "Displays live agent sessions from the local registry on a 15-key grid. Press Claude tiles to focus their Ghostty terminals, Codex tiles to open desktop tasks, and Kimi tiles to open Web sessions.",
@@ -38,12 +38,12 @@
 	},
 	"Profiles": [
 		{
-			"Name": "profiles/Stream Deck Agents",
+			"Name": "profiles/Dealerboard",
 			"DeviceType": 0,
 			"AutoInstall": true,
 			"Readonly": true,
 			"DontAutoSwitchWhenInstalled": false
 		}
 	],
-	"UUID": "com.drewritter.stream-deck-agents"
+	"UUID": "com.drewritter.dealerboard"
 }

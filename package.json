@@ -15,7 +15,7 @@
     "build:core": "bun build --compile --minify --outfile dist/dealerboard src/core/cli.ts",
     "build:plugin": "rollup --config",
     "build": "bun run typecheck && bun run build:core && bun run build:plugin",
-    "pack:plugin": "bun ./node_modules/@elgato/cli/bin/streamdeck.mjs validate --no-update-check com.drewritter.stream-deck-agents.sdPlugin && bun ./node_modules/@elgato/cli/bin/streamdeck.mjs pack --no-update-check com.drewritter.stream-deck-agents.sdPlugin --output dist --force",
+    "pack:plugin": "bun ./node_modules/@elgato/cli/bin/streamdeck.mjs validate --no-update-check com.drewritter.dealerboard.sdPlugin && bun ./node_modules/@elgato/cli/bin/streamdeck.mjs pack --no-update-check com.drewritter.dealerboard.sdPlugin --output dist --force",
     "build:app": "bun build app/src/main.ts --outdir app/dist --target browser --minify && cp app/index.html app/styles.css app/dist/",
     "dev:app": "bun run build:app && cd app && bunx tauri dev",
     "bundle:app": "bun run build:app && cd app && bunx tauri build",
