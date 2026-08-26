@@ -189,10 +189,17 @@ export const appendDayCurvePoint = (
   point: TokenUsageDayCurvePoint,
 ): TokenUsageDayCurves => {
   if (curves !== undefined && curves.today.providerDay === day) {
-    const floor = curves.today.points.at(-1)?.totalTokens ?? 0;
+    const last = curves.today.points.at(-1);
+    // The reader rejects a curve whose timestamps are not strictly
+    // increasing, so a sample at a repeated or stepped-back instant is
+    // dropped: keeping the last parseable curve beats manufacturing a
+    // timestamp (canonical UTC ISO strings compare chronologically).
+    if (last !== undefined && point.fetchedAt <= last.fetchedAt) {
+      return curves;
+    }
     const points = downsampleDayPoints([
       ...curves.today.points,
-      { fetchedAt: point.fetchedAt, totalTokens: Math.max(point.totalTokens, floor) },
+      { fetchedAt: point.fetchedAt, totalTokens: Math.max(point.totalTokens, last?.totalTokens ?? 0) },
     ]);
     return { today: { providerDay: day, points }, yesterday: curves.yesterday };
   }

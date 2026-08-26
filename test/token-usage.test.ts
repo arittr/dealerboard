@@ -263,6 +263,16 @@ describe("appendDayCurvePoint", () => {
     expect(thursday.yesterday).toBeNull();
   });
 
+  test("drops a same-day point whose fetchedAt does not advance (a stepped-back clock never breaks the curve)", () => {
+    // The reader rejects a curve whose timestamps are not strictly
+    // increasing, so a repeated or backward instant must never be published.
+    const base = appendDayCurvePoint(undefined, "2026-08-25", point(10, 100));
+    expect(appendDayCurvePoint(base, "2026-08-25", point(10, 150))).toEqual(base);
+    expect(appendDayCurvePoint(base, "2026-08-25", point(5, 200))).toEqual(base);
+    const advanced = appendDayCurvePoint(base, "2026-08-25", point(11, 120));
+    expect(advanced.today.points.map((p) => p.totalTokens)).toEqual([100, 120]);
+  });
+
   test("downsampling keeps at most the limit and always the first and latest points", () => {
     let curves = appendDayCurvePoint(undefined, "2026-08-25", point(0, 0));
     for (let i = 1; i <= 200; i++) {

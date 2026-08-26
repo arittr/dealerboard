@@ -322,7 +322,9 @@ Notes:
   `dayCurves` key — `schemaVersion` stays 1 and the parser ignores unknown
   top-level keys, so daemon and app update in either order (an old app
   ignores the key; a new app on an old daemon renders no sparkline): points
-  oldest-first with totals clamped to a running maximum, at most 96 per
+  oldest-first with totals clamped to a running maximum (a sample at a
+  repeated or stepped-back instant is dropped, so a backward clock never
+  publishes a curve the parser rejects), at most 96 per
   day retaining first and latest, and rollover date-keyed (today promotes
   to yesterday only on the immediately preceding LA day, else yesterday
   nulls — an outage across midnight never promotes a stale curve, and
