@@ -3,7 +3,9 @@
  * EDID model string, falling back to the exact physical resolution (physical
  * size is scaling-independent, so a HiDPI 1280x360 mode still matches). A
  * 5s re-pin interval covers panel reconnects; with no strip attached the
- * window is left alone as a normal floating window.
+ * window is left alone as a normal floating window. The same poll mirrors
+ * native-fullscreen state onto body[data-fullscreen], the stylesheet's cue
+ * to trade the menu-bar clearance for centered padding.
  */
 
 import {
@@ -39,6 +41,26 @@ export const logicalPinFrame = (monitor: {
   size: { width: monitor.size.width / monitor.scaleFactor, height: monitor.size.height / monitor.scaleFactor },
 });
 
+/**
+ * Reflects native-fullscreen state onto the body for the stylesheet's
+ * clearance switch: fullscreen has no menu-bar overlay, so #board and #rail
+ * swap their 44px dodge for centered padding. An unknown state (a failed
+ * isFullscreen read) keeps the last applied layout rather than flapping it.
+ */
+export const applyFullscreenLayout = (
+  target: { dataset: Record<string, string | undefined> },
+  isFullscreen: boolean | null,
+): void => {
+  if (isFullscreen === null) {
+    return;
+  }
+  if (isFullscreen) {
+    target.dataset["fullscreen"] = "true";
+  } else {
+    delete target.dataset["fullscreen"];
+  }
+};
+
 export const stripWindowNeedsPin = (
   isFullscreen: boolean,
   position: Point,
@@ -65,18 +87,20 @@ const pinTo = async (target: Monitor): Promise<void> => {
 
 export const startStripWindowManager = async (): Promise<void> => {
   const window = getCurrentWindow();
+  applyFullscreenLayout(document.body, await window.isFullscreen().catch(() => null));
   const initial = await findStripMonitor().catch(() => undefined);
   if (initial !== undefined) {
     await pinTo(initial).catch(() => {});
   }
   setInterval(() => {
     void (async () => {
-      const strip = await findStripMonitor().catch(() => undefined);
-      if (strip === undefined) {
+      const isFullscreen = await window.isFullscreen().catch(() => null);
+      applyFullscreenLayout(document.body, isFullscreen);
+      if (isFullscreen === null) {
         return;
       }
-      const isFullscreen = await window.isFullscreen().catch(() => null);
-      if (isFullscreen === null) {
+      const strip = await findStripMonitor().catch(() => undefined);
+      if (strip === undefined) {
         return;
       }
       const position = await window.outerPosition().catch(() => null);

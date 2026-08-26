@@ -320,8 +320,11 @@ All dimensions below are native 2560×720 pixels, viewport-relative in the
 implementation (px/25.6 → vw, px/7.2 → vh), so the 1280×360 HiDPI mode
 scales proportionally and nothing is pixel-locked; macOS draws its menu bar
 as a ~30px overlay on the strip display (no visibleFrame reservation), so
-the top 44px stays clear of critical content — board and rail alike — and
-thin marks (hairline borders, the 2px spine, the 8px status edge) map
+the top 44px stays clear of critical content — board and rail alike. Native
+fullscreen draws no overlay bar: the window manager mirrors the state onto
+`body[data-fullscreen]` and the top clearance drops to 24px on board and
+rail, centering the 672px board block (six rows, five gaps) in the 720px
+height. Thin marks (hairline borders, the 2px spine, the 8px status edge) map
 per-axis to viewport units and never drop below one physical pixel in the
 HiDPI mode (`max(1px, …)`).
 
