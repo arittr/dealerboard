@@ -83,3 +83,44 @@ to ready and re-run the ratify gate. -->
 - **Because:** Smallest honest behavior; a 2-minute transient dim is
   acceptable noise. Revisit only if flicker is observed in practice.
 - **Deciders:** steering-session
+
+## 2026-08-27 00:50 — One source per situation for claude quota (Supersedes: collector untouched)
+- **Decided:** The collector reads cswap before the provider probe loop.
+  cswap success with ≥2 accounts → skip the codexbar claude probe, stamp
+  the claude entry's `fetchedAt` at the cswap read, publish null ambient
+  windows. cswap absent or <2 accounts → codexbar claude probe as today.
+  cswap read failure with retained accounts → no codexbar fallback, no
+  restamp (group ages toward stale), rows dim via existing unavailable.
+  This supersedes the spec's original non-goal "No change to quota
+  collection cadence or the collector itself."
+- **Rejected:** codexbar-only (cannot see the inactive seat; no pacing —
+  120s cadence alone spends the whole ~28-30/hr budget); keeping both
+  sources and fixing only the display (active seat stays genuinely ~30 min
+  stale on heavy days); codexbar fallback on cswap failure (spends budget
+  exactly when cswap is struggling; flaps the layout).
+- **Because:** cswap is the only source that can see both seats and the
+  active marker, and the only correctly paced client of the shared usage
+  budget; the codexbar claude reading is never rendered in the grouped
+  layout (verified: quota history rendered nowhere).
+- **Deciders:** user ("yes pls" to the settled one-source shape,
+  2026-08-27)
+
+## 2026-08-27 00:50 — Gate findings 1-8, 10, 11 dispositioned
+- **Decided:** F1: partially refuted — ambient fetchedAt restamps per
+  successful pass, forcing a snapshot rewrite; residue (ambient measured
+  codexbar, not cswap) resolved by the one-source decision: the stamp now
+  IS the cswap read. F2/F10: already answered by the design (no overdue
+  state; scope in non-goals). F3: bound verified and documented — worst
+  successful pass fits inside STALE_QUOTA_AGE_MS once claude leaves the
+  probe loop. F4: explicit state rendering contract added to spec. F5:
+  usageStatus enum verified in cswap 0.25.0 source; "ok" = believable
+  numbers (last-good under backoff), sentinels structural; uniform non-ok
+  → unavailable stands. F6: degenerate cases documented as unchanged
+  existing behavior. F7: no schema change needed (existing fields
+  suffice). F8: usageFetchedAt authoritative; usageAgeSeconds ignored;
+  age affects note text only. F11: retained active marker on command
+  failure accepted. (F9 dispositioned in its own entry above.)
+- **Because:** gate findings list of 2026-08-27 (agent 5c0a04a2) is the
+  record; verifications performed against the worktree code and cswap
+  0.25.0 source.
+- **Deciders:** steering-session, with user's scope confirmation
