@@ -37,6 +37,7 @@ const row = (
     originRef?: string | null;
     originSubagent?: number;
     unreadSince?: string | null;
+    doneSince?: string | null;
     statusSince?: string | null;
     activityLine?: string | null;
     transcriptPath?: string | null;
@@ -62,6 +63,7 @@ const row = (
     // Unread by default so idle roots stay visible; tests exercising the
     // visibility filter pass null explicitly (a `??` default would swallow it).
     unreadSince: options.unreadSince === undefined ? "2026-08-16T00:00:00.000Z" : options.unreadSince,
+    doneSince: options.doneSince ?? null,
     statusSince: options.statusSince ?? null,
     activityLine: options.activityLine ?? null,
     transcriptPath: options.transcriptPath ?? null,
@@ -118,6 +120,7 @@ describe("projectRows", () => {
       originRef: null,
       originSubagent: false,
       unreadSince: "2026-08-16T00:00:00.000Z",
+      doneSince: null,
       statusSince: null,
       activityLine: null,
       transcriptPath: null,
@@ -153,6 +156,41 @@ describe("projectRows", () => {
       row("broken", { status: "error", unreadSince: null, slot: 5 }),
     ];
     expect(projectRows(rows).map((session) => session.sessionId)).toEqual(["unread-idle", "busy", "blocked", "broken"]);
+  });
+
+  test("a done-and-read idle root stays visible with doneSince exposed", () => {
+    const doneAt = "2026-08-16T00:05:00.000Z";
+    const projected = projectRows([
+      row("done-read", { status: "idle", unreadSince: null, doneSince: doneAt, slot: 1 }),
+    ]);
+    expect(projected.map((session) => session.sessionId)).toEqual(["done-read"]);
+    expect(projected[0]?.doneSince).toBe(doneAt);
+  });
+
+  test("an idle paseo subagent with only a done stamp stays hidden (mirrors the unread rule)", () => {
+    expect(
+      projectRows([
+        row("sub", {
+          status: "idle",
+          unreadSince: null,
+          doneSince: "2026-08-16T00:05:00.000Z",
+          originKind: "paseo",
+          originRef: "a1",
+          originSubagent: 1,
+          slot: 1,
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("a native subagent node carries a null doneSince while its root exposes the stamp", () => {
+    const doneAt = "2026-08-16T00:05:00.000Z";
+    const { agents } = projectSnapshotRows([
+      row("p", { status: "working", unreadSince: null, doneSince: doneAt, slot: 1 }),
+      row("c", { parent: "p", status: "working", doneSince: doneAt }),
+    ]);
+    expect(agents.find((agent) => agent.sessionId === "p")?.doneSince).toBe(doneAt);
+    expect(agents.find((agent) => agent.sessionId === "c")?.doneSince).toBeNull();
   });
 
   test("a read-idle root with a live child is lifted to working and stays visible", () => {
@@ -954,6 +992,7 @@ describe("readProjection", () => {
             originRef: null,
             originSubagent: false,
             unreadSince: null,
+            doneSince: null,
             statusSince: "2026-08-06T00:00:04.000Z",
             activityLine: null,
             transcriptPath: null,
@@ -976,6 +1015,7 @@ describe("readProjection", () => {
             statusSince: "2026-08-06T00:00:04.000Z",
             activityLine: null,
             unreadSince: null,
+            doneSince: null,
             logicalSlot: 1,
             ghosttyTerminalId: null,
             transcriptPath: null,
@@ -999,6 +1039,7 @@ describe("readProjection", () => {
             statusSince: "2026-08-06T00:00:05.000Z",
             activityLine: null,
             unreadSince: null,
+            doneSince: null,
             logicalSlot: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
@@ -1022,6 +1063,7 @@ describe("readProjection", () => {
             statusSince: "2026-08-06T00:00:06.000Z",
             activityLine: null,
             unreadSince: null,
+            doneSince: null,
             logicalSlot: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
@@ -1289,6 +1331,84 @@ describe("readProjection", () => {
     }
   });
 
+  test("a Stop's done stamp round-trips into the published snapshot", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "finished",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-26T05:00:00.000Z",
+          },
+          { kind: "Stop", provider: "claude", sessionId: "finished", observedAt: "2026-08-26T05:01:00.000Z" },
+        ]);
+      } finally {
+        writer.close();
+      }
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions).toHaveLength(1);
+        expect(snapshot.sessions[0]).toMatchObject({
+          sessionId: "finished",
+          status: "idle",
+          doneSince: "2026-08-26T05:01:00.000Z",
+        });
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a corrupt done_since and rolls back the read transaction", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "bad-done-since",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-26T05:00:00.000Z",
+          },
+        ]);
+        // A blob defeats the column's text affinity, unlike an integer,
+        // which SQLite would quietly store as the string '42'.
+        writer.run("UPDATE active_sessions SET done_since = x'00' WHERE session_id = 'bad-done-since'");
+      } finally {
+        writer.close();
+      }
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        expect(() => readProjection(reader)).toThrow(new ProjectionError("corrupt-row"));
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   test("rejects corrupt opened_at and rolls back the read transaction", () => {
     const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
     try {
@@ -1356,6 +1476,7 @@ describe("writeSnapshotAtomically", () => {
         originRef: null,
         originSubagent: false,
         unreadSince: null,
+        doneSince: null,
         statusSince: null,
         activityLine: null,
         transcriptPath: null,

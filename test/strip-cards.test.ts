@@ -28,6 +28,7 @@ const session = (slot: number, overrides: Partial<ProjectedSession> = {}): Proje
   originRef: null,
   originSubagent: false,
   unreadSince: null,
+  doneSince: null,
   statusSince: null,
   activityLine: null,
   transcriptPath: null,

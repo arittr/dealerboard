@@ -112,6 +112,8 @@ export type ProjectedSession = {
   originSubagent: boolean;
   /** ISO-8601 UTC when the latest unviewed result landed; null when nothing is unread. */
   unreadSince: string | null;
+  /** ISO-8601 UTC when the latest undismissed result landed; null once dismissed or while none. */
+  doneSince: string | null;
   /** ISO-8601 UTC of the row's own last status change (subtree lifts never restamp); null when never stamped. */
   statusSince: string | null;
   /** The last tool call as "Tool target" (≤64 code points; claude/codex only); null otherwise. */
@@ -143,6 +145,8 @@ export type ProjectedAgentNode = {
   statusSince: string | null;
   activityLine: string | null;
   unreadSince: string | null;
+  /** ISO-8601 UTC when the latest undismissed result landed; null once dismissed or while none. */
+  doneSince: string | null;
   logicalSlot: number | null;
   ghosttyTerminalId: string | null;
   transcriptPath: string | null;
@@ -283,6 +287,10 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
   if (!isNullableBoundedString(unreadSince)) {
     return invalid("agent.unreadSince must be null or a bounded string");
   }
+  const doneSince = "doneSince" in value ? value["doneSince"] : null;
+  if (!isNullableBoundedString(doneSince)) {
+    return invalid("agent.doneSince must be null or a bounded string");
+  }
   const logicalSlot = value["logicalSlot"];
   if (logicalSlot !== null && (typeof logicalSlot !== "number" || !Number.isInteger(logicalSlot))) {
     return invalid("agent.logicalSlot must be null or an integer");
@@ -331,7 +339,8 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
       originRef !== null ||
       originSubagent ||
       originParentRef !== null ||
-      unreadSince !== null
+      unreadSince !== null ||
+      doneSince !== null
     ) {
       return invalid("agent native role invariants are invalid");
     }
@@ -360,6 +369,7 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
     statusSince,
     activityLine,
     unreadSince,
+    doneSince,
     logicalSlot,
     ghosttyTerminalId,
     transcriptPath,
@@ -505,6 +515,10 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (!isNullableBoundedString(lastEventAt)) {
     return invalid("session.lastEventAt must be null or a bounded string");
   }
+  const doneSince = "doneSince" in value ? value["doneSince"] : null;
+  if (!isNullableBoundedString(doneSince)) {
+    return invalid("session.doneSince must be null or a bounded string");
+  }
   return {
     provider: value["provider"] as Provider,
     sessionId: value["sessionId"],
@@ -519,6 +533,7 @@ const parseSession = (value: unknown): ProjectedSession => {
     originRef: value["originRef"] === undefined ? null : (value["originRef"] as string | null),
     originSubagent: value["originSubagent"] === undefined ? false : (value["originSubagent"] as boolean),
     unreadSince,
+    doneSince,
     statusSince,
     activityLine,
     transcriptPath,

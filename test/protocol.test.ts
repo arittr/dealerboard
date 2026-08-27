@@ -28,6 +28,7 @@ const valid: SessionSnapshotV2 = {
       originRef: null,
       originSubagent: false,
       unreadSince: null,
+      doneSince: null,
       statusSince: null,
       activityLine: null,
       transcriptPath: null,
@@ -52,6 +53,7 @@ const agent = (overrides: Partial<ProjectedAgentNode> = {}): ProjectedAgentNode 
   statusSince: "2026-08-26T05:00:00.000Z",
   activityLine: null,
   unreadSince: null,
+  doneSince: null,
   logicalSlot: 1,
   ghosttyTerminalId: null,
   transcriptPath: null,
@@ -127,6 +129,13 @@ describe("parseSessionSnapshot", () => {
   test("normalizes an absent agent.lastEventAt to null", () => {
     const { lastEventAt: _lastEventAt, ...oldDaemonAgent } = agent();
     expect(parseSessionSnapshot({ ...valid, agents: [oldDaemonAgent] }).agents?.[0]?.lastEventAt).toBeNull();
+  });
+
+  test("round-trips agent.doneSince and normalizes absence to null", () => {
+    const stamped = agent({ doneSince: "2026-08-26T05:00:09.000Z" });
+    expect(parseSessionSnapshot({ ...valid, agents: [stamped] }).agents).toEqual([stamped]);
+    const { doneSince: _doneSince, ...oldDaemonAgent } = agent();
+    expect(parseSessionSnapshot({ ...valid, agents: [oldDaemonAgent] }).agents?.[0]?.doneSince).toBeNull();
   });
 
   test.each([
@@ -212,6 +221,20 @@ describe("parseSessionSnapshot", () => {
           lineage: "native",
           parent: { provider: "claude", sessionId: "agent-root" },
           logicalSlot: 2,
+        }),
+      ],
+    ],
+    [
+      "native non-null doneSince",
+      [
+        agent(),
+        agent({
+          sessionId: "native",
+          role: "subagent",
+          lineage: "native",
+          parent: { provider: "claude", sessionId: "agent-root" },
+          logicalSlot: null,
+          doneSince: "2026-08-26T05:00:09.000Z",
         }),
       ],
     ],
@@ -558,6 +581,18 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot(malformed)).toThrow("session.lastEventAt");
     const explicitNull = { ...valid, sessions: [{ ...firstSession(), lastEventAt: null }] };
     expect(parseSessionSnapshot(explicitNull).sessions[0]?.lastEventAt).toBeNull();
+  });
+
+  test("doneSince parses when present, defaults to null when the key is absent, and rejects non-strings", () => {
+    const stamp = "2026-08-25T05:10:08.055Z";
+    expect(parseSessionSnapshot(withSession({ doneSince: stamp })).sessions[0]?.doneSince).toBe(stamp);
+    // Cross-version tolerance: a snapshot written before the field existed
+    // carries no key at all (not a present null) and parses to null.
+    const absent = { ...firstSession() } as Partial<ProjectedSession>;
+    delete absent.doneSince;
+    expect(parseSessionSnapshot({ ...valid, sessions: [absent] }).sessions[0]?.doneSince).toBeNull();
+    const malformed = { ...valid, sessions: [{ ...firstSession(), doneSince: 12 }] };
+    expect(() => parseSessionSnapshot(malformed)).toThrow("session.doneSince");
   });
 });
 
