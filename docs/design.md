@@ -119,7 +119,9 @@ the ambient Claude row.
 
 Quota and token data use independent sidecar snapshots so daemon and app
 versions can roll independently. Missing optional helpers hide their panels.
-A failed refresh keeps last-good values with an unavailable or age cue.
+A failed refresh keeps the last-good percent and pending reset countdown; once
+the reading is stale it adds a coarse age such as `1h+ old`, while a spent reset
+leaves the age standing alone.
 
 ## Interaction
 

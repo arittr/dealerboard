@@ -256,44 +256,69 @@ describe("formatBindingPercent and formatBindingNote", () => {
 
   test("unavailable panels with a pending reset and fresh last-good data show its countdown alone", () => {
     // The default model's binding session window resets 4h out — a reset
-    // schedule stays trustworthy after the probe stops, so it displays.
-    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 60_000 }), NOW)).toBe("resets 4h");
+    // schedule stays trustworthy after the probe stops, so it displays,
+    // bare like the ok-state countdown.
+    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 60_000 }), NOW)).toBe("4h");
   });
 
   test("unavailable panels with a pending reset and old last-good data add the age cue", () => {
     expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe(
-      "resets 4h · updated 12m ago",
+      "4h · 12m old",
     );
   });
 
-  test("unavailable panels whose reset has passed show the last-update age", () => {
+  test("unavailable panels whose reset has passed show the data age", () => {
     const passed = model({
       state: "unavailable",
       fetchedAtMs: NOW - 12 * 60_000,
       windows: [windowModel("weekly", 0, NOW - 60_000)],
       bindingIndex: 0,
     });
-    expect(formatBindingNote(passed, NOW)).toBe("updated 12m ago");
+    expect(formatBindingNote(passed, NOW)).toBe("12m old");
   });
 
-  test("the last-update age reads in hours and minutes past the first hour", () => {
+  test("the age drops minute precision at the hour scale and carries a plus", () => {
     const passed = model({
       state: "unavailable",
       fetchedAtMs: NOW - 170 * 60_000,
       windows: [windowModel("weekly", 0, NOW - 60_000)],
       bindingIndex: 0,
     });
-    expect(formatBindingNote(passed, NOW)).toBe("updated 2h 50m ago");
+    expect(formatBindingNote(passed, NOW)).toBe("2h+ old");
   });
 
-  test("unavailable panels without a reset instant show the last-update age", () => {
+  test("the age keeps minutes under an hour and floors hours with a plus past it", () => {
+    const at = (ageMs: number) =>
+      model({
+        state: "unavailable",
+        fetchedAtMs: NOW - ageMs,
+        windows: [windowModel("weekly", 0, NOW - 60_000)],
+        bindingIndex: 0,
+      });
+    expect(formatBindingNote(at(0), NOW)).toBe("1m old");
+    expect(formatBindingNote(at(30_000), NOW)).toBe("1m old");
+    expect(formatBindingNote(at(59 * 60_000), NOW)).toBe("59m old");
+    expect(formatBindingNote(at(60 * 60_000), NOW)).toBe("1h+ old");
+  });
+
+  test("the age floors to days with a plus past 24 hours", () => {
+    const passed = model({
+      state: "unavailable",
+      fetchedAtMs: NOW - 36 * 3_600_000,
+      windows: [windowModel("weekly", 0, NOW - 60_000)],
+      bindingIndex: 0,
+    });
+    expect(formatBindingNote(passed, NOW)).toBe("1d+ old");
+  });
+
+  test("unavailable panels without a reset instant show the data age", () => {
     const noReset = model({
       state: "unavailable",
       fetchedAtMs: NOW - 12 * 60_000,
       windows: [windowModel("session", 100)],
       bindingIndex: 0,
     });
-    expect(formatBindingNote(noReset, NOW)).toBe("updated 12m ago");
+    expect(formatBindingNote(noReset, NOW)).toBe("12m old");
   });
 
   test("unavailable panels without data say so", () => {
