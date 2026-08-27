@@ -118,14 +118,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 15 database and stays silent on stdout", async () => {
+  test("creates a version 16 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 16 });
     } finally {
       db.close();
     }
@@ -1232,7 +1232,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 15");
+      restore.exec("PRAGMA user_version = 16");
     } finally {
       restore.close();
     }
