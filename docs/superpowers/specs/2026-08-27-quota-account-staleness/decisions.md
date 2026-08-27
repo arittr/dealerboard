@@ -175,3 +175,28 @@ to ready and re-run the ratify gate. -->
   explicitly.
 - **Deciders:** steering-session under Drew's overnight "fix and
   proceed" instruction (2026-08-27)
+
+## 2026-08-27 02:28 — Plan review round 2: NOT READY; two-bounce reached; ratification voided
+- **Decided:** (1) Sol's round-2 review (agent 20b87bb9, plan a027ef0)
+  is right that the 2026-08-27 receipt was voided by the post-receipt
+  spec amendments (36deba8 and later): status flipped back to ready;
+  Drew's re-sign-off over the full delta since 53a30a6 is QUEUED FOR
+  MORNING. Deviation from the reviewer's literal fix, recorded openly:
+  no third cold-read — two rounds ran and were dispositioned, the voided
+  delta was itself adversarially reviewed by both plan-review rounds, and
+  the workflow's own rule is to never loop gates. (2) Two plan-review
+  rejections = two-bounce: gating stops; the steering seat resolved the
+  remaining findings conversationally. Finding 2: claude's state now
+  resolves after every other provider's await with no await between
+  computing and committing both halves (cswap read stays first for stamp
+  semantics); regression test added. Finding 3: starvation requires a
+  usable (non-null) stamp — a null-stamp legacy seed takes the fallback
+  probe — and starvation publishes with unavailable canonicalized false;
+  spec edge cases updated, two tests added. Finding 4: the physical
+  receipt now specifies the repo's real install sequence, fresh-daemon
+  verification, and reversible fault injection.
+- **Because:** the reviewer's findings were verified against the plan and
+  code; the fixes follow its required-fix guidance except where the
+  never-loop-gates rule overrides (the third cold-read).
+- **Deciders:** steering-session under Drew's overnight instruction;
+  ratification explicitly reserved for Drew

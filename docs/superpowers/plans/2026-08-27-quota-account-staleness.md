@@ -562,17 +562,19 @@ type ClaudeSwapRead =
   };
 ```
 
-**(c)** In `pollNow`, replace everything from `const providers: …` through the existing claude merge block (`const accounts = await pollClaudeAccounts(...)` … `providers["claude"] = { ...emptyQuota(), accounts };`) with the block below. The assembly after the loop is one synchronous region with no `await` and no throwing call inside it (`reportAccountFailure` contains its own exceptions) — that is the atomicity: retention and the claude entry are committed together, after the pass's last await:
+**(c)** In `pollNow`, replace everything from `const providers: …` through the existing claude merge block (`const accounts = await pollClaudeAccounts(...)` … `providers["claude"] = { ...emptyQuota(), accounts };`) with the block below. The atomicity rule (spec, edge cases): claude's two state halves — `claudeAccounts` and `states["claude"]` — commit with no `await` between computing them and writing them. The cswap read stays FIRST (its stamp tracks pass starts), but claude's state resolution moves to AFTER every other provider's await: an abort in the four-provider loop then leaves both halves exactly as the previous pass did, and in the fallback branch the claude probe is the pass's final await with a purely synchronous continuation (`reportAccountFailure` contains its own exceptions):
 
 ```ts
       // Claude quota has one source per situation: the cswap read runs before
       // the probe loop, and a successful read with ≥2 accounts serves the
       // grouped entry and skips the codexbar claude probe for this pass.
+      // Claude's STATE resolves after every other await — nothing may abort
+      // between computing claude's next state and committing both its halves.
       const swapRead = await readClaudeSwap(resolveClaudeSwapExec());
       const providers: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
       for (const provider of QUOTA_PROVIDER_KEYS) {
-        if (provider === "claude" && swapRead.kind === "ok" && swapRead.accounts.length >= 2) {
-          continue;
+        if (provider === "claude") {
+          continue; // resolved below, after the other providers' awaits
         }
         const quota = await pollProvider(exec, provider, widget);
         if (quota !== null) {
@@ -582,7 +584,7 @@ type ClaudeSwapRead =
       if (swapRead.kind === "ok" && swapRead.accounts.length >= 2) {
         // Atomic commit — retained rows and the entry carrying their collector
         // stamp land together, after the pass's last await, so an aborted pass
-        // can never leave retained accounts without a published stamp.
+        // can never leave the two halves inconsistent.
         claudeAccounts = { accounts: swapRead.accounts, failed: false };
         const quota: ProviderQuota = {
           percentRemaining: null,
@@ -602,7 +604,9 @@ type ClaudeSwapRead =
       } else {
         // Not grouped this pass — cswap absent, <2 accounts reported, or a
         // failed read (any retention count in this task): claude stays on the
-        // codexbar probe and today's retention semantics apply.
+        // codexbar probe. The probe is the final await; everything from its
+        // return to the paired retention update is synchronous.
+        const ambient = await pollProvider(exec, "claude", widget);
         if (swapRead.kind === "failed") {
           if (!claudeAccounts.failed) {
             reportAccountFailure();
@@ -614,16 +618,15 @@ type ClaudeSwapRead =
         } else {
           claudeAccounts = { accounts: swapRead.kind === "absent" ? [] : swapRead.accounts, failed: false };
         }
-        const ambientClaude = providers["claude"];
-        if (ambientClaude !== undefined) {
-          providers["claude"] = { ...ambientClaude, accounts: claudeAccounts.accounts };
+        if (ambient !== null) {
+          providers["claude"] = { ...ambient, accounts: claudeAccounts.accounts };
         } else if (claudeAccounts.accounts.length > 0) {
           providers["claude"] = { ...emptyQuota(), accounts: claudeAccounts.accounts };
         }
       }
 ```
 
-Leave the `orderedProviders` rebuild, JSON publication, catch, and finally blocks of `pollNow` exactly as they are. Also leave the daemon-restart seeding block (line 454 area) untouched — it already seeds `claudeAccounts` and `states` together from the same snapshot, which is the second writer of the atomic state. Note the failure path intentionally still flows through the `else` merge in this task (probe runs, today's behavior) — Task 4 carves out grouped starvation.
+Leave the `orderedProviders` rebuild, JSON publication, catch, and finally blocks of `pollNow` exactly as they are — snapshot publication order is unchanged (the rebuild walks `QUOTA_PROVIDER_KEYS`), even though claude now PROBES last; any existing test pinning the order of `harness.calls` entries gets its expectation updated in (e) (counts are unchanged). Also leave the daemon-restart seeding block (line 454 area) untouched — it already seeds `claudeAccounts` and `states` together from the same snapshot, which is the second writer of the atomic state. Note the failure path intentionally still flows through the `else` (probe runs, today's behavior) — Task 4 carves out grouped starvation.
 
 **(d)** Update the module-header comment (lines 1–24), which currently says all five providers are probed through CodexBar every pass — after this task that is false for claude while grouped. Replace:
 
@@ -906,6 +909,60 @@ In `test/quota.test.ts`, replace the whole `"widget fallback is ambient-only"` t
   });
 ```
 
+**RED — a legacy seed persisted with `unavailable: true` starves with the flag canonicalized false** (same seed shape as the previous test but `unavailable: true` and the same valid stamp; pre-change the fallback probe restamps, and a naive starvation would republish `unavailable: true`, dimming the group forever):
+
+```ts
+  test("a legacy unavailable seed starves with unavailable canonicalized false", async () => {
+    // Seed exactly as in the previous test, but with unavailable: true.
+    ...
+    await createQuotaCollector(harness.deps).pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.fetchedAt).toBe(seedStamp);
+    expect(claude?.unavailable).toBe(false); // canonicalized — group health rides the stamp's age
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
+  });
+```
+
+**GUARD — a null-stamp legacy seed takes the fallback probe, not starvation** (a pre-change snapshot merged over `emptyQuota()` can persist ≥2 accounts with `fetchedAt: null`; expected PASS after Task 3 alone AND after Task 4 — it exists to fail a Task 4 implementation that omits the usable-stamp condition):
+
+```ts
+  test("a legacy seed without a usable stamp falls back to the codexbar probe", async () => {
+    // Seed ≥2 accounts under an emptyQuota()-shaped claude entry: fetchedAt
+    // null, unavailable true, null windows.
+    ...
+    harness.failClaudeSwap();
+    await createQuotaCollector(harness.deps).pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(true); // probe ran
+    expect(claude?.percentRemaining).toBe(80); // honest ambient data under the retained rows
+    expect(claude?.fetchedAt).toBe(NOW);
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+  });
+```
+
+**RED — an aborted de-grouping pass cannot desync retention from the published group** (the round-2 review's regression: pre-Task-3-restructure, claude probed first, so a pass that de-groups and then aborts left `states["claude"]` ambient while retention stayed grouped; the claude-last structure must make the abort leave both halves untouched). Requires a small harness affordance: make ONE designated provider exec reject (throw) — a thrown exec models the unexpected abort `pollNow`'s catch contains, which a plain failure outcome does not:
+
+```ts
+  test("an aborted de-grouping pass cannot desync retention from the published group", async () => {
+    const harness = makeHarness();
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow(); // pass 1: grouped from the fixture's two accounts
+    const grouped = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    harness.setClaudeSwap(/* one-account response, as in the fallback guard test */);
+    harness.throwOnce("kimi"); // pass 2 aborts inside the four-provider loop, before claude resolution
+    await collector.pollNow(); // contained by pollNow's catch; nothing published, claude untouched
+    const passThreeStart = harness.calls.length;
+    harness.failClaudeSwap();
+    await collector.pollNow(); // pass 3: failed read against still-consistent grouped state
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.fetchedAt).toBe(grouped?.fetchedAt); // starvation, no restamp
+    expect(claude?.accounts.map((account) => account.id)).toEqual(grouped?.accounts.map((account) => account.id));
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+    expect(harness.calls.slice(passThreeStart).some((call) => call[2] === "claude")).toBe(false);
+  });
+```
+
 **CHARACTERIZATION GUARD — expected PASS before AND after the change** (it pins the 0/1-retained fallback half of the settled contract; both main and the Task 3 implementation already behave this way):
 
 ```ts
@@ -951,33 +1008,32 @@ Run: `bun test test/quota.test.ts`
 Expected, exactly:
 - FAIL: `"a failed cswap read keeps the group and starves the stamp…"` — pre-change (with Task 3 landed) the failed pass still runs the claude probe; the test fails that probe on purpose, so the widget rescue fires and the claude entry reads `percentRemaining: 90` with `fetchedAt` restamped to 18:02, where the test expects `null` and the original stamp. The call count (5 instead of +4) also fails.
 - FAIL: `"a legacy grouped seed whose first new read fails starves with the seeded stamp"` — pre-change the fallback probe runs and restamps (`fetchedAt` becomes `NOW`, `percentRemaining` becomes 80 from the probe fixture instead of the seeded 62.5).
+- FAIL: `"a legacy unavailable seed starves with unavailable canonicalized false"` — pre-change the fallback probe restamps, same as above.
+- FAIL: `"an aborted de-grouping pass cannot desync retention from the published group"` — with Task 3 landed this red-phase claim holds only for the STARVATION expectations (pass 3 probes and restamps pre-Task-4); the abort-consistency half is already guaranteed by Task 3's claude-last structure.
 - PASS: the 0/1-retained fallback characterization guard — it pins the settled contract against over-skipping and must stay green.
+- PASS: `"a legacy seed without a usable stamp falls back to the codexbar probe"` — green after Task 3 alone; it exists to fail a Task 4 that omits the usable-stamp condition, so it MUST still be green after Step 3.
 
 - [ ] **Step 3: Implement starvation**
 
 In `pollNow` in `src/core/quota.ts`, make two changes. Retention counts for a FAILED read come from `claudeAccounts` (the read itself carries no accounts — `readClaudeSwap` is pure):
 
-**(a)** Widen the probe-loop skip from successful reads to any situation the settled contract keeps off the probe — success with ≥2 reported, or failure with ≥2 retained (replace the Task 3 condition):
+**(a)** The probe loop needs no change — Task 3 already removed claude from it unconditionally. Starvation is carved into the claude resolution step instead. Its condition (settled contract, decisions.md): a FAILED read with ≥2 retained accounts AND a usable stamp — `states.get("claude")?.quota.fetchedAt` non-null. A legacy seed without a usable stamp (a pre-change snapshot merged over `emptyQuota()` can persist ≥2 accounts with `fetchedAt: null`) takes the fallback probe instead: with nothing to age, starvation would render a permanently null-stamped group, while the probe at least serves honest ambient data under the retained rows.
+
+**(b)** Insert the starvation branch between Task 3's grouped branch and its fallback `else` (which still handles absence, <2 reported, and failure below the starvation conditions, exactly as in Task 3 — including its awaited claude probe; the starvation branch itself contains no await):
 
 ```ts
-        const claudeHeldBySwap =
-          provider === "claude" &&
-          (swapRead.kind === "ok"
-            ? swapRead.accounts.length >= 2
-            : swapRead.kind === "failed" && claudeAccounts.accounts.length >= 2);
-        if (claudeHeldBySwap) {
-          continue;
-        }
-```
-
-**(b)** Carve the starvation branch out of Task 3's `else` merge — it goes between the grouped branch and the fallback, and the fallback `else` branch (which still handles failure with <2 retained, exactly as in Task 3) is otherwise untouched:
-
-```ts
-      } else if (swapRead.kind === "failed" && claudeAccounts.accounts.length >= 2) {
+      } else if (
+        swapRead.kind === "failed" &&
+        claudeAccounts.accounts.length >= 2 &&
+        states.get("claude")?.quota.fetchedAt != null
+      ) {
         // Grouped starvation — settled contract (decisions.md 2026-08-27
-        // 01:43): from ≥2 retained, no fallback probe ran above and the stamp
-        // is not restamped, so a persistent failure ages the group stale
-        // while a transient one only dims the rows for one pass.
+        // 01:43): from ≥2 retained with a usable stamp, no fallback probe
+        // runs and the stamp is not restamped, so a persistent failure ages
+        // the group stale while a transient one only dims the rows for one
+        // pass. unavailable is canonicalized false — group health rides the
+        // stamp's age, and a legacy seed persisted with unavailable: true
+        // must not dim the group forever.
         if (!claudeAccounts.failed) {
           reportAccountFailure();
         }
@@ -985,12 +1041,15 @@ In `pollNow` in `src/core/quota.ts`, make two changes. Retention counts for a FA
           accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
           failed: true,
         };
-        // Retention ≥2 ⇒ a grouped entry exists: the atomic commit and the
-        // restart seeding are the only ways to reach it, and both populate
-        // states. The guard satisfies the Map lookup's type.
+        // The stamp condition above guarantees the entry exists; the guard
+        // satisfies the Map lookup's type.
         const previous = states.get("claude");
         if (previous !== undefined) {
-          const quota: ProviderQuota = { ...previous.quota, accounts: claudeAccounts.accounts };
+          const quota: ProviderQuota = {
+            ...previous.quota,
+            unavailable: false,
+            accounts: claudeAccounts.accounts,
+          };
           states.set("claude", { quota, failed: previous.failed });
           providers["claude"] = quota;
         }
@@ -1050,7 +1109,16 @@ Verify each code path against the spec's contract table (rows 1–6 map to tests
 
 - [ ] **Step 4: Physical-strip acceptance receipt — REQUIRED**
 
-The spec's golden-question checklist mandates on-device verification of the dimmed-group vs dimmed-row treatments; tests cannot see them. This step is an acceptance receipt, not a suggestion: run each check on the physical strip after installing the build (`bun run build:app`, then deploy as usual), record **pass/fail plus a one-line observation per check**, and include the completed receipt in the completion report. If the strip hardware is unavailable, say so explicitly in the report and leave the receipt incomplete — do not mark this step done.
+The spec's golden-question checklist mandates on-device verification of the dimmed-group vs dimmed-row treatments; tests cannot see them. This step is an acceptance receipt, not a suggestion. Install the ACTUAL changed artifacts first — the daemon and the app install separately (README "Install"):
+
+```bash
+bun run check                    # source gate
+bun scripts/install-local.ts     # daemon + LaunchAgent (reinstalls the agent)
+bun run install:app              # builds and installs the Tauri app
+open -a Dealerboard
+```
+
+Confirm the running daemon is the fresh build before recording anything (the LaunchAgent reinstall restarts it — verify via a new write to the quota snapshot after the install timestamp); a receipt recorded against stale installed artifacts is void. Fault injection must be reversible and restored between checks: for "cswap failing", temporarily replace `~/.local/bin/cswap` with a stub script that exits 1 (`printf '#!/bin/sh\nexit 1\n'`, `chmod +x`), keeping the real binary as `cswap.real` to restore; for "cswap absent", rename the binary away and back. Record **pass/fail plus a one-line observation per check**, and include the completed receipt in the completion report. If the strip hardware is unavailable, say so explicitly in the report and leave the receipt incomplete — do not mark this step done.
 
 1. Normal operation with two seats: both rows stay bright through cswap's 3–10 min cadence (and through a 429 backoff window up to ~30 min).
 2. Kill cswap's ability to fetch for one seat (or wait for a real `usageStatus != ok`): only that row dims, with the "Xm/Xh+ old" note; the group stays bright.
@@ -1070,9 +1138,9 @@ No commit for this task.
 | Source selection — widget-snapshot rescue not consulted for claude in grouped operation | 3 (widget entry in golden test), 4 (widget entry + failed claude probe in starvation test) |
 | Source selection — claude entry carries account rows, `unavailable: false`, null ambient windows, collector-stamped `fetchedAt` | 3 (golden `toEqual` test, restamp test) |
 | Fallback — cswap absent or <2 accounts: probe runs as today, ungrouped panel unchanged | 3 (byte-identity characterization pin; pre-existing absence tests stay green) |
-| cswap read failure keeps the group and starves the stamp — no fallback probe, no restamp, rows unavailable | 4 (starvation test with healing compared against the parser's per-seat health; legacy-seed starvation test) |
+| cswap read failure keeps the group and starves the stamp — no fallback probe, no restamp, rows unavailable, `unavailable` canonicalized false | 4 (starvation test with healing compared against the parser's per-seat health; legacy-seed starvation test; unavailable-seed canonicalization test; null-stamp fallback guard) |
 | Settled 0/1/≥2-retained failure contract (decisions.md 2026-08-27 01:43) | 4 (fallback characterization guard: 0 and 1 retained run the probe) |
-| Atomic state — retained accounts travel with their stamp; an aborted pass never leaves accounts without one; legacy seeding populates the pair | 3 (abort-safety guard test), 4 (legacy-seed starvation test); seeding block at `src/core/quota.ts:454` untouched |
+| Atomic state — claude resolves after every other await; an aborted pass leaves both halves untouched; legacy seeding populates the pair | 3 (abort-safety guard test), 4 (abort de-grouping regression; legacy-seed starvation test); seeding block at `src/core/quota.ts:454` untouched |
 | Grouped section renders the ambient panel state (`data-state`) | 2 (red render test) |
 | Group dims when the collector misses three 120s passes | 2 (layer-1 pin: starved stamp ages past `STALE_QUOTA_AGE_MS` → `stale`, injected clock) |
 | Account row state ignores reading age — collapses to ok \| unavailable | 1 (red state test) |

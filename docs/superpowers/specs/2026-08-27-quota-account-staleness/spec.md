@@ -1,6 +1,6 @@
 ---
 topic: 2026-08-27-quota-account-staleness
-status: ratified            # draft | ready | ratified | paused | abandoned | completed
+status: ready            # draft | ready | ratified | paused | abandoned | completed — ratification of 53a30a6 voided by post-receipt amendments; Drew's re-sign-off queued
 created: 2026-08-27
 author-pool: claude-seat2   # the ratify cold-read must come from a DIFFERENT model family
 ---
@@ -187,11 +187,18 @@ Two coordinated changes:
 - cswap read failure with 0 or 1 retained accounts: not grouped operation
   — the codexbar claude probe keeps running and the ungrouped panel
   renders as today. Grouped starvation (no fallback, no restamp) applies
-  only from ≥2 retained accounts, and retained accounts travel atomically
-  with their collector stamp so an aborted pass can never leave accounts
-  without one. A legacy grouped snapshot seeded at daemon restart
-  populates that atomic state, so a first-read failure after restart
-  enters starvation with the seeded stamp (ages honestly toward stale).
+  only from ≥2 retained accounts WITH a usable (non-null) stamp; a legacy
+  seed lacking one takes the fallback probe instead.
+- Atomicity rule: retained accounts and the published claude entry are
+  two halves of one state. The cswap read stays first in the pass (its
+  stamp tracks pass starts), but claude's state is resolved after every
+  other provider's await, with no await between computing claude's next
+  state and committing both halves — an aborted pass leaves both exactly
+  as the previous pass did.
+- Starvation publishes the retained entry with `unavailable` canonicalized
+  to `false` (group health rides the stamp's age): a legacy grouped
+  snapshot persisted with `unavailable: true` and a valid stamp starves
+  honestly (seeded stamp ages toward stale) instead of dimming forever.
 - Sleep/wake: the first pass after wake may render the group stale for up
   to ~one pass (~2 min) until a cswap read lands — existing behavior for
   every provider panel today; accepted, no wake grace.
