@@ -12,6 +12,7 @@
         "label": "main",
         "title": "Dealerboard",
         "decorations": false,
+        "acceptFirstMouse": true,
         "resizable": true,
         "width": 1280,
         "height": 360
