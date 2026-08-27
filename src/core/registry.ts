@@ -1013,32 +1013,45 @@ export const updateSessionActivityLines = (db: Database, updates: readonly Sessi
   });
 
 /**
- * Remove every top-level row whose last hook predates its provider's cutoff,
- * cascading to children. zcode has no SessionEnd hook, so its rows lease out
- * on a shorter cutoff supplied by the caller; `zcodeCutoffIso` defaults to
- * `cutoffIso` so operator-driven single-cutoff prunes (`sessions prune`)
- * apply one age to every provider. `updated_at` holds an ISO-8601 UTC
- * timestamp, so the lexical comparison is chronological. Returns the number
- * of stale top-level rows (SQLite's own change count would also include
- * cascade-deleted children).
+ * Remove every top-level row whose whole tree is stale, cascading to children.
+ * zcode has no SessionEnd hook, so its rows lease out on a shorter cutoff
+ * supplied by the caller; `zcodeCutoffIso` defaults to `cutoffIso` so
+ * operator-driven single-cutoff prunes (`sessions prune`) apply one age to
+ * every provider. A row inside its lease keeps every ancestor alive: a thread
+ * with a live subagent is never pruned, no matter how quiet the parent's own
+ * hooks have gone. `updated_at` holds an ISO-8601 UTC timestamp, so the
+ * lexical comparison is chronological. Returns the number of stale top-level
+ * rows (SQLite's own change count would also include cascade-deleted
+ * children).
  */
 export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffIso: string = cutoffIso): number =>
   inWriteTransaction(db, () => {
+    // Rows inside their lease, plus every ancestor of such a row. A kept
+    // top-level row's tree is never deleted, so children only ever go with a
+    // fully stale tree via the cascade.
+    const keepSet = `WITH RECURSIVE keep(provider, session_id) AS (
+         SELECT provider, session_id FROM active_sessions
+          WHERE (provider = 'zcode' AND updated_at >= ?1) OR (provider != 'zcode' AND updated_at >= ?2)
+         UNION
+         SELECT child.provider, child.parent_session_id
+           FROM active_sessions AS child
+           JOIN keep ON keep.provider = child.provider AND keep.session_id = child.session_id
+          WHERE child.parent_session_id IS NOT NULL
+       )
+       SELECT provider, session_id FROM keep`;
     const stale = db
       .query(
         `SELECT COUNT(*) AS n FROM active_sessions
-         WHERE parent_session_id IS NULL AND (
-           (provider = 'zcode' AND updated_at < ?) OR (provider != 'zcode' AND updated_at < ?)
-         )`,
+         WHERE parent_session_id IS NULL
+           AND (provider, session_id) NOT IN (${keepSet})`,
       )
       .get(zcodeCutoffIso, cutoffIso) as { n: number } | null;
     const count = stale?.n ?? 0;
     if (count > 0) {
       db.run(
         `DELETE FROM active_sessions
-         WHERE parent_session_id IS NULL AND (
-           (provider = 'zcode' AND updated_at < ?) OR (provider != 'zcode' AND updated_at < ?)
-         )`,
+         WHERE parent_session_id IS NULL
+           AND (provider, session_id) NOT IN (${keepSet})`,
         [zcodeCutoffIso, cutoffIso],
       );
     }

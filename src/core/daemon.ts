@@ -17,8 +17,9 @@
  * from provider files, update rows that changed) every two seconds, a Paseo
  * overlay pass (mirror Paseo's per-agent attention and origin state onto
  * matching rows) on the same cadence, and a prune pass (delete sessions
- * whose last hook is older than the stale TTL — one hour for zcode, which
- * has no SessionEnd hook, a day for everyone else) every minute. A poll gap
+ * whose whole tree is stale — the last hook of every descendant older than
+ * the stale TTL, one hour for zcode, which has no SessionEnd hook, a day for
+ * everyone else — so a live subagent always keeps its thread) every minute. A poll gap
  * beyond the clock-jump threshold — the sleep signature of the host machine
  * — records a diagnostic. Maintenance failures record their own diagnostic
  * and never affect publication health.

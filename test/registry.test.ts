@@ -1628,6 +1628,30 @@ describe("pruneStaleSessions", () => {
     expect(countRows()).toBe(1);
   });
 
+  test("keeps a stale top-level row whose subagent is still inside the lease", () => {
+    applyRegistryEvents(db, [
+      start("old", { at: "2026-08-01T00:00:00.000Z" }),
+      subStart("old-child", "old", { at: "2026-08-01T00:00:01.000Z" }),
+    ]);
+    // The subagent keeps producing hooks long after the parent's own went quiet.
+    applyRegistryEvents(db, [simple("Activity", "old-child", { at: "2026-08-06T00:00:00.000Z" })]);
+
+    expect(pruneStaleSessions(db, "2026-08-05T00:00:00.000Z")).toBe(0);
+    expect(getRow("old")).not.toBeNull();
+    expect(getRow("old-child")).not.toBeNull();
+  });
+
+  test("keeps a stale top-level row when a deeper descendant is still inside the lease", () => {
+    applyRegistryEvents(db, [
+      start("root", { at: "2026-08-01T00:00:00.000Z" }),
+      subStart("mid", "root", { at: "2026-08-01T00:00:01.000Z" }),
+      subStart("leaf", "mid", { at: "2026-08-06T00:00:00.000Z" }),
+    ]);
+
+    expect(pruneStaleSessions(db, "2026-08-05T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(3);
+  });
+
   test("a live session pruned by mistake late-joins through SessionObserved", () => {
     applyRegistryEvents(db, [start("s1", { at: "2026-08-01T00:00:00.000Z" })]);
     expect(pruneStaleSessions(db, "2026-08-05T00:00:00.000Z")).toBe(1);

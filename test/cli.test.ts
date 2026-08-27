@@ -1103,11 +1103,12 @@ describe("sessions commands", () => {
     expect(harness.stdout()).toBe("pruned 0 sessions\n");
     expect(listRows()).toHaveLength(4);
 
-    // A row whose last hook is two days old goes; its children cascade; the
-    // fresh ones stay.
+    // A tree whose rows are all two days old goes — a stale parent is kept
+    // only while some descendant is still inside the lease; the fresh tree
+    // stays.
     const db = openRegistryDatabase(paths.database, "readwrite");
     try {
-      db.run("UPDATE active_sessions SET updated_at = ? WHERE session_id = ?", ["2026-08-04T00:00:00.000Z", "a"]);
+      db.run("UPDATE active_sessions SET updated_at = ? WHERE provider = 'claude'", ["2026-08-04T00:00:00.000Z"]);
     } finally {
       db.close();
     }
