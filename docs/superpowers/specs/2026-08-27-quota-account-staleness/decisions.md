@@ -140,3 +140,15 @@ to ready and re-run the ratify gate. -->
   question list is the record against which the spec was checked, per the
   artifact-gated workflow.
 - **Deciders:** steering-session; ratification pending user sign-off
+
+## 2026-08-27 01:02 — Ratified
+- **Commit:** 53a30a6
+- **Cold-read:** codex/gpt-5.6-sol, two rounds (agents 5c0a04a2, 8f0b9cdd;
+  a first attempt was voided for integrity and re-run). Round 1: 11
+  findings — dispositioned 2026-08-27 (entries above): partially refuted
+  with code evidence (F1, F3), already answered by design (F2, F10),
+  folded into the spec (F4-F8), settled as decisions (F9, F11). Round 2:
+  10 questions — 8 answered by the amended spec, finding 9 plus residual
+  explicitness folded in (entry above).
+- **Sign-off:** Drew — "go ahead" (2026-08-27, in response to "say the
+  word and I'll record your ratification")
