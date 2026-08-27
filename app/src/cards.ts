@@ -11,19 +11,22 @@ import type { SessionStatus } from "../../src/protocol";
 import type { BoardPage, BoardSession, PlacedCard, SpineSegment } from "./board";
 import { breathAnimationDelay, elapsedLabel } from "./liveness";
 
+/** The corner's bright word: a working card headlines its session age; the other states spell themselves. */
+export const statusWord = (status: SessionStatus): string => (status === "working" ? "open" : status);
+
 /**
- * The per-tile status timer text ("working 12m"), or null when the row's own
- * status stamp is absent or unparseable — an old daemon simply shows no line.
+ * Compact elapsed text from an ISO stamp, or null when the stamp is absent
+ * or unparseable — an old daemon simply shows no number.
  */
-export const statusLineText = (status: SessionStatus, statusSince: string | null, nowMs: number): string | null => {
-  if (statusSince === null) {
+export const elapsedSince = (since: string | null, nowMs: number): string | null => {
+  if (since === null) {
     return null;
   }
-  const startedMs = Date.parse(statusSince);
+  const startedMs = Date.parse(since);
   if (Number.isNaN(startedMs)) {
     return null;
   }
-  return `${status} ${elapsedLabel(nowMs - startedMs)}`;
+  return elapsedLabel(nowMs - startedMs);
 };
 
 /** The board's meta line has room for full model ids; the tile 10-point cap does not apply. */
@@ -40,8 +43,15 @@ export type CardViewModel = {
   project: string | null;
   activity: string | null;
   status: SessionStatus;
-  statusSince: string | null;
+  /** The corner word beside the bright number: "open" on working cards, the status elsewhere. */
+  word: string;
+  /** The bright number's anchor: openedAt on working cards, statusSince elsewhere; null shows no number. */
+  timerSince: string | null;
   timer: string | null;
+  /** The dim leading "open <age>" fact on idle/waiting/error cards; null on working
+   *  (the gap slot owns that position) and on sessions without an openedAt stamp. */
+  age: string | null;
+  ageSince: string | null;
   originDisc: boolean;
   subagent: boolean;
   indent: boolean;
@@ -63,6 +73,11 @@ const safeActivityLabel = (activityLine: string | null): string | null => {
 
 export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel => {
   const { session } = card;
+  // Only agent-graph sessions carry openedAt; a legacy snapshot renders no open facts.
+  const openedAt = "openedAt" in session ? session.openedAt : null;
+  const timerSince = session.status === "working" ? openedAt : session.statusSince;
+  const timer = elapsedSince(timerSince, nowMs);
+  const ageLabel = session.status === "working" ? null : elapsedSince(openedAt, nowMs);
   return {
     provider: session.provider,
     letter: PROVIDER_LETTERS[session.provider],
@@ -74,8 +89,11 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
       card.subagent && card.parentProject !== null && card.parentProject === session.project ? null : session.project,
     activity: safeActivityLabel(session.activityLine),
     status: session.status,
-    statusSince: session.statusSince,
-    timer: statusLineText(session.status, session.statusSince, nowMs),
+    word: statusWord(session.status),
+    timerSince: timer === null ? null : timerSince,
+    timer,
+    age: ageLabel === null ? null : `open ${ageLabel}`,
+    ageSince: ageLabel === null ? null : openedAt,
     originDisc: session.originKind === "paseo" && !session.originSubagent,
     subagent: card.subagent,
     indent: card.indent,
@@ -160,24 +178,28 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   meta.append(metaRight);
   element.append(meta);
 
+  // The corner reads dim fact, worded bright number, dot — the dot last so
+  // every card's number and dot share the board column's right rail.
   const statusRow = document.createElement("div");
   statusRow.className = "card-status";
-  const statusDot = document.createElement("span");
-  statusDot.className = "status-dot";
-  statusRow.append(statusDot);
-  // Working/idle carry their state in the dot and edge color; only the
-  // attention states spell it out.
-  if (model.status === "waiting" || model.status === "error") {
-    appendText(statusRow, "status-word", model.status);
-  }
-  if (model.statusSince !== null && model.timer !== null) {
-    const timer = appendText(statusRow, "cardtimer", model.timer.slice(model.status.length + 1));
-    timer.dataset["since"] = model.statusSince;
-  }
   if (model.status === "working") {
     // The gap slot stays empty while fresh; the 1s liveness ticker owns its text.
     appendText(statusRow, "cardgap", "");
+  } else if (model.age !== null && model.ageSince !== null) {
+    const age = appendText(statusRow, "cardage", model.age);
+    age.dataset["since"] = model.ageSince;
   }
+  if (model.timer !== null && model.timerSince !== null) {
+    appendText(statusRow, "status-word", model.word);
+    const timer = appendText(statusRow, "cardtimer", model.timer);
+    timer.dataset["since"] = model.timerSince;
+  } else if (model.status === "waiting" || model.status === "error") {
+    // The attention states spell themselves even when an old daemon has no stamp.
+    appendText(statusRow, "status-word", model.word);
+  }
+  const statusDot = document.createElement("span");
+  statusDot.className = "status-dot";
+  statusRow.append(statusDot);
   element.append(statusRow);
 
   if (model.degraded) {

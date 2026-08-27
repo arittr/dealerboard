@@ -10,14 +10,18 @@ import {
   cardContentSignature,
   cardKey,
   cardViewModel,
+  elapsedSince,
   planCardPatches,
   renderBoard,
-  statusLineText,
+  statusWord,
 } from "../app/src/cards";
 import type { ProjectedSession } from "../src/protocol";
 import { descendants, FakeElement, hasClass, withFakeDocument } from "./support/fake-dom";
 
-const session = (slot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
+const session = (
+  slot: number,
+  overrides: Partial<ProjectedSession> & { openedAt?: string } = {},
+): ProjectedSession & { openedAt?: string } => ({
   provider: "claude",
   sessionId: `s${slot}`,
   project: null,
@@ -39,7 +43,10 @@ const session = (slot: number, overrides: Partial<ProjectedSession> = {}): Proje
   ...overrides,
 });
 
-const placed = (overrides: Partial<PlacedCard> = {}, sessionOverrides: Partial<ProjectedSession> = {}): PlacedCard => {
+const placed = (
+  overrides: Partial<PlacedCard> = {},
+  sessionOverrides: Partial<ProjectedSession> & { openedAt?: string } = {},
+): PlacedCard => {
   const projected = session(1, sessionOverrides);
   return {
     session: projected,
@@ -64,21 +71,30 @@ describe("card source hygiene", () => {
   });
 });
 
-describe("statusLineText", () => {
+describe("statusWord", () => {
+  test("working cards headline the session age as open; the other states spell themselves", () => {
+    expect(statusWord("working")).toBe("open");
+    expect(statusWord("idle")).toBe("idle");
+    expect(statusWord("waiting")).toBe("waiting");
+    expect(statusWord("error")).toBe("error");
+  });
+});
+
+describe("elapsedSince", () => {
   const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
 
   test("formats compact elapsed labels across the unit boundaries", () => {
-    expect(statusLineText("working", "2026-08-19T00:09:18.000Z", NOW_MS)).toBe("working 42s");
-    expect(statusLineText("working", "2026-08-19T00:09:00.000Z", NOW_MS)).toBe("working 1m");
-    expect(statusLineText("waiting", "2026-08-18T23:58:00.000Z", NOW_MS)).toBe("waiting 12m");
-    expect(statusLineText("error", "2026-08-18T22:10:00.000Z", NOW_MS)).toBe("error 2h");
-    expect(statusLineText("idle", "2026-08-16T00:10:00.000Z", NOW_MS)).toBe("idle 3d");
+    expect(elapsedSince("2026-08-19T00:09:18.000Z", NOW_MS)).toBe("42s");
+    expect(elapsedSince("2026-08-19T00:09:00.000Z", NOW_MS)).toBe("1m");
+    expect(elapsedSince("2026-08-18T23:58:00.000Z", NOW_MS)).toBe("12m");
+    expect(elapsedSince("2026-08-18T22:10:00.000Z", NOW_MS)).toBe("2h");
+    expect(elapsedSince("2026-08-16T00:10:00.000Z", NOW_MS)).toBe("3d");
   });
 
   test("clamps a future stamp to 0s and returns null for a missing or unparseable one", () => {
-    expect(statusLineText("working", "2026-08-20T00:00:00.000Z", NOW_MS)).toBe("working 0s");
-    expect(statusLineText("working", null, NOW_MS)).toBeNull();
-    expect(statusLineText("working", "not a timestamp", NOW_MS)).toBeNull();
+    expect(elapsedSince("2026-08-20T00:00:00.000Z", NOW_MS)).toBe("0s");
+    expect(elapsedSince(null, NOW_MS)).toBeNull();
+    expect(elapsedSince("not a timestamp", NOW_MS)).toBeNull();
   });
 });
 
@@ -138,16 +154,50 @@ describe("cardViewModel", () => {
     expect(cardViewModel(placed({ degraded: true }), NOW_MS).degraded).toBe(true);
   });
 
-  test("unread tracks the ledger stamp; timer derives from statusSince", () => {
+  test("unread tracks the ledger stamp; a working card's bright corner is the session age", () => {
     const model = cardViewModel(
       placed(
         {},
-        { unreadSince: "2026-08-25T00:05:00.000Z", status: "working", statusSince: "2026-08-25T00:08:00.000Z" },
+        {
+          unreadSince: "2026-08-25T00:05:00.000Z",
+          status: "working",
+          statusSince: "2026-08-25T00:08:00.000Z",
+          openedAt: "2026-08-25T00:00:00.000Z",
+        },
       ),
       NOW_MS,
     );
     expect(model.unread).toBe(true);
-    expect(model.timer).toBe("working 2m");
+    expect(model.word).toBe("open");
+    expect(model.timer).toBe("10m");
+    expect(model.timerSince).toBe("2026-08-25T00:00:00.000Z");
+    // The gap slot owns the working card's dim position; no open fact there.
+    expect(model.age).toBeNull();
+    expect(model.ageSince).toBeNull();
+  });
+
+  test("idle, waiting, and error corners pair their status age with a dim open fact", () => {
+    for (const status of ["idle", "waiting", "error"] as const) {
+      const model = cardViewModel(
+        placed({}, { status, statusSince: "2026-08-25T00:08:00.000Z", openedAt: "2026-08-25T00:00:00.000Z" }),
+        NOW_MS,
+      );
+      expect(model.word).toBe(status);
+      expect(model.timer).toBe("2m");
+      expect(model.timerSince).toBe("2026-08-25T00:08:00.000Z");
+      expect(model.age).toBe("open 10m");
+      expect(model.ageSince).toBe("2026-08-25T00:00:00.000Z");
+    }
+  });
+
+  test("a legacy session without openedAt renders no open facts", () => {
+    const working = cardViewModel(placed({}, { status: "working", statusSince: "2026-08-25T00:08:00.000Z" }), NOW_MS);
+    expect(working.timer).toBeNull();
+    expect(working.timerSince).toBeNull();
+    const waiting = cardViewModel(placed({}, { status: "waiting", statusSince: "2026-08-25T00:08:00.000Z" }), NOW_MS);
+    expect(waiting.timer).toBe("2m");
+    expect(waiting.age).toBeNull();
+    expect(waiting.ageSince).toBeNull();
   });
 
   test("a graph-backed display-only child has no unread dot or descendant badge", () => {
@@ -168,7 +218,8 @@ describe("cardViewModel", () => {
       displayOnly: true,
       modelLabel: "5.6-terra",
       status: "waiting",
-      timer: "waiting 2m",
+      word: "waiting",
+      timer: "2m",
       unread: false,
       badge: null,
     });
@@ -257,52 +308,68 @@ describe("liveness reconciliation", () => {
   });
 });
 
-const pageWith = (status: ProjectedSession["status"]) => ({
-  cards: [placed({}, { status, statusSince: "2026-08-25T00:08:00.000Z" })],
+const OPENED_AT = "2026-08-25T00:00:00.000Z";
+const STATUS_SINCE = "2026-08-25T00:08:00.000Z";
+
+const pageWith = (status: ProjectedSession["status"], overrides: { openedAt?: string } = { openedAt: OPENED_AT }) => ({
+  cards: [placed({}, { status, statusSince: STATUS_SINCE, ...overrides })],
 });
 
-describe("status word rendering", () => {
-  test("working and idle cards render dot and timer with no status word", () => {
-    for (const status of ["working", "idle"] as const) {
-      withFakeDocument((root) => {
-        renderBoard(root as unknown as HTMLElement, pageWith(status), false);
-        const nodes = descendants(root);
-        expect(nodes.some((node) => hasClass(node, "status-word"))).toBe(false);
-        expect(nodes.some((node) => hasClass(node, "status-dot"))).toBe(true);
-        expect(nodes.filter((node) => hasClass(node, "cardtimer"))).toHaveLength(1);
-      });
-    }
-  });
+const statusRowOf = (root: FakeElement): FakeElement | undefined =>
+  descendants(root).find((node) => hasClass(node, "card-status"));
 
-  test("waiting and error cards keep their bright status word", () => {
-    for (const status of ["waiting", "error"] as const) {
-      withFakeDocument((root) => {
-        renderBoard(root as unknown as HTMLElement, pageWith(status), false);
-        const word = descendants(root).find((node) => hasClass(node, "status-word"));
-        expect(word?.textContent).toBe(status);
-        expect(descendants(root).some((node) => hasClass(node, "status-dot"))).toBe(true);
-        expect(descendants(root).filter((node) => hasClass(node, "cardtimer"))).toHaveLength(1);
-      });
-    }
-  });
-});
+const cornerClasses = (row: FakeElement | undefined): string[] => (row?.children ?? []).map((node) => node.className);
 
-describe("status gap slot", () => {
-  test("a working card renders an empty gap slot for the liveness ticker", () => {
+describe("status corner anatomy", () => {
+  test("a working card reads gap slot, open word, session-age timer, dot last", () => {
     withFakeDocument((root) => {
       renderBoard(root as unknown as HTMLElement, pageWith("working"), false);
-      const gaps = descendants(root).filter((node) => hasClass(node, "cardgap"));
-      expect(gaps).toHaveLength(1);
-      expect(gaps[0]?.textContent).toBe("");
+      const row = statusRowOf(root);
+      expect(cornerClasses(row)).toEqual(["cardgap", "status-word", "cardtimer", "status-dot"]);
+      const [gap, word, timer] = row?.children ?? [];
+      expect(gap?.textContent).toBe("");
+      expect(word?.textContent).toBe("open");
+      expect(timer?.dataset["since"]).toBe(OPENED_AT);
     });
   });
 
-  test("waiting, idle, and error cards render no gap slot", () => {
-    for (const status of ["waiting", "idle", "error"] as const) {
+  test("idle, waiting, and error cards read open fact, status word, status-age timer, dot last", () => {
+    for (const status of ["idle", "waiting", "error"] as const) {
       withFakeDocument((root) => {
         renderBoard(root as unknown as HTMLElement, pageWith(status), false);
-        expect(descendants(root).some((node) => hasClass(node, "cardgap"))).toBe(false);
+        const row = statusRowOf(root);
+        expect(cornerClasses(row)).toEqual(["cardage", "status-word", "cardtimer", "status-dot"]);
+        const [age, word, timer] = row?.children ?? [];
+        // renderBoard stamps the initial text from the wall clock; the exact
+        // number is the 1s ticker's business, the grammar and anchor are ours.
+        expect(age?.textContent).toMatch(/^open \d+[smhd]$/u);
+        expect(age?.dataset["since"]).toBe(OPENED_AT);
+        expect(word?.textContent).toBe(status);
+        expect(timer?.dataset["since"]).toBe(STATUS_SINCE);
       });
     }
+  });
+
+  test("a legacy working card without openedAt degrades to the gap slot and dot alone", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, pageWith("working", {}), false);
+      expect(cornerClasses(statusRowOf(root))).toEqual(["cardgap", "status-dot"]);
+    });
+  });
+
+  test("legacy waiting and error cards keep their worded status age without an open fact", () => {
+    for (const status of ["waiting", "error"] as const) {
+      withFakeDocument((root) => {
+        renderBoard(root as unknown as HTMLElement, pageWith(status, {}), false);
+        expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "cardtimer", "status-dot"]);
+      });
+    }
+  });
+
+  test("a legacy idle card without openedAt still spells its status age", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, pageWith("idle", {}), false);
+      expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "cardtimer", "status-dot"]);
+    });
   });
 });
