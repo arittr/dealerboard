@@ -210,3 +210,33 @@ to ready and re-run the ratify gate. -->
   and resolved per the two-bounce conversational takeover.
 - **Sign-off:** Drew — "ratify" (2026-08-27, morning, over the delta
   summary since 53a30a6)
+
+## 2026-08-27 12:46 — Physical-strip acceptance receipt (plan Task 5 Step 4)
+- **Decided:** Receipt executed live on the installed artifacts (daemon via
+  install-local.ts, app via install:app, fresh-daemon proof: the new
+  grouped snapshot shape — null ambient windows + collector stamp —
+  within one pass of install). Data-side verification per check, driven
+  by the steering seat with reversible fault injection:
+  1. Normal cadence: both seats ok with seat-1 reading ~13 min old —
+     bright under the new rule where the old code greyed it. PASS.
+  2. Seat-2-only fault (stub cswap reporting usageStatus unavailable):
+     seat 2 unavailable, seat 1 ok, group stamp 30s. PASS.
+  3. Whole-command failure (exit-1 stub): both rows unavailable, stamp
+     frozen at the pre-fault value, ambient windows still null — no
+     fallback probe, no budget spend. One good pass cleared it. PASS.
+  4. Collector death (launchctl bootout): stamp aged to 399s past the
+     360s threshold with the snapshot frozen; daemon restarted after.
+     PASS (data); group dim rendered from stamp age per Task 2's tests.
+  5. cswap absent (binary renamed): panel collapsed to the ungrouped
+     ambient meter with live codexbar data (91%); restored. PASS.
+  Visual confirmations on the strip observed live by Drew during the
+  run; formal per-check visual sign-off: pending Drew's confirmation.
+- **Operational note (in-spec behavior, recorded for awareness):** after
+  ~25 min of faults + daemon downtime, the first cswap invocations
+  exceeded the 5s exec timeout while catching up overdue usage fetches
+  (quota_accounts_failed at 19:30 and 19:42Z); with the seeded snapshot
+  being the ungrouped check-5 state (0 retained), the collector correctly
+  sat in codexbar fallback until cswap warmed, then re-grouped. Self-
+  healed per the ratified 0/1/≥2 contract; bounded budget spend.
+- **Deciders:** steering-session (execution); Drew (visual sign-off,
+  pending)
