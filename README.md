@@ -13,6 +13,24 @@ It is designed for the Corsair Xeneon Edge, but it also works as a normal
 floating macOS window. Dealerboard is currently source-built and locally
 configured; no signed or notarized binary release is provided.
 
+<p align="center">
+  <img src="docs/assets/dealerboard-strip.png" alt="Dealerboard showing synthetic coding-agent sessions, quota meters, and token usage on a 2560 by 720 strip display">
+</p>
+<p align="center"><em>Dealerboard on a 2560×720 strip display. All data shown is synthetic.</em></p>
+
+## Why “Dealerboard”?
+
+A [trading turret](https://en.wikipedia.org/wiki/Trading_turret)—also called a
+dealer board—is a purpose-built desk console for seeing, prioritizing, and
+acting on many live communication lines at a glance. Dealerboard borrows that
+idea for coding agents: one dedicated surface for watching concurrent work and
+jumping to the session that needs you.
+
+<p align="center">
+  <img src="docs/assets/trading-turret.png" width="640" alt="Original illustration of a generic financial trading turret, also called a dealer board">
+</p>
+<p align="center"><em>An original illustration of a generic trading turret.</em></p>
+
 ## What it shows
 
 - Live top-level sessions and their native or Paseo subagent trees.
@@ -60,6 +78,13 @@ only long-lived maintenance process and snapshot publisher.
 The Xeneon Edge is recommended, not required. Dealerboard automatically pins
 to a display whose model contains `Xeneon Edge` or whose physical resolution
 is 2560×720. Without one, the window remains floating.
+
+macOS touch support varies across external displays. Independent tools such as
+[Touch-Base UPDD](https://www.touch-base.com/) and
+[Touchscreen Gestures](https://www.touchscreengestures.com/) can provide or
+improve touch input. They are examples rather than Dealerboard requirements or
+endorsements. Use only one touchscreen driver or gesture tool at a time because
+these tools may require exclusive control of the device.
 
 ## Quick start
 
@@ -137,17 +162,22 @@ provider transcript or close the provider session.
 ## Optional integrations
 
 Dealerboard works without these helpers. Missing optional data simply stays
-hidden.
+hidden. For the complete right rail, install
+**[CodexBar](https://github.com/steipete/CodexBar)** for quota meters and
+**[`agentsview`](https://github.com/kenn-io/agentsview)** for daily token
+totals, rates, and trend curves; neither is required for the session board
+itself.
 
 - **Paseo:** supplies agent lineage, attention/view state, names, and exact
   `paseo://` routes.
 - **Evener:** supplies local inventory and lifecycle state over authenticated
   AppWire v3.
-- **CodexBar:** supplies quota windows for Claude, Codex, Kimi, GLM/zai, and
-  Qwen.
+- **[CodexBar](https://github.com/steipete/CodexBar):** supplies quota windows
+  for Claude, Codex, Kimi, GLM/zai, and Qwen.
 - **`cswap`:** adds privacy-safe numeric Claude account meters when two or
   more accounts are present.
-- **`agentsview`:** supplies aggregate daily token totals and trend curves.
+- **[`agentsview`](https://github.com/kenn-io/agentsview):** supplies aggregate
+  daily token totals and trend curves.
 - **Ghostty:** enables exact Claude terminal focus for direct, non-tmux
   sessions.
 
