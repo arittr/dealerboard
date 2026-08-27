@@ -144,16 +144,15 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
 
   const head = document.createElement("div");
   head.className = "card-head";
-  const chip = appendText(head, "chip", model.letter);
+  // The containment ring: a Paseo-dispatched parent's chip is enclosed by
+  // the multiplexer's ring — the harness inside something.
+  const chip = appendText(head, model.paseoOrigin ? "chip paseo" : "chip", model.letter);
   chip.dataset["provider"] = model.provider;
   if (model.unread) {
     // Corner badge: absolutely positioned on the chip, card-colored ring.
     const dot = document.createElement("span");
     dot.className = "unread-dot";
     chip.append(dot);
-  }
-  if (model.paseoOrigin) {
-    appendText(head, "paseo-pill", "paseo");
   }
   // A grouped sub's indent and spine already say it; only an orphan (neither)
   // still needs the pill.

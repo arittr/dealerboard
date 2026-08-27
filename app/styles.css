@@ -385,11 +385,9 @@ body[data-fullscreen] #board {
   border: 0.117vw solid #1c2430;
 }
 
-/* The chip-side lineage pills: hollow ring = "sub" (orphan subagents only —
-   grouped subs carry the indent and spine instead), filled disc = "paseo"
-   (Paseo-dispatched parents). */
-.sub-pill,
-.paseo-pill {
+/* The hollow-ring "sub" cue after the chip — orphan subagents only; grouped
+   subs carry the indent and spine instead. */
+.sub-pill {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -400,19 +398,27 @@ body[data-fullscreen] #board {
   color: #94a3b8;
   font-size: 0.781vw; /* 20px native */
 }
-.sub-pill::before,
-.paseo-pill::before {
+.sub-pill::before {
   content: "";
   flex: none;
   width: 0.508vw; /* 13px native */
   height: 0.508vw;
+  border: 0.098vw solid #a78bfa; /* 2.5px native */
   border-radius: 50%;
 }
-.sub-pill::before {
-  border: 0.098vw solid #a78bfa; /* 2.5px native */
+
+/* The containment ring: a Paseo-dispatched parent's chip sits enclosed by
+   the multiplexer's violet — a card-colored gap keeps it reading as an
+   enclosure around the chip, not a border of it. */
+.chip.paseo {
+  box-shadow:
+    0 0 0 0.078vw #1c2430,
+    /* 2px native gap */ 0 0 0 0.195vw #a78bfa; /* 3px native ring */
 }
-.paseo-pill::before {
-  background: #a78bfa;
+.card.status-working.quiet .chip.paseo {
+  box-shadow:
+    0 0 0 0.078vw #171e28,
+    0 0 0 0.195vw #a78bfa; /* the gap stays card-colored on the sunk surface */
 }
 
 /* Subagent anatomy: smaller chip, muted title, tighter status and meta. */

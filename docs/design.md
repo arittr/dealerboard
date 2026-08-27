@@ -96,11 +96,12 @@ The orphan tail remains one deterministic full-width block.
   (`waiting 12m`) behind a dim `open 3h` fact. Sessions published without
   `openedAt` (an old daemon) simply omit the open facts.
 - The meta row can show model, project, and one fixed activity category.
-- A Paseo parent carries a violet `paseo` pill beside its chip (filled disc;
-  the `sub` pill's ring is hollow). A grouped subagent has a dimmed card,
-  indent, and violet spine — the tree is its identification, so no pill.
-  Orphans keep subagent styling without indent or spine, and only they still
-  carry the `sub` pill.
+- A Paseo parent's chip wears the containment ring: a violet enclosure with
+  a card-colored gap — the harness inside the multiplexer. The ring's shape
+  is the semantic; a future multiplexer would be a different hue, same
+  grammar. A grouped subagent has a dimmed card, indent, and violet spine —
+  the tree is its identification, so no pill. Orphans keep subagent styling
+  without indent or spine, and only they still carry the `sub` pill.
 - Native children never expose tap, acknowledgment, routing, or action-sheet
   behavior. Paseo children remain independently actionable.
 

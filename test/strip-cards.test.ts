@@ -392,19 +392,23 @@ describe("head origin and lineage pills", () => {
       (node) => node.className.split(/\s+/u)[0] ?? "",
     );
 
-  test("a paseo parent carries the paseo pill beside its chip; the origin disc is gone", () => {
+  test("a paseo parent's chip wears the containment ring; no pill or disc anywhere", () => {
     withFakeDocument((root) => {
       renderBoard(root as unknown as HTMLElement, { cards: [placed({}, { originKind: "paseo" })] }, false);
-      expect(headClasses(root)).toEqual(["chip", "paseo-pill", "card-title"]);
-      expect(descendants(root).find((node) => hasClass(node, "paseo-pill"))?.textContent).toBe("paseo");
+      expect(headClasses(root)).toEqual(["chip", "card-title"]);
+      const chip = descendants(root).find((node) => hasClass(node, "chip"));
+      expect(chip !== undefined && hasClass(chip, "paseo")).toBe(true);
+      expect(descendants(root).some((node) => hasClass(node, "paseo-pill"))).toBe(false);
       expect(descendants(root).some((node) => hasClass(node, "origin-disc"))).toBe(false);
     });
   });
 
-  test("a terminal session carries neither pill", () => {
+  test("a terminal session's chip has no ring and no pill", () => {
     withFakeDocument((root) => {
       renderBoard(root as unknown as HTMLElement, { cards: [placed()] }, false);
       expect(headClasses(root)).toEqual(["chip", "card-title"]);
+      const chip = descendants(root).find((node) => hasClass(node, "chip"));
+      expect(chip !== undefined && hasClass(chip, "paseo")).toBe(false);
     });
   });
 
