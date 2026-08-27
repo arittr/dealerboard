@@ -200,3 +200,13 @@ to ready and re-run the ratify gate. -->
   never-loop-gates rule overrides (the third cold-read).
 - **Deciders:** steering-session under Drew's overnight instruction;
   ratification explicitly reserved for Drew
+
+## 2026-08-27 09:37 — Ratified
+- **Commit:** 4a1a7fe
+- **Cold-read:** codex/gpt-5.6-sol, two ratify rounds (5c0a04a2, 8f0b9cdd)
+  dispositioned in entries above; the post-receipt delta (cold-start
+  fallback contract, claude-last atomicity, legacy-seed migration) was
+  adversarially reviewed by plan-review rounds 1-2 (1705c847, 20b87bb9)
+  and resolved per the two-bounce conversational takeover.
+- **Sign-off:** Drew — "ratify" (2026-08-27, morning, over the delta
+  summary since 53a30a6)

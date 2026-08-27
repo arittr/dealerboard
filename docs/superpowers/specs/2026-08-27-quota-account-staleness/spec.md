@@ -1,6 +1,6 @@
 ---
 topic: 2026-08-27-quota-account-staleness
-status: ready            # draft | ready | ratified | paused | abandoned | completed — ratification of 53a30a6 voided by post-receipt amendments; Drew's re-sign-off queued
+status: ratified            # draft | ready | ratified | paused | abandoned | completed
 created: 2026-08-27
 author-pool: claude-seat2   # the ratify cold-read must come from a DIFFERENT model family
 ---
