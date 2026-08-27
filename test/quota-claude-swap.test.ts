@@ -1,0 +1,193 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  CLAUDE_SWAP_ARGS,
+  CLAUDE_SWAP_EXEC_TIMEOUT_MS,
+  claudeSwapBinaryCandidates,
+  parseClaudeSwapAccounts,
+} from "../src/core/claude-swap-quota";
+import { QUOTA_EXTRA_WINDOWS_LIMIT } from "../src/quota-snapshot";
+
+const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures", "quota", name), "utf8");
+
+describe("parseClaudeSwapAccounts", () => {
+  test("normalizes privacy-safe account readings and sorts numeric slots", () => {
+    const parsed = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
+    expect(parsed).toEqual({
+      kind: "ok",
+      accounts: [
+        {
+          id: "claude-swap:1",
+          label: "1",
+          active: false,
+          percentRemaining: 70,
+          resetAt: "2030-01-01T05:00:00.000Z",
+          weeklyPercentRemaining: 40,
+          weeklyResetAt: "2030-01-08T00:00:00.000Z",
+          unavailable: false,
+          fetchedAt: "2030-01-01T01:00:00.000Z",
+          extraWindows: [
+            {
+              id: "claude-swap:1:scoped:0",
+              label: "Fable",
+              percentRemaining: 50,
+              resetAt: "2030-01-08T00:00:00.000Z",
+            },
+          ],
+        },
+        {
+          id: "claude-swap:2",
+          label: "2",
+          active: true,
+          percentRemaining: 90,
+          resetAt: null,
+          weeklyPercentRemaining: 50,
+          weeklyResetAt: "2030-01-08T00:00:00.000Z",
+          unavailable: true,
+          fetchedAt: "2030-01-01T00:00:00.000Z",
+          extraWindows: [
+            {
+              id: "claude-swap:2:scoped:0",
+              label: "Fable",
+              percentRemaining: 25,
+              resetAt: "2030-01-08T00:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(parsed)).not.toContain("@");
+    expect(JSON.stringify(parsed)).not.toContain("organization");
+    expect(JSON.stringify(parsed)).not.toContain("Ignored");
+  });
+
+  test("accepts an empty account collection", () => {
+    expect(parseClaudeSwapAccounts(JSON.stringify({ schemaVersion: 1, activeAccountNumber: 1, accounts: [] }))).toEqual(
+      { kind: "ok", accounts: [] },
+    );
+  });
+
+  test("falls back to last-good and otherwise retains an empty unavailable slot", () => {
+    const parsed = parseClaudeSwapAccounts(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [
+          {
+            number: 1,
+            usageStatus: "ok",
+            usage: { fiveHour: { pct: 10 } },
+            usageFetchedAt: "not-an-instant",
+            lastGoodUsage: { sevenDay: { pct: 30, resetsAt: "2026-08-30T00:59:00Z" } },
+            lastGoodFetchedAt: "2026-08-25T19:30:00Z",
+          },
+          { number: 2, usageStatus: "token_expired" },
+        ],
+      }),
+    );
+    expect(parsed).toMatchObject({
+      kind: "ok",
+      accounts: [
+        { id: "claude-swap:1", unavailable: true, weeklyPercentRemaining: 70, fetchedAt: "2026-08-25T19:30:00.000Z" },
+        { id: "claude-swap:2", unavailable: true, percentRemaining: null, fetchedAt: null, extraWindows: [] },
+      ],
+    });
+  });
+
+  test("drops only malformed scoped rows and nulls invalid reset instants", () => {
+    const parsed = parseClaudeSwapAccounts(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [
+          {
+            number: 1,
+            usageStatus: "ok",
+            usageFetchedAt: "2026-08-25T20:00:00Z",
+            usage: {
+              fiveHour: { pct: 25, resetsAt: "bad" },
+              scoped: [{ name: "Fable", pct: 45 }, { name: "broken", pct: 101 }, null],
+            },
+          },
+        ],
+      }),
+    );
+    expect(parsed).toMatchObject({
+      kind: "ok",
+      accounts: [{ resetAt: null, extraWindows: [{ label: "Fable", percentRemaining: 55, resetAt: null }] }],
+    });
+  });
+
+  test("caps scoped extras without discarding valid account-wide windows", () => {
+    const parsed = parseClaudeSwapAccounts(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [
+          {
+            number: 1,
+            usageStatus: "ok",
+            usageFetchedAt: "2026-08-25T20:00:00Z",
+            usage: {
+              fiveHour: { pct: 10 },
+              sevenDay: { pct: 20 },
+              scoped: Array.from({ length: QUOTA_EXTRA_WINDOWS_LIMIT + 2 }, (_, index) => ({
+                name: `scope-${index}`,
+                pct: index,
+              })),
+            },
+          },
+        ],
+      }),
+    );
+    expect(parsed).toMatchObject({
+      kind: "ok",
+      accounts: [
+        {
+          percentRemaining: 90,
+          weeklyPercentRemaining: 80,
+          extraWindows: Array.from({ length: QUOTA_EXTRA_WINDOWS_LIMIT }, (_, index) => ({
+            label: `scope-${index}`,
+            percentRemaining: 100 - index,
+          })),
+        },
+      ],
+    });
+  });
+
+  test.each([
+    ["invalid JSON", "{"],
+    ["non-object", "[]"],
+    ["wrong schema", JSON.stringify({ schemaVersion: 2, activeAccountNumber: 1, accounts: [] })],
+    ["invalid slot", JSON.stringify({ schemaVersion: 1, activeAccountNumber: 1, accounts: [{ number: 0 }] })],
+    [
+      "duplicate slot",
+      JSON.stringify({ schemaVersion: 1, activeAccountNumber: 1, accounts: [{ number: 1 }, { number: 1 }] }),
+    ],
+    ["missing active", JSON.stringify({ schemaVersion: 1, activeAccountNumber: 2, accounts: [{ number: 1 }] })],
+    [
+      "nine accounts",
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: Array.from({ length: 9 }, (_, index) => ({ number: index + 1 })),
+      }),
+    ],
+  ])("rejects %s", (_name, body) => {
+    expect(parseClaudeSwapAccounts(body)).toEqual({ kind: "invalid" });
+  });
+
+  test("uses only the three approved binary candidates", () => {
+    expect(claudeSwapBinaryCandidates("/Users/test")).toEqual([
+      "/Users/test/.local/bin/cswap",
+      "/opt/homebrew/bin/cswap",
+      "/usr/local/bin/cswap",
+    ]);
+  });
+
+  test("exposes the exact read-only invocation contract", () => {
+    expect(CLAUDE_SWAP_ARGS).toEqual(["list", "--json"]);
+    expect(CLAUDE_SWAP_EXEC_TIMEOUT_MS).toBe(5_000);
+  });
+});

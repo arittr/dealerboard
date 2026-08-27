@@ -1,0 +1,1201 @@
+# Provider hook configuration
+
+This is the final setup step for hook-backed providers. Complete manual edits
+one provider at a time after `bun scripts/install-local.ts` succeeds; the
+registry and LaunchAgent daemon must exist before the first hook event arrives.
+Pi, oh-my-pi, and Grok are exceptions: the installer places their reporting
+shim or hook file when their provider directory already exists, so those
+sections describe the managed artifact rather than a config edit.
+
+Evener is a different exception: it needs no hook or plugin configuration at
+all. The daemon observes Evener's supported AppWire feed; see the next section.
+
+Every hook-backed provider invokes the same installed helper with one JSON
+event object on standard input:
+
+The snippets use `<dealerboard>` for the installed executable. Replace that
+placeholder with this absolute path, substituting your macOS account name for
+`<username>`:
+
+```text
+/Users/<username>/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard
+```
+
+Every hook ultimately invokes `<dealerboard> event <provider>` with one JSON
+event object on standard input.
+
+The helper reads at most 65,536 bytes of stdin, prints nothing, and always
+exits zero, so a registry problem can never block, delay, or alter a provider
+turn. The snippets below contain no wrapper scripts, no background processes,
+and no standard-output output.
+
+**Privacy note.** Hook payloads can carry message text, session file paths,
+and tool-call details. The helper allowlists the fields needed for session
+state and discards the rest. The daemon may read bounded transcript tails to
+resolve a title, model, and recent activity category. It stores only one of
+the fixed activity labels `File`, `Command`, `Search`, `Request`, or `Tool`;
+raw paths, commands, queries, URLs, tool names, prompts, message bodies, and
+tool output are not persisted as activity. The registry stores the transcript
+path itself so the app can offer **Reveal transcript** and the daemon can
+refresh those derived facts.
+
+---
+
+## Evener (AppWire; no hook configuration)
+
+Do **not** install a Dealerboard hook into Evener. Evener hooks are
+per-session, opt-in plugin behavior and omit authoritative title/model state;
+the supported daemon-wide observer surface is AppWire.
+
+When both daemons are running, Dealerboard automatically connects to
+Evener hub at its documented default `http://127.0.0.1:9180` (WebSocket
+`/rpc`). It follows Evener's own configuration and credential precedence:
+
+- address: `EVENER_HUB_ADDR`, then `addr` in
+  `${XDG_CONFIG_HOME:-~/.config}/evener/hub.toml`, then
+  `127.0.0.1:9180`;
+- capability: `EVENER_HUB_AUTH_TOKEN`, otherwise
+  `<hub_state_root>/auth-token`, where the default root is
+  `${XDG_STATE_HOME:-~/.local/state}/evener` and `hub_state_root` in
+  `hub.toml` overrides it.
+
+Evener's `hub --addr` command-line flag is process-local and is not published
+in its state directory, so no external client can discover that override. If
+you launch the hub with a non-default `--addr`, put the same durable value in
+`hub.toml` (recommended), or expose the same `EVENER_HUB_ADDR` to the
+Dealerboard LaunchAgent. A shell-only environment variable is not
+automatically inherited by an already-loaded LaunchAgent.
+
+The bearer capability is held in memory only. It is never logged, copied to
+the registry, or published in a snapshot. The collector refuses non-loopback
+hub addresses. AppWire currently sends the capability in the initial
+WebSocket Authorization header, so this integration assumes the local user
+account is trusted: another process running as the same user could bind the
+configured loopback port and receive it. A missing hub or token is an
+optional-provider condition; the collector stays quiet and retries every five
+seconds.
+
+After the AppWire v3 handshake, the collector lists only Evener's `local`
+source, hydrates roots before live subagents, subscribes to ordered updates,
+and refreshes every two seconds to discover new sessions. Status mapping is:
+
+| Evener AppWire | Tile |
+|---|---|
+| `active` without a pending blocker | working |
+| `awaiting` without a pending blocker | idle (the ordinary post-reply state) |
+| `evener.askPending` or non-empty `evener.pendingEscalations` | waiting |
+| `warning` / `systemError` | error |
+| `idle` | idle (visible only when unread) |
+| `closed` | removed |
+
+Generated/user-renamed titles and current model changes arrive through
+AppWire. Live turn completion owns the unread transition; reconnect hydration
+repairs status without inventing unread output. An explicit `thread/closed`
+removes the row. List omission does not, because the hub can return a partial
+list while one source is unavailable; the ordinary 24-hour prune covers a
+missed close.
+
+To verify, start an Evener session through the hub, submit a prompt, then run:
+
+```bash
+"$HOME/Library/Application Support/com.drewritter.dealerboard/bin/dealerboard" sessions list
+```
+
+An `evener` row should show the session title/model and `idle`, `working`,
+`waiting`, or `error` status. Evener tile presses currently use the same alert/flash
+behavior as pi and omp; no exact-focus binding is claimed.
+
+---
+
+## Claude Code
+
+Target file: `$HOME/.claude/settings.json` (user level, applies to
+all projects).
+
+Claude supports the full eleven-event set. Because the installed path contains a
+space, each handler uses Claude's exec form (`command` plus `args`): Claude
+spawns the executable directly with no shell, so the path needs no quoting and
+nothing is shell-interpreted. Each handler sets a one-second `timeout`.
+
+### 1. Back up
+
+```bash
+cp $HOME/.claude/settings.json $HOME/.claude/settings.json.before-dealerboard
+```
+
+### 2. Edit
+
+Merge the following top-level `"hooks"` object into the existing settings.
+Keep every existing key; if a `"hooks"` object already exists, add these eleven
+event arrays inside it without removing any existing entries.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<dealerboard>",
+            "args": ["event", "claude"],
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Notes:
+
+- Only `Notification` takes a `matcher` (`permission_prompt`); the other events
+  either have no matcher support or should fire for every tool and source.
+- `PostToolUse` is what clears a permission/question prompt: it fires the
+  moment an answered prompt unblocks the tool call, mapping the session back
+  to working. Without it a tile stays in the waiting color until the next
+  `PreToolUse` or `Stop` happens to arrive.
+- Background shells keep the tile in the working color: a Bash
+  `run_in_background` `PreToolUse` arms a per-session flag, and `Stop` then
+  maps to working instead of idle while the shell lives. A finished shell's
+  completion arrives as a `UserPromptSubmit` whose prompt opens with
+  `<task-notification>` and disarms the flag; a `TaskStop` `PreToolUse`
+  disarms it directly. The flag is per session, not per shell, so overlapping
+  background shells can idle the tile once the first completion lands. No
+  extra hook entries are needed — the existing `PreToolUse`,
+  `UserPromptSubmit`, and `Stop` handlers carry both signals.
+- One second fits every event's budget, including the shared 1.5-second
+  `SessionEnd` budget.
+
+### Claude tile activation
+
+Run ordinary `claude` directly in Ghostty. Ghostty must expose its native
+terminal `pid` and `tty` properties for SessionStart discovery. tmux and other
+terminals remain display-only and unbound. If discovery fails, the session tile
+remains visible, but pressing it alerts. The hook snippets above remain
+unchanged; no wrapper is installed.
+
+### 3. Validate
+
+Start a new Claude Code session and run `/hooks`. Each of the eleven events
+should list the dealerboard command. The registry should show the
+session within one polling interval (see "After every provider" below).
+
+### 4. Compare before replace, and restore
+
+```bash
+diff $HOME/.claude/settings.json.before-dealerboard $HOME/.claude/settings.json
+cp $HOME/.claude/settings.json.before-dealerboard $HOME/.claude/settings.json
+```
+
+Keep the backup until physical verification is complete.
+
+---
+
+## Kimi Code
+
+Target file: `$HOME/.kimi-code/config.toml` (current Kimi Code —
+not the legacy `$HOME/.kimi/config.toml`, which belongs to the
+older Python CLI and will not work).
+
+Kimi supports ten of the eleven events (its `Notification` event signals
+background-task status, not approval requests, so it is deliberately omitted)
+and additionally wires `Interrupt`, which Kimi fires instead of `Stop` when a
+turn is interrupted — including when a question prompt is dismissed. Kimi hook
+commands are shell commands, so the installed path is double-quoted inside a
+TOML literal string (single quotes — no escaping needed). Each entry sets a
+one-second `timeout` (valid range 1–600).
+
+**Strict-schema warning.** Kimi Code validates `[[hooks]]` strictly: an
+unknown event name, or any field beyond `event`, `matcher`, `command`, and
+`timeout`, makes the entire config file fail to load. Append exactly the eleven
+entries below; do not add fields, events, or comments inside the entries.
+
+### 1. Back up
+
+```bash
+cp $HOME/.kimi-code/config.toml $HOME/.kimi-code/config.toml.before-dealerboard
+```
+
+### 2. Edit
+
+Append these eleven entries to the end of the file. Leave all existing content
+untouched.
+
+```toml
+[[hooks]]
+event = "SessionStart"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "UserPromptSubmit"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "PreToolUse"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "PostToolUse"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "PermissionRequest"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "Stop"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "Interrupt"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "StopFailure"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "SessionEnd"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "SubagentStart"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+
+[[hooks]]
+event = "SubagentStop"
+command = '"<dealerboard>" event kimi'
+timeout = 1
+```
+
+Notes:
+
+- Kimi Web emits a titleless `SessionStart` as soon as a blank page opens and
+  may never close that unused session. The helper registers the row so its
+  model is retained, but the idle row stays grid-invisible until the first
+  `UserPromptSubmit` marks it working. A titled `SessionStart` also restores an
+  existing session immediately.
+- A pending `AskUserQuestion` prompt needs no extra entry: `PreToolUse` carries
+  `tool_name`, and the helper maps a question call to the waiting color while
+  it blocks the turn; the answering `PostToolUse` maps back to working.
+- `Interrupt` is wired because Kimi fires it in place of `Stop` when a turn is
+  interrupted or a question dismissed — without it a dismissed prompt would
+  leave the tile stuck in the waiting color until the next event.
+- `SessionStart` payloads also carry `model` (and `profile`); the helper
+  decodes and stores the bounded `model` value, and the tile renders it as
+  small neutral text right of the provider chip. Titleless starts register
+  too — a blank page's row stays grid-invisible until its first prompt — so
+  fresh sessions get their model; only a start the hook never delivered
+  leaves the model unset, since `UserPromptSubmit` carries no model field to
+  backfill from.
+
+### 3. Validate
+
+Start a new Kimi Code session. The config must load without an error; a
+strict-schema failure is reported at startup and disables all configuration,
+so a clean start is the check. In Kimi Web, opening and abandoning a blank page
+must not add a tile; submitting its first prompt must add one.
+
+### 4. Compare before replace, and restore
+
+```bash
+diff $HOME/.kimi-code/config.toml.before-dealerboard $HOME/.kimi-code/config.toml
+cp $HOME/.kimi-code/config.toml.before-dealerboard $HOME/.kimi-code/config.toml
+```
+
+Keep the backup until physical verification is complete.
+
+---
+
+## Codex Desktop
+
+This setup registers nine Codex lifecycle events — `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`SubagentStart`, `SubagentStop`, `Stop`, and `SessionEnd` — through a small
+local plugin. Codex has no `Notification` approval event or `StopFailure`;
+the registry does not need the compact hooks. Two locations are user-owned:
+the plugin directory and the personal marketplace file.
+
+- Plugin directory: `$HOME/.agents/plugins/dealerboard-codex/`
+- Marketplace file: `$HOME/.agents/plugins/marketplace.json`
+
+Codex runs hook command strings through a shell, so the installed path is
+double-quoted inside the JSON string. Each handler sets a one-second
+`timeout`, which is within the `SessionEnd` ceiling (default 1 second, maximum
+3).
+
+### 1. Back up
+
+The marketplace file may not exist yet. If it does, back it up:
+
+```bash
+cp $HOME/.agents/plugins/marketplace.json $HOME/.agents/plugins/marketplace.json.before-dealerboard
+```
+
+If it does not exist, the edit below creates it, and there is nothing to back
+up. The plugin directory is new; there is nothing to back up there either.
+
+### 2. Create the plugin
+
+Create `$HOME/.agents/plugins/dealerboard-codex/.codex-plugin/plugin.json`:
+
+```json
+{
+  "name": "dealerboard-codex",
+  "version": "1.0.0",
+  "description": "Reports Codex session lifecycle events to the local Dealerboard registry.",
+  "interface": {
+    "displayName": "Dealerboard",
+    "category": "Productivity"
+  }
+}
+```
+
+Create `$HOME/.agents/plugins/dealerboard-codex/hooks/hooks.json`
+(the default hook location, so the manifest needs no `hooks` key):
+
+```json
+{
+  "description": "Dealerboard session registry hooks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### 3. Register the marketplace
+
+Create or edit `$HOME/.agents/plugins/marketplace.json`. If it
+already exists, merge only the `plugins` entry below into the existing
+`plugins` array and keep every existing key:
+
+```json
+{
+  "name": "dealerboard-local",
+  "interface": {
+    "displayName": "Dealerboard Local"
+  },
+  "plugins": [
+    {
+      "name": "dealerboard-codex",
+      "source": {
+        "source": "local",
+        "path": "./.agents/plugins/dealerboard-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+`source.path` is relative to the **registered marketplace root**, not to the
+marketplace file. The root is `$HOME` for the personal
+marketplace (Codex discovers the file at `<root>/.agents/plugins/marketplace.json`),
+so the path must reach down through `.agents/plugins/`.
+
+Then register the marketplace once (it is not auto-discovered):
+
+```bash
+codex plugin marketplace add $HOME
+```
+
+Verify resolution before installing — the printed path must be the real
+plugin directory:
+
+```bash
+codex plugin list
+```
+
+### 4. Install, enable, and trust
+
+1. Install and enable with `codex plugin add dealerboard-codex@dealerboard-local`,
+   or restart Codex Desktop, open the Plugins Directory, select the
+   **Dealerboard Local** source, install **Dealerboard**, and enable it.
+2. Codex runs the installed copy under `~/.codex/plugins/cache`, not the local
+   marketplace source directly. After changing `hooks/hooks.json`, refresh that
+   copy before looking for an approval prompt:
+
+   ```bash
+   codex plugin remove dealerboard-codex@dealerboard-local
+   codex plugin add dealerboard-codex@dealerboard-local
+   ```
+
+3. **Required trust step.** Codex skips non-managed command hooks until the
+   exact hook definition is reviewed and trusted. Trust is recorded per event
+   entry (a hash of each entry), not per file: adding events to
+   `hooks/hooks.json` later leaves the existing entries trusted, but the new
+   entries are silently skipped until approved, and editing an existing entry
+   rehashes that entry and requires its re-approval. Open the Codex CLI, run
+   `/hooks`, review the dealerboard-codex hooks, and approve every
+   listed event. Codex prints a startup warning while review is pending.
+   Without this step the untrusted events silently never fire — a tile that
+   never receives `Stop` stays working forever, so the review must cover all
+   nine entries, not just the first three.
+
+### 5. Behavior to expect
+
+- A Codex session appears on the grid when its `SessionStart` hook fires. If
+  the start event is missed — for example the registry was not installed yet
+  or the daemon was down — the next `UserPromptSubmit` for that session
+  late-joins it: the prompt proves membership, so the session appears then
+  instead of staying invisible forever.
+- The configured subset reports session starts, submitted-message and tool
+  activity, approval waits, live subagent starts and stops, turn completions,
+  and session ends: a Codex tile is idle at start, working while a turn runs,
+  waiting while an approval is pending, back to idle when the turn stops, and
+  removed at `SessionEnd`. Every live child increments the tile's descendant
+  badge; `SubagentStop` removes that child and its active descendants. Error
+  transitions are not reported (Codex has no `StopFailure` event). A missed
+  `SubagentStop` leaves a stale badge until the parent ends or the row is
+  repaired, and a missed `SessionEnd` leaves a stale session until the
+  daemon's 24-hour prune removes it — or `sessions clear` / `sessions prune`
+  repairs it first.
+- Tile titles come from `~/.codex/session_index.jsonl`: the daemon reads the
+  thread's `thread_name` and shows it instead of the project name once Codex
+  has named the thread.
+- Codex Desktop spawns hidden ambient-suggestion threads that fire the same
+  start and prompt hooks as real chats; left unfiltered they would add a
+  phantom tile per real chat. Their payloads carry an explicit
+  `"transcript_path": null` (they keep no transcript and are never
+  user-visible), and the decoder drops any event that declares no transcript,
+  so these threads never reach the registry.
+
+### 6. Compare before replace, and restore
+
+```bash
+diff $HOME/.agents/plugins/marketplace.json.before-dealerboard $HOME/.agents/plugins/marketplace.json
+cp $HOME/.agents/plugins/marketplace.json.before-dealerboard $HOME/.agents/plugins/marketplace.json
+```
+
+Then disable or remove the plugin in Codex Desktop, delete
+`$HOME/.agents/plugins/dealerboard-codex/`, and keep the
+backup until physical verification is complete. (If the marketplace file did
+not exist before, delete it instead of restoring.)
+
+---
+
+## ZCode
+
+Target file: `~/.zcode/cli/config.json` (created in the back-up step below
+if it does not exist yet).
+
+ZCode supports seven events — `SessionStart`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, and
+`Stop`. It has no `SessionEnd`, `StopFailure`, or subagent events and no
+dedicated interrupt event: a `PostToolUseFailure` carrying `is_interrupt` is
+the only interrupt signal, and the helper maps it to a Stop when it arrives.
+An interrupt that fires no such event leaves the tile working until the
+next event or the 1-hour lease (see "Behavior to expect" below). A
+`"type": "process"` hook is spawned directly with no shell, so the
+executable path needs no quoting; each handler sets a two-second `timeoutMs`.
+
+### 1. Back up
+
+The config directory or file may not exist yet. The snippet below creates
+them only when absent — an existing config is never touched — then backs it
+up:
+
+```bash
+mkdir -p ~/.zcode/cli
+if [ ! -e ~/.zcode/cli/config.json ]; then
+  printf '{}\n' > ~/.zcode/cli/config.json
+fi
+cp ~/.zcode/cli/config.json ~/.zcode/cli/config.json.bak
+```
+
+### 2. Edit
+
+Merge the following top-level `"hooks"` object into the config, keeping
+every existing key. Replace every `<helper>` with the installed executable
+path — `<dealerboard>`,
+the same helper every provider above invokes:
+
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "SessionStart":      [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "UserPromptSubmit":  [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PreToolUse":        [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PostToolUse":       [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PostToolUseFailure":[{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "PermissionRequest": [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }],
+      "Stop":              [{ "hooks": [{ "type": "process", "command": "<helper>", "args": ["event", "zcode"], "timeoutMs": 2000 }] }]
+    }
+  }
+}
+```
+
+Warnings — these are the traps to know before editing:
+
+- The matcher-group wrapper is required: every `events.<Event>` value is a
+  list of `{ "hooks": [...] }` objects, optionally with a `matcher`. A flat
+  list of executors in its place is silently ignored — zcode loads the
+  config without any error and the hooks never fire.
+- `timeoutMs` is **milliseconds**; `timeout` is **seconds** — never write
+  `timeout` in this file.
+- Hooks are snapshotted at session start: existing zcode sessions never pick
+  the hooks up. Start a new session to test.
+- Some 2026-06/07 builds reject the `args` array (validation bug). If zcode
+  refuses to start or logs a config error, fall back to one shell string per
+  event — `{ "type": "command", "command": "\"<helper>\" event zcode", "timeoutMs": 2000 }` —
+  quote the path, it contains a space.
+- If hooks seem inert after a zcode update, re-check this file: older builds
+  silently dropped the whole section on one unknown key.
+
+### 3. Validate
+
+Parse the merged file before trusting it — a typo can silently disable every
+hook:
+
+```bash
+bun -e 'try { JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")) } catch { process.exit(1) }' ~/.zcode/cli/config.json
+```
+
+The command prints nothing and exits zero when the JSON is valid. Then start
+a NEW zcode session and confirm its tile appears (see "After every provider"
+below).
+
+### Headless and CLI use (optional)
+
+The hooks above are all the desktop app needs. Driving zcode headlessly —
+`--prompt` one-shots or the `app-server` protocol — additionally requires an
+explicit model provider in this same file; without one the CLI refuses to
+start (`Model config is missing`). The desktop app keeps its providers in
+`~/.zcode/v2/config.json`, which the CLI does not read. Merge two more
+top-level keys, mirroring the enabled provider entry from that file:
+
+```json
+{
+  "model": { "main": "builtin:zai-coding-plan/GLM-5.3" },
+  "provider": {
+    "builtin:zai-coding-plan": {
+      "name": "Z.ai - Coding Plan",
+      "kind": "anthropic",
+      "options": {
+        "apiKey": "<key>",
+        "baseURL": "https://api.z.ai/api/anthropic",
+        "apiKeyRequired": true
+      },
+      "enabled": true,
+      "source": "custom"
+    }
+  }
+}
+```
+
+- `model.main` is a `provider/model` string ref. The object form
+  (`{ "provider": ..., "model": ... }`) is silently ignored and the CLI
+  keeps reporting the config missing.
+- Replace `<key>` with the API key from the same entry in
+  `~/.zcode/v2/config.json` — never a literal key in documentation or
+  scripts. The file now carries a credential: keep it mode 0600
+  (`chmod 600 ~/.zcode/cli/config.json`).
+- The back-up, diff, and restore ritual in this section now handles a
+  key-bearing file — treat `config.json.bak` with the same care and delete
+  it once verification is complete.
+
+### Behavior to expect
+
+- A tile appears at the first prompt, not at session creation: zcode
+  materializes hooks lazily, and the live probes saw no event (and no
+  registry row) from creating a session until `UserPromptSubmit` fired.
+  From there the tile goes working on prompt and tool activity, waiting
+  while a permission prompt is pending, and idle when the turn ends. (All
+  of this is registry-row evidence; the physical key face itself was not
+  part of the live observation.)
+- The helper maps a `PostToolUseFailure` carrying `is_interrupt` to a Stop
+  when one arrives, but the live probes on 0.16.3 never saw one: stopping a
+  session both mid-tool-call and between tool calls delivered no hook event
+  at all, leaving the tile working until the next event or the 1-hour
+  lease. That is the behavior to expect from an interrupt.
+- In a headless `--mode plan` run, denying a permission prompt strands the
+  tile at waiting until the next event or the 1-hour lease — the deny path
+  delivers no event after `PermissionRequest` (observed live on 0.16.3);
+  interactive sessions return to working and idle after the prompt is
+  answered.
+- Quitting zcode leaves the tile until the 1-hour lease prunes it — zcode
+  has no `SessionEnd` hook, so the daemon presumes a zcode row with no hook
+  event for an hour dead and removes it then.
+- Titles arrive from zcode's own database a few seconds after zcode generates
+  them: the daemon re-queries `~/.zcode/cli/db/db.sqlite` (`ZCODE_HOME`
+  override) on its title cadence.
+
+### 4. Compare before replace, and restore
+
+```bash
+diff ~/.zcode/cli/config.json.bak ~/.zcode/cli/config.json
+cp ~/.zcode/cli/config.json.bak ~/.zcode/cli/config.json
+```
+
+Keep the backup until physical verification is complete.
+
+---
+
+## pi
+
+Target file: `~/.pi/agent/extensions/dealerboard.ts` — placed by the
+installer, not by hand.
+
+pi needs no config edits. The installer copies one extension file into pi's
+auto-discovered extensions directory; pi loads it on every start, and it
+reports session lifecycle to the daemon through the same helper every
+provider above invokes.
+
+**Ownership marker.** The file's first line is
+`// dealerboard: managed shim v1`. The installer re-copies any
+same-named file that still starts with that marker line — customizations kept
+beneath a retained marker are overwritten on the next install. To customize
+the file, delete its first-line marker: the installer then treats the file as
+yours, never touches it again, and it stops receiving updates.
+
+### Behavior to expect
+
+- A tile appears when a session starts. Extensions load in every pi process,
+  but only interactive TUI sessions are reported — print (`pi -p`), JSON, and
+  RPC processes never produce tiles.
+- The tile shows the current model id right of the provider chip: the shim
+  forwards pi's current model (`ExtensionContext.model`, pinned on 0.84.2)
+  at session start. A mid-session model switch is not reported.
+- The tile goes working on prompt and tool activity, and idle when the turn
+  settles.
+- A failed turn shows the error tile, and it stays: the shim reports exactly
+  one terminal event per turn, so the error is never overwritten by a later
+  idle — it persists until the next turn's first activity.
+- `/name` retitles the tile.
+- `/new`, `/resume`, and `/fork` close the old row and open the new session's
+  — pi reports the old session's shutdown whatever the reason.
+- Escape during a streaming response settles the tile to idle. Escape during
+  a tool call shows the error tile: pi records the aborted tool as an errored
+  turn (live-probed on 0.84.2 — the abort fires the same terminal event pair
+  as a real failure, with the error outcome). The shim serializes its helper
+  spawns, so the tool-end and terminal writes always reach the registry in
+  emission order — re-probed live, 6/6 abort trials showed the error tile
+  with no stuck-working outcome.
+- Quitting pi removes the tile.
+
+### Known gaps
+
+- pi has no permission or question surface, so the tile never shows waiting.
+- pi reports no subagent rows.
+
+### Verify and remove
+
+Start a new pi session and watch its tile appear (see "After every provider"
+below). To remove pi reporting, delete the file.
+
+---
+
+## oh-my-pi (omp)
+
+Target file: `~/.omp/agent/extensions/dealerboard.ts` — placed by the
+installer, not by hand.
+
+Same shape as pi: omp needs no config edits, the installer places one
+extension file in omp's auto-discovered extensions directory, and omp loads it
+on every start. The same ownership-marker rule applies — the file's first line
+is `// dealerboard: managed shim v1`; the installer re-copies any
+same-named file that still starts with that line, and to customize the file
+you delete the marker, making it yours (untouched, and no longer updated).
+
+### Behavior to expect
+
+- A tile appears when a session starts, goes working on prompt and tool
+  activity, and idle when the turn ends.
+- Approval prompts show waiting, and omp's ask question shows waiting. The
+  approval UX is unchanged: the shim observes the approval event and never
+  intercepts it. Live caveat (17.3.4): the task tool's Change/Acceptance
+  spec dialog does not reliably raise the approval event — in most probed
+  runs the tile stayed working while that dialog was open; ordinary tool
+  approvals (e.g. bash) showed waiting every time.
+- Subagent runs show the descendant badge on the parent tile.
+- Auto-generated titles appear a few seconds after the first message: the
+  daemon reads them from the title slot at the head of the session file.
+- Switching sessions mid-process keeps parentage correct — the shim follows
+  the visible session. The previous session's row is not closed by an
+  in-process switch (omp signals session end only at process exit), so it
+  lingers with its last status until the 24-hour lease prunes it — or until
+  that session is resumed and quit.
+- Quitting omp removes the tile.
+
+### Known gaps
+
+- omp has no StopFailure-equivalent event, so there is no error tile;
+  interrupted turns settle the tile to idle.
+
+**Fork churn.** omp ships multiple builds a day. If tiles stop updating after
+an omp upgrade, reinstall (`bun scripts/install-local.ts`) and re-check — the
+shim's host-event surface is re-verified per upgrade.
+
+### Verify and remove
+
+Start a new omp session and watch its tile appear (see "After every provider"
+below). To remove omp reporting, delete the file.
+
+---
+
+## grok
+
+Target file: `~/.grok/hooks/dealerboard.json` — written by the
+installer, not by hand.
+
+grok needs no config edits. The installer manages this one hook file: it
+renders the template, substitutes the installed executable path, and writes
+the file atomically at mode 0600 — but only when `~/.grok` exists (a machine
+without grok is skipped entirely). The file carries the marker key
+`"x-dealerboard": "managed hook v1"`; the installer refuses to
+overwrite a same-named file that lacks that exact marker key and value, so a
+user-owned file named the same is never clobbered.
+
+The file registers nine events — SessionStart, UserPromptSubmit, PreToolUse,
+PostToolUse, Stop, StopFailure, StopCancelled, Notification, and SessionEnd.
+Every handler is observe-only, sets `timeout: 5`, and runs
+`"<installed-binary>" event grok` — the same helper every provider above
+invokes.
+
+### Behavior to expect
+
+- grok's stdin envelope is camelCase-keyed with snake_case `hookEventName`
+  values; the daemon maps them to canonical events (`session_start` →
+  `SessionStart`, and so on).
+- grok fires an observe-only `Stop` at session teardown with a `reason` of
+  `channel_closed` or `shutdown`; any `Stop` carrying a reason other than
+  `end_turn` is dropped, so only a genuine turn end settles the tile idle —
+  `SessionEnd` owns the row's removal.
+- Events carrying `subagentType` are dropped: grok-native subagents are
+  invisible in v1, and a subagent's prompt must not late-join a phantom
+  top-level row.
+- `StopCancelled` covers interrupted and declined turns and maps to `Stop`
+  (idle); `StopFailure` is real, so a failed turn shows the error color.
+- Only a Notification with `notificationType === "permission_prompt"` raises
+  the waiting color; `idle_prompt` is deliberately unmapped.
+
+### Compat scanning (leave it on)
+
+grok also loads `~/.claude/settings.json` hooks by default, so the Claude
+hook commands configured above also spawn under grok sessions. The payload
+grok hands them is the camelCase envelope, whose snake_case event names fail
+the Claude decode — the helper decodes zero events and exits 0. It is
+harmless; leave compat scanning on.
+
+### Titles and models
+
+The daemon pulls both from `~/.grok/sessions/*/<id>/summary.json`
+(`generated_title`, `current_model_id`), locating the file by globbing the
+group directories and re-reading only when its stat changes. The `GROK_HOME`
+override is honored.
+
+### Verify and remove
+
+Start a new grok session and watch its tile appear (see "After every
+provider" below). To remove grok reporting, delete the file.
+
+---
+
+## Qwen Code
+
+Target file: `$HOME/.qwen/settings.json` (user level, applies to
+all projects).
+
+Qwen Code runs command hooks through a shell with the event JSON on stdin,
+so the installed path — which contains a space — is shell-quoted inside the
+single `command` string. Timeouts are milliseconds; each handler sets five
+seconds. Like the other manual providers, the installer never touches this
+file.
+
+**Credential note.** `settings.json` can carry API keys (e.g. under `env`);
+back it up and merge only the `"hooks"` key.
+
+### 1. Back up
+
+```bash
+cp $HOME/.qwen/settings.json $HOME/.qwen/settings.json.before-dealerboard
+```
+
+### 2. Edit
+
+Merge the following top-level `"hooks"` object into the existing settings,
+keeping every existing key.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"<dealerboard>\" event qwen",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Behavior to expect
+
+- `SessionStart` registers the row and stores the pushed model id; Qwen Code
+  pushes no title, so the tile label falls back to the project basename.
+- Prompt and tool activity show working; `Stop` settles idle and stamps
+  unread like every provider.
+- Qwen Code has no interrupt event of its own: an interrupted turn surfaces
+  as `PostToolUseFailure` with `is_interrupt: true`, which maps to `Stop`
+  (idle) exactly like zcode; plain tool failures are ignored. A real API
+  failure fires `StopFailure`, so a failed turn shows the error color.
+- Only a `permission_prompt` Notification raises waiting.
+- `SessionEnd` removes the row; the standard 24-hour prune applies.
+- Hooks load at session start — sessions already running when the config
+  lands start reporting at their next start.
+
+### Verify and remove
+
+Start a new Qwen Code session and watch its tile appear (see "After every
+provider" below). To remove Qwen reporting, delete the `"hooks"` key.
+
+---
+
+## After every provider
+
+Start a session in each provider, then list what the registry recorded:
+
+```bash
+"<dealerboard>" sessions list
+```
+
+Each active session should appear with its provider, title, and project. To
+remove every recorded session (for example after testing), run
+`... sessions clear-all` with the same binary. `... sessions prune
+[max-age-hours]` deletes only sessions whose last hook is older than the
+cutoff (default 24 hours); that one operator cutoff applies to every
+provider alike. The daemon's automatic pass — the same prune, once a minute
+— is split by provider instead: zcode rows are pruned at 1 hour, every
+other provider at 24 hours. grok fires a real `SessionEnd`, so it uses the
+standard 24-hour lease — no special TTL like zcode's.

@@ -1,0 +1,874 @@
+:root {
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #10151c;
+  color: #e8eef7;
+  font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+#strip {
+  display: grid;
+  grid-template-columns: 1fr 29.6875%; /* 760px native rail */
+  height: 100vh;
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+/* Board: fixed geometry — two 886px columns of six 102px rows, 12px gaps,
+   44px top / 16px left padding (native px converted at 2560x720:
+   px / 25.6 = vw, px / 7.2 = vh). macOS draws its menu bar as a ~30px
+   overlay on the strip display (no visibleFrame reservation), so the top
+   padding keeps row one — including the chip's corner unread dot at
+   top -6px — clear of it. Cards are a fixed standard size and never
+   flex-resize; the renderer sets each card's grid position inline from its
+   placement. */
+#board {
+  display: grid;
+  grid-template-columns: repeat(2, 34.609vw); /* 886px native */
+  grid-template-rows: repeat(6, 14.167vh); /* 102px native */
+  gap: 1.667vh 0.469vw; /* 12px native */
+  padding: 6.111vh 0 0 0.625vw; /* 44px top clears the menu bar overlay, 16px left */
+  min-width: 0;
+}
+/* Native fullscreen (window.ts mirrors it as body[data-fullscreen]) draws no
+   menu-bar overlay: the 44px dodge gives way to centering — six 102px rows
+   and five 12px gaps total 672px, leaving 24px above and below. */
+body[data-fullscreen] #board {
+  padding-top: 3.333vh; /* 24px native */
+}
+.offline {
+  color: #94a3b8;
+  font-size: 1.4vw;
+  letter-spacing: 0.2em;
+}
+#board > .offline {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * Cards (the fixed geometry is documented in docs/design.md; native px converted at
+ * 2560x720 — px / 25.6 = vw, px / 7.2 = vh). Each card is a two-column
+ * grid: the head and status rows share the first row (the status block
+ * right-aligns against the title) and the meta
+ * row spans below. The status edge is the left border; the sub spine is
+ * ::before and the waiting/error tint is ::after; .pulse-overlay is the
+ * working card's event flash.
+ */
+.card {
+  --st: #94a3b8;
+  position: relative;
+  isolation: isolate; /* keeps the waiting/error tint and pulse overlay over the surface, under text */
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  align-content: center;
+  row-gap: 0.833vh; /* 6px native */
+  column-gap: 0.547vw; /* 14px native */
+  min-width: 0;
+  padding: 0 0.625vw 0 0.938vw; /* 30px padding behind an 8px edge: text 32px in */
+  border-radius: 0.469vw; /* 12px native */
+  background: #1c2430;
+  border-left: 0.3125vw solid transparent; /* the 8px status-edge slot */
+  cursor: pointer;
+}
+.card.display-only {
+  cursor: default;
+}
+
+/* Status edges and motion (colors and semantics mirror
+   src/plugin/render.ts): working carries the liveness treatment: the 1s
+   ticker decays the edge and dot from data-last-event, the shared-phase
+   breath animates the dot, and ten silent minutes hollow the card to
+   quiet; waiting breathes its full frame, error pulses at 2s, idle is
+   static. Waiting and error widen the edge to 12px and lay a static
+   surface tint. The negative z-index paints the tint under the text,
+   inside the isolation context. */
+.card.status-working {
+  --st: #20b8ff;
+  border-left-color: rgb(32 184 255 / 0.9);
+}
+.card.status-idle {
+  --st: #4ade80;
+  border-left-color: rgb(74 222 128 / 0.9);
+}
+.card.status-waiting {
+  --st: #ffb020;
+  border: max(1px, 0.078vw) solid rgb(255 176 32 / 0.75);
+  border-left: 0.469vw solid #ffb020;
+  padding-left: 0.781vw; /* text stays where the 8px edge leaves it */
+  animation: breathe 4s ease-in-out infinite alternate;
+}
+.card.status-error {
+  --st: #ff4d67;
+  border: max(1px, 0.078vw) solid rgb(255 77 103 / 0.75);
+  border-left: 0.469vw solid #ff4d67;
+  padding-left: 0.781vw;
+  animation: pulse 2s ease-in-out infinite alternate;
+}
+.card.status-waiting::after,
+.card.status-error::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+}
+.card.status-waiting::after {
+  background: rgb(255 176 32 / 0.1);
+}
+.card.status-error::after {
+  background: rgb(255 77 103 / 0.1);
+}
+@keyframes breathe {
+  from {
+    border-color: rgb(255 176 32 / 0.2);
+  }
+  to {
+    border-color: rgb(255 176 32 / 0.9);
+  }
+}
+@keyframes pulse {
+  from {
+    border-color: rgb(255 77 103 / 0.2);
+  }
+  to {
+    border-color: rgb(255 77 103 / 0.9);
+  }
+}
+
+/* Subagents: quieter everything — near-canvas surface, 2px frame
+   recolored #232b38 (hairline, never below 1 physical px), and a
+   half-opacity edge; no frame breathing or static tint (the edge is the
+   status cue). */
+.card.sub {
+  background: #11151d;
+  border: max(1px, 0.078125vw) solid #232b38; /* 2px border, color-only change */
+}
+.card.sub.status-working {
+  border-left: 0.3125vw solid rgb(32 184 255 / 0.5);
+}
+.card.sub.status-idle {
+  border-left: 0.3125vw solid rgb(74 222 128 / 0.5);
+}
+.card.sub.status-waiting,
+.card.sub.status-error {
+  animation: none;
+}
+.card.sub.status-waiting {
+  border-left: 0.469vw solid rgb(255 176 32 / 0.5);
+}
+.card.sub.status-error {
+  border-left: 0.469vw solid rgb(255 77 103 / 0.5);
+}
+.card.sub.status-waiting::after,
+.card.sub.status-error::after {
+  display: none;
+}
+
+/* Group attachment (indented subs only): the 2px violet spine rises through
+   the row gap to the parent's bottom edge and elbows into the card's left
+   edge at its vertical center. Mid cards pass the spine through to the next
+   sub; end cards stop it at their center. */
+.card.indented {
+  margin-left: 1.719vw; /* 44px native */
+}
+.card.spine-mid::before,
+.card.spine-end::before {
+  content: "";
+  position: absolute;
+  left: -1.25vw; /* spine 24px left of the border box, inside the 44px gutter */
+  top: calc(-1.667vh - 1px); /* through the 12px row gap and this card's hairline */
+  width: 0.9375vw; /* elbow reach: the spine to the card's left edge */
+  border-left: max(1px, 0.078vw) solid rgb(167 139 250 / 0.75);
+  border-bottom: max(1px, 0.078vw) solid rgb(167 139 250 / 0.75);
+  pointer-events: none; /* the spine overlaps the parent card above */
+}
+.card.spine-mid::before {
+  height: calc(100% + 1.667vh + 2px); /* continue into the next gap */
+}
+.card.spine-end::before {
+  height: calc(50% + 1.667vh + 1px); /* stop at this card's center */
+}
+/* The 12px waiting/error edge shifts the padding box the spine anchors to. */
+.card.status-waiting.spine-mid::before,
+.card.status-waiting.spine-end::before,
+.card.status-error.spine-mid::before,
+.card.status-error.spine-end::before {
+  left: -1.406vw;
+}
+
+/* Head row: chip, unread dot, sub pill, title. */
+.card-head {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.547vw; /* 14px native */
+  min-width: 0;
+}
+.card-title {
+  flex: 1;
+  min-width: 0;
+  color: #e8eef7;
+  font-size: 1.25vw; /* 32px native */
+  font-weight: 650;
+  line-height: 1.15;
+}
+.card-title.fallback {
+  font-style: italic;
+  font-weight: 560;
+}
+.one-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Meta row: model · project · activity, with the badge and origin disc at
+   the right end. */
+.card-meta {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.39vw; /* 10px native */
+  min-width: 0;
+  overflow: hidden;
+  margin-left: 2.188vw; /* 56px native: aligns under the title */
+  color: #94a3b8;
+  font-size: 0.859vw; /* 22px native */
+  line-height: 1.2;
+}
+.meta-item {
+  flex: none;
+  white-space: nowrap;
+}
+.meta-item + .meta-item::before {
+  content: "·";
+  margin-right: 0.39vw;
+  opacity: 0.55;
+}
+.meta-item.activity {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.781vw; /* 20px native */
+}
+.meta-right {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.352vw; /* 9px native */
+  padding-left: 0.469vw; /* 12px native */
+}
+.badge {
+  color: #a78bfa;
+  font-size: 0.859vw; /* 22px native */
+  font-weight: 650;
+}
+.origin-disc {
+  flex: none;
+  width: 0.547vw; /* 14px native */
+  height: 0.547vw;
+  border-radius: 50%;
+  background: #a78bfa;
+}
+
+/* Status row: dot + word + tabular timer, right-aligned on the head line. */
+.card-status {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  display: flex;
+  align-items: baseline;
+  gap: 0.313vw; /* 8px native */
+}
+.status-dot {
+  align-self: center;
+  flex: none;
+  width: 0.508vw; /* 13px native */
+  height: 0.508vw;
+  border-radius: 50%;
+  background: var(--st, #94a3b8);
+}
+.status-word {
+  color: #94a3b8;
+  font-size: 0.859vw; /* 22px native */
+}
+.card.status-waiting .status-word,
+.card.status-error .status-word {
+  color: #e8eef7;
+  font-weight: 700;
+}
+.cardtimer {
+  color: #e8eef7;
+  font-size: 1.094vw; /* 28px native */
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+/* The working card's silence gap ("· 48s"), dim beside the bright timer; the
+   liveness ticker fills it once the edge starts fading and empties it when
+   the quiet label takes over. */
+.cardgap {
+  color: #7c8ba1;
+  font-size: 0.859vw; /* 22px native */
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.cardgap:empty {
+  display: none;
+}
+.cardgap::before {
+  content: "· ";
+  opacity: 0.55;
+}
+
+/* Provider chip (locked hues below). */
+.chip {
+  position: relative;
+  flex: none;
+  width: 1.641vw; /* 42px native */
+  height: 1.641vw;
+  border-radius: 0.39vw; /* 10px native */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #10151c;
+  font-size: 0.977vw; /* 25px native */
+  font-weight: 800;
+}
+.chip[data-provider="claude"] {
+  background: #d97757;
+}
+.chip[data-provider="codex"] {
+  background: #d946ef;
+}
+.chip[data-provider="kimi"] {
+  background: #3b82f6;
+}
+.chip[data-provider="pi"] {
+  background: #0ea514;
+}
+.chip[data-provider="omp"] {
+  background: #f5f0ea;
+}
+.chip[data-provider="zcode"] {
+  background: #eab308;
+}
+.chip[data-provider="deepseek"] {
+  background: #2dd4bf;
+}
+.chip[data-provider="grok"] {
+  background: #f472b6;
+}
+.chip[data-provider="qwen"] {
+  background: #ef4444;
+}
+.chip[data-provider="evener"] {
+  background: #a3e635;
+}
+
+.unread-dot {
+  /* Chip-corner badge: -6px offsets, 18px disc, 3px card-colored ring. */
+  position: absolute;
+  top: -0.833vh;
+  right: -0.234vw;
+  width: 0.703vw;
+  height: 0.703vw;
+  border-radius: 50%;
+  background: #ffb020;
+  border: 0.117vw solid #1c2430;
+}
+
+/* The hollow-ring "sub" cue after the chip. */
+.sub-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.313vw; /* 8px native */
+  padding: 0.417vh 0.391vw 0.417vh 0.313vw; /* 3px 10px 3px 8px native */
+  border: max(1px, 0.0586vw) solid rgb(167 139 250 / 0.45); /* 1.5px native */
+  border-radius: 0.313vw; /* 8px native */
+  color: #94a3b8;
+  font-size: 0.781vw; /* 20px native */
+}
+.sub-pill::before {
+  content: "";
+  flex: none;
+  width: 0.508vw; /* 13px native */
+  height: 0.508vw;
+  border: 0.098vw solid #a78bfa; /* 2.5px native */
+  border-radius: 50%;
+}
+
+/* Subagent anatomy: smaller chip, muted title, tighter status and meta. */
+.card.sub .chip {
+  width: 1.25vw; /* 32px native */
+  height: 1.25vw;
+  border-radius: 0.313vw; /* 8px native */
+  font-size: 0.781vw; /* 20px native */
+  opacity: 0.85;
+}
+.card.sub .card-title {
+  color: #94a3b8;
+  font-size: 1.016vw; /* 26px native */
+  font-weight: 550;
+}
+.card.sub .card-meta {
+  margin-left: 1.797vw; /* 46px native: the sub chip is narrower */
+  color: rgb(148 163 184 / 0.85);
+  font-size: 0.781vw; /* 20px native */
+}
+.card.sub .status-word {
+  color: rgb(148 163 184 / 0.8);
+  font-size: 0.781vw; /* 20px native */
+}
+.card.sub .cardtimer {
+  color: #94a3b8;
+  font-size: 0.938vw; /* 24px native */
+  font-weight: 600;
+}
+.card.sub .cardgap {
+  font-size: 0.781vw; /* 20px native */
+}
+.card.sub .status-dot {
+  width: 0.43vw; /* 11px native */
+  height: 0.43vw;
+}
+
+/* Liveness (working cards only; waiting/idle/error treatments unchanged).
+   Decay: the 1s ticker inline-paints border-left-color and --st from
+   data-last-event; these rules carry only what the ticker cannot. Placed
+   after the sub blocks so the quiet edge wins the (0,3,0) order tie with
+   .card.sub.status-working's border-left shorthand. */
+
+/* Quiet: ≥10 silent minutes. The solid edge gives way to a 2px inset rule,
+   the dot hollows, the surface sinks, and the meta row states the silence
+   as a fact ("quiet 12m") — never a claim like "stalled". */
+.card.status-working.quiet {
+  background: #171e28;
+  border-left-color: transparent;
+  box-shadow: inset 0.078vw 0 0 #55647a; /* 2px native rule in the edge slot */
+}
+.card.status-working.quiet .card-title {
+  color: #8b9bb0;
+}
+.card.status-working.quiet .status-dot {
+  background: transparent;
+  border: max(1px, 0.078vw) solid #55647a; /* 2px native */
+  animation: none;
+}
+.card.status-working.quiet .unread-dot {
+  border-color: #171e28; /* the ring stays card-colored on the sunk surface */
+}
+.quiet-elapsed {
+  color: #5c6b80;
+}
+.quiet-elapsed:empty {
+  display: none;
+}
+
+/* Pulse: a one-shot bloom fired by main.ts via element.animate when the
+   card's stamp advances (coalesced per card); at rest it is invisible. */
+.pulse-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgb(32 184 255 / 0.34), transparent 46%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Breath: proof of life on one shared four-second cycle — the phase comes
+   from the wall clock (--breath-delay), so every dot on the board inhales
+   together and the one still dot (a quiet card) is the salient thing.
+   opacity MULTIPLIES the decayed --st alpha; it must never replace it. */
+.card.status-working:not(.quiet) .status-dot {
+  animation: breath 4s ease-in-out infinite;
+  animation-delay: var(--breath-delay, 0s);
+}
+@keyframes breath {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(0.92);
+  }
+}
+
+.flag {
+  position: absolute;
+  left: 4%;
+  bottom: 4%;
+  color: #ffb020;
+  font-size: 1.6vw;
+  font-weight: 700;
+}
+
+#rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1vh;
+  background: #10141c;
+  border: 1px solid #232b38;
+  border-radius: 1vw;
+  /* 44px top matches the board's menu-bar clearance; the box itself may sit
+     under the overlay bar, but its content never does. */
+  padding: 6.111vh 3.5% 2.222vh;
+  color: #94a3b8;
+  font-size: 1.3vw;
+}
+/* Fullscreen: match the board's centered top edge (see the #board note). */
+body[data-fullscreen] #rail {
+  padding-top: 3.333vh;
+}
+.dot {
+  width: 0.5vw;
+  height: 0.5vw;
+  border-radius: 50%;
+}
+.dot.ok {
+  background: #4ade80;
+}
+.dot.bad {
+  background: #ff4d67;
+}
+.offline-text {
+  color: #ff4d67;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.rail-tokens {
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
+.rail-tokens[data-state="stale"] {
+  opacity: 0.45;
+}
+.tokens-today {
+  color: #e8eef7;
+  font-size: 1.6vw;
+  font-weight: 650;
+}
+/* The two rolling rates stack beside the sparkline; tokens-rate's min-width
+   floor keeps the column width stable across realistic values. */
+.tokens-flow {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.469vw; /* 12px native */
+  margin-top: 1.389vh; /* 10px native */
+}
+.tokens-rate {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.833vh; /* 6px native */
+  width: auto;
+  min-width: 7.422vw; /* 190px native: a stable floor above every realistic rate string, so the sparkline never shifts */
+  color: #94a3b8;
+  font-size: 1.2vw;
+}
+.tokens-rate [data-trend="up"] {
+  color: #4ade80;
+}
+.tokens-rate [data-trend="down"] {
+  color: #ff4d67;
+}
+
+/* Day-over-day sparkline: a 500x84-native box beside the rates — faint
+   fill under today's curve, dim yesterday line, bright today line, endpoint
+   dot, and the yda micro-label as SVG text at the fixed baseline (uniform
+   viewBox scaling keeps it 20px native). The height is fixed rather than
+   ratio-locked to the width, so a wider box is not a taller one — a taller
+   sparkline would eat the rail's quota-panel breathing room. */
+.rail-sparkline {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 11.667vh; /* 84px native */
+  overflow: visible; /* the endpoint dot sits at the plot edge */
+}
+.rail-sparkline svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.rail-unread {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+  margin-top: 1.667vh; /* + the rail gap ≈ 20px below the token block */
+  font-size: 1.016vw; /* 26px native */
+}
+.rail-unread.active {
+  color: #ffb020;
+  font-weight: 600;
+}
+
+/* The quota panels share one flex zone that absorbs the rail's free height,
+   spreading the meters evenly instead of packing them (the reclaimed space
+   goes between the bars). */
+.rail-quota-zone {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-evenly;
+  min-height: 0;
+}
+
+.rail-pager {
+  display: flex;
+  gap: 0.6vw;
+}
+.page-dot {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0.2vw;
+  color: #2a3342;
+  font-size: 0.6vw;
+  cursor: pointer;
+}
+.page-dot.current {
+  color: #94a3b8;
+}
+
+/* Quota panels (strip-only; there is no keypad equivalent). */
+.rail-quota {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5vh;
+}
+.rail-quota[data-state="stale"],
+.rail-quota[data-state="unavailable"] {
+  opacity: 0.45;
+}
+.quota-group {
+  gap: 1.389vh; /* 10px native */
+}
+.quota-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.972vh; /* 7px native */
+}
+.quota-provider-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+  font-size: 1.2vw;
+}
+.quota-account-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1.667vh; /* 12px native */
+  padding-left: 0.469vw; /* 12px native */
+}
+.quota-account-stack::before {
+  position: absolute;
+  top: 0.278vh;
+  bottom: 0.278vh;
+  left: 0;
+  width: max(1px, 0.078vw); /* 2px native */
+  border-radius: 0.139vh;
+  background: rgb(217 119 87 / 0.55);
+  content: "";
+}
+.quota-account {
+  display: flex;
+  flex-direction: column;
+}
+.quota-account-marker {
+  flex: none;
+  width: 0.42vw;
+  height: 0.42vw;
+  border-radius: 50%;
+  background: transparent;
+}
+.quota-account-active {
+  background: #d97757;
+}
+.quota-account-label {
+  flex: none;
+  min-width: 0.8vw;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  transform: scale(0.651); /* 20px glyph at native width; inherited metrics keep every meter aligned */
+  transform-origin: left center;
+}
+.quota-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+  font-size: 1.2vw;
+}
+.quota-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4vw;
+  height: 1.4vw;
+  border-radius: 22%;
+  color: #10151c;
+  font-size: 0.9vw;
+  font-weight: 700;
+}
+.quota-chip[data-provider="claude"] {
+  background: #d97757;
+}
+.quota-chip[data-provider="codex"] {
+  background: #d946ef;
+}
+.quota-chip[data-provider="kimi"] {
+  background: #3b82f6;
+}
+.quota-chip[data-provider="zai"] {
+  background: #2dd4bf;
+}
+.quota-chip[data-provider="qwen"] {
+  background: #ef4444;
+}
+.quota-right {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4vw;
+}
+.quota-pct {
+  color: #e8eef7;
+  font-variant-numeric: tabular-nums;
+}
+.quota-note {
+  color: #94a3b8;
+  font-size: 1.05vw;
+  /* The note is one line of facts — never let it wrap an orphan word. */
+  white-space: nowrap;
+}
+.quota-bar {
+  position: relative;
+  height: 1.111vh;
+  border-radius: 0.556vh;
+  background: #232b38;
+  overflow: hidden;
+}
+.quota-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+.quota-account[data-state="stale"] .quota-right,
+.quota-account[data-state="stale"] .quota-bar,
+.quota-account[data-state="unavailable"] .quota-right,
+.quota-account[data-state="unavailable"] .quota-bar {
+  opacity: 0.45;
+}
+/* A neutral tick per non-binding window at its own percent. */
+.quota-tick {
+  position: absolute;
+  top: 0;
+  width: max(1px, 0.078vw); /* 2px native */
+  height: 100%;
+  background: rgb(148 163 184 / 0.55);
+}
+.quota-tag {
+  flex: none;
+  padding: 0.1vh 0.4vw;
+  border-radius: 0.3vw;
+  background: #1c2430;
+  color: #94a3b8;
+  font-size: 0.95vw;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.card.flash {
+  animation: flashblink 0.32s ease-out;
+}
+@keyframes flashblink {
+  0% {
+    box-shadow: inset 0 0 0 1vw rgb(148 163 184 / 0.9);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+/* Long-press action sheet. The overlay covers the window; the sheet is
+   positioned by main.ts at the touch point. */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgb(0 0 0 / 0.25);
+}
+.action-sheet {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6vh;
+  min-width: 16vw;
+  padding: 1.2vh 0.8vw;
+  background: #1a2230;
+  border: 1px solid #2a3342;
+  border-radius: 0.8vw;
+  box-shadow: 0 1vh 4vh rgb(0 0 0 / 0.5);
+}
+.sheet-title {
+  max-width: 22vw;
+  padding: 0 0.6vw 0.8vh;
+  border-bottom: 1px solid #2a3342;
+  color: #94a3b8;
+  font-size: 1.3vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-error {
+  padding: 0.2vh 0.6vw 0.4vh;
+  color: #ff4d67;
+  font-size: 1.2vw;
+}
+.sheet-item {
+  appearance: none;
+  border: none;
+  border-radius: 0.5vw;
+  background: none;
+  color: #e8eef7;
+  font-size: 1.6vw;
+  padding: 1.2vh 0.8vw;
+  text-align: left;
+  cursor: pointer;
+}
+.sheet-item:active {
+  background: #232b38;
+}
+.sheet-item:disabled {
+  color: #4a5568;
+  cursor: default;
+}
+.sheet-item.confirming {
+  color: #ff4d67;
+  font-weight: 700;
+}

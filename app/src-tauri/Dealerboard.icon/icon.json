@@ -1,0 +1,34 @@
+{
+  "fill" : {
+    "solid" : "extended-srgb:0.09412,0.10588,0.13725,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "app-icon-foreground.svg",
+          "name" : "Cells"
+        },
+        {
+          "image-name" : "app-icon-background.svg",
+          "name" : "Background"
+        }
+      ],
+      "name" : "Board",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

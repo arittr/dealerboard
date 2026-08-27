@@ -1,0 +1,40 @@
+{
+	"Name": "Dealerboard",
+	"Version": "0.4.2.2",
+	"Author": "Drew Ritter",
+	"Actions": [
+		{
+			"Name": "Session Grid",
+			"UUID": "com.drewritter.dealerboard.session-grid",
+			"Icon": "imgs/action-icon",
+			"Tooltip": "Shows live agent sessions; press Claude, Codex, or Kimi tiles to focus or open them.",
+			"Controllers": [
+				"Keypad"
+			],
+			"States": [
+				{
+					"Image": "imgs/action-icon"
+				}
+			]
+		}
+	],
+	"Category": "Dealerboard",
+	"CategoryIcon": "imgs/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Displays live agent sessions from the local registry on a 15-key grid. Press Claude tiles to focus their Ghostty terminals, Codex tiles to open desktop tasks, and Kimi tiles to open Web sessions.",
+	"Icon": "imgs/plugin-icon",
+	"SDKVersion": 3,
+	"Software": {
+		"MinimumVersion": "7.1"
+	},
+	"OS": [
+		{
+			"Platform": "mac",
+			"MinimumVersion": "12"
+		}
+	],
+	"Nodejs": {
+		"Version": "24"
+	},
+	"UUID": "com.drewritter.dealerboard"
+}

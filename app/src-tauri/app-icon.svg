@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Dealerboard</title>
+  <g id="background">
+    <rect width="1024" height="1024" fill="#181b23"/>
+  </g>
+  <g id="neutral-cells" fill="#3a414f">
+    <rect x="294" y="290" width="132" height="116" rx="28"/>
+    <rect x="622" y="290" width="132" height="116" rx="28"/>
+    <rect x="786" y="290" width="132" height="116" rx="28"/>
+    <rect x="130" y="454" width="132" height="116" rx="28"/>
+    <rect x="458" y="454" width="132" height="116" rx="28"/>
+    <rect x="622" y="454" width="132" height="116" rx="28"/>
+    <rect x="130" y="618" width="132" height="116" rx="28"/>
+    <rect x="294" y="618" width="132" height="116" rx="28"/>
+    <rect x="458" y="618" width="132" height="116" rx="28"/>
+    <rect x="622" y="618" width="132" height="116" rx="28"/>
+    <rect x="786" y="618" width="132" height="116" rx="28"/>
+  </g>
+  <g id="working-cells" fill="#4ade80">
+    <rect x="130" y="290" width="132" height="116" rx="28"/>
+    <rect x="458" y="290" width="132" height="116" rx="28"/>
+    <rect x="786" y="454" width="132" height="116" rx="28"/>
+  </g>
+  <g id="attention-cell" fill="#ffb020">
+    <rect x="294" y="454" width="132" height="116" rx="28"/>
+  </g>
+</svg>

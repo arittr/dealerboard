@@ -1,0 +1,18 @@
+# NOTE: lefthook globs are not standard shell globs — `*` matches across
+# path separators and `dir/**/*.ts` matches nothing. Verified working forms
+# under lefthook 2.1.10: `*.ts` and `*.{ts,json,mjs}` cover the repo.
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{ts,json,mjs}"
+      run: bunx biome check --write --no-errors-on-unmatched {staged_files}
+      stage_fixed: true
+    typecheck:
+      glob: "*.ts"
+      run: bun run typecheck
+
+pre-push:
+  commands:
+    check:
+      run: bun run check

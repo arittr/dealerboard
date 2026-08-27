@@ -1,0 +1,414 @@
+// dealerboard: managed shim v1
+/**
+ * Reports oh-my-pi (omp) session lifecycle to the dealerboard daemon.
+ *
+ * Dependency-free by contract (jiti loads this file bare); the host surface
+ * is declared as local structural interfaces. omp hosts MANY sessions per
+ * process, including headless ones — the shim emits only for sessions with a
+ * UI and a session file, and re-reads the current identity on every
+ * session_start and session_switch (the subagent bus handler has no ctx, so
+ * a stale captured id would mis-parent rows). Telemetry never breaks the
+ * host: every handler is fail-soft, the approval handler is observe-only,
+ * and helper spawns are detached but serialized through a FIFO queue — each
+ * spawn starts only after the previous helper exits, so wire order always
+ * matches emission order (unserialized spawns milliseconds apart were
+ * live-observed reaching the registry out of order).
+ */
+
+import { spawn } from "node:child_process";
+
+/** Substituted by scripts/install-local.ts at copy time. */
+const HELPER = "__DEALERBOARD_EXECUTABLE__";
+const HELPER_ARGS = ["event", "omp"] as const;
+
+/**
+ * The queue's settlement backstop. The helper's contract is sub-second; a
+ * link that hasn't settled by this deadline is treated as hung, killed
+ * best-effort, and the queue moves on.
+ */
+export const SPAWN_SETTLE_TIMEOUT_MS = 2_000;
+
+/**
+ * Tool-event pair — pinned by the implementation-time parity probe against
+ * the installed omp package (verified: @oh-my-pi/pi-coding-agent 17.3.4
+ * carries pi's tool_execution_start/end with the same payloads). Prefer pi's
+ * fork-parity pair; fall back to tool_call/tool_result (both handler bodies
+ * stay fully try/caught — those events are fail-closed on throw). Exported
+ * so the harness fires the same pair instead of hardcoding it.
+ */
+export const TOOL_EVENTS = { start: "tool_execution_start", end: "tool_execution_end" } as const;
+
+/** A returned Promise defers the next spawn until it settles (queue link). */
+export type SpawnPort = (json: string) => void | Promise<void>;
+
+export type OmpContext = {
+  hasUI: boolean;
+  sessionManager: {
+    getSessionId(): string | undefined;
+    getSessionFile(): string | undefined;
+  };
+};
+
+export type OmpHost = {
+  on(event: string, handler: (event: unknown, ctx: OmpContext) => unknown): void;
+  events: {
+    on(event: string, handler: (payload: unknown) => void): void;
+  };
+};
+
+type WirePayload = {
+  hook_event_name: string;
+  session_id: string;
+  cwd?: string;
+  transcript_path?: string;
+  tool_name?: string;
+  agent_id?: string;
+  agent_type?: string;
+};
+
+/** Narrow a host payload to a readable record; anything else reads as empty. */
+const asRecord = (value: unknown): Record<string, unknown> =>
+  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+
+const readString = (value: unknown, key: string): string | undefined => {
+  const field = asRecord(value)[key];
+  return typeof field === "string" && field.length > 0 ? field : undefined;
+};
+
+/** Live-pinned accessor: omp's input event source field (pi fork parity). */
+const readSource = (event: unknown): string | undefined => readString(event, "source");
+
+/** Live-pinned accessor: omp's tool events carry the tool's name. */
+const readToolName = (event: unknown): string | undefined => readString(event, "toolName");
+
+/** omp's question tool normalizes to the decoder's existing waiting rule. */
+const normalizeToolName = (name: string | undefined): string | undefined => (name === "ask" ? "AskUserQuestion" : name);
+
+/**
+ * The child surface the adapter touches — structural, so tests drive the
+ * production adapter with a fake child (kill spy, controllable exit/error
+ * events) instead of real helper processes.
+ */
+export type SpawnedChild = {
+  on(event: string, listener: () => void): unknown;
+  kill(signal?: string | number): boolean;
+  unref(): void;
+  stdin: { on(event: string, listener: () => void): unknown; end(data: string): void } | null;
+};
+
+/** node:child_process spawn as the adapter calls it — the injectable seam. */
+export type ChildSpawn = (
+  command: string,
+  args: string[],
+  options: { detached: boolean; stdio: ["pipe", "ignore", "ignore"] },
+) => SpawnedChild;
+
+/** Injectable settle-timer handle — armed on spawn, cleared on settle, unref'd. */
+export type SettleTimer = {
+  clear(): void;
+  unref(): void;
+};
+
+/** Timer seam: tests observe arm/clear/unref without wall-clock waits. */
+export type SettleTimerFactory = (callback: () => void, timeoutMs: number) => SettleTimer;
+
+/** The production timer: one ambient timeout, unref'd at arm, cleared at settle. */
+const defaultSettleTimer: SettleTimerFactory = (callback, timeoutMs) => {
+  const timer = setTimeout(callback, timeoutMs);
+  return {
+    clear: () => clearTimeout(timer),
+    unref: () => timer.unref(),
+  };
+};
+
+/**
+ * The production spawn adapter (defaultSpawn's body) as an injectable
+ * factory — behavior identical to the inline original; tests drive it with
+ * a fake child-spawn and a fake settle-timer factory.
+ */
+export const createSpawnPort =
+  (
+    spawnFn: ChildSpawn = spawn,
+    settleTimer: SettleTimerFactory = defaultSettleTimer,
+    timeoutMs: number = SPAWN_SETTLE_TIMEOUT_MS,
+  ): SpawnPort =>
+  (json) =>
+    new Promise<void>((resolve) => {
+      try {
+        const child = spawnFn(HELPER, [...HELPER_ARGS], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+        const timer = settleTimer(() => {
+          // Hung helper: kill best-effort and release the queue link.
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // The kill is best-effort; the link releases regardless.
+          }
+          resolve();
+        }, timeoutMs);
+        timer.unref();
+        const settle = (): void => {
+          timer.clear();
+          resolve();
+        };
+        // Helper missing or unspawnable ("error") and any exit both settle.
+        child.on("error", settle);
+        child.on("exit", settle);
+        child.stdin?.on("error", () => {
+          // EPIPE if the helper exits first — irrelevant to the host.
+        });
+        child.stdin?.end(json);
+        child.unref();
+      } catch {
+        // Never let telemetry surface in the host process.
+        resolve();
+      }
+    });
+
+const defaultSpawn: SpawnPort = createSpawnPort();
+
+export const createExtension = (
+  host: OmpHost,
+  spawnPort: SpawnPort = defaultSpawn,
+  settleTimeoutMs: number = SPAWN_SETTLE_TIMEOUT_MS,
+): void => {
+  // FIFO spawn queue. Helpers are independent detached processes, and two
+  // spawned milliseconds apart can reach the registry out of order — live-
+  // observed on pi's Escape'd tool call, where the PostToolUse write landed
+  // after the terminal StopFailure and stuck the tile on working. Each link
+  // starts only after the previous helper settles; every link is fail-soft
+  // and settle-timeout-bounded, so neither a dead helper nor a hung one
+  // wedges the queue. Handlers stay synchronous — the queue absorbs the
+  // asynchrony, and a port that completes synchronously (returns no
+  // promise) keeps emission fully synchronous. Accepted residual: a hung
+  // helper costs one timeout per event (bounded drain, never an unbounded
+  // stall), and events still queued behind a hung helper when the host
+  // exits are lost — the prune lease covers the resulting stale tile.
+  let spawnTail: Promise<void> | undefined;
+
+  const emit = (payload: WirePayload): void => {
+    try {
+      const json = JSON.stringify(payload);
+      // Every link settles: port promise resolution, rejection, a
+      // synchronous throw, and the settle timeout all release the queue.
+      const link = (): Promise<void> | undefined => {
+        try {
+          const result: unknown = spawnPort(json);
+          if (!(result instanceof Promise)) {
+            return undefined;
+          }
+          return new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, settleTimeoutMs);
+            timer.unref();
+            (result as Promise<void>).then(
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+            );
+          });
+        } catch {
+          // A broken port must never break the host session.
+          return undefined;
+        }
+      };
+      if (spawnTail === undefined) {
+        const first = link();
+        if (first !== undefined) {
+          spawnTail = first.then(
+            () => undefined,
+            () => undefined,
+          );
+        }
+      } else {
+        spawnTail = spawnTail.then(link).then(
+          () => undefined,
+          () => undefined,
+        );
+      }
+    } catch {
+      // Never let telemetry break the host session.
+    }
+  };
+
+  // The current GRID-VISIBLE session identity. Undefined when the foreground
+  // session is headless or file-less. Refreshed on session_start and
+  // session_switch; the subagent bus handler has no ctx and reads this.
+  let current: { sessionId: string; sessionFile: string } | undefined;
+
+  const refresh = (ctx: OmpContext): void => {
+    // Fail-safe disarm: clear FIRST, before any potentially throwing
+    // operation, so a getter that throws mid-refresh can never leave the
+    // previous session's identity armed for the ctx-less bus handler.
+    current = undefined;
+    // Reject non-true hasUI before touching the session manager (an absent
+    // hasUI reads headless — conservative, and the installed types say the
+    // field is a required boolean on every event's ctx).
+    if (ctx.hasUI !== true) {
+      return;
+    }
+    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    if (sessionId !== undefined && sessionFile !== undefined) {
+      current = { sessionId, sessionFile };
+    }
+  };
+
+  host.on("session_start", (_event: unknown, ctx: OmpContext) => {
+    try {
+      refresh(ctx);
+      if (current === undefined) {
+        return;
+      }
+      emit({
+        hook_event_name: "SessionStart",
+        session_id: current.sessionId,
+        cwd: process.cwd(),
+        transcript_path: current.sessionFile,
+      });
+    } catch {
+      // fail-soft
+    }
+  });
+
+  host.on("session_switch", (_event: unknown, ctx: OmpContext) => {
+    try {
+      // Identity follows the visible session; the row itself re-registers on
+      // the next prompt via late-join if it was pruned.
+      refresh(ctx);
+    } catch {
+      // fail-soft
+    }
+  });
+
+  host.on("input", (event: unknown, ctx: OmpContext) => {
+    try {
+      refresh(ctx);
+      if (current === undefined || readSource(event) !== "interactive") {
+        return;
+      }
+      emit({ hook_event_name: "UserPromptSubmit", session_id: current.sessionId });
+    } catch {
+      // fail-soft
+    }
+  });
+
+  host.on(TOOL_EVENTS.start, (event: unknown, ctx: OmpContext) => {
+    try {
+      refresh(ctx);
+      if (current === undefined) {
+        return;
+      }
+      const toolName = normalizeToolName(readToolName(event));
+      emit({
+        hook_event_name: "PreToolUse",
+        session_id: current.sessionId,
+        ...(toolName === undefined ? {} : { tool_name: toolName }),
+      });
+    } catch {
+      // fail-soft
+    }
+  });
+
+  host.on(TOOL_EVENTS.end, (event: unknown, ctx: OmpContext) => {
+    try {
+      refresh(ctx);
+      if (current === undefined) {
+        return;
+      }
+      const toolName = normalizeToolName(readToolName(event));
+      emit({
+        hook_event_name: "PostToolUse",
+        session_id: current.sessionId,
+        ...(toolName === undefined ? {} : { tool_name: toolName }),
+      });
+    } catch {
+      // fail-soft
+    }
+  });
+
+  host.on("tool_approval_requested", (_event: unknown, ctx: OmpContext) => {
+    try {
+      refresh(ctx);
+      if (current === undefined) {
+        return undefined;
+      }
+      // Observe-only: this handler exists to see the event. Never intercept —
+      // the return value is undefined and the approval UX is unchanged.
+      emit({ hook_event_name: "PermissionRequest", session_id: current.sessionId });
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  });
+
+  // session_stop is awaited by omp — the helper spawn is detached and this
+  // handler never blocks on it.
+  host.on("session_stop", (_event: unknown, ctx: OmpContext) => {
+    try {
+      refresh(ctx);
+      if (current === undefined) {
+        return;
+      }
+      emit({ hook_event_name: "Stop", session_id: current.sessionId });
+    } catch {
+      // fail-soft
+    }
+  });
+
+  // Verified 2026-08-15 against omp 17.3.4: session_shutdown is process-exit
+  // only; session switches fire session_switch instead (handled above).
+  host.on("session_shutdown", (_event: unknown, ctx: OmpContext) => {
+    try {
+      refresh(ctx);
+      if (current === undefined) {
+        return;
+      }
+      emit({ hook_event_name: "SessionEnd", session_id: current.sessionId });
+    } catch {
+      // fail-soft
+    }
+  });
+
+  host.events.on("task:subagent:lifecycle", (payload: unknown) => {
+    try {
+      // No ctx on the bus — the refreshed foreground identity is the parent.
+      if (current === undefined) {
+        return;
+      }
+      const childId = readString(payload, "id");
+      if (childId === undefined) {
+        return;
+      }
+      // Live-pinned against omp 17.3.4 (src/task/types.ts
+      // SubagentLifecyclePayload): the phase field is `status` and the agent
+      // name field is `agent` — the brief's `phase`/`agent_name` spellings do
+      // not exist in any installed build (17.2.11 and 17.3.4 agree).
+      const status = readString(payload, "status");
+      if (status === "started") {
+        // The payload id is an agent/registry identity, NOT a session-manager
+        // session id — the two namespaces never mix on the wire (agent_id).
+        const agentName = readString(payload, "agent");
+        emit({
+          hook_event_name: "SubagentStart",
+          session_id: current.sessionId,
+          agent_id: childId,
+          cwd: process.cwd(),
+          ...(agentName === undefined ? {} : { agent_type: agentName }),
+        });
+      } else if (status === "completed" || status === "failed" || status === "aborted") {
+        emit({ hook_event_name: "SubagentStop", session_id: current.sessionId, agent_id: childId });
+      }
+    } catch {
+      // fail-soft
+    }
+  });
+};
+
+/** omp's extension contract: a default-exported factory invoked with the ExtensionAPI. */
+export default function streamDeckAgents(host: OmpHost): void {
+  createExtension(host);
+}
