@@ -282,8 +282,8 @@ const quotaSection = (panel: QuotaPanelModel, nowMs: number): HTMLElement => {
   const section = document.createElement("section");
   section.className = render.grouped ? "rail-quota quota-group" : "rail-quota";
   section.dataset["provider"] = panel.provider;
+  section.dataset["state"] = panel.state;
   if (!render.grouped) {
-    section.dataset["state"] = panel.state;
     section.append(quotaMeter(render.meter, nowMs, quotaProviderIdentity(panel.provider)));
     return section;
   }

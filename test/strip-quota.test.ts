@@ -203,6 +203,27 @@ describe("reduceQuotaRead", () => {
     expect(reduceQuotaRead(read({ claude: quota({ fetchedAt: oldFetch }) }), NOW)[0]?.state).toBe("stale");
   });
 
+  test("a grouped stamp older than three passes dims the group; a fresh stamp does not", () => {
+    const groupedEntry = (fetchedAt: string) =>
+      quota({
+        percentRemaining: null,
+        resetAt: null,
+        weeklyPercentRemaining: null,
+        weeklyResetAt: null,
+        unavailable: false,
+        fetchedAt,
+        accounts: [quotaAccount(), quotaAccount({ id: "claude-swap:2", label: "2", active: true })],
+      });
+    const starved = reduceQuotaRead(
+      read({ claude: groupedEntry(new Date(NOW - STALE_QUOTA_AGE_MS - 1).toISOString()) }),
+      NOW,
+    )[0];
+    expect(starved?.state).toBe("stale");
+    expect(starved?.accounts).toHaveLength(2);
+    const fresh = reduceQuotaRead(read({ claude: groupedEntry(new Date(NOW).toISOString()) }), NOW)[0];
+    expect(fresh?.state).toBe("ok");
+  });
+
   test("a provider that never fetched is unavailable with no windows", () => {
     const panel = reduceQuotaRead(
       read({

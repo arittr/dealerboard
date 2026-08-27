@@ -118,6 +118,24 @@ test("maps grouped Claude to one provider and two stable account meters", () => 
   expect(quotaRenderModel(quotaPanel())).toMatchObject({ grouped: false, meter: { provider: "claude" } });
 });
 
+test("the grouped section carries the ambient panel state", () => {
+  withFakeDocument((root) => {
+    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
+    const group = descendants(root).find((node) => hasClass(node, "quota-group"));
+    expect(group?.dataset["state"]).toBe("ok");
+  });
+  withFakeDocument((root) => {
+    const stale = quotaPanel({ state: "stale", accounts: groupedClaude().accounts });
+    renderRail(root as unknown as HTMLElement, model({ quota: [stale] }), { onJumpToPage: () => {} });
+    const group = descendants(root).find((node) => hasClass(node, "quota-group"));
+    expect(group?.dataset["state"]).toBe("stale");
+    // The render-skip signature must see the group-level dim, or it would not rebuild.
+    expect(railRenderSignature(model({ quota: [stale] }))).not.toBe(
+      railRenderSignature(model({ quota: [groupedClaude()] })),
+    );
+  });
+});
+
 test("renders one Claude header, two bars, one active marker, and per-account dimming", () => {
   withFakeDocument((root) => {
     renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
