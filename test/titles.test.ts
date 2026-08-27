@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createSessionFactsResolver, type FileStat, OMP_SLOT_BYTES, type TitleTarget } from "../src/core/titles";
 
 const CODEX_INDEX = "/home/test/.codex/session_index.jsonl";
+const KIMI_INDEX = "/home/test/.kimi-code/session_index.jsonl";
 
 type FakeFs = {
   stats: Map<string, FileStat>;
@@ -37,6 +38,7 @@ const makeResolver = (seed?: {
   let headReads = 0;
   const resolver = createSessionFactsResolver({
     codexIndexPath: CODEX_INDEX,
+    kimiIndexPath: KIMI_INDEX,
     zcodeDatabasePath: seed?.zcodeDatabasePath ?? "/nonexistent/zcode/db.sqlite",
     grokSessionsRoot: seed?.grokSessionsRoot ?? "/nonexistent/grok/sessions",
     statPath: (path) => stats.get(path) ?? null,
@@ -598,6 +600,7 @@ describe("omp session-file titles", () => {
     // Real filesystem access against synthetic fixture data — no fs fakes.
     const resolver = createSessionFactsResolver({
       codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
+      kimiIndexPath: "/nonexistent/.kimi-code/session_index.jsonl",
       zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
       grokSessionsRoot: "/nonexistent/grok/sessions",
     });
@@ -1049,6 +1052,92 @@ describe("activity line resolution", () => {
         },
       ]).activities,
     ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Command" }]);
+  });
+
+  const kimiIndexLine = (sessionId: string, sessionDir: string): string =>
+    `${JSON.stringify({ sessionId, sessionDir, workDir: "/repo" })}\n`;
+
+  const kimiToolCall = (name: string, args: Record<string, unknown>): string =>
+    `${JSON.stringify({ type: "context.append_loop_event", agentId: "main", event: { type: "tool.call", uuid: "u1", turnId: "0", step: 1, toolCallId: "t1", name, args }, time: 1787809291975 })}\n`;
+
+  const kimiTarget = (): TitleTarget => ({
+    provider: "kimi",
+    sessionId: "session_k1",
+    title: null,
+    model: null,
+    transcriptPath: null,
+    activityLine: null,
+  });
+
+  test("resolves a kimi tool.call through the session index and the main agent's wire tail", () => {
+    const wirePath = "/home/test/.kimi-code/sessions/wd_repo_abc/session_k1/agents/main/wire.jsonl";
+    const contentPart = `${JSON.stringify({ type: "context.append_loop_event", agentId: "main", event: { type: "content.part", uuid: "u2", part: { type: "think", think: "..." } } })}\n`;
+    const { resolver } = makeResolver({
+      stats: {
+        [KIMI_INDEX]: { mtimeMs: 100, size: 300 },
+        [wirePath]: { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [KIMI_INDEX]: kimiIndexLine("session_k1", "/home/test/.kimi-code/sessions/wd_repo_abc/session_k1") },
+      tails: { [wirePath]: `${kimiToolCall("Bash", { command: "bun test" })}${contentPart}` },
+    });
+    // The non-call loop event newest in the tail falls through to the call.
+    expect(resolver.resolve([kimiTarget()]).activities).toEqual([
+      { provider: "kimi", sessionId: "session_k1", activityLine: "Command" },
+    ]);
+  });
+
+  test("a kimi session absent from the index resolves no activity", () => {
+    const { resolver, fs } = makeResolver({
+      stats: { [KIMI_INDEX]: { mtimeMs: 100, size: 300 } },
+      wholes: { [KIMI_INDEX]: kimiIndexLine("session_other", "/home/test/.kimi-code/sessions/wd_x/session_other") },
+    });
+    expect(resolver.resolve([kimiTarget()]).activities).toEqual([]);
+    expect(fs.tailReads()).toBe(0);
+  });
+
+  test("resolves an omp tool_execution_start's category from the session tail", () => {
+    const execStart = (toolName: string, args: Record<string, unknown>): string =>
+      `${JSON.stringify({ type: "custom", customType: "tool_execution_start", data: { toolCallId: "call_1", toolName, startedAt: "2026-08-27T05:52:12.153Z", args } })}\n`;
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/o1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: {
+        "/transcripts/o1.jsonl": `${execStart("read", { path: "/repo/src/core/titles.ts" })}${execStart("bash", { command: "git status --short" })}`,
+      },
+    });
+    expect(
+      resolver.resolve([
+        {
+          provider: "omp",
+          sessionId: "o1",
+          title: null,
+          model: null,
+          transcriptPath: "/transcripts/o1.jsonl",
+          activityLine: null,
+        },
+      ]).activities,
+    ).toEqual([{ provider: "omp", sessionId: "o1", activityLine: "Command" }]);
+  });
+
+  test("an omp tool_execution_start without classifiable args is the opaque tool category", () => {
+    const line = `${JSON.stringify({ type: "custom", customType: "tool_execution_start", data: { toolCallId: "call_1", toolName: "edit", startedAt: "2026-08-27T05:52:12.153Z", args: {} } })}\n`;
+    const other = `${JSON.stringify({ type: "custom", customType: "mid-run-todo-nudge", data: {} })}\n`;
+    const { resolver } = makeResolver({
+      stats: { "/transcripts/o1.jsonl": { mtimeMs: 100, size: 500 } },
+      tails: { "/transcripts/o1.jsonl": `${line}${other}` },
+    });
+    // The non-tool custom record newest in the tail falls through to the call.
+    expect(
+      resolver.resolve([
+        {
+          provider: "omp",
+          sessionId: "o1",
+          title: null,
+          model: null,
+          transcriptPath: "/transcripts/o1.jsonl",
+          activityLine: null,
+        },
+      ]).activities,
+    ).toEqual([{ provider: "omp", sessionId: "o1", activityLine: "Tool" }]);
   });
 
   test("resolves a codex custom_tool_call by tool name", () => {

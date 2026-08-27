@@ -422,6 +422,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
     const grokRoot = environment["GROK_HOME"] ?? join(daemonPaths.home, ".grok");
     const resolveFacts = createSessionFactsResolver({
       codexIndexPath: join(daemonPaths.home, ".codex/session_index.jsonl"),
+      kimiIndexPath: join(daemonPaths.home, ".kimi-code/session_index.jsonl"),
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
       grokSessionsRoot: join(grokRoot, "sessions"),
     }).resolve;

@@ -60,6 +60,8 @@ export type FileStat = { mtimeMs: number; size: number };
 
 export type SessionFactsResolverDependencies = {
   codexIndexPath: string;
+  /** kimi's session index; maps registry session ids to on-disk session dirs. */
+  kimiIndexPath: string;
   /** zcode's SQLite store; resolved by the caller (ZCODE_HOME override lives in cli.ts). */
   zcodeDatabasePath: string;
   /** grok's sessions directory; resolved by the caller (GROK_HOME override lives in cli.ts). */
@@ -247,6 +249,23 @@ const claudeModelFromTail = (tail: string): string | null => nestedMessageModelF
 const ompModelFromTail = (tail: string): string | null => nestedMessageModelFromTail(tail, "message");
 
 /**
+ * The last tool call in an omp session tail: custom records of customType
+ * tool_execution_start carry the tool's args under `data.args`. Only a fixed
+ * semantic category crosses the wire; argument contents stay local.
+ */
+const ompActivityFromTail = (tail: string): string | null =>
+  lastFromTail(tail, "custom", (record) => {
+    if (record["customType"] !== "tool_execution_start") {
+      return null;
+    }
+    const data = record["data"];
+    if (!isRecord(data)) {
+      return null;
+    }
+    return (isRecord(data["args"]) ? activityCategoryFrom(data["args"]) : null) ?? "Tool";
+  });
+
+/**
  * The last tool call in a Claude transcript tail: assistant records carry
  * content arrays whose tool_use items name the tool and its input. Records
  * scan newest-first and items newest-first within a record, so the result is
@@ -428,6 +447,44 @@ const codexTitlesFromIndex = (content: string): Map<string, string> => {
   return byId;
 };
 
+/** kimi's index lines map sessionId to its on-disk sessionDir; later lines win. */
+const kimiSessionDirsFromIndex = (content: string): Map<string, string> => {
+  const byId = new Map<string, string>();
+  for (const line of content.split("\n")) {
+    if (line.length === 0) {
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (
+        isRecord(parsed) &&
+        typeof parsed["sessionId"] === "string" &&
+        typeof parsed["sessionDir"] === "string" &&
+        parsed["sessionDir"].length > 0
+      ) {
+        byId.set(parsed["sessionId"], parsed["sessionDir"]);
+      }
+    } catch {
+      // Malformed lines are skipped; one bad line never voids the index.
+    }
+  }
+  return byId;
+};
+
+/**
+ * The last tool call in a kimi wire tail: context.append_loop_event records
+ * whose event is a tool.call carry the tool's args under `event.args`. Only a
+ * fixed semantic category crosses the wire; argument contents stay local.
+ */
+const kimiActivityFromTail = (tail: string): string | null =>
+  lastFromTail(tail, "context.append_loop_event", (record) => {
+    const event = record["event"];
+    if (!isRecord(event) || event["type"] !== "tool.call") {
+      return null;
+    }
+    return (isRecord(event["args"]) ? activityCategoryFrom(event["args"]) : null) ?? "Tool";
+  });
+
 /**
  * zcode stores auto-generated titles in its own SQLite database. The schema
  * names are pinned by live verification (Task 4 of the P1 plan); if that
@@ -482,9 +539,14 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     string,
     FileStat & { title: string | null; model: string | null; activity: string | null }
   >();
-  const ompCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
+  const ompCache = new Map<
+    string,
+    FileStat & { title: string | null; model: string | null; activity: string | null }
+  >();
   let codexCache: (FileStat & { byId: Map<string, string> }) | null = null;
   const codexModelCache = new Map<string, FileStat & { model: string | null; activity: string | null }>();
+  let kimiIndexCache: (FileStat & { byId: Map<string, string> }) | null = null;
+  const kimiWireCache = new Map<string, FileStat & { activity: string | null }>();
   const grokCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
   const grokSummaryPaths = new Map<string, string>();
 
@@ -507,26 +569,28 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     return { title, model, activity };
   };
 
-  const ompFacts = (path: string): { title: string | null; model: string | null } => {
+  const ompFacts = (path: string): { title: string | null; model: string | null; activity: string | null } => {
     const stat = statPath(path);
     if (stat === null) {
-      return { title: null, model: null };
+      return { title: null, model: null, activity: null };
     }
     const cached = ompCache.get(path);
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return { title: cached.title, model: cached.model };
+      return { title: cached.title, model: cached.model, activity: cached.activity };
     }
     // Every change to the session file — appended records or the in-place
     // slot rewrite — bumps its stat identity, so (mtime, size) caching is
     // sound here (unlike zcode's WAL store, which bypasses the main file).
-    // The title lives in the head slot and the model in the newest assistant
-    // message, so one changed file costs one head read plus one tail read.
+    // The title lives in the head slot and the model and activity in the
+    // newest tail records, so one changed file costs one head read plus one
+    // tail read.
     const head = readHead(path, OMP_HEAD_BYTES);
     const title = head === null ? null : ompTitleFromHead(head);
     const tail = readTail(path, TAIL_BYTES);
     const model = tail === null ? null : ompModelFromTail(tail);
-    ompCache.set(path, { ...stat, title, model });
-    return { title, model };
+    const activity = tail === null ? null : ompActivityFromTail(tail);
+    ompCache.set(path, { ...stat, title, model, activity });
+    return { title, model, activity };
   };
 
   /**
@@ -600,12 +664,44 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     return byId;
   };
 
+  // kimi rows register with no transcript path, so the wire transcript is
+  // located through the session index — the same shape as codex titles.
+  const kimiSessionDirs = (): Map<string, string> => {
+    const stat = statPath(dependencies.kimiIndexPath);
+    if (stat === null) {
+      return new Map();
+    }
+    if (kimiIndexCache !== null && kimiIndexCache.mtimeMs === stat.mtimeMs && kimiIndexCache.size === stat.size) {
+      return kimiIndexCache.byId;
+    }
+    const content = readWhole(dependencies.kimiIndexPath);
+    const byId = content === null ? new Map<string, string>() : kimiSessionDirsFromIndex(content);
+    kimiIndexCache = { ...stat, byId };
+    return byId;
+  };
+
+  const kimiWireActivity = (path: string): string | null => {
+    const stat = statPath(path);
+    if (stat === null) {
+      return null;
+    }
+    const cached = kimiWireCache.get(path);
+    if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.activity;
+    }
+    const tail = readTail(path, TAIL_BYTES);
+    const activity = tail === null ? null : kimiActivityFromTail(tail);
+    kimiWireCache.set(path, { ...stat, activity });
+    return activity;
+  };
+
   return {
     resolve: (targets) => {
       const titles: SessionTitleUpdate[] = [];
       const models: SessionModelUpdate[] = [];
       const activities: SessionActivityLineUpdate[] = [];
       let codexById: Map<string, string> | null = null;
+      let kimiById: Map<string, string> | null = null;
       let zcodeById: Map<string, string> | null = null;
       for (const target of targets) {
         let resolvedTitle: string | null = null;
@@ -620,6 +716,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
           const facts = ompFacts(target.transcriptPath);
           resolvedTitle = facts.title;
           resolvedModel = facts.model;
+          resolvedActivity = facts.activity;
         } else if (target.provider === "codex") {
           codexById ??= codexTitles();
           resolvedTitle = codexById.get(target.sessionId) ?? null;
@@ -638,6 +735,12 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
           const facts = grokFacts(target.sessionId);
           resolvedTitle = facts.title;
           resolvedModel = facts.model;
+        } else if (target.provider === "kimi") {
+          kimiById ??= kimiSessionDirs();
+          const sessionDir = kimiById.get(target.sessionId);
+          if (sessionDir !== undefined) {
+            resolvedActivity = kimiWireActivity(join(sessionDir, "agents", "main", "wire.jsonl"));
+          }
         }
         if (resolvedTitle !== null && resolvedTitle !== target.title) {
           titles.push({ provider: target.provider, sessionId: target.sessionId, title: resolvedTitle });
