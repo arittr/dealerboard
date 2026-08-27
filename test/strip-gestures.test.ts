@@ -14,6 +14,7 @@ const down = (x: number, y: number, now: number): GestureInput => ({ kind: "down
 const move = (x: number, y: number, now: number): GestureInput => ({ kind: "move", point: { x, y }, now });
 const up = (x: number, y: number, now: number): GestureInput => ({ kind: "up", point: { x, y }, now });
 const tick = (now: number): GestureInput => ({ kind: "tick", now });
+const context = (x: number, y: number, now: number): GestureInput => ({ kind: "context", point: { x, y }, now });
 
 describe("createGestureRecognizer", () => {
   test("a clean tap emits nothing and does not suppress the click", () => {
@@ -188,6 +189,49 @@ describe("flick classification", () => {
     recognizer.feed(tick(LONG_PRESS_MS));
     recognizer.feed(move(400, 500, LONG_PRESS_MS + 100));
     expect(recognizer.feed(up(400, 500, LONG_PRESS_MS + 200))).toEqual([{ kind: "suppress-click" }]);
+  });
+});
+
+describe("context press", () => {
+  test("a context signal on a live stroke long-presses it and the trailing release suppresses the click", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(100, 100, 0));
+    expect(recognizer.feed(context(100, 100, 2))).toEqual([{ kind: "longpress", point: { x: 100, y: 100 } }]);
+    expect(recognizer.feed(up(100, 100, 80))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("a context signal with no stroke long-presses at its own point", () => {
+    const recognizer = createGestureRecognizer();
+    expect(recognizer.feed(context(250, 40, 10))).toEqual([{ kind: "longpress", point: { x: 250, y: 40 } }]);
+  });
+
+  test("a context signal after the deadline tick fires nothing more", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(100, 100, 0));
+    recognizer.feed(tick(LONG_PRESS_MS));
+    expect(recognizer.feed(context(100, 100, LONG_PRESS_MS + 10))).toEqual([]);
+  });
+
+  test("a context signal overrides the slop: a wiggled stroke still long-presses", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(100, 100, 0));
+    recognizer.feed(move(100 + MOVE_SLOP_PX + 10, 100, 50));
+    expect(recognizer.feed(context(100, 100, 60))).toEqual([{ kind: "longpress", point: { x: 100, y: 100 } }]);
+  });
+
+  test("a stroke that context-pressed never becomes a flick", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(context(400, 300, 2));
+    recognizer.feed(move(400, 500, 100));
+    expect(recognizer.feed(up(400, 500, 150))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("longPressDueAt goes quiet once the context signal lands", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(100, 100, 0));
+    recognizer.feed(context(100, 100, 2));
+    expect(recognizer.longPressDueAt()).toBeNull();
   });
 });
 

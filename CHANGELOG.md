@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   24h stale prune, so parent roll-ups clear once their failed subagents are
   acknowledged.
 
+### Fixed
+
+- Strip gestures work while the app is backgrounded — its usual state. The
+  window now accepts first mouse, so a stroke's moves and release reach the
+  recognizer instead of being consumed as an activation click; flick and
+  swipe work on the first touch, and first taps are no longer swallowed.
+- A touchscreen touch-and-hold opens the card action sheet. macOS delivers
+  the hold as a synthesized secondary click, which was suppressed outright;
+  its contextmenu now routes to the long-press. A mouse right-click opens
+  the sheet the same way.
+
 ## [1.0.0] - 2026-08-26
 
 First source release of the Dealerboard daemon and macOS strip app.

@@ -14,7 +14,8 @@ export type GestureInput =
   | { readonly kind: "move"; readonly point: GesturePoint; readonly now: number }
   | { readonly kind: "up"; readonly point: GesturePoint; readonly now: number }
   | { readonly kind: "cancel"; readonly now: number }
-  | { readonly kind: "tick"; readonly now: number };
+  | { readonly kind: "tick"; readonly now: number }
+  | { readonly kind: "context"; readonly point: GesturePoint; readonly now: number };
 
 export type GestureIntent =
   | { readonly kind: "longpress"; readonly point: GesturePoint }
@@ -102,6 +103,22 @@ export const createGestureRecognizer = (): GestureRecognizer => {
       case "cancel": {
         stroke = null;
         return [];
+      }
+      // The platform's own hold verdict: macOS synthesizes a touchscreen
+      // touch-and-hold as a secondary click, whose contextmenu event is the
+      // only page-visible signal — the finger never produces the sustained
+      // primary-button down the tick path needs. It outranks the slop check
+      // (the classifying driver, not this recognizer, judged the hold), and
+      // a mouse right-click rides the same route.
+      case "context": {
+        if (stroke === null) {
+          return [{ kind: "longpress", point: input.point }];
+        }
+        if (stroke.longPressed) {
+          return [];
+        }
+        stroke.longPressed = true;
+        return [{ kind: "longpress", point: stroke.start }];
       }
     }
   };

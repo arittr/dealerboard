@@ -432,7 +432,7 @@ const onBoardClick = (event: MouseEvent): void => {
   });
 };
 
-const cardFromPointerEvent = (event: PointerEvent): PendingPress | null => {
+const cardFromPointerEvent = (event: MouseEvent): PendingPress | null => {
   if (!(event.target instanceof HTMLElement)) {
     return null;
   }
@@ -764,6 +764,22 @@ const onContextMenu = (event: MouseEvent): void => {
   event.preventDefault();
 };
 
+/**
+ * The platform's hold verdict arrives as that synthesized secondary click:
+ * a finger planted on the panel never produces the sustained primary-button
+ * down the long-press timer needs, so its contextmenu is routed through the
+ * recognizer as the context signal instead — the pressed card opens the
+ * same action sheet as a mouse hold, and a mouse right-click rides along.
+ * The native menu stays cancelled at the document root regardless.
+ */
+const onStripContextMenu = (event: MouseEvent): void => {
+  const pending = cardFromPointerEvent(event);
+  if (pending !== null) {
+    pendingPress = pending;
+  }
+  feedPointer({ kind: "context", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
+};
+
 const wireInteraction = (): void => {
   document.querySelector<HTMLElement>("#board")?.addEventListener("click", onBoardClick);
   const strip = document.querySelector<HTMLElement>("#strip");
@@ -772,6 +788,7 @@ const wireInteraction = (): void => {
   strip?.addEventListener("pointerup", onStripPointerUp);
   strip?.addEventListener("pointercancel", onStripPointerCancel);
   strip?.addEventListener("click", onStripClickCapture, true);
+  strip?.addEventListener("contextmenu", onStripContextMenu);
   document.addEventListener("contextmenu", onContextMenu);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
