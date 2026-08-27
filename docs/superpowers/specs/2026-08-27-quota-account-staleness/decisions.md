@@ -152,3 +152,26 @@ to ready and re-run the ratify gate. -->
   explicitness folded in (entry above).
 - **Sign-off:** Drew — "go ahead" (2026-08-27, in response to "say the
   word and I'll record your ratification")
+
+## 2026-08-27 01:43 — Plan review round 1: NOT READY; 0/1/≥2-retained failure contract settled
+- **Decided:** Sol's plan review (agent 1705c847, on plan commit 27be488)
+  returned 6 findings, all accepted. Its finding 2 exposed an internal
+  contradiction in the ratified notebook: the state table's "never
+  fetched → unavailable grouped (null stamp)" row conflicted with the
+  ratified requirements (fallback when cswap yields <2 accounts; grouped
+  starvation scoped to ≥2 retained). Settled per the requirements, which
+  take precedence over the illustrative table: failure with 0 or 1
+  retained accounts stays in fallback mode (codexbar probe runs,
+  ungrouped panel); grouped starvation applies only from ≥2 retained;
+  retained accounts and their collector stamp are one atomic state, also
+  populated by legacy-snapshot seeding at restart (finding 3). Table row
+  repaired accordingly — recorded as a consistency repair, not a
+  reversal of any ratified decision. FLAGGED for Drew's morning review:
+  if this reading is wrong, it is a one-line spec change plus a Task 4
+  test adjustment.
+- **Because:** the requirements section is what was reviewed, amended,
+  and ratified; the table row described a state the ratified collector
+  design makes unreachable except via the seeding path now handled
+  explicitly.
+- **Deciders:** steering-session under Drew's overnight "fix and
+  proceed" instruction (2026-08-27)

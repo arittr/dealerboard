@@ -85,7 +85,7 @@ Two coordinated changes:
 | Whole `cswap list` failing this pass (transient) | bright (stamp ≤3 passes old) | both rows dim + age notes |
 | `cswap list` failing ≥3 passes, or collector dead | dims (stale) | both rows also dim (unavailable) |
 | Seat exhausted (0% remaining) | bright | bright; red/empty bar says it (user decision) |
-| Never fetched (cold start, cswap failing from the first pass) | unavailable (null stamp) | em-dash / unavailable note (existing) |
+| cswap failing from the very first pass (nothing ever retained) | n/a — codexbar fallback, ungrouped ambient panel (existing cold-start rendering) | n/a |
 | cswap reports <2 accounts | ungrouped ambient panel, unchanged semantics | n/a |
 
 ## Constraints
@@ -184,6 +184,14 @@ Two coordinated changes:
   as cswap absent → codexbar fallback, ungrouped panel (existing "absent"
   path). Missing codexbar binary in fallback mode: existing
   provider-absent behavior, unchanged.
+- cswap read failure with 0 or 1 retained accounts: not grouped operation
+  — the codexbar claude probe keeps running and the ungrouped panel
+  renders as today. Grouped starvation (no fallback, no restamp) applies
+  only from ≥2 retained accounts, and retained accounts travel atomically
+  with their collector stamp so an aborted pass can never leave accounts
+  without one. A legacy grouped snapshot seeded at daemon restart
+  populates that atomic state, so a first-read failure after restart
+  enters starvation with the seeded stamp (ages honestly toward stale).
 - Sleep/wake: the first pass after wake may render the group stale for up
   to ~one pass (~2 min) until a cswap read lands — existing behavior for
   every provider panel today; accepted, no wake grace.
