@@ -27,7 +27,7 @@ idea for coding agents: one dedicated surface for watching concurrent work and
 jumping to the session that needs you.
 
 <p align="center">
-  <img src="docs/assets/trading-turret.png" width="640" alt="Original illustration of a generic financial trading turret, also called a dealer board">
+  <img src="docs/assets/trading-turret.png" width="440" alt="Original illustration of a generic financial trading turret, also called a dealer board">
 </p>
 <p align="center"><em>An original illustration of a generic trading turret.</em></p>
 
