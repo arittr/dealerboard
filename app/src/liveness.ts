@@ -77,7 +77,7 @@ export type LivenessFrame = {
   dotColor: string | null;
   /** "quiet 12m" — the silence age as a fact; null while live. */
   quietLabel: string | null;
-  /** The corner gap ("48s"): silence age once the edge starts fading, until quiet owns it. */
+  /** The corner gap ("quiet 48s"): silence age once the edge starts fading, until quiet owns it. */
   gapLabel: string | null;
 };
 
@@ -108,7 +108,7 @@ export const livenessFrame = (lastEventAt: string | null, subagent: boolean, now
     edgeColor: rgb(paint.color, paint.alpha * (subagent ? 0.5 : 1)),
     dotColor: rgb(paint.color, paint.alpha),
     quietLabel: null,
-    gapLabel: age >= FADE_MS ? elapsedLabel(age) : null,
+    gapLabel: age >= FADE_MS ? `quiet ${elapsedLabel(age)}` : null,
   };
 };
 
