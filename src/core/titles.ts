@@ -26,7 +26,8 @@
  * - omp: the fixed 256-byte title slot at the head of the session JSONL at the
  *   row's transcript_path, (mtime, size)-cached — every change to the file
  *   (appended records or the in-place slot rewrite) bumps its stat identity.
- *   No model source; omp rows never resolve one.
+ *   Models come from the last assistant `message` record's nested
+ *   `message.model` in a tail read of the same file, sharing that cache entry.
  * - grok: `summary.json` under the session's directory (found by globbing the
  *   sessions root), carrying `generated_title` (fallback `session_summary`)
  *   and `current_model_id`, (mtime, size)-cached like the other file readers.
@@ -223,6 +224,10 @@ const lastFromTail = (
 const claudeTitleFromTail = (tail: string): string | null =>
   lastFromTail(tail, "ai-title", (record) => record["aiTitle"]);
 
+/** The model on a record's nested message object, the shape Claude and omp share. */
+const nestedMessageModelFromTail = (tail: string, recordType: string): string | null =>
+  lastFromTail(tail, recordType, (record) => (isRecord(record["message"]) ? record["message"]["model"] : null));
+
 /**
  * Only an assistant record's `message.model` is authoritative for the
  * session: tool-call inputs nested in the same records can carry their own
@@ -230,8 +235,16 @@ const claudeTitleFromTail = (tail: string): string | null =>
  * resolve the decoy. The last parsed record wins — a mid-session model
  * switch changes it.
  */
-const claudeModelFromTail = (tail: string): string | null =>
-  lastFromTail(tail, "assistant", (record) => (isRecord(record["message"]) ? record["message"]["model"] : null));
+const claudeModelFromTail = (tail: string): string | null => nestedMessageModelFromTail(tail, "assistant");
+
+/**
+ * omp message records nest the model the same way, but only assistant ones
+ * carry it — user and toolResult records fall through to older lines. The
+ * last parsed record wins. model_change records are deliberately not a
+ * source: the tail window may predate the last one, while any active session
+ * has assistant messages in its tail.
+ */
+const ompModelFromTail = (tail: string): string | null => nestedMessageModelFromTail(tail, "message");
 
 /**
  * The last tool call in a Claude transcript tail: assistant records carry
@@ -456,7 +469,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     string,
     FileStat & { title: string | null; model: string | null; activity: string | null }
   >();
-  const ompCache = new Map<string, FileStat & { title: string | null }>();
+  const ompCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
   let codexCache: (FileStat & { byId: Map<string, string> }) | null = null;
   const codexModelCache = new Map<string, FileStat & { model: string | null; activity: string | null }>();
   const grokCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
@@ -481,22 +494,26 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     return { title, model, activity };
   };
 
-  const ompTitle = (path: string): string | null => {
+  const ompFacts = (path: string): { title: string | null; model: string | null } => {
     const stat = statPath(path);
     if (stat === null) {
-      return null;
+      return { title: null, model: null };
     }
     const cached = ompCache.get(path);
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      return cached.title;
+      return { title: cached.title, model: cached.model };
     }
     // Every change to the session file — appended records or the in-place
     // slot rewrite — bumps its stat identity, so (mtime, size) caching is
     // sound here (unlike zcode's WAL store, which bypasses the main file).
+    // The title lives in the head slot and the model in the newest assistant
+    // message, so one changed file costs one head read plus one tail read.
     const head = readHead(path, OMP_HEAD_BYTES);
     const title = head === null ? null : ompTitleFromHead(head);
-    ompCache.set(path, { ...stat, title });
-    return title;
+    const tail = readTail(path, TAIL_BYTES);
+    const model = tail === null ? null : ompModelFromTail(tail);
+    ompCache.set(path, { ...stat, title, model });
+    return { title, model };
   };
 
   /**
@@ -587,7 +604,9 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
           resolvedModel = facts.model;
           resolvedActivity = facts.activity;
         } else if (target.provider === "omp" && target.transcriptPath !== null) {
-          resolvedTitle = ompTitle(target.transcriptPath);
+          const facts = ompFacts(target.transcriptPath);
+          resolvedTitle = facts.title;
+          resolvedModel = facts.model;
         } else if (target.provider === "codex") {
           codexById ??= codexTitles();
           resolvedTitle = codexById.get(target.sessionId) ?? null;

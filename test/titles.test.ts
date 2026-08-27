@@ -558,6 +558,8 @@ describe("omp session-file titles", () => {
   const FIXTURE_PATH = join(import.meta.dir, "fixtures", "omp-session.jsonl");
   // The title stored in the synthetic fixture's head slot, pinned as a literal.
   const FIXTURE_TITLE = "Synthetic OMP title slot for testing.";
+  // The model on the fixture's assistant message record, pinned as a literal.
+  const FIXTURE_MODEL = "glm-5.3";
 
   // Mirrors omp's slot writer: one JSON record whose "pad" field absorbs the
   // slack so the line is exactly OMP_SLOT_BYTES UTF-8 bytes, newline included.
@@ -582,7 +584,17 @@ describe("omp session-file titles", () => {
     ...overrides,
   });
 
-  test("reads the title slot from a synthetic omp session file", () => {
+  // Mirrors omp's assistant message records: the session model rides on the
+  // nested message object; user and toolResult records carry no model.
+  const assistantMessage = (model: string): string =>
+    `${JSON.stringify({
+      type: "message",
+      id: "m1",
+      timestamp: "2024-01-02T03:04:06.000Z",
+      message: { role: "assistant", model, provider: "zai", content: [{ type: "text", text: "reply" }] },
+    })}\n`;
+
+  test("reads the title slot and assistant-message model from a synthetic omp session file", () => {
     // Real filesystem access against synthetic fixture data — no fs fakes.
     const resolver = createSessionFactsResolver({
       codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
@@ -591,8 +603,9 @@ describe("omp session-file titles", () => {
     });
     const updates = resolver.resolve([
       { provider: "omp", sessionId: "o1", title: null, model: null, activityLine: null, transcriptPath: FIXTURE_PATH },
-    ]).titles;
-    expect(updates).toEqual([{ provider: "omp", sessionId: "o1", title: FIXTURE_TITLE }]);
+    ]);
+    expect(updates.titles).toEqual([{ provider: "omp", sessionId: "o1", title: FIXTURE_TITLE }]);
+    expect(updates.models).toEqual([{ provider: "omp", sessionId: "o1", model: FIXTURE_MODEL }]);
   });
 
   test("caches per path on mtime and size", () => {
@@ -632,6 +645,44 @@ describe("omp session-file titles", () => {
     ]);
   });
 
+  test("resolves the model from the last assistant message record in the tail", () => {
+    const { resolver } = makeResolver({
+      stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
+      heads: { "/sessions/o1.jsonl": slotRecord("Auto-titled session") },
+      tails: {
+        "/sessions/o1.jsonl":
+          assistantMessage("glm-4.9") +
+          assistantMessage("glm-5.3") +
+          `${JSON.stringify({ type: "message", message: { role: "toolResult", toolName: "read", content: [] } })}\n`,
+      },
+    });
+    expect(resolver.resolve([ompTarget()]).models).toEqual([{ provider: "omp", sessionId: "o1", model: "glm-5.3" }]);
+  });
+
+  test("caches the tail read on mtime and size and skips a matching stored model", () => {
+    const { resolver, fs } = makeResolver({
+      stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
+      heads: { "/sessions/o1.jsonl": slotRecord("Auto-titled session") },
+      tails: { "/sessions/o1.jsonl": assistantMessage("glm-5.3") },
+    });
+    expect(resolver.resolve([ompTarget()]).models).toEqual([{ provider: "omp", sessionId: "o1", model: "glm-5.3" }]);
+    expect(fs.tailReads()).toBe(1);
+
+    expect(resolver.resolve([ompTarget({ title: "Auto-titled session", model: "glm-5.3" })]).models).toEqual([]);
+    expect(fs.tailReads()).toBe(1);
+  });
+
+  test("proposes no model when the tail has no assistant message record", () => {
+    // model_change records are deliberately not a source: a tail window may
+    // predate the last one, so only assistant messages are authoritative.
+    const { resolver } = makeResolver({
+      stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
+      heads: { "/sessions/o1.jsonl": slotRecord("Auto-titled session") },
+      tails: { "/sessions/o1.jsonl": `${JSON.stringify({ type: "model_change", model: "zai/glm-5.3" })}\n` },
+    });
+    expect(resolver.resolve([ompTarget()]).models).toEqual([]);
+  });
+
   test("an untitled slot with no fallback line resolves nothing; a missing file never throws", () => {
     const { resolver } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
@@ -647,6 +698,7 @@ describe("omp session-file titles", () => {
     const { resolver, fs } = makeResolver();
     expect(resolver.resolve([ompTarget({ transcriptPath: null })]).titles).toEqual([]);
     expect(fs.headReads()).toBe(0);
+    expect(fs.tailReads()).toBe(0);
   });
 });
 

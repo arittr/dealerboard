@@ -1,2 +1,3 @@
 {"type":"title","v":1,"title":"Synthetic OMP title slot for testing.","source":"auto","updatedAt":"2024-01-02T03:04:05.000Z","pad":"                                                                                                                         "}
 {"type":"message","role":"user","content":"fixture"}
+{"type":"message","id":"429debe0","parentId":"9f23be29","timestamp":"2024-01-02T03:04:06.000Z","message":{"role":"assistant","model":"glm-5.3","provider":"zai","api":"anthropic-messages","content":[{"type":"text","text":"fixture reply"}],"stopReason":"end_turn"}}
