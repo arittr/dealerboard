@@ -126,7 +126,7 @@ cp $HOME/.claude/settings.json $HOME/.claude/settings.json.before-dealerboard
 ### 2. Edit
 
 Merge the following top-level `"hooks"` object into the existing settings.
-Keep every existing key; if a `"hooks"` object already exists, add these ten
+Keep every existing key; if a `"hooks"` object already exists, add these eleven
 event arrays inside it without removing any existing entries.
 
 ```json
