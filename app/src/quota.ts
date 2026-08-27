@@ -38,10 +38,14 @@ export type QuotaMeterModel = {
   fetchedAtMs: number | null;
 };
 
-export type QuotaAccountMeterModel = QuotaMeterModel & {
+export type QuotaAccountState = "ok" | "unavailable";
+
+export type QuotaAccountMeterModel = Omit<QuotaMeterModel, "state"> & {
   id: string;
   label: string;
   active: boolean;
+  /** cswap's fetch health only — the account's reading age never dims its row. */
+  state: QuotaAccountState;
 };
 
 export type QuotaPanelModel = QuotaMeterModel & {
@@ -115,12 +119,11 @@ const panelModel = (provider: QuotaProviderKey, quota: ProviderQuota, now: numbe
       ? []
       : [...quota.accounts]
           .sort((a, b) => Number(a.label) - Number(b.label))
-          .map((account) => ({
-            id: account.id,
-            label: account.label,
-            active: account.active,
-            ...meterModel(account, now),
-          }));
+          .map((account) => {
+            const meter = meterModel(account, now);
+            const state: QuotaAccountState = account.unavailable ? "unavailable" : "ok";
+            return { id: account.id, label: account.label, active: account.active, ...meter, state };
+          });
   return {
     provider,
     ...ambient,

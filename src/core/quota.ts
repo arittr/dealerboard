@@ -5,10 +5,13 @@
  * All five providers are read through the locally installed CodexBar CLI:
  * `codexbar usage --provider <arg> --format json --log-level critical`,
  * spawned once per provider per pass (serialized — CodexBar's app-support
- * directory carries lock files). The provider argument is the contract key
+ * directory carries lock files). Claude is excepted while claude-swap serves
+ * the grouped two-account view: cswap is then claude's only source and the
+ * CodexBar claude probe is skipped for that pass (readClaudeSwap). The
+ * provider argument is the contract key
  * itself except qwen, which reads CodexBar's `alibabatokenplan` provider
  * (CODEXBAR_PROVIDER_ARGS). The binary resolves per pass from
- * CODEXBAR_BINARY_CANDIDATES; a missing binary omits every provider. CodexBar's
+ * CODEXBAR_BINARY_CANDIDATES; a missing binary omits every codexbar-probed provider. CodexBar's
  * primary/secondary labels are not positional (kimi reports the weekly window
  * as primary), so windows are classified by windowMinutes: weekly = the longest
  * window of at least a day, session = the shortest window under a day, and
@@ -357,6 +360,11 @@ type FetchOutcome =
   | { kind: "absent" }
   | { kind: "failed" };
 
+type ClaudeSwapRead =
+  | { kind: "ok"; accounts: ProviderQuota["accounts"]; at: string }
+  | { kind: "failed" }
+  | { kind: "absent" };
+
 type ProviderState = { quota: ProviderQuota; failed: boolean };
 
 const emptyQuota = (): ProviderQuota => ({
@@ -509,10 +517,10 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     }
   };
 
-  const pollClaudeAccounts = async (exec: QuotaExec | null): Promise<ProviderQuota["accounts"]> => {
+  /** Pure read — pollNow commits the retention state, never this function. */
+  const readClaudeSwap = async (exec: QuotaExec | null): Promise<ClaudeSwapRead> => {
     if (exec === null) {
-      claudeAccounts = { accounts: [], failed: false };
-      return [];
+      return { kind: "absent" };
     }
     let result: QuotaExecResult;
     try {
@@ -520,19 +528,14 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     } catch {
       result = { exitCode: -1, stdout: "" };
     }
-    const parsed = result.exitCode === 0 ? parseClaudeSwapAccounts(result.stdout) : { kind: "invalid" as const };
-    if (parsed.kind === "ok") {
-      claudeAccounts = { accounts: parsed.accounts, failed: false };
-      return parsed.accounts;
+    if (result.exitCode !== 0) {
+      return { kind: "failed" };
     }
-    if (!claudeAccounts.failed) {
-      reportAccountFailure();
+    const parsed = parseClaudeSwapAccounts(result.stdout);
+    if (parsed.kind !== "ok") {
+      return { kind: "failed" };
     }
-    claudeAccounts = {
-      accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
-      failed: true,
-    };
-    return claudeAccounts.accounts;
+    return { kind: "ok", accounts: parsed.accounts, at: now() };
   };
 
   const probe = async (exec: QuotaExec, provider: QuotaProviderKey): Promise<FetchOutcome> => {
@@ -620,19 +623,95 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         readFile(dependencies.widgetSnapshotPath ?? codexbarWidgetSnapshotPath()) ?? "",
         Date.parse(now()),
       );
+      // Claude quota has one source per situation: the cswap read runs before
+      // the probe loop, and a successful read with ≥2 accounts serves the
+      // grouped entry and skips the codexbar claude probe for this pass.
+      // Claude's STATE resolves after every other await — nothing may abort
+      // between computing claude's next state and committing both its halves.
+      const swapRead = await readClaudeSwap(resolveClaudeSwapExec());
       const providers: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
       for (const provider of QUOTA_PROVIDER_KEYS) {
+        if (provider === "claude") {
+          continue; // resolved below, after the other providers' awaits
+        }
         const quota = await pollProvider(exec, provider, widget);
         if (quota !== null) {
           providers[provider] = quota;
         }
       }
-      const accounts = await pollClaudeAccounts(resolveClaudeSwapExec());
-      const ambientClaude = providers["claude"];
-      if (ambientClaude !== undefined) {
-        providers["claude"] = { ...ambientClaude, accounts };
-      } else if (accounts.length > 0) {
-        providers["claude"] = { ...emptyQuota(), accounts };
+      if (swapRead.kind === "ok" && swapRead.accounts.length >= 2) {
+        // Atomic commit — retained rows and the entry carrying their collector
+        // stamp land together, after the pass's last await, so an aborted pass
+        // can never leave the two halves inconsistent.
+        claudeAccounts = { accounts: swapRead.accounts, failed: false };
+        const quota: ProviderQuota = {
+          percentRemaining: null,
+          resetAt: null,
+          weeklyPercentRemaining: null,
+          weeklyResetAt: null,
+          unavailable: false,
+          fetchedAt: swapRead.at,
+          // The ambient history ring stops accumulating in grouped mode; the
+          // carried ring stays frozen for a later return to the probe path.
+          history: states.get("claude")?.quota.history ?? [],
+          extraWindows: [],
+          accounts: swapRead.accounts,
+        };
+        states.set("claude", { quota, failed: false });
+        providers["claude"] = quota;
+      } else if (
+        swapRead.kind === "failed" &&
+        claudeAccounts.accounts.length >= 2 &&
+        states.get("claude")?.quota.fetchedAt != null
+      ) {
+        // Grouped starvation — settled contract (decisions.md 2026-08-27
+        // 01:43): from ≥2 retained with a usable stamp, no fallback probe
+        // runs and the stamp is not restamped, so a persistent failure ages
+        // the group stale while a transient one only dims the rows for one
+        // pass. unavailable is canonicalized false — group health rides the
+        // stamp's age, and a legacy seed persisted with unavailable: true
+        // must not dim the group forever.
+        if (!claudeAccounts.failed) {
+          reportAccountFailure();
+        }
+        claudeAccounts = {
+          accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+          failed: true,
+        };
+        // The stamp condition above guarantees the entry exists; the guard
+        // satisfies the Map lookup's type.
+        const previous = states.get("claude");
+        if (previous !== undefined) {
+          const quota: ProviderQuota = {
+            ...previous.quota,
+            unavailable: false,
+            accounts: claudeAccounts.accounts,
+          };
+          states.set("claude", { quota, failed: previous.failed });
+          providers["claude"] = quota;
+        }
+      } else {
+        // Not grouped this pass — cswap absent, <2 accounts reported, or a
+        // failed read below the starvation conditions: claude stays on the
+        // codexbar probe. The probe is the final await; everything from its
+        // return to the paired retention update is synchronous.
+        const ambient = await pollProvider(exec, "claude", widget);
+        if (swapRead.kind === "failed") {
+          if (!claudeAccounts.failed) {
+            reportAccountFailure();
+          }
+          claudeAccounts = {
+            accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+            failed: true,
+          };
+        } else {
+          claudeAccounts = { accounts: swapRead.kind === "absent" ? [] : swapRead.accounts, failed: false };
+        }
+        if (ambient !== null) {
+          providers["claude"] = { ...ambient, accounts: claudeAccounts.accounts };
+        } else if (claudeAccounts.accounts.length > 0) {
+          providers["claude"] = { ...emptyQuota(), accounts: claudeAccounts.accounts };
+        }
       }
       const orderedProviders: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
       for (const provider of QUOTA_PROVIDER_KEYS) {

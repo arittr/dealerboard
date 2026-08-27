@@ -129,7 +129,7 @@ describe("reduceQuotaRead", () => {
     ).toEqual([]);
   });
 
-  test("derives each account state from its own source instant", () => {
+  test("an account row's state is cswap's fetch health — reading age never dims", () => {
     const oldFetch = new Date(NOW - STALE_QUOTA_AGE_MS - 1).toISOString();
     const panel = reduceQuotaRead(
       read({
@@ -142,7 +142,23 @@ describe("reduceQuotaRead", () => {
       }),
       NOW,
     )[0];
-    expect(panel?.accounts.map((account) => account.state)).toEqual(["stale", "unavailable"]);
+    expect(panel?.accounts.map((account) => account.state)).toEqual(["ok", "unavailable"]);
+  });
+
+  test("an exhausted seat (0% remaining, cswap healthy) stays bright", () => {
+    const panel = reduceQuotaRead(
+      read({
+        claude: quota({
+          accounts: [
+            quotaAccount({ percentRemaining: 0 }),
+            quotaAccount({ id: "claude-swap:2", label: "2", active: true }),
+          ],
+        }),
+      }),
+      NOW,
+    )[0];
+    expect(panel?.accounts.map((account) => account.state)).toEqual(["ok", "ok"]);
+    expect(panel?.accounts[0]?.windows[0]?.percentRemaining).toBe(0);
   });
 
   test("grouped account derivation leaves the ambient meter and history unchanged", () => {
@@ -185,6 +201,27 @@ describe("reduceQuotaRead", () => {
     expect(reduceQuotaRead(read({ claude: quota({ unavailable: true }) }), NOW)[0]?.state).toBe("unavailable");
     const oldFetch = new Date(NOW - STALE_QUOTA_AGE_MS - 1).toISOString();
     expect(reduceQuotaRead(read({ claude: quota({ fetchedAt: oldFetch }) }), NOW)[0]?.state).toBe("stale");
+  });
+
+  test("a grouped stamp older than three passes dims the group; a fresh stamp does not", () => {
+    const groupedEntry = (fetchedAt: string) =>
+      quota({
+        percentRemaining: null,
+        resetAt: null,
+        weeklyPercentRemaining: null,
+        weeklyResetAt: null,
+        unavailable: false,
+        fetchedAt,
+        accounts: [quotaAccount(), quotaAccount({ id: "claude-swap:2", label: "2", active: true })],
+      });
+    const starved = reduceQuotaRead(
+      read({ claude: groupedEntry(new Date(NOW - STALE_QUOTA_AGE_MS - 1).toISOString()) }),
+      NOW,
+    )[0];
+    expect(starved?.state).toBe("stale");
+    expect(starved?.accounts).toHaveLength(2);
+    const fresh = reduceQuotaRead(read({ claude: groupedEntry(new Date(NOW).toISOString()) }), NOW)[0];
+    expect(fresh?.state).toBe("ok");
   });
 
   test("a provider that never fetched is unavailable with no windows", () => {
