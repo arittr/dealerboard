@@ -786,8 +786,6 @@ body[data-fullscreen] #rail {
   height: 100%;
   border-radius: inherit;
 }
-.quota-account[data-state="stale"] .quota-right,
-.quota-account[data-state="stale"] .quota-bar,
 .quota-account[data-state="unavailable"] .quota-right,
 .quota-account[data-state="unavailable"] .quota-bar {
   opacity: 0.45;
