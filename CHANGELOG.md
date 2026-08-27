@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Flick a slat vertically to dismiss it: a slat an ack would remove (an
+  errored session or a viewed idle result) slides out and acks; live slats
+  flash instead.
+
+### Changed
+
+- Acknowledging a session settles its error state: tap-ack and a Paseo
+  archive retire an errored row to idle instead of leaving it red until the
+  24h stale prune, so parent roll-ups clear once their failed subagents are
+  acknowledged.
+
 ## [1.0.0] - 2026-08-26
 
 First source release of the Dealerboard daemon and macOS strip app.

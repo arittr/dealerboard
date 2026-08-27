@@ -615,7 +615,11 @@ export const clearSession = (db: Database, provider: Provider, sessionId: string
 /**
  * Mark one session read: the user has viewed the latest result. The ack time
  * is recorded in `acked_at` so the Paseo overlay can never resurrect unread
- * from an attention flag raised before the view. Never touches updated_at.
+ * from an attention flag raised before the view. An error is itself a result
+ * (applyStopFailure), so viewing settles it: an error row retires to idle —
+ * with the background flag disarmed, like every other retirement — instead of
+ * shouting until the stale prune. A source still in error re-raises it through
+ * its own status events. Never touches updated_at.
  */
 export const acknowledgeSession = (
   db: Database,
@@ -625,8 +629,13 @@ export const acknowledgeSession = (
 ): MutationResult =>
   inWriteTransaction(db, () => {
     const result = db.run(
-      "UPDATE active_sessions SET unread_since = NULL, acked_at = ? WHERE provider = ? AND session_id = ? AND unread_since IS NOT NULL",
-      [ackedAt, provider, sessionId],
+      `UPDATE active_sessions
+       SET unread_since = NULL, acked_at = ?,
+           status = CASE WHEN status = 'error' THEN 'idle' ELSE status END,
+           status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
+           background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
+       WHERE provider = ? AND session_id = ? AND (unread_since IS NOT NULL OR status = 'error')`,
+      [ackedAt, ackedAt, provider, sessionId],
     );
     return result.changes > 0 ? "applied" : "ignored";
   });
@@ -738,9 +747,11 @@ export type PaseoSyncState = {
  *   flight) whose `updatedAt` is strictly newer than the row's last hook
  *   retires a stuck working or waiting row to idle: its turn-end hook was
  *   missed (interrupt, host sleep, daemon swap) and Paseo's record is the
- *   newer witness. Error rows keep their failure visible. `status_since`
- *   adopts the record's settle time; unread stays the attention mirror's
- *   business.
+ *   newer witness. Error rows keep their failure visible — except when the
+ *   record is archived: the terminal gesture settles an error row to idle
+ *   too, under the same freshness guard with the later of `archivedAt` and
+ *   `updatedAt` as the settle time. `status_since` adopts the record's
+ *   settle time; unread stays the attention mirror's business.
  * - A background-armed row normally outlives its Stop on purpose — the
  *   shell still acts on the session's behalf, exactly as in applyStop. But
  *   the disarming edge (TaskStop) can be lost the same way the turn-end
@@ -895,6 +906,21 @@ export const syncPaseoStates = (
           ],
         );
         changed += settled.changes;
+      }
+      // An archived record settles an error row too: archiving is the user's
+      // terminal gesture on the agent, so the failure has been seen and the
+      // row retires like a settled working row — under the same strict
+      // freshness guard, with the later of archivedAt/updatedAt as proof.
+      if (state.archivedAt !== null) {
+        const archiveTime = laterInstant(state.archivedAt, state.updatedAt);
+        const archivedError = db.run(
+          `UPDATE active_sessions
+           SET status = 'idle', status_since = ?, background_outstanding = 0
+           WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+             AND status = 'error' AND ? > updated_at`,
+          [archiveTime, state.provider, state.sessionId, archiveTime],
+        );
+        changed += archivedError.changes;
       }
       // Un-stamp rows abandoned by provider-session rotation: every match
       // carries the stamp being cleared, so the WHERE is its own difference

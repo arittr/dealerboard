@@ -656,6 +656,37 @@ describe("unread ledger", () => {
     expect(row?.updated_at).toBe(before);
     expect(acknowledgeSession(db, "claude", "s1", at(13))).toBe("ignored"); // already read
   });
+
+  test("acknowledgeSession retires an error row to idle (the error is a result; viewing settles it)", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("BackgroundWorkStarted", "s1"),
+      simple("StopFailure", "s1", { at: at(9) }),
+    ]);
+    const before = getRow("s1")?.updated_at;
+    expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
+    const row = getRow("s1");
+    expect(row?.status).toBe("idle");
+    expect(row?.status_since).toBe(at(12));
+    expect(row?.background_outstanding).toBe(0);
+    expect(row?.unread_since).toBeNull();
+    expect(row?.acked_at).toBe(at(12));
+    expect(row?.updated_at).toBe(before);
+  });
+
+  test("acknowledgeSession leaves a non-error status alone", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("Stop", "s1", { at: at(5) }),
+      simple("Activity", "s1", { at: at(6) }),
+    ]);
+    expect(getRow("s1")?.unread_since).toBe(at(5)); // prompts never mark read
+    expect(acknowledgeSession(db, "claude", "s1", at(8))).toBe("applied");
+    const row = getRow("s1");
+    expect(row?.status).toBe("working");
+    expect(row?.status_since).toBe(at(6));
+    expect(row?.unread_since).toBeNull();
+  });
 });
 
 describe("origin", () => {
@@ -1116,6 +1147,55 @@ describe("syncPaseoStates", () => {
     });
     expect(syncPaseoStates(db, [archived])).toBe(1);
     expect(getRow("s1")?.unread_since).toBeNull();
+  });
+
+  test("an archived record retires an error row (archiving is the user's terminal gesture)", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("BackgroundWorkStarted", "s1"),
+      simple("StopFailure", "s1", { at: at(9) }),
+    ]);
+    const before = getRow("s1")?.updated_at;
+
+    const archivedAt = "2026-08-06T00:11:00.000Z";
+    const changed = syncPaseoStates(db, [
+      paseoState({
+        requiresAttention: false,
+        updatedAt: "2026-08-06T00:10:00.000Z",
+        archivedAt,
+        lastStatus: "error",
+      }),
+    ]);
+    expect(changed).toBeGreaterThan(0);
+    const row = getRow("s1");
+    expect(row?.status).toBe("idle");
+    expect(row?.status_since).toBe(archivedAt); // the later of archivedAt/updatedAt
+    expect(row?.background_outstanding).toBe(0);
+    expect(row?.unread_since).toBeNull();
+    expect(row?.updated_at).toBe(before);
+  });
+
+  test("a cleared record without an archive keeps an error row's failure visible", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(9) })]);
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:10:00.000Z" })]);
+    expect(getRow("s1")).toMatchObject({ status: "error", unread_since: null });
+  });
+
+  test("a stale archived record does not retire a newer error", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(9) })]);
+    // Archive stamped before the failure is not proof the user saw this error.
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: at(2), archivedAt: at(3) })]);
+    expect(getRow("s1")).toMatchObject({ status: "error", unread_since: at(9) });
+  });
+
+  test("acknowledgeSession retires an error row Paseo already marked read", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(9) })]);
+    // Viewed in Paseo without archiving: unread clears, the failure stays up.
+    syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:10:00.000Z" })]);
+    expect(getRow("s1")).toMatchObject({ status: "error", unread_since: null });
+
+    expect(acknowledgeSession(db, "claude", "s1", at(30))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(30), acked_at: at(30) });
   });
 
   test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {

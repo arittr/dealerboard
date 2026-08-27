@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createClickSuppression,
   createGestureRecognizer,
+  FLICK_MIN_VERTICAL_PX,
   type GestureInput,
   LONG_PRESS_MS,
   MOVE_SLOP_PX,
@@ -123,11 +124,14 @@ describe("swipe classification", () => {
     ]);
   });
 
-  test("a vertical-dominant drag is not a swipe but still swallows the click", () => {
+  test("a vertical-dominant drag is a flick, not a swipe", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(400, 100, 0));
     recognizer.feed(move(430, 400, 200));
-    expect(recognizer.feed(up(430, 400, 250))).toEqual([{ kind: "suppress-click" }]);
+    expect(recognizer.feed(up(430, 400, 250))).toEqual([
+      { kind: "flick", direction: "down" },
+      { kind: "suppress-click" },
+    ]);
   });
 
   test("a short horizontal drag below the threshold is not a swipe", () => {
@@ -143,6 +147,47 @@ describe("swipe classification", () => {
     recognizer.feed(tick(LONG_PRESS_MS));
     recognizer.feed(move(100, 300, LONG_PRESS_MS + 100));
     expect(recognizer.feed(up(100, 300, LONG_PRESS_MS + 200))).toEqual([{ kind: "suppress-click" }]);
+  });
+});
+
+describe("flick classification", () => {
+  test("an upward fling past the threshold is a flick and suppresses the click", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(410, 300 - FLICK_MIN_VERTICAL_PX - 20, 120));
+    expect(recognizer.feed(up(410, 300 - FLICK_MIN_VERTICAL_PX - 20, 180))).toEqual([
+      { kind: "flick", direction: "up" },
+      { kind: "suppress-click" },
+    ]);
+  });
+
+  test("a downward fling is a flick too", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    expect(recognizer.feed(up(395, 300 + FLICK_MIN_VERTICAL_PX + 20, 180))).toEqual([
+      { kind: "flick", direction: "down" },
+      { kind: "suppress-click" },
+    ]);
+  });
+
+  test("a diagonal drag beyond the horizontal tolerance is neither swipe nor flick", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    expect(recognizer.feed(up(400 + 60, 300 + FLICK_MIN_VERTICAL_PX + 20, 180))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("a short vertical drag below the threshold is not a flick", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    expect(recognizer.feed(up(400, 300 + FLICK_MIN_VERTICAL_PX - 10, 180))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("a stroke that long-pressed never becomes a flick", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(tick(LONG_PRESS_MS));
+    recognizer.feed(move(400, 500, LONG_PRESS_MS + 100));
+    expect(recognizer.feed(up(400, 500, LONG_PRESS_MS + 200))).toEqual([{ kind: "suppress-click" }]);
   });
 });
 

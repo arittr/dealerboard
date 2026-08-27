@@ -19,12 +19,15 @@ export type GestureInput =
 export type GestureIntent =
   | { readonly kind: "longpress"; readonly point: GesturePoint }
   | { readonly kind: "swipe"; readonly direction: "previous" | "next" }
+  | { readonly kind: "flick"; readonly direction: "up" | "down" }
   | { readonly kind: "suppress-click" };
 
 export const LONG_PRESS_MS = 500;
 export const MOVE_SLOP_PX = 12;
 export const SWIPE_MIN_HORIZONTAL_PX = 80;
 export const SWIPE_MAX_VERTICAL_PX = 48;
+export const FLICK_MIN_VERTICAL_PX = 56;
+export const FLICK_MAX_HORIZONTAL_PX = 48;
 
 type Stroke = {
   readonly start: GesturePoint;
@@ -88,6 +91,11 @@ export const createGestureRecognizer = (): GestureRecognizer => {
         const moved = finished.moved || Math.hypot(dx, dy) > MOVE_SLOP_PX;
         if (Math.abs(dx) >= SWIPE_MIN_HORIZONTAL_PX && Math.abs(dy) <= SWIPE_MAX_VERTICAL_PX) {
           return [{ kind: "swipe", direction: dx < 0 ? "next" : "previous" }, { kind: "suppress-click" }];
+        }
+        // Vertical is the dismiss axis: horizontal is taken by paging, so a
+        // vertical-dominant release flicks the pressed card away instead.
+        if (Math.abs(dy) >= FLICK_MIN_VERTICAL_PX && Math.abs(dx) <= FLICK_MAX_HORIZONTAL_PX) {
+          return [{ kind: "flick", direction: dy < 0 ? "up" : "down" }, { kind: "suppress-click" }];
         }
         return moved ? [{ kind: "suppress-click" }] : [];
       }
