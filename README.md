@@ -35,15 +35,16 @@ jumping to the session that needs you.
 
 - Live top-level sessions and their native or Paseo subagent trees.
 - `working`, `waiting`, `idle`, and `error` state with elapsed timers.
-- Unread results that disappear from the board after you view or acknowledge
-  them.
+- Finished results that stay on the board — viewing one elsewhere only clears
+  its unread mark — until you flick or ack the card, archive the agent, or
+  the session moves on.
 - Provider, model, project, and privacy-safe activity categories.
 - Optional quota meters and daily token-usage trends.
 - Tap-to-open for integrations with an exact route; a visible flash when no
   safe route exists.
 
 Dealerboard is a live status surface, not a transcript viewer or historical
-inbox. Finished, acknowledged sessions stay in the registry temporarily but
+inbox. Finished, dismissed sessions stay in the registry temporarily but
 leave the board.
 
 ## How it works

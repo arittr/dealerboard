@@ -67,6 +67,14 @@ describe("flickRemoves", () => {
     expect(flickRemoves(session("s1", { status: "idle", unreadSince: "2026-08-26T05:00:00.000Z" }))).toBe(true);
   });
 
+  test("a done-and-read idle slat is removable: the done card persists until this gesture", () => {
+    expect(flickRemoves(session("s1", { status: "idle", doneSince: "2026-08-26T05:00:00.000Z" }))).toBe(true);
+  });
+
+  test("an idle slat with neither stamp is not removable (nothing for the ack to settle)", () => {
+    expect(flickRemoves(session("s1", { status: "idle" }))).toBe(false);
+  });
+
   test("a live slat is not removable, unread or not", () => {
     expect(flickRemoves(session("s1", { status: "working" }))).toBe(false);
     expect(flickRemoves(session("s1", { status: "working", unreadSince: "2026-08-26T05:00:00.000Z" }))).toBe(false);
