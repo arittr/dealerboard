@@ -47,3 +47,13 @@ to ready and re-run the ratify gate. -->
   no resident cswap surfaces — dealerboard's collector is the only driver.
 - **Deciders:** steering-session (user assented to scribing this as the
   opening position; not yet ratified)
+
+## 2026-08-27 00:25 — Exhausted seat gets no distinct treatment
+- **Decided:** An exhausted account row (0% remaining in its binding
+  window) renders like any other ok-state row: red/empty bar, normal
+  brightness, no badge or extra note.
+- **Rejected:** Exhaustion badges, dimming, or other distinct affordances.
+- **Because:** Exhaustion is quota truth, not a data-health state, and the
+  bar fill plus percent already say it; the dim channel stays reserved for
+  "don't trust this number".
+- **Deciders:** user

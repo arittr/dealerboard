@@ -1,6 +1,6 @@
 ---
 topic: 2026-08-27-quota-account-staleness
-status: draft            # draft | ready | ratified | paused | abandoned | completed
+status: ready            # draft | ready | ratified | paused | abandoned | completed
 created: 2026-08-27
 author-pool: claude-seat2   # the ratify cold-read must come from a DIFFERENT model family
 ---
@@ -82,10 +82,6 @@ fetch.
 
 ## Open questions
 
-- Does the exhausted seat (0% remaining) deserve any distinct treatment
-  beyond the red bar color, given exhaustion is now the only reason a seat
-  sits at a 600s poll ceiling while active work hammers the other? — tag:
-  user-decides
 - When the grouped section dims as a whole, should the per-account age
   notes appear so the user can see how old each seat's reading is? — tag:
   gate-decides
@@ -124,6 +120,10 @@ fetch.
   dealerboard's fix must simply render it honestly.
 - Token-usage panel staleness (`rail-tokens`) — reason: separate data path
   with its own collector-owned timestamp; semantics already correct.
+- Distinct treatment for an exhausted seat (0% remaining) — reason:
+  exhaustion is quota truth, already conveyed by the bar fill and percent;
+  the dim channel stays reserved for data health (user decision,
+  2026-08-27).
 
 ## Golden-question checklist
 
