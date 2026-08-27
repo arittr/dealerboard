@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 14;
+export const LATEST_SCHEMA_VERSION = 15;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -438,6 +438,18 @@ UPDATE active_sessions SET activity_line = NULL;
 `;
 
 /**
+ * v15 adds the done ledger: `done_since` records when the latest undismissed
+ * result landed, so a finished session stays on the board until an explicit
+ * dismissal or a real state change — independent of the read state a passive
+ * view (Paseo) may clear. Plain additive ALTER, nullable and unconstrained
+ * like unread_since.
+ */
+const SCHEMA_VERSION_15 = `
+ALTER TABLE active_sessions
+  ADD COLUMN done_since TEXT;
+`;
+
+/**
  * Ordered migrations keyed by the schema version each one produces. Entries
  * below v5 alter the original table and run in one transaction before the
  * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
@@ -692,6 +704,22 @@ export const initializeDatabase = (paths: AppPaths): void => {
           db.exec("PRAGMA user_version = 14");
         });
         migrateToV14();
+      }
+      // v15 adds the done ledger column. Shape-driven like the v8 repair —
+      // the column list, not the version, decides whether the ALTER applies —
+      // so a retried or re-stamped init never dies on a duplicate column. One
+      // transaction, so the ALTER and the stamp commit together.
+      if (version < 15) {
+        const migrateToV15 = db.transaction(() => {
+          const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
+            name: string;
+          }>;
+          if (!columns.some((column) => column.name === "done_since")) {
+            db.exec(SCHEMA_VERSION_15);
+          }
+          db.exec("PRAGMA user_version = 15");
+        });
+        migrateToV15();
       }
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);
