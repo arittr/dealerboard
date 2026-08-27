@@ -149,7 +149,7 @@ test("an unavailable account keeps its dimmed percent while the binding reset is
     expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%", "20%"]);
     expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
       "2m ·",
-      "resets 2m ·",
+      "2m ·",
     ]);
   });
 });
@@ -173,7 +173,7 @@ test("an unavailable account drops the percent once the binding reset has passed
     expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%"]);
     expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
       "2m ·",
-      "updated 1m ago",
+      "1m old",
     ]);
   });
 });

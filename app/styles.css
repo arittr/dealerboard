@@ -764,6 +764,8 @@ body[data-fullscreen] #rail {
 .quota-note {
   color: #94a3b8;
   font-size: 1.05vw;
+  /* The note is one line of facts — never let it wrap an orphan word. */
+  white-space: nowrap;
 }
 .quota-bar {
   position: relative;

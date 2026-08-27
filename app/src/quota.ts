@@ -194,9 +194,21 @@ export const formatBindingPercent = (model: QuotaMeterModel): string => {
   return binding === null ? "—" : formatPercentRemaining(binding.percentRemaining);
 };
 
-const formatUpdatedAge = (fetchedAtMs: number, now: number): string => {
+/**
+ * The data age, coarse: minutes under an hour, then floored hours or days with
+ * a "+" — the plus keeps "at least this stale" without minute precision.
+ */
+const formatDataAge = (fetchedAtMs: number, now: number): string => {
   const ageMs = Math.max(0, now - fetchedAtMs);
-  return ageMs < 60_000 ? "updated just now" : `updated ${formatDuration(ageMs)} ago`;
+  const minutes = Math.max(1, Math.ceil(ageMs / 60_000));
+  if (minutes < 60) {
+    return `${minutes}m old`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours >= 24) {
+    return `${Math.floor(hours / 24)}d+ old`;
+  }
+  return `${hours}h+ old`;
 };
 
 /** Muted right text of the head line: unavailable age or countdown, binding reset countdown, or empty. */
@@ -207,17 +219,17 @@ export const formatBindingNote = (model: QuotaMeterModel, now: number): string =
       return "unavailable";
     }
     // A reset schedule stays trustworthy after the probe stops (the percent
-    // does not), so a pending reset keeps its countdown; once it passes the
-    // last-good numbers are spent and only the data age remains honest. The
-    // age rides along once it crosses the stale threshold, so an old reading
-    // never masquerades as a live one.
+    // does not), so a pending reset keeps its countdown — bare, like the
+    // ok-state note; once it passes, the last-good numbers are spent and only
+    // the data age remains honest. The age rides along once it crosses the
+    // stale threshold, so an old reading never masquerades as a live one.
     if (binding.resetAtMs !== null && bindingResetPending(model, now)) {
-      const countdown = `resets ${formatResetCountdown(binding.resetAtMs, now)}`;
+      const countdown = formatResetCountdown(binding.resetAtMs, now);
       return now - model.fetchedAtMs > STALE_QUOTA_AGE_MS
-        ? `${countdown} · ${formatUpdatedAge(model.fetchedAtMs, now)}`
+        ? `${countdown} · ${formatDataAge(model.fetchedAtMs, now)}`
         : countdown;
     }
-    return formatUpdatedAge(model.fetchedAtMs, now);
+    return formatDataAge(model.fetchedAtMs, now);
   }
   if (binding === null || binding.resetAtMs === null) {
     return "";

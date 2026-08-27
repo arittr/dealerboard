@@ -553,11 +553,16 @@ Fixed 760px (~29.7%), top to bottom:
   `schemaVersion`, read through Tauri commands, never the session snapshot.
   The schema-v2 quota sidecar now has an additive Claude `accounts`
   collection, while old/new daemon-app deployment order remains compatible.
-  A provider whose last fetch failed renders dimmed with a last-updated
-  age in place of the percent; a provider disabled in CodexBar (or with no
-  binary installed) is omitted unless Claude has non-empty claude-swap
-  account rows, which synthesize its panel; a missing file renders no quota rows /
-  hides the token block. Stale-dimming semantics are unchanged.
+  A provider whose last fetch failed renders dimmed: while the binding
+  window's reset is still pending the row keeps its last-good percent and
+  the bare reset countdown, adding the coarse data age once the reading
+  crosses the stale threshold (`21h 7m · 1h+ old`); a spent reset leaves
+  the age standing alone (`2h+ old`). Ages read in minutes under an hour,
+  then floored hours or days with a `+`. A provider disabled in CodexBar
+  (or with no binary installed) is omitted unless Claude has non-empty
+  claude-swap account rows, which synthesize its panel; a missing file
+  renders no quota rows / hides the token block. Stale-dimming semantics
+  are unchanged.
 
 The sparkline's data is additive: `token-usage-snapshot.json` gains a
 top-level `dayCurves` key while its `schemaVersion` stays 1 — the parser's
