@@ -57,3 +57,29 @@ to ready and re-run the ratify gate. -->
   bar fill plus percent already say it; the dim channel stays reserved for
   "don't trust this number".
 - **Deciders:** user
+
+## 2026-08-27 00:43 — Root cause found upstream: dealerboard's own codexbar claude probe saturates the usage budget
+- **Decided:** Recorded as evidence (scope addition pending user confirmation):
+  the ambient claude probe (`codexbar usage --provider claude`, every 120s
+  ≈ 30 calls/hour) hits the same `api.anthropic.com/api/oauth/usage`
+  endpoint as cswap (verified in the codexbar binary) with the active
+  seat's token, consuming the entire ~28-30/hour budget by itself and
+  starving cswap into 30-minute backoff — the very staleness this spec
+  addresses. Its reading is never rendered in the grouped two-seat layout.
+  Disabling claude in the CodexBar app does not stop it: dealerboard
+  invokes the CLI directly with an explicit provider argument (verified
+  live 2026-08-27 ~07:45: probe still succeeds, seat-1 429 nine minutes
+  prior, poll interval still pinned at 1800s).
+- **Because:** Fixing only the display would leave the active seat's data
+  genuinely 30 minutes old on heavy days; the probe is pure budget waste
+  in the grouped case.
+- **Deciders:** steering-session (evidence); scope addition awaits user
+
+## 2026-08-27 00:43 — Single-failure dimming stands (gate finding 9)
+- **Decided:** One failed `cswap list` pass immediately marks accounts
+  unavailable (dims rows) and one success clears it — existing behavior
+  kept, no debounce.
+- **Rejected:** Requiring consecutive failures before dimming.
+- **Because:** Smallest honest behavior; a 2-minute transient dim is
+  acceptable noise. Revisit only if flicker is observed in practice.
+- **Deciders:** steering-session
