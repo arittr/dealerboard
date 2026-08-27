@@ -1051,6 +1051,80 @@ describe("activity line resolution", () => {
     ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Command" }]);
   });
 
+  test("resolves a codex custom_tool_call by tool name", () => {
+    // Newer codex CLIs log tools as custom_tool_call records whose `input` is
+    // an opaque string (harness code or patch text), so the tool name is the
+    // only classification signal.
+    const customCall = (name: string): string =>
+      responseItemLine({
+        type: "custom_tool_call",
+        status: "completed",
+        call_id: "call_1",
+        name,
+        input: 'const r = await tools.exec_command({ cmd: "cat /repo/secret.md" })',
+      });
+    const cases: readonly { name: string; expected: string }[] = [
+      { name: "exec", expected: "Command" },
+      { name: "apply_patch", expected: "File" },
+      { name: "web_search", expected: "Tool" },
+    ];
+    for (const { name, expected } of cases) {
+      const { resolver } = makeResolver({
+        stats: {
+          [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+          "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+        },
+        wholes: { [CODEX_INDEX]: "" },
+        tails: { "/rollouts/c1.jsonl": customCall(name) },
+      });
+      expect(
+        resolver.resolve([
+          {
+            provider: "codex",
+            sessionId: "c1",
+            title: null,
+            model: null,
+            transcriptPath: "/rollouts/c1.jsonl",
+            activityLine: null,
+          },
+        ]).activities,
+      ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: expected }]);
+    }
+  });
+
+  test("a codex custom_tool_call's input string never crosses the wire", () => {
+    const call = responseItemLine({
+      type: "custom_tool_call",
+      status: "completed",
+      call_id: "call_1",
+      name: "exec",
+      input: 'const r = await tools.exec_command({ cmd: "cat /repo/CLAUDE.md" })',
+    });
+    const { resolver } = makeResolver({
+      stats: {
+        [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
+        "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 },
+      },
+      wholes: { [CODEX_INDEX]: "" },
+      tails: { "/rollouts/c1.jsonl": call },
+    });
+    const updates = resolver.resolve([
+      {
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        model: null,
+        transcriptPath: "/rollouts/c1.jsonl",
+        activityLine: null,
+      },
+    ]).activities;
+    expect(updates).toHaveLength(1);
+    const line = updates[0]?.activityLine ?? "";
+    expect(line).toBe("Command");
+    expect(line.includes("CLAUDE.md")).toBe(false);
+    expect(line.includes("exec_command")).toBe(false);
+  });
+
   test("a codex function_call with unparseable arguments still names the tool, and non-call items are skipped", () => {
     const truncated = responseItemLine({ type: "function_call", name: "apply_patch", arguments: '{"patch":"***' });
     const message = responseItemLine({ type: "message", role: "assistant" });

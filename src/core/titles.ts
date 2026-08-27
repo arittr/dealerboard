@@ -292,9 +292,19 @@ const codexArgumentsActivity = (value: unknown): ActivityCategory | null => {
 };
 
 /**
+ * custom_tool_call payloads carry only an opaque `input` string (harness code
+ * or patch text), so the tool name is the classification signal.
+ */
+const CODEX_CUSTOM_TOOL_ACTIVITY: Readonly<Record<string, ActivityCategory>> = {
+  exec: "Command",
+  apply_patch: "File",
+};
+
+/**
  * The last tool call in a Codex rollout tail: response_item records whose
- * payload is a function_call or a local_shell_call. Only a fixed semantic
- * category crosses the wire; tool names and argument contents stay local.
+ * payload is a function_call, a local_shell_call, or a custom_tool_call. Only
+ * a fixed semantic category crosses the wire; tool names and argument
+ * contents stay local.
  */
 const codexActivityFromTail = (tail: string): string | null =>
   lastFromTail(tail, "response_item", (record) => {
@@ -308,6 +318,9 @@ const codexActivityFromTail = (tail: string): string | null =>
     if (payload["type"] === "local_shell_call") {
       const action = payload["action"];
       return isRecord(action) && hasActivityValue(action["command"]) ? "Command" : "Tool";
+    }
+    if (payload["type"] === "custom_tool_call" && typeof payload["name"] === "string" && payload["name"].length > 0) {
+      return CODEX_CUSTOM_TOOL_ACTIVITY[payload["name"]] ?? "Tool";
     }
     return null;
   });
