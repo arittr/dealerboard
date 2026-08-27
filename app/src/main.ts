@@ -45,6 +45,7 @@ import {
   type SnapshotPayload,
 } from "./bridge";
 import { boardRenderSignature, cardKey, renderBoard, sessionLastEventAt } from "./cards";
+import { createDismissals, flickRemoves } from "./dismissals";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -82,17 +83,18 @@ let currentCards: readonly PlacedCard[] = [];
 const ingestGate = createIngestGate();
 
 /**
- * A pending long-press is bound to the pressed session's identity, never to
- * a dense tile index: a pushed snapshot can re-render the grid during the
- * 500ms hold, and an index captured at press time may already point at a
- * different session when the sheet opens.
+ * A pending press is bound to the pressed session's identity, never to a
+ * dense tile index: a pushed snapshot can re-render the grid during the
+ * stroke, and an index captured at press time may already point at a
+ * different session when the long-press sheet opens or the flick lands.
  */
-type PendingLongPress = { identity: SessionIdentity; point: GesturePoint };
+type PendingPress = { identity: SessionIdentity; point: GesturePoint };
 
 const gestures = createGestureRecognizer();
 const clickSuppression = createClickSuppression();
+const dismissals = createDismissals();
 let gestureTimer: number | null = null;
-let pendingLongPress: PendingLongPress | null = null;
+let pendingPress: PendingPress | null = null;
 
 type SheetContext = {
   point: GesturePoint;
@@ -306,8 +308,14 @@ const ingest = (payload: SnapshotPayload | null): void => {
   lastPayload = payload;
   const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
   lastGood = reduction.lastGood;
-  currentView = reduction.view;
-  applyBoard(reduceBoard(reduction.view, loadStoredSettings()));
+  // The rendered view hides freshly-flicked slats while their ack's
+  // settlement makes the registry → snapshot round-trip; lastGood stays
+  // unfiltered so an expired dismissal honestly resurfaces.
+  currentView = {
+    ...reduction.view,
+    snapshot: dismissals.filterSnapshot(reduction.view.snapshot, Date.now()),
+  };
+  applyBoard(reduceBoard(currentView, loadStoredSettings()));
   // A healthy view arms the one-shot expiry check; a degraded one disarms it
   // — the slow pass owns re-reads until a fresh payload re-arms it.
   if (payload !== null && !reduction.view.degraded) {
@@ -418,7 +426,7 @@ const onBoardClick = (event: MouseEvent): void => {
   });
 };
 
-const cardFromPointerEvent = (event: PointerEvent): PendingLongPress | null => {
+const cardFromPointerEvent = (event: PointerEvent): PendingPress | null => {
   if (!(event.target instanceof HTMLElement)) {
     return null;
   }
@@ -562,7 +570,48 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
   }
 };
 
-const openActionSheetFor = (pending: PendingLongPress): void => {
+const FLICK_OUT_MS = 200;
+
+/**
+ * Flick-to-dismiss: the vertical counterpart of tap-ack, minus the routing.
+ * Only a slat an ack would actually take off the board (a retired error, a
+ * viewed idle result) slides out; a live slat flashes like a routeless tap,
+ * so the animation never promises a dismissal the registry will refuse. The
+ * ack itself is fire-and-forget exactly like pressSessionTile's: if it is
+ * lost, the local dismissal expires and the slat honestly returns.
+ */
+const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
+  const ref = resolveInteractiveBoardCard(currentCards, pending.identity);
+  if (ref === null) {
+    return;
+  }
+  const tile = document.querySelector<HTMLElement>(`#board [data-card-index="${ref.index}"]`);
+  if (tile === null) {
+    return;
+  }
+  if (!flickRemoves(ref.card.session)) {
+    flashCard(tile);
+    return;
+  }
+  const { provider, sessionId } = ref.card.session;
+  void ackSession(provider, sessionId).catch(() => {});
+  const slide = tile.animate(
+    [
+      { transform: "translateY(0)", opacity: 1 },
+      { transform: `translateY(${direction === "up" ? -120 : 120}%)`, opacity: 0 },
+    ],
+    { duration: FLICK_OUT_MS, easing: "ease-in", fill: "forwards" },
+  );
+  // A re-render mid-slide cancels the animation (finished rejects): settle
+  // either way — the dismissal must land or the card pops back for a beat.
+  const settle = (): void => {
+    dismissals.dismiss(provider, sessionId, Date.now());
+    ingest(lastPayload);
+  };
+  slide.finished.then(settle, settle);
+};
+
+const openActionSheetFor = (pending: PendingPress): void => {
   // Resolve by identity against the current cards: if the pressed session
   // left the board during the hold, cancel — never retarget the sheet (and
   // its Clear action) at whichever session shifted into the old index.
@@ -605,11 +654,19 @@ const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
         onSwipe(intent.direction);
         break;
       case "longpress": {
-        const pending = pendingLongPress;
+        const pending = pendingPress;
         if (pending !== null) {
-          pendingLongPress = null;
+          pendingPress = null;
           settleLongPressStroke(pending.point); // before the overlay takes the pointer
           openActionSheetFor(pending);
+        }
+        break;
+      }
+      case "flick": {
+        const pending = pendingPress;
+        if (pending !== null) {
+          pendingPress = null;
+          flickAway(pending, intent.direction);
         }
         break;
       }
@@ -650,7 +707,7 @@ const onStripPointerDown = (event: PointerEvent): void => {
   // click at all — so any still-unconsumed suppression from the last stroke
   // dies here rather than eating this stroke's taps.
   clickSuppression.beginStroke();
-  pendingLongPress = cardFromPointerEvent(event);
+  pendingPress = cardFromPointerEvent(event);
   feedPointer({ kind: "down", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
 
@@ -666,7 +723,7 @@ const onStripPointerUp = (event: PointerEvent): void => {
     return;
   }
   feedPointer({ kind: "up", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
-  pendingLongPress = null;
+  pendingPress = null;
 };
 
 const onStripPointerCancel = (event: PointerEvent): void => {
@@ -674,7 +731,7 @@ const onStripPointerCancel = (event: PointerEvent): void => {
     return;
   }
   feedPointer({ kind: "cancel", now: Date.now() });
-  pendingLongPress = null;
+  pendingPress = null;
 };
 
 /**
