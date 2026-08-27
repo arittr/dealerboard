@@ -154,12 +154,12 @@ describe("cardViewModel", () => {
     expect(label?.endsWith("…")).toBe(true);
   });
 
-  test("origin disc only for Paseo parents; badge is the bare descendant count", () => {
+  test("paseo origin only for Paseo parents; badge is the bare descendant count", () => {
     const paseoParent = cardViewModel(placed({}, { originKind: "paseo", descendantCount: 2 }), NOW_MS);
-    expect(paseoParent.originDisc).toBe(true);
+    expect(paseoParent.paseoOrigin).toBe(true);
     expect(paseoParent.badge).toBe(2);
     const paseoSub = cardViewModel(placed({ subagent: true }, { originKind: "paseo", originSubagent: true }), NOW_MS);
-    expect(paseoSub.originDisc).toBe(false);
+    expect(paseoSub.paseoOrigin).toBe(false);
   });
 
   test("degraded passes through to the model (the card's ! flag)", () => {
@@ -382,6 +382,48 @@ describe("status corner anatomy", () => {
     withFakeDocument((root) => {
       renderBoard(root as unknown as HTMLElement, pageWith("idle", {}), false);
       expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "cardtimer", "status-dot"]);
+    });
+  });
+});
+
+describe("head origin and lineage pills", () => {
+  const headClasses = (root: FakeElement): string[] =>
+    (descendants(root).find((node) => hasClass(node, "card-head"))?.children ?? []).map(
+      (node) => node.className.split(/\s+/u)[0] ?? "",
+    );
+
+  test("a paseo parent carries the paseo pill beside its chip; the origin disc is gone", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, { cards: [placed({}, { originKind: "paseo" })] }, false);
+      expect(headClasses(root)).toEqual(["chip", "paseo-pill", "card-title"]);
+      expect(descendants(root).find((node) => hasClass(node, "paseo-pill"))?.textContent).toBe("paseo");
+      expect(descendants(root).some((node) => hasClass(node, "origin-disc"))).toBe(false);
+    });
+  });
+
+  test("a terminal session carries neither pill", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, { cards: [placed()] }, false);
+      expect(headClasses(root)).toEqual(["chip", "card-title"]);
+    });
+  });
+
+  test("a grouped sub drops the sub pill — the indent and spine already say it", () => {
+    withFakeDocument((root) => {
+      renderBoard(
+        root as unknown as HTMLElement,
+        { cards: [placed({ subagent: true, indent: true, spine: "end" })] },
+        false,
+      );
+      expect(headClasses(root)).toEqual(["chip", "card-title"]);
+    });
+  });
+
+  test("an orphan sub keeps the sub pill — no indent or spine identifies it", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, { cards: [placed({ subagent: true })] }, false);
+      expect(headClasses(root)).toEqual(["chip", "sub-pill", "card-title"]);
+      expect(descendants(root).find((node) => hasClass(node, "sub-pill"))?.textContent).toBe("sub");
     });
   });
 });

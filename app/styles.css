@@ -279,13 +279,6 @@ body[data-fullscreen] #board {
   font-size: 0.859vw; /* 22px native */
   font-weight: 650;
 }
-.origin-disc {
-  flex: none;
-  width: 0.547vw; /* 14px native */
-  height: 0.547vw;
-  border-radius: 50%;
-  background: #a78bfa;
-}
 
 /* Status row: dim fact, worded bright timer, dot last — right-aligned on the
    head line so every card's number and dot share the column's right rail. */
@@ -392,8 +385,11 @@ body[data-fullscreen] #board {
   border: 0.117vw solid #1c2430;
 }
 
-/* The hollow-ring "sub" cue after the chip. */
-.sub-pill {
+/* The chip-side lineage pills: hollow ring = "sub" (orphan subagents only —
+   grouped subs carry the indent and spine instead), filled disc = "paseo"
+   (Paseo-dispatched parents). */
+.sub-pill,
+.paseo-pill {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -404,13 +400,19 @@ body[data-fullscreen] #board {
   color: #94a3b8;
   font-size: 0.781vw; /* 20px native */
 }
-.sub-pill::before {
+.sub-pill::before,
+.paseo-pill::before {
   content: "";
   flex: none;
   width: 0.508vw; /* 13px native */
   height: 0.508vw;
-  border: 0.098vw solid #a78bfa; /* 2.5px native */
   border-radius: 50%;
+}
+.sub-pill::before {
+  border: 0.098vw solid #a78bfa; /* 2.5px native */
+}
+.paseo-pill::before {
+  background: #a78bfa;
 }
 
 /* Subagent anatomy: smaller chip, muted title, tighter status and meta. */

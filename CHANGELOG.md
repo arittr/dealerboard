@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Paseo provenance moved to the harness side: the violet meta-row dot is now
+  a worded "paseo" pill beside the provider chip. Grouped subagents drop the
+  "sub" pill — the indent and spine already identify them; only orphan subs
+  keep it.
 - The card's status corner now words every number and ends with the dot, so
   numbers and dots align down each column: working cards headline the session
   age ("open 2h") with a dim "quiet 4m" silence fact, while idle, waiting,

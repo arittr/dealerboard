@@ -58,7 +58,8 @@ export type CardViewModel = {
    *  (the gap slot owns that position) and on sessions without an openedAt stamp. */
   age: string | null;
   ageSince: string | null;
-  originDisc: boolean;
+  /** True for a session a Paseo agent dispatched (parents only) — the head's "paseo" pill. */
+  paseoOrigin: boolean;
   subagent: boolean;
   indent: boolean;
   spine: SpineSegment;
@@ -100,7 +101,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     timer,
     age,
     ageSince: age === null ? null : openedAt,
-    originDisc: session.originKind === "paseo" && !session.originSubagent,
+    paseoOrigin: session.originKind === "paseo" && !session.originSubagent,
     subagent: card.subagent,
     indent: card.indent,
     spine: card.spine,
@@ -151,7 +152,12 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
     dot.className = "unread-dot";
     chip.append(dot);
   }
-  if (model.subagent) {
+  if (model.paseoOrigin) {
+    appendText(head, "paseo-pill", "paseo");
+  }
+  // A grouped sub's indent and spine already say it; only an orphan (neither)
+  // still needs the pill.
+  if (model.subagent && !model.indent) {
     appendText(head, "sub-pill", "sub");
   }
   const title = appendText(head, model.fallbackTitle ? "card-title fallback" : "card-title", model.title);
@@ -171,11 +177,6 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   }
   const metaRight = document.createElement("span");
   metaRight.className = "meta-right";
-  if (model.originDisc) {
-    const disc = document.createElement("span");
-    disc.className = "origin-disc";
-    metaRight.append(disc);
-  }
   if (model.badge !== null && model.badge > 0) {
     appendText(metaRight, "badge", String(model.badge));
   }
