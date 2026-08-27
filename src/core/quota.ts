@@ -659,9 +659,40 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         };
         states.set("claude", { quota, failed: false });
         providers["claude"] = quota;
+      } else if (
+        swapRead.kind === "failed" &&
+        claudeAccounts.accounts.length >= 2 &&
+        states.get("claude")?.quota.fetchedAt != null
+      ) {
+        // Grouped starvation — settled contract (decisions.md 2026-08-27
+        // 01:43): from ≥2 retained with a usable stamp, no fallback probe
+        // runs and the stamp is not restamped, so a persistent failure ages
+        // the group stale while a transient one only dims the rows for one
+        // pass. unavailable is canonicalized false — group health rides the
+        // stamp's age, and a legacy seed persisted with unavailable: true
+        // must not dim the group forever.
+        if (!claudeAccounts.failed) {
+          reportAccountFailure();
+        }
+        claudeAccounts = {
+          accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+          failed: true,
+        };
+        // The stamp condition above guarantees the entry exists; the guard
+        // satisfies the Map lookup's type.
+        const previous = states.get("claude");
+        if (previous !== undefined) {
+          const quota: ProviderQuota = {
+            ...previous.quota,
+            unavailable: false,
+            accounts: claudeAccounts.accounts,
+          };
+          states.set("claude", { quota, failed: previous.failed });
+          providers["claude"] = quota;
+        }
       } else {
         // Not grouped this pass — cswap absent, <2 accounts reported, or a
-        // failed read (any retention count in this task): claude stays on the
+        // failed read below the starvation conditions: claude stays on the
         // codexbar probe. The probe is the final await; everything from its
         // return to the paired retention update is synchronous.
         const ambient = await pollProvider(exec, "claude", widget);

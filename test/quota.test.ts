@@ -72,6 +72,7 @@ describe("createQuotaCollector", () => {
     failClaudeSwap: () => void;
     healClaudeSwap: () => void;
     setClaudeSwap: (body: string) => void;
+    throwOnce: (provider: string) => void;
     writes: () => string[];
   };
 
@@ -86,6 +87,13 @@ describe("createQuotaCollector", () => {
     const writes: string[] = [];
     const failures = new Set<string>();
     const omissions = new Set<string>();
+    const throwers = new Set<string>();
+    // A rejecting exec cannot abort a pass — probe's catch-all contains exec
+    // rejections — so an armed throwOnce detonates at the designated
+    // provider's next now() stamp instead: pollProvider takes that stamp
+    // outside every try/catch, so the throw reaches pollNow's catch and
+    // models the unexpected mid-loop abort the collector must survive.
+    let abortAtNextStamp = false;
     const raw = new Map<string, RawResponse>();
     let claudeSwapFailed = false;
     let claudeSwapBody = fixture("claude-swap-accounts.json");
@@ -98,6 +106,9 @@ describe("createQuotaCollector", () => {
       calls.push(args);
       const arg = args[2] ?? "";
       const provider = contractKeyByArg[arg] ?? arg;
+      if (throwers.delete(provider)) {
+        abortAtNextStamp = true;
+      }
       const override = raw.get(provider);
       if (override !== undefined) {
         return Promise.resolve(override);
@@ -129,7 +140,13 @@ describe("createQuotaCollector", () => {
       ...(binaryPresent ? { exec: execSpy } : {}),
       ...(claudeSwapBinaryPresent ? { claudeSwapExec } : {}),
       readFile: (path) => options.files?.[path] ?? null,
-      now: () => NOW,
+      now: () => {
+        if (abortAtNextStamp) {
+          abortAtNextStamp = false;
+          throw new Error("harness: abort at the designated provider's stamp");
+        }
+        return NOW;
+      },
       writeFile: (_path, payload) => {
         writes.push(payload);
       },
@@ -170,6 +187,9 @@ describe("createQuotaCollector", () => {
       },
       setClaudeSwap: (body) => {
         claudeSwapBody = body;
+      },
+      throwOnce: (provider) => {
+        throwers.add(provider);
       },
       writes: () => writes,
     };
@@ -341,31 +361,148 @@ describe("createQuotaCollector", () => {
     );
   });
 
-  test("widget fallback is ambient-only", async () => {
+  test("a legacy grouped seed whose first new read fails starves with the seeded stamp", async () => {
+    const seedStamp = "2026-08-19T17:50:00.000Z";
+    const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
+    if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
+    const seeded = parseQuotaSnapshot({
+      schemaVersion: 2,
+      providers: {
+        claude: {
+          percentRemaining: 62.5,
+          resetAt: "2026-08-19T22:00:00.000Z",
+          weeklyPercentRemaining: 88,
+          weeklyResetAt: "2026-08-24T00:00:00.000Z",
+          unavailable: false,
+          fetchedAt: seedStamp,
+          history: [],
+          extraWindows: [],
+          accounts: seededAccounts.accounts,
+        },
+      },
+    });
+    const harness = makeHarness(
+      { files: { [quotaPath]: JSON.stringify(seeded) } },
+      { claudeSwapExec: () => Promise.resolve({ exitCode: 1, stdout: "private failure text" }) },
+    );
+    await createQuotaCollector(harness.deps).pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.fetchedAt).toBe(seedStamp);
+    expect(claude?.percentRemaining).toBe(62.5);
+    expect(claude?.unavailable).toBe(false);
+    expect(claude?.accounts).toEqual(seededAccounts.accounts.map((account) => ({ ...account, unavailable: true })));
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
+    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(1);
+  });
+
+  test("a legacy unavailable seed starves with unavailable canonicalized false", async () => {
+    // Seed exactly as in the previous test, but with unavailable: true.
+    const seedStamp = "2026-08-19T17:50:00.000Z";
+    const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
+    if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
+    const seeded = parseQuotaSnapshot({
+      schemaVersion: 2,
+      providers: {
+        claude: {
+          percentRemaining: 62.5,
+          resetAt: "2026-08-19T22:00:00.000Z",
+          weeklyPercentRemaining: 88,
+          weeklyResetAt: "2026-08-24T00:00:00.000Z",
+          unavailable: true,
+          fetchedAt: seedStamp,
+          history: [],
+          extraWindows: [],
+          accounts: seededAccounts.accounts,
+        },
+      },
+    });
+    const harness = makeHarness(
+      { files: { [quotaPath]: JSON.stringify(seeded) } },
+      { claudeSwapExec: () => Promise.resolve({ exitCode: 1, stdout: "private failure text" }) },
+    );
+    await createQuotaCollector(harness.deps).pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.fetchedAt).toBe(seedStamp);
+    expect(claude?.unavailable).toBe(false); // canonicalized — group health rides the stamp's age
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
+  });
+
+  test("a legacy seed without a usable stamp falls back to the codexbar probe", async () => {
+    // Seed ≥2 accounts under an emptyQuota()-shaped claude entry: fetchedAt
+    // null, unavailable true, null windows.
+    const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
+    if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
+    const seeded = parseQuotaSnapshot({
+      schemaVersion: 2,
+      providers: {
+        claude: {
+          percentRemaining: null,
+          resetAt: null,
+          weeklyPercentRemaining: null,
+          weeklyResetAt: null,
+          unavailable: true,
+          fetchedAt: null,
+          history: [],
+          extraWindows: [],
+          accounts: seededAccounts.accounts,
+        },
+      },
+    });
+    const harness = makeHarness({ files: { [quotaPath]: JSON.stringify(seeded) } });
+    harness.failClaudeSwap();
+    await createQuotaCollector(harness.deps).pollNow();
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(true); // probe ran
+    expect(claude?.percentRemaining).toBe(80); // honest ambient data under the retained rows
+    expect(claude?.fetchedAt).toBe(NOW);
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+  });
+
+  test("a failed cswap read keeps the group and starves the stamp — no probe, no widget rescue", async () => {
+    // A fresh claude widget entry proves the rescue is not consulted — if it
+    // were, percentRemaining would be 90 instead of null.
     const widget = JSON.stringify({
       generatedAt: NOW,
       entries: [
         {
           provider: "claude",
           primary: { windowMinutes: 300, usedPercent: 10, resetsAt: null },
-          secondary: { windowMinutes: 10080, usedPercent: 20, resetsAt: null },
+          secondary: null,
           tertiary: null,
         },
       ],
     });
-    const harness = makeHarness({ files: { [widgetPath(tempDir)]: widget } });
+    let current = NOW;
+    const harness = makeHarness({ files: { [widgetPath(tempDir)]: widget } }, { now: () => current });
     const collector = createQuotaCollector(harness.deps);
     await collector.pollNow();
-    const successful = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
-    const lastGoodAccounts = successful.providers["claude"]?.accounts ?? [];
-    harness.fail("claude");
+    const callsAfterFirstPass = harness.calls.length;
+
+    current = "2026-08-19T18:02:00.000Z";
     harness.failClaudeSwap();
+    harness.fail("claude"); // pre-change this sends the pass into the widget rescue
     await collector.pollNow();
-    const rescued = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
-    expect(rescued.providers["claude"]).toMatchObject({ percentRemaining: 90, unavailable: false });
-    expect(rescued.providers["claude"]?.accounts).toEqual(
-      lastGoodAccounts.map((account) => ({ ...account, unavailable: true })),
-    );
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude).toMatchObject({ percentRemaining: null, unavailable: false, fetchedAt: NOW });
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+    expect(harness.calls.length).toBe(callsAfterFirstPass + 4); // codex, kimi, zai, qwen only
+    expect(harness.diagnostics.filter((record) => record.code === "quota_failed")).toEqual([]);
+    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(1);
+
+    current = "2026-08-19T18:04:00.000Z";
+    harness.healClaudeSwap();
+    harness.heal("claude");
+    await collector.pollNow();
+    const healed = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    const expected = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
+    if (expected.kind !== "ok") throw new Error("fixture must parse");
+    expect(healed?.unavailable).toBe(false);
+    expect(healed?.fetchedAt).toBe("2026-08-19T18:04:00.000Z");
+    // The blanket command-failure marking clears: the rows return exactly to
+    // the parser's per-seat health — seat 2's own usageStatus "unavailable"
+    // in the fixture stays unavailable, seat 1 becomes available again.
+    expect(healed?.accounts).toEqual(expected.accounts);
   });
 
   test("account subprocess errors stay payload-free in diagnostics", async () => {
@@ -841,6 +978,37 @@ describe("createQuotaCollector", () => {
     expect(claude?.accounts).toEqual([]);
   });
 
+  test("an aborted de-grouping pass cannot desync retention from the published group", async () => {
+    const harness = makeHarness();
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow(); // pass 1: grouped from the fixture's two accounts
+    const grouped = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    harness.setClaudeSwap(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [
+          {
+            number: 1,
+            usageStatus: "ok",
+            usageFetchedAt: "2026-08-19T17:00:00Z",
+            usage: { fiveHour: { pct: 30 } },
+          },
+        ],
+      }),
+    );
+    harness.throwOnce("kimi"); // pass 2 aborts inside the four-provider loop, before claude resolution
+    await collector.pollNow(); // contained by pollNow's catch; nothing published, claude untouched
+    const passThreeStart = harness.calls.length;
+    harness.failClaudeSwap();
+    await collector.pollNow(); // pass 3: failed read against still-consistent grouped state
+    const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(claude?.fetchedAt).toBe(grouped?.fetchedAt); // starvation, no restamp
+    expect(claude?.accounts.map((account) => account.id)).toEqual(grouped?.accounts.map((account) => account.id));
+    expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
+    expect(harness.calls.slice(passThreeStart).some((call) => call[2] === "claude")).toBe(false);
+  });
+
   test("below two accounts the claude entry stays byte-identical to today's codexbar shape", async () => {
     const harness = makeHarness();
     const collector = createQuotaCollector(harness.deps);
@@ -904,5 +1072,40 @@ describe("createQuotaCollector", () => {
         extraWindows: [],
       },
     ]);
+  });
+
+  test("a failed cswap read with fewer than two retained accounts falls back to the codexbar claude probe", async () => {
+    const harness = makeHarness();
+    const collector = createQuotaCollector(harness.deps);
+    harness.failClaudeSwap();
+    await collector.pollNow(); // cold start: nothing retained
+    let claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(true);
+    expect(claude).toMatchObject({ percentRemaining: 80, unavailable: false });
+    expect(claude?.accounts).toEqual([]);
+
+    harness.healClaudeSwap();
+    harness.setClaudeSwap(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [
+          {
+            number: 1,
+            usageStatus: "ok",
+            usageFetchedAt: "2026-08-19T17:00:00Z",
+            usage: { fiveHour: { pct: 30 } },
+          },
+        ],
+      }),
+    );
+    await collector.pollNow(); // one account: fallback territory
+    harness.failClaudeSwap();
+    await collector.pollNow(); // failed with one retained account: still fallback
+    claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
+    expect(harness.calls.filter((call) => call[2] === "claude").length).toBe(3);
+    expect(claude?.percentRemaining).toBe(80);
+    expect(claude?.accounts).toHaveLength(1);
+    expect(claude?.accounts[0]?.unavailable).toBe(true);
   });
 });
