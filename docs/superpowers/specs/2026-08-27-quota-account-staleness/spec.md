@@ -44,9 +44,12 @@ Two coordinated changes:
       provider probe loop; when the read succeeds with ≥2 accounts it
       skips the codexbar claude probe for that pass.
   - Acceptance: in grouped operation, `codexbar usage --provider claude`
-    is not invoked; claude's published snapshot entry carries the account
-    rows, `unavailable: false`, null ambient windows, and `fetchedAt`
-    stamped by the collector at the successful cswap read.
+    is not invoked and the widget-snapshot rescue path is not consulted
+    for claude either; claude's published snapshot entry carries the
+    account rows, `unavailable: false`, null ambient windows, and
+    `fetchedAt` stamped by the collector at the successful cswap read.
+    With one source there is also no two-probe window that can straddle an
+    account switch mid-pass.
 - [ ] Requirement: fallback — when cswap is absent or authoritatively
       reports <2 accounts, the codexbar claude probe runs as today and the
       ungrouped panel renders unchanged.
@@ -181,6 +184,15 @@ Two coordinated changes:
   as cswap absent → codexbar fallback, ungrouped panel (existing "absent"
   path). Missing codexbar binary in fallback mode: existing
   provider-absent behavior, unchanged.
+- Sleep/wake: the first pass after wake may render the group stale for up
+  to ~one pass (~2 min) until a cswap read lands — existing behavior for
+  every provider panel today; accepted, no wake grace.
+- Binding reset passes while a reading is `ok`: the row stays bright and
+  shows the existing "resetting…" note. Bounded honestly: cswap clamps
+  its next poll to a known reset + 60s slack (`RESET_SLACK_S`), so fresh
+  numbers follow within minutes even under backoff.
+- Unknown future `usageStatus` values: non-ok by construction (the parse
+  tests `=== "ok"`), so they render unavailable — safe default.
 
 ## Out of scope (with reasons)
 

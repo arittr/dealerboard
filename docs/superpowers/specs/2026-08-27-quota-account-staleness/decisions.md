@@ -124,3 +124,19 @@ to ready and re-run the ratify gate. -->
   record; verifications performed against the worktree code and cswap
   0.25.0 source.
 - **Deciders:** steering-session, with user's scope confirmation
+
+## 2026-08-27 01:00 — Gate round 2 findings dispositioned; cold-read complete
+- **Decided:** Findings 1-8 and 10 of the second cold-read (agent
+  8f0b9cdd) are answered by the amended spec (source authority, no age
+  threshold, collector-dead = the collector's own cswap-read stamp aging
+  past three passes, uniform status mapping, group-vs-rows dim extent,
+  account-count transitions, ambient meter retired in grouped mode, scope
+  limited to the claude group). Finding 9 (reset-passed trust horizon)
+  and residual explicitness folded into the spec: widget-snapshot path
+  excluded in grouped mode; no sleep/wake grace (existing behavior);
+  "resetting…" bounded by cswap's reset-clamped scheduling; unknown
+  usageStatus values unavailable by construction.
+- **Because:** the cold-read judges from problem.md + code only; its
+  question list is the record against which the spec was checked, per the
+  artifact-gated workflow.
+- **Deciders:** steering-session; ratification pending user sign-off
