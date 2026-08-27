@@ -12,9 +12,10 @@ import type { BoardSession } from "./board";
 
 export const DISMISS_TTL_MS = 5_000;
 
-/** True when an ack would take the slat off the board: a retired error or a viewed idle result. */
+/** True when an ack would take the slat off the board: a retired error or an undismissed idle result. */
 export const flickRemoves = (session: BoardSession): boolean =>
-  session.status === "error" || (session.status === "idle" && session.unreadSince !== null);
+  session.status === "error" ||
+  (session.status === "idle" && (session.unreadSince !== null || session.doneSince !== null));
 
 const identityKey = (provider: string, sessionId: string): string => `${provider}\u0000${sessionId}`;
 

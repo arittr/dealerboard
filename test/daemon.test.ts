@@ -153,6 +153,7 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       originRef: null,
       originSubagent: false,
       unreadSince: NOW,
+      doneSince: NOW,
       statusSince: NOW,
       activityLine: null,
       transcriptPath: null,
@@ -175,6 +176,7 @@ const HEALTHY_S1: SessionSnapshotV2 = {
       statusSince: NOW,
       activityLine: null,
       unreadSince: NOW,
+      doneSince: NOW,
       logicalSlot: 1,
       ghosttyTerminalId: null,
       transcriptPath: null,
@@ -291,7 +293,7 @@ describe("ProjectionDaemon", () => {
 
     // Projection error: a child row with a missing parent (inserted with
     // foreign-key enforcement off) fails the defensive topology checks.
-    setUserVersion(14);
+    setUserVersion(15);
     startSession("parent");
     const raw = new Database(paths.database);
     try {

@@ -13,6 +13,7 @@ const session = (sessionId: string, overrides: Partial<ProjectedSession> = {}): 
   originRef: null,
   originSubagent: false,
   unreadSince: null,
+  doneSince: null,
   statusSince: null,
   activityLine: null,
   transcriptPath: null,
@@ -38,6 +39,7 @@ const node = (sessionId: string, overrides: Partial<ProjectedAgentNode> = {}): P
   statusSince: null,
   activityLine: null,
   unreadSince: null,
+  doneSince: null,
   logicalSlot: 1,
   ghosttyTerminalId: null,
   transcriptPath: null,
@@ -63,6 +65,14 @@ describe("flickRemoves", () => {
 
   test("an idle unread slat is removable: ack takes it off the board", () => {
     expect(flickRemoves(session("s1", { status: "idle", unreadSince: "2026-08-26T05:00:00.000Z" }))).toBe(true);
+  });
+
+  test("a done-and-read idle slat is removable: the done card persists until this gesture", () => {
+    expect(flickRemoves(session("s1", { status: "idle", doneSince: "2026-08-26T05:00:00.000Z" }))).toBe(true);
+  });
+
+  test("an idle slat with neither stamp is not removable (nothing for the ack to settle)", () => {
+    expect(flickRemoves(session("s1", { status: "idle" }))).toBe(false);
   });
 
   test("a live slat is not removable, unread or not", () => {

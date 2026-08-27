@@ -36,6 +36,7 @@ export type ProjectionRow = {
   originRef: string | null;
   originSubagent: number;
   unreadSince: string | null;
+  doneSince: string | null;
   statusSince: string | null;
   activityLine: string | null;
   transcriptPath: string | null;
@@ -296,7 +297,8 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
   }
 
   const rootVisible = (result: RootResult): boolean =>
-    result.effectiveStatus !== "idle" || (result.row.unreadSince !== null && !isPaseoSubagent(result.row));
+    result.effectiveStatus !== "idle" ||
+    ((result.row.unreadSince !== null || result.row.doneSince !== null) && !isPaseoSubagent(result.row));
   const visibleRoots = rootResults.filter(rootVisible);
   const visibleRootKeys = new Set(visibleRoots.map((result) => identityKey(result.row.provider, result.row.sessionId)));
 
@@ -310,6 +312,7 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     statusSince: result.row.statusSince,
     activityLine: result.row.activityLine,
     unreadSince: result.row.unreadSince,
+    doneSince: result.row.doneSince,
     logicalSlot: result.slot,
     ghosttyTerminalId: result.row.ghosttyTerminalId,
     transcriptPath: result.row.transcriptPath,
@@ -359,6 +362,7 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     activityLine: result.row.activityLine,
     lastEventAt: result.row.lastEventAt,
     unreadSince: null,
+    doneSince: null,
     logicalSlot: null,
     ghosttyTerminalId: null,
     transcriptPath: null,
@@ -466,6 +470,7 @@ type StoredRow = {
   origin_ref: unknown;
   origin_subagent: unknown;
   unread_since: unknown;
+  done_since: unknown;
   status_since: unknown;
   activity_line: unknown;
   transcript_path: unknown;
@@ -534,7 +539,12 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
   if (typeof row.origin_ref === "string" && (row.origin_ref.length === 0 || Array.from(row.origin_ref).length > 256)) {
     throw new ProjectionError("corrupt-row");
   }
-  if (!isBinary(row.origin_subagent) || !isStringOrNull(row.unread_since) || !isStringOrNull(row.status_since)) {
+  if (
+    !isBinary(row.origin_subagent) ||
+    !isStringOrNull(row.unread_since) ||
+    !isStringOrNull(row.done_since) ||
+    !isStringOrNull(row.status_since)
+  ) {
     throw new ProjectionError("corrupt-row");
   }
   if (
@@ -578,6 +588,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     originRef: row.origin_ref,
     originSubagent: row.origin_subagent,
     unreadSince: row.unread_since,
+    doneSince: row.done_since,
     statusSince: row.status_since,
     activityLine: row.activity_line,
     transcriptPath: row.transcript_path,
@@ -587,7 +598,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, opened_at, origin_kind, origin_ref, origin_subagent, unread_since, status_since, activity_line, transcript_path, origin_parent_ref, updated_at";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, opened_at, origin_kind, origin_ref, origin_subagent, unread_since, done_since, status_since, activity_line, transcript_path, origin_parent_ref, updated_at";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:

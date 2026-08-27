@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   age ("open 2h") with a dim "quiet 4m" silence fact, while idle, waiting,
   and error keep their status age ("waiting 12m") behind a dim "open 3h"
   fact. The unlabeled working-burst timer is gone.
+- Finished sessions persist on the board until dismissed: a done card no
+  longer vanishes when its result is passively viewed (for example, a
+  foregrounded Paseo agent finishing). Viewing clears only the unread dot;
+  the card leaves on a flick or ack, a Paseo archive, a session restart, or
+  session end.
 - Acknowledging a session settles its error state: tap-ack and a Paseo
   archive retire an errored row to idle instead of leaving it red until the
   24h stale prune, so parent roll-ups clear once their failed subagents are

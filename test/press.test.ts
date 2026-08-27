@@ -17,6 +17,7 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   originRef: null,
   originSubagent: false,
   unreadSince: null,
+  doneSince: null,
   statusSince: null,
   activityLine: null,
   transcriptPath: null,

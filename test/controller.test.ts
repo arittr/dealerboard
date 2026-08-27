@@ -21,6 +21,7 @@ const session = (logicalSlot: number, overrides: Partial<ProjectedSession> = {})
   originRef: null,
   originSubagent: false,
   unreadSince: null,
+  doneSince: null,
   statusSince: null,
   activityLine: null,
   transcriptPath: null,
