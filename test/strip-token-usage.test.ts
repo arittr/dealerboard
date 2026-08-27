@@ -39,7 +39,7 @@ const read = (value: TokenUsageSnapshot): { mtimeMs: number; contents: string } 
 });
 
 describe("formatTokensCompact", () => {
-  test("formats with glorp's compact rules: one decimal, .0 stripped, k/M/B", () => {
+  test("formats compactly with one decimal, .0 stripped, and k/M/B suffixes", () => {
     expect(formatTokensCompact(0)).toBe("0");
     expect(formatTokensCompact(42)).toBe("42");
     expect(formatTokensCompact(999)).toBe("999");
@@ -220,7 +220,7 @@ describe("reduceSparkline", () => {
 });
 
 describe("sparkline SVG geometry", () => {
-  test("polyline points map to d7's 500x84 viewBox: x*500, baseline 78 minus y*74", () => {
+  test("polyline points map to the 500x84 viewBox: x*500, baseline 78 minus y*74", () => {
     expect(
       sparklinePolylinePoints([
         { x: 0, y: 0 },
@@ -250,7 +250,7 @@ describe("sparkline SVG geometry", () => {
     expect(sparklineEndpoint([])).toBeNull();
   });
 
-  test("the viewBox matches d7's 500x84 box", () => {
+  test("the viewBox matches the fixed 500x84 box", () => {
     expect(SPARKLINE_VIEWBOX).toEqual({ width: 500, height: 84 });
   });
 });

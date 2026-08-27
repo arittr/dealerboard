@@ -328,6 +328,69 @@ describe("Evener AppWire collector", () => {
     expect(socket.closed).toBe(true);
   });
 
+  test("disconnects without partial hydration when thread/list exceeds the page cap", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      maxListPages: 2,
+      maxListItems: 10,
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+
+    let lists = socket.sent.filter((frame) => frame["method"] === "thread/list" && "id" in frame);
+    respond(socket, lists[0]!, { data: [thread("page-one", "active")], nextCursor: "cursor-1" });
+    await flush();
+    lists = socket.sent.filter((frame) => frame["method"] === "thread/list" && "id" in frame);
+    expect(lists).toHaveLength(2);
+    respond(socket, lists[1]!, { data: [thread("page-two", "active")], nextCursor: "cursor-2" });
+    await flush();
+
+    expect(socket.closed).toBe(true);
+    expect(updates).toEqual([]);
+    expect(diagnostics).toHaveLength(1);
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 5_000)).toBe(true);
+    collector.stop();
+  });
+
+  test("disconnects without partial hydration when thread/list exceeds the item cap", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      maxListPages: 2,
+      maxListItems: 1,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), {
+      data: [thread("first", "active"), thread("second", "active")],
+    });
+    await flush();
+
+    expect(socket.closed).toBe(true);
+    expect(updates).toEqual([]);
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 5_000)).toBe(true);
+    collector.stop();
+  });
+
   test("treats ordinary awaiting as a settled turn during hydration and live updates", async () => {
     const socket = new FakeSocket();
     const events: EvenerCollectorUpdate["events"] = [];

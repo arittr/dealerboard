@@ -23,8 +23,8 @@
  *   9. Bootstrap and kickstart the exact label.
  *   10. Install the managed shims and grok hook file into the provider
  *       dirs that exist; never overwrite unmarked user files.
- *   11. Print the canonical paths; the Claude/Kimi/Codex hooks remain a
- *       manual step.
+ *   11. Print the canonical paths; Claude, Kimi, Codex, ZCode, and Qwen
+ *       remain manual setup steps.
  *
  * Every subprocess runs through spawnSync with an argument array — no shell
  * command strings — and every tool path is absolute.
@@ -257,7 +257,7 @@ const main = (): void => {
   installShims(paths);
   installGrokHook(paths);
 
-  // 11. Report canonical paths; the Claude/Kimi/Codex hooks remain manual.
+  // 11. Report canonical paths; five provider integrations remain manual.
   process.stdout.write(
     [
       "install-local: complete",
@@ -269,8 +269,8 @@ const main = (): void => {
       `  service:     ${serviceTarget}`,
       "",
       "Managed pi/omp shims and the grok hook file were installed where their",
-      "provider dirs exist (see above). Claude, Kimi, and Codex hooks are NOT",
-      "installed — follow",
+      "provider dirs exist (see above). Claude, Kimi, Codex, ZCode, and Qwen",
+      "hooks are NOT installed — follow",
       "docs/hook-configuration.md to add them manually as the final setup step.",
       "",
     ].join("\n"),

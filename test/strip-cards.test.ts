@@ -85,6 +85,12 @@ describe("statusLineText", () => {
 describe("cardViewModel", () => {
   const NOW_MS = Date.parse("2026-08-25T00:10:00.000Z");
 
+  test("renders only safe activity categories and collapses legacy raw values", () => {
+    expect(cardViewModel(placed({}, { activityLine: "Command" }), NOW_MS).activity).toBe("Command");
+    expect(cardViewModel(placed({}, { activityLine: "Bash API_TOKEN=top-secret" }), NOW_MS).activity).toBe("Activity");
+    expect(cardViewModel(placed({}, { activityLine: null }), NOW_MS).activity).toBeNull();
+  });
+
   test("real title is not a fallback; project and long model id survive to 24 code points", () => {
     const model = cardViewModel(
       placed({}, { title: "Fix the thing", project: "repo", model: "qwen3.8-max-preview" }),

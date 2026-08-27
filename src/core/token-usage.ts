@@ -1,7 +1,7 @@
 /**
  * Token-usage collection for the strip's rail block.
  *
- * Shells out to the local `agentsview` helper (the same reporter glorp uses)
+ * Shells out to the local `agentsview` helper
  * for the America/Los_Angeles day's cumulative token totals, and keeps a
  * bounded ring of cumulative samples so the strip can difference rolling
  * windows. The total contract is tokenmaxxing_total_v1: input + output +

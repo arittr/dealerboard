@@ -87,7 +87,7 @@ const startEvent = (sessionId: string, extra: Record<string, unknown> = {}): str
   JSON.stringify({
     hook_event_name: "SessionStart",
     session_id: sessionId,
-    cwd: "/users/drew/project-x",
+    cwd: "/users/test/project-x",
     session_title: `Title for ${sessionId}`,
     ...extra,
   });
@@ -118,14 +118,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 13 database and stays silent on stdout", async () => {
+  test("creates a version 14 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 13 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 14 });
     } finally {
       db.close();
     }
@@ -270,7 +270,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "SessionStart",
           session_id: "blank-kimi",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           source: "startup",
           model: "k3",
         }),
@@ -309,7 +309,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "blank-kimi",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
@@ -537,7 +537,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "late-join",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
@@ -563,7 +563,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "s1",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
@@ -605,7 +605,7 @@ describe("event ingress", () => {
         JSON.stringify({
           hook_event_name: "UserPromptSubmit",
           session_id: "s1",
-          cwd: "/users/drew/project-x",
+          cwd: "/users/test/project-x",
           prompt: "SENTINEL_PROMPT_NEVER_STORED",
         }),
       ),
@@ -1231,7 +1231,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 13");
+      restore.exec("PRAGMA user_version = 14");
     } finally {
       restore.close();
     }

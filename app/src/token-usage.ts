@@ -1,7 +1,7 @@
 /**
  * Pure view-model for the rail's token-usage block: reduce the token-usage
  * snapshot read to a rail model — today's total plus rolling /hr and /10m
- * rates with glorp-style trend arrows, the day-over-day sparkline, and the
+ * rates with trend arrows, the day-over-day sparkline, and the
  * compact token formatting. Kept DOM-free so the logic is unit-testable; the
  * rendering layer is app/src/rail.ts.
  */
@@ -54,7 +54,7 @@ const totalAsOf = (samples: readonly NumberedSample[], atMs: number): number => 
   return (latest ?? earliest)?.totalTokens ?? 0;
 };
 
-/** A rolling-window rate: current window minus its start, trended against the previous equal-width window with glorp's deadband. */
+/** A rolling-window rate: current window minus its start, trended against the previous equal-width window with a deadband. */
 const rateLine = (samples: readonly NumberedSample[], anchorMs: number, windowMs: number): TokenUsageRateLine => {
   const newest = samples[samples.length - 1]?.totalTokens ?? 0;
   const current = Math.max(0, newest - totalAsOf(samples, anchorMs - windowMs));
@@ -121,7 +121,7 @@ export const laDayBoundsMs = (day: string): { startMs: number; endMs: number } =
   endMs: laMidnightMs(nextProviderDay(day)),
 });
 
-/** glorp's compact token formatting: one decimal, a trailing .0 stripped, k/M/B suffixes (1000.0k rolls up to 1M). */
+/** Compact token formatting: one decimal, a trailing .0 stripped, k/M/B suffixes (1000.0k rolls up to 1M). */
 export const formatTokensCompact = (value: number): string => {
   const tokens = Math.max(0, value);
   if (tokens < 1000) {
@@ -179,7 +179,7 @@ export const reduceSparkline = (snapshot: TokenUsageSnapshot): SparklineModel | 
   };
 };
 
-/* SVG geometry for the sparkline (d7's exact 500x84 box: curve baseline y=78,
+/* SVG geometry for the sparkline (fixed 500x84 box: curve baseline y=78,
    curve max y=4). Pure and DOM-free so rail.ts stays a thin attribute shell. */
 
 export const SPARKLINE_VIEWBOX = { width: 500, height: 84 } as const;

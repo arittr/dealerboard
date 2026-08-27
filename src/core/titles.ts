@@ -153,75 +153,37 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const boundTitle = (value: string): string => Array.from(value).slice(0, MAX_TITLE_CODE_POINTS).join("");
 
-const ACTIVITY_TARGET_KEYS = ["file_path", "path", "command", "pattern", "query", "url"] as const;
+type ActivityCategory = "File" | "Command" | "Search" | "Request";
 
-/**
- * Codex function_call arguments carry the command under `cmd` (verified
- * across the local rollout corpus: a plain string, never `command` — that
- * spelling belongs to local_shell_call's argv), so exec_command's target is
- * lifted by a Codex-specific key list.
- */
-const CODEX_CALL_TARGET_KEYS = ["cmd", "file_path", "path", "pattern", "query", "url"] as const;
-
-/** A command's head is its first line; the rest never crosses the wire. */
-const firstLine = (value: string): string => value.split("\n", 1)[0] ?? value;
-
-/** Join an all-string argv, or null when the value is not one. */
-const stringArrayJoin = (value: unknown): string | null => {
-  if (!Array.isArray(value) || value.length === 0) {
-    return null;
-  }
-  if (!value.every((item) => typeof item === "string")) {
-    return null;
-  }
-  return (value as string[]).join(" ");
+const ACTIVITY_CATEGORY_BY_KEY: Readonly<Record<string, ActivityCategory>> = {
+  file_path: "File",
+  path: "File",
+  command: "Command",
+  pattern: "Search",
+  query: "Search",
+  url: "Request",
 };
 
-/**
- * A tool call's short target: the first known path/command/pattern-style
- * input key (string, or string array joined), first line only. Never full
- * arguments — matching the payload-minimality posture.
- */
-const activityTargetFrom = (
+const CODEX_ACTIVITY_CATEGORY_BY_KEY: Readonly<Record<string, ActivityCategory>> = {
+  cmd: "Command",
+  ...ACTIVITY_CATEGORY_BY_KEY,
+};
+
+const hasActivityValue = (value: unknown): boolean =>
+  (typeof value === "string" && value.length > 0) ||
+  (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string"));
+
+/** Classify a tool input without retaining its path, command, search, query, or URL. */
+const activityCategoryFrom = (
   input: Record<string, unknown>,
-  keys: readonly string[] = ACTIVITY_TARGET_KEYS,
-): string | null => {
-  for (const key of keys) {
-    const value = input[key];
-    if (typeof value === "string" && value.length > 0) {
-      return firstLine(value);
-    }
-    const joined = stringArrayJoin(value);
-    if (joined !== null && joined.length > 0) {
-      return firstLine(joined);
+  categories: Readonly<Record<string, ActivityCategory>> = ACTIVITY_CATEGORY_BY_KEY,
+): ActivityCategory | null => {
+  for (const [key, category] of Object.entries(categories)) {
+    if (hasActivityValue(input[key])) {
+      return category;
     }
   }
   return null;
-};
-
-/**
- * Compose "Tool target": the target truncates first, with an ellipsis, so
- * the whole line stays within MAX_ACTIVITY_LINE_CODE_POINTS — the registry's
- * activity_line CHECK rejects anything longer. An independently overlong
- * tool name is capped at that same bound, without an ellipsis: it is the
- * whole line when the target is null, and the target budget derives from
- * the capped length.
- */
-const composeActivityLine = (toolName: string, target: string | null): string => {
-  const name = Array.from(toolName).slice(0, MAX_ACTIVITY_LINE_CODE_POINTS).join("");
-  if (target === null) {
-    return name;
-  }
-  const budget = MAX_ACTIVITY_LINE_CODE_POINTS - Array.from(name).length - 1;
-  if (budget < 1) {
-    return name;
-  }
-  const points = Array.from(target);
-  if (points.length === 0) {
-    return name;
-  }
-  const kept = points.length > budget ? `${points.slice(0, budget - 1).join("")}…` : target;
-  return `${name} ${kept}`;
 };
 
 /**
@@ -293,7 +255,7 @@ const claudeActivityFromTail = (tail: string): string | null =>
         item["name"].length > 0
       ) {
         const input = isRecord(item["input"]) ? item["input"] : {};
-        return composeActivityLine(item["name"], activityTargetFrom(input));
+        return activityCategoryFrom(input) ?? "Tool";
       }
     }
     return null;
@@ -303,14 +265,14 @@ const claudeActivityFromTail = (tail: string): string | null =>
 const codexModelFromTail = (tail: string): string | null =>
   lastFromTail(tail, "turn_context", (record) => (isRecord(record["payload"]) ? record["payload"]["model"] : null));
 
-/** Lift a short target from a function_call's stringified JSON arguments; null when unparseable. */
-const codexArgumentsTarget = (value: unknown): string | null => {
+/** Classify a function_call's stringified arguments without retaining their contents. */
+const codexArgumentsActivity = (value: unknown): ActivityCategory | null => {
   if (typeof value !== "string" || value.length === 0) {
     return null;
   }
   try {
     const parsed: unknown = JSON.parse(value);
-    return isRecord(parsed) ? activityTargetFrom(parsed, CODEX_CALL_TARGET_KEYS) : null;
+    return isRecord(parsed) ? activityCategoryFrom(parsed, CODEX_ACTIVITY_CATEGORY_BY_KEY) : null;
   } catch {
     return null;
   }
@@ -318,9 +280,8 @@ const codexArgumentsTarget = (value: unknown): string | null => {
 
 /**
  * The last tool call in a Codex rollout tail: response_item records whose
- * payload is a function_call (name plus stringified JSON arguments) or a
- * local_shell_call (an exec action's argv, shown as "shell <argv head>").
- * Arguments are parsed only to lift a short target — never carried whole.
+ * payload is a function_call or a local_shell_call. Only a fixed semantic
+ * category crosses the wire; tool names and argument contents stay local.
  */
 const codexActivityFromTail = (tail: string): string | null =>
   lastFromTail(tail, "response_item", (record) => {
@@ -329,12 +290,11 @@ const codexActivityFromTail = (tail: string): string | null =>
       return null;
     }
     if (payload["type"] === "function_call" && typeof payload["name"] === "string" && payload["name"].length > 0) {
-      return composeActivityLine(payload["name"], codexArgumentsTarget(payload["arguments"]));
+      return codexArgumentsActivity(payload["arguments"]) ?? "Tool";
     }
     if (payload["type"] === "local_shell_call") {
       const action = payload["action"];
-      const joined = isRecord(action) ? stringArrayJoin(action["command"]) : null;
-      return composeActivityLine("shell", joined === null ? null : firstLine(joined));
+      return isRecord(action) && hasActivityValue(action["command"]) ? "Command" : "Tool";
     }
     return null;
   });

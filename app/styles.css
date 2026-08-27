@@ -56,10 +56,10 @@ body[data-fullscreen] #board {
 }
 
 /*
- * Cards (d6.html is the visual contract of record; native px converted at
+ * Cards (the fixed geometry is documented in docs/design.md; native px converted at
  * 2560x720 — px / 25.6 = vw, px / 7.2 = vh). Each card is a two-column
  * grid: the head and status rows share the first row (the status block
- * right-aligns against the title, as d6's .trow/.stat pair) and the meta
+ * right-aligns against the title) and the meta
  * row spans below. The status edge is the left border; the sub spine is
  * ::before and the waiting/error tint is ::after; .pulse-overlay is the
  * working card's event flash.
@@ -75,7 +75,7 @@ body[data-fullscreen] #board {
   row-gap: 0.833vh; /* 6px native */
   column-gap: 0.547vw; /* 14px native */
   min-width: 0;
-  padding: 0 0.625vw 0 0.938vw; /* d6's 30px padding behind an 8px edge: text 32px in */
+  padding: 0 0.625vw 0 0.938vw; /* 30px padding behind an 8px edge: text 32px in */
   border-radius: 0.469vw; /* 12px native */
   background: #1c2430;
   border-left: 0.3125vw solid transparent; /* the 8px status-edge slot */
@@ -146,13 +146,13 @@ body[data-fullscreen] #board {
   }
 }
 
-/* Subagents: quieter everything — near-canvas surface, d6's 2px frame
+/* Subagents: quieter everything — near-canvas surface, 2px frame
    recolored #232b38 (hairline, never below 1 physical px), and a
    half-opacity edge; no frame breathing or static tint (the edge is the
    status cue). */
 .card.sub {
   background: #11151d;
-  border: max(1px, 0.078125vw) solid #232b38; /* d6's 2px border, color-only change */
+  border: max(1px, 0.078125vw) solid #232b38; /* 2px border, color-only change */
 }
 .card.sub.status-working {
   border-left: 0.3125vw solid rgb(32 184 255 / 0.5);
@@ -382,7 +382,7 @@ body[data-fullscreen] #board {
 }
 
 .unread-dot {
-  /* d6's chip-corner badge: -6px offsets, 18px disc, 3px card-colored ring. */
+  /* Chip-corner badge: -6px offsets, 18px disc, 3px card-colored ring. */
   position: absolute;
   top: -0.833vh;
   right: -0.234vw;
@@ -596,9 +596,9 @@ body[data-fullscreen] #rail {
   color: #ff4d67;
 }
 
-/* d7's day-over-day sparkline: a 500x84-native box beside the rates — faint
+/* Day-over-day sparkline: a 500x84-native box beside the rates — faint
    fill under today's curve, dim yesterday line, bright today line, endpoint
-   dot, and the yda micro-label as SVG text at d7's baseline (uniform
+   dot, and the yda micro-label as SVG text at the fixed baseline (uniform
    viewBox scaling keeps it 20px native). The height is fixed rather than
    ratio-locked to the width, so a wider box is not a taller one — a taller
    sparkline would eat the rail's quota-panel breathing room. */

@@ -556,18 +556,18 @@ describe("zcode SQLite titles", () => {
 
 describe("omp session-file titles", () => {
   const FIXTURE_PATH = join(import.meta.dir, "fixtures", "omp-session.jsonl");
-  // The title stored in the captured fixture's head slot, pinned as a literal.
-  const FIXTURE_TITLE = "Write haiku about binary search trees";
+  // The title stored in the synthetic fixture's head slot, pinned as a literal.
+  const FIXTURE_TITLE = "Synthetic OMP title slot for testing.";
 
   // Mirrors omp's slot writer: one JSON record whose "pad" field absorbs the
   // slack so the line is exactly OMP_SLOT_BYTES UTF-8 bytes, newline included.
-  // "source" appears only once a title is set, matching observed captures.
+  // "source" appears only once a title is set, matching the provider format.
   const slotRecord = (title: string): string => {
     const record = (pad: string): string =>
       `${JSON.stringify(
         title === ""
-          ? { type: "title", v: 1, title, updatedAt: "2026-08-16T07:01:52.082Z", pad }
-          : { type: "title", v: 1, title, source: "auto", updatedAt: "2026-08-16T07:01:52.082Z", pad },
+          ? { type: "title", v: 1, title, updatedAt: "2024-01-02T03:04:05.000Z", pad }
+          : { type: "title", v: 1, title, source: "auto", updatedAt: "2024-01-02T03:04:05.000Z", pad },
       )}\n`;
     return record(" ".repeat(OMP_SLOT_BYTES - Buffer.byteLength(record(""), "utf8")));
   };
@@ -582,8 +582,8 @@ describe("omp session-file titles", () => {
     ...overrides,
   });
 
-  test("reads the title slot from a real captured omp session file", () => {
-    // Real defaults, real fixture file — no fs fakes.
+  test("reads the title slot from a synthetic omp session file", () => {
+    // Real filesystem access against synthetic fixture data — no fs fakes.
     const resolver = createSessionFactsResolver({
       codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
       zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
@@ -788,9 +788,7 @@ describe("activity line resolution", () => {
     expect(result.titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Fix the widget" }]);
     expect(result.models).toEqual([{ provider: "claude", sessionId: "s1", model: "claude-fable-5" }]);
     // The newest assistant record's tool call wins.
-    expect(result.activities).toEqual([
-      { provider: "claude", sessionId: "s1", activityLine: "Bash git status --short" },
-    ]);
+    expect(result.activities).toEqual([{ provider: "claude", sessionId: "s1", activityLine: "Command" }]);
     expect(fs.tailReads()).toBe(1);
   });
 
@@ -810,7 +808,7 @@ describe("activity line resolution", () => {
       tails: { "/transcripts/s1.jsonl": both },
     });
     expect(resolver.resolve([claudeTarget()]).activities).toEqual([
-      { provider: "claude", sessionId: "s1", activityLine: "Edit /b.ts" },
+      { provider: "claude", sessionId: "s1", activityLine: "File" },
     ]);
   });
 
@@ -824,22 +822,47 @@ describe("activity line resolution", () => {
       tails: { "/transcripts/s1.jsonl": `${toolUseLine("Grep", { pattern: "TODO" })}${textOnly}` },
     });
     expect(resolver.resolve([claudeTarget()]).activities).toEqual([
-      { provider: "claude", sessionId: "s1", activityLine: "Grep TODO" },
+      { provider: "claude", sessionId: "s1", activityLine: "Search" },
     ]);
   });
 
-  test("takes only a command's first line; truncates the target to fit, and caps an overlong tool name, at 64 code points", () => {
+  test("classifies command input without retaining any argument content", () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
-      tails: { "/transcripts/s1.jsonl": toolUseLine("Bash", { command: `${"x".repeat(100)}\necho second` }) },
+      tails: {
+        "/transcripts/s1.jsonl": toolUseLine("Bash", {
+          command: "API_TOKEN=top-secret curl https://user:password@example.invalid/private\necho second",
+        }),
+      },
     });
     const updates = resolver.resolve([claudeTarget()]).activities;
-    expect(updates).toHaveLength(1);
-    const line = updates[0]?.activityLine ?? "";
-    expect(Array.from(line)).toHaveLength(64);
-    expect(line.startsWith("Bash ")).toBe(true);
-    expect(line.endsWith("…")).toBe(true);
-    expect(line.includes("second")).toBe(false);
+    expect(updates).toEqual([{ provider: "claude", sessionId: "s1", activityLine: "Command" }]);
+    expect(JSON.stringify(updates)).not.toContain("top-secret");
+    expect(JSON.stringify(updates)).not.toContain("password");
+  });
+
+  test("classifies every selected input shape without retaining paths, searches, URLs, or unknown tool names", () => {
+    const cases = [
+      { name: "Read", input: { file_path: "/private/customer-secret.txt" }, expected: "File" },
+      { name: "Grep", input: { pattern: "CONFIDENTIAL_PATTERN" }, expected: "Search" },
+      { name: "Search", input: { query: "private acquisition terms" }, expected: "Search" },
+      {
+        name: "WebFetch",
+        input: { url: "https://user:password@example.invalid/private?q=secret" },
+        expected: "Request",
+      },
+      { name: "SECRET_TOOL_NAME", input: {}, expected: "Tool" },
+    ] as const;
+    for (const [index, entry] of cases.entries()) {
+      const path = `/transcripts/${String(index)}.jsonl`;
+      const { resolver } = makeResolver({
+        stats: { [path]: { mtimeMs: 100, size: 500 } },
+        tails: { [path]: toolUseLine(entry.name, entry.input) },
+      });
+      expect(resolver.resolve([claudeTarget({ transcriptPath: path })]).activities).toEqual([
+        { provider: "claude", sessionId: "s1", activityLine: entry.expected },
+      ]);
+    }
   });
 
   test("a tool-less transcript proposes no activity; other providers are never read", () => {
@@ -874,11 +897,11 @@ describe("activity line resolution", () => {
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": toolUseLine("Read", { file_path: "/src/core/registry.ts" }) },
     });
-    expect(resolver.resolve([claudeTarget({ activityLine: "Read /src/core/registry.ts" })]).activities).toEqual([]);
+    expect(resolver.resolve([claudeTarget({ activityLine: "File" })]).activities).toEqual([]);
   });
 
   test("resolves a codex function_call's name and cmd head from the rollout tail", () => {
-    // Shape captured from a real rollout: exec_command's arguments are
+    // Provider-compatible shape: exec_command's arguments are
     // stringified JSON carrying the command under `cmd` (a plain string).
     const call = responseItemLine({
       type: "function_call",
@@ -903,14 +926,12 @@ describe("activity line resolution", () => {
         activityLine: null,
       },
     ]);
-    expect(result.activities).toEqual([
-      { provider: "codex", sessionId: "c1", activityLine: "exec_command git status --short" },
-    ]);
+    expect(result.activities).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Command" }]);
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("a captured exec_command emits only cmd's first line, never workdir or other arguments", () => {
-    // Captured argument keys: cmd (string), workdir, max_output_tokens,
+  test("an exec_command emits only the safe command category", () => {
+    // Representative argument keys: cmd (string), workdir, max_output_tokens,
     // yield_time_ms — only cmd's first line may cross the wire.
     const call = responseItemLine({
       type: "function_call",
@@ -942,15 +963,16 @@ describe("activity line resolution", () => {
     ]).activities;
     expect(updates).toHaveLength(1);
     const line = updates[0]?.activityLine ?? "";
-    expect(line).toBe("exec_command sed -n '1,220p' /repo/CLAUDE.md");
-    // The command's second line and every sibling argument stay out.
+    expect(line).toBe("Command");
+    // The command and every sibling argument stay out.
+    expect(line.includes("CLAUDE.md")).toBe(false);
     expect(line.includes("should-not-appear")).toBe(false);
     expect(line.includes("worktrees")).toBe(false);
     expect(line.includes("4000")).toBe(false);
     expect(line.includes("3000")).toBe(false);
   });
 
-  test("resolves a codex local_shell_call as 'shell <argv head>'", () => {
+  test("resolves a codex local_shell_call as the safe command category", () => {
     const call = responseItemLine({
       type: "local_shell_call",
       action: { type: "exec", command: ["git", "diff", "--stat"] },
@@ -974,7 +996,7 @@ describe("activity line resolution", () => {
           activityLine: null,
         },
       ]).activities,
-    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "shell git diff --stat" }]);
+    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Command" }]);
   });
 
   test("a codex function_call with unparseable arguments still names the tool, and non-call items are skipped", () => {
@@ -1005,7 +1027,7 @@ describe("activity line resolution", () => {
           activityLine: null,
         },
       ]).activities,
-    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "apply_patch" }]);
+    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Tool" }]);
 
     const { resolver: second } = makeResolver({
       stats: {
@@ -1027,6 +1049,6 @@ describe("activity line resolution", () => {
           activityLine: null,
         },
       ]).activities,
-    ).toEqual([{ provider: "codex", sessionId: "c2", activityLine: "shell ls" }]);
+    ).toEqual([{ provider: "codex", sessionId: "c2", activityLine: "Command" }]);
   });
 });

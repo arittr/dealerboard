@@ -36,14 +36,5 @@
 	"Nodejs": {
 		"Version": "24"
 	},
-	"Profiles": [
-		{
-			"Name": "profiles/Dealerboard",
-			"DeviceType": 0,
-			"AutoInstall": true,
-			"Readonly": true,
-			"DontAutoSwitchWhenInstalled": false
-		}
-	],
 	"UUID": "com.drewritter.dealerboard"
 }

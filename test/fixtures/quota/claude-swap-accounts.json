@@ -9,11 +9,11 @@
       "organizationUuid": "ignored-uuid",
       "usageStatus": "unavailable",
       "lastGoodUsage": {
-        "fiveHour": { "pct": 0 },
-        "sevenDay": { "pct": 56, "resetsAt": "2026-08-30T00:59:00Z" },
-        "scoped": [{ "name": "Fable", "pct": 98, "resetsAt": "2026-08-30T00:59:00Z" }]
+        "fiveHour": { "pct": 10 },
+        "sevenDay": { "pct": 50, "resetsAt": "2030-01-08T00:00:00Z" },
+        "scoped": [{ "name": "Fable", "pct": 75, "resetsAt": "2030-01-08T00:00:00Z" }]
       },
-      "lastGoodFetchedAt": "2026-08-25T19:30:00Z"
+      "lastGoodFetchedAt": "2030-01-01T00:00:00Z"
     },
     {
       "number": 1,
@@ -22,11 +22,11 @@
       "organizationUuid": "ignored-personal-uuid",
       "usageStatus": "ok",
       "usage": {
-        "fiveHour": { "pct": 25, "resetsAt": "2026-08-26T02:19:00Z" },
-        "sevenDay": { "pct": 40, "resetsAt": "2026-08-30T00:59:00Z" },
-        "scoped": [{ "name": "Fable", "pct": 45, "resetsAt": "2026-08-30T00:59:00Z" }]
+        "fiveHour": { "pct": 30, "resetsAt": "2030-01-01T05:00:00Z" },
+        "sevenDay": { "pct": 60, "resetsAt": "2030-01-08T00:00:00Z" },
+        "scoped": [{ "name": "Fable", "pct": 50, "resetsAt": "2030-01-08T00:00:00Z" }]
       },
-      "usageFetchedAt": "2026-08-25T20:00:00Z"
+      "usageFetchedAt": "2030-01-01T01:00:00Z"
     }
   ]
 }

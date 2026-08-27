@@ -10,6 +10,8 @@ export const EVENER_REFRESH_INTERVAL_MS = 2_000;
 export const EVENER_RECONNECT_INTERVAL_MS = 5_000;
 export const EVENER_REQUEST_TIMEOUT_MS = 5_000;
 export const EVENER_MAX_FRAME_CODE_UNITS = 4 * 1024 * 1024;
+export const EVENER_MAX_LIST_PAGES = 16;
+export const EVENER_MAX_LIST_ITEMS = 4_096;
 
 const MAX_WIRE_STRING_CODE_POINTS = 256;
 const MAX_TOKEN_CODE_UNITS = 4_096;
@@ -187,6 +189,8 @@ export type EvenerCollectorDependencies = {
   refreshIntervalMs?: number;
   reconnectIntervalMs?: number;
   requestTimeoutMs?: number;
+  maxListPages?: number;
+  maxListItems?: number;
 };
 
 export type EvenerCollector = {
@@ -411,6 +415,8 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   const refreshIntervalMs = dependencies.refreshIntervalMs ?? EVENER_REFRESH_INTERVAL_MS;
   const reconnectIntervalMs = dependencies.reconnectIntervalMs ?? EVENER_RECONNECT_INTERVAL_MS;
   const requestTimeoutMs = dependencies.requestTimeoutMs ?? EVENER_REQUEST_TIMEOUT_MS;
+  const maxListPages = dependencies.maxListPages ?? EVENER_MAX_LIST_PAGES;
+  const maxListItems = dependencies.maxListItems ?? EVENER_MAX_LIST_ITEMS;
 
   let stopped = true;
   let socket: EvenerSocket | null = null;
@@ -656,8 +662,12 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   const listThreads = async (target: EvenerSocket): Promise<EvenerThreadState[]> => {
     const values: unknown[] = [];
     let cursor: string | null = null;
+    let pageCount = 0;
     const seenCursors = new Set<string>();
     for (;;) {
+      if (pageCount >= maxListPages) {
+        throw new Error("Evener thread/list exceeded its page limit");
+      }
       const result = await request(target, "thread/list", {
         statuses: [...THREAD_STATUSES],
         sourceIds: [LOCAL_SOURCE_ID],
@@ -666,6 +676,10 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       });
       if (!isRecord(result) || !Array.isArray(result["data"])) {
         throw new Error("invalid Evener thread/list response");
+      }
+      pageCount += 1;
+      if (values.length + result["data"].length > maxListItems) {
+        throw new Error("Evener thread/list exceeded its item limit");
       }
       values.push(...result["data"]);
       const nextCursor = nonEmptyString(result["nextCursor"]);

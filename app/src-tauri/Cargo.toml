@@ -2,6 +2,8 @@
 name = "dealerboard"
 version = "1.0.0"
 edition = "2021"
+license = "MIT"
+publish = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

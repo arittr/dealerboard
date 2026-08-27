@@ -3,14 +3,14 @@
     "provider": "codex",
     "source": "oauth",
     "usage": {
-      "updatedAt": "2026-08-20T06:04:44Z",
-      "identity": { "providerID": "codex", "accountEmail": "drew@example.com", "loginMethod": "pro" },
+      "updatedAt": "2030-01-01T00:00:00Z",
+      "identity": { "providerID": "codex", "accountEmail": "user@example.invalid", "loginMethod": "pro" },
       "primary": null,
       "secondary": {
         "windowMinutes": 10080,
-        "usedPercent": 25,
-        "resetsAt": "2026-08-27T06:03:05Z",
-        "resetDescription": "Aug 26 at 11:03 PM"
+        "usedPercent": 20,
+        "resetsAt": "2030-01-08T00:00:00Z",
+        "resetDescription": "Synthetic weekly reset"
       },
       "tertiary": null,
       "extraRateWindows": [
@@ -19,9 +19,9 @@
           "id": "codex-spark",
           "window": {
             "windowMinutes": 300,
-            "usedPercent": 40,
-            "resetsAt": "2026-08-20T11:04:44Z",
-            "resetDescription": "tomorrow, 4:04 AM"
+            "usedPercent": 30,
+            "resetsAt": "2030-01-01T05:00:00Z",
+            "resetDescription": "Synthetic five-hour reset"
           }
         },
         {
@@ -29,9 +29,9 @@
           "id": "codex-spark-weekly",
           "window": {
             "windowMinutes": 10080,
-            "usedPercent": 10,
-            "resetsAt": "2026-08-27T06:04:44Z",
-            "resetDescription": "Aug 26 at 11:04 PM"
+            "usedPercent": 40,
+            "resetsAt": "2030-01-15T00:00:00Z",
+            "resetDescription": "Synthetic extra reset"
           }
         }
       ]
