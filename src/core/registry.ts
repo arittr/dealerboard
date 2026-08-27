@@ -22,6 +22,13 @@
  * explicit view clears it — `acknowledgeSession` or a reused SessionStart.
  * Prompts and status events never mark a session read.
  *
+ * The done ledger records finished results still owed a board slot: a Stop
+ * settling to idle stamps `done_since`, and only an explicit dismissal
+ * (`acknowledgeSession`), a Paseo archive, or a reused SessionStart clears
+ * it. A passive view — Paseo's cleared attention record — clears unread but
+ * never done: the finished card stays until the user dismisses it or the
+ * session moves on.
+ *
  * `status_since` records the row's own last status change: status events
  * restamp it only when the status value changes, BackgroundWork events never
  * do, and starts initialize it.
@@ -185,9 +192,9 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
     // Reset to idle and refresh metadata; slot and opened_at stay put. Any
     // stale background flag drops too: shells a previous life left running
     // are no longer tracked, and their late completions clear a zero flag.
-    // The reuse is also a view: unread clears, and a fresh non-null origin
-    // replaces the stored one (null new evidence keeps it) while resetting
-    // the subagent bit and clearing the parent ref.
+    // The reuse is also a view and a new life: unread and done clear, and a
+    // fresh non-null origin replaces the stored one (null new evidence keeps
+    // it) while resetting the subagent bit and clearing the parent ref.
     // A null event model never clears the stored one (COALESCE): providers
     // that omit the field on resume must not erase what an earlier start
     // stored. A paseo-origin row keeps its stored title — the overlay owns
@@ -198,7 +205,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
        SET status = 'idle',
            title = CASE WHEN origin_kind IS 'paseo' THEN title ELSE ? END,
            project = ?, ghostty_terminal_id = ?, transcript_path = ?,
-           background_outstanding = 0, unread_since = NULL,
+           background_outstanding = 0, unread_since = NULL, done_since = NULL,
            status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
            origin_kind = COALESCE(?, origin_kind),
            origin_ref = CASE WHEN ? IS NOT NULL THEN ? ELSE origin_ref END,
@@ -444,21 +451,23 @@ const applyStatusUpdate = (db: Database, event: StatusEvent, status: SessionStat
  * A turn ended. A session with a live background shell stays at working: the
  * shell still acts on the session's behalf and its completion will wake a new
  * turn. Only a Stop with no background work outstanding returns to idle —
- * and only that transition lands a result the user has not viewed, so it
- * alone stamps `unread_since`.
+ * and only that transition lands a result, so it alone stamps `unread_since`
+ * (the user has not viewed it) and `done_since` (the board still owes it a
+ * card).
  */
 const applyStop = (db: Database, event: StatusEvent): MutationResult => {
   const result = db.run(
     `UPDATE active_sessions
      SET status = CASE WHEN background_outstanding = 1 THEN 'working' ELSE 'idle' END,
          unread_since = CASE WHEN background_outstanding = 1 THEN unread_since ELSE ? END,
+         done_since = CASE WHEN background_outstanding = 1 THEN done_since ELSE ? END,
          status_since = CASE
            WHEN (background_outstanding = 1 AND status IS NOT 'working')
              OR (background_outstanding = 0 AND status IS NOT 'idle')
            THEN ? ELSE status_since END,
          updated_at = ?
      WHERE provider = ? AND session_id = ?`,
-    [event.observedAt, event.observedAt, event.observedAt, event.provider, event.sessionId],
+    [event.observedAt, event.observedAt, event.observedAt, event.observedAt, event.provider, event.sessionId],
   );
   return result.changes > 0 ? "applied" : "ignored";
 };
@@ -613,9 +622,11 @@ export const clearSession = (db: Database, provider: Provider, sessionId: string
   });
 
 /**
- * Mark one session read: the user has viewed the latest result. The ack time
- * is recorded in `acked_at` so the Paseo overlay can never resurrect unread
- * from an attention flag raised before the view. An error is itself a result
+ * Dismiss one session's result: the user's explicit gesture on the card. The
+ * ack time is recorded in `acked_at` so the Paseo overlay can never resurrect
+ * unread from an attention flag raised before the view. The done ledger
+ * clears with it — this gesture, not a passive view, is what takes a
+ * finished card off the board. An error is itself a result
  * (applyStopFailure), so viewing settles it: an error row retires to idle —
  * with the background flag disarmed, like every other retirement — instead of
  * shouting until the stale prune. A source still in error re-raises it through
@@ -630,11 +641,12 @@ export const acknowledgeSession = (
   inWriteTransaction(db, () => {
     const result = db.run(
       `UPDATE active_sessions
-       SET unread_since = NULL, acked_at = ?,
+       SET unread_since = NULL, done_since = NULL, acked_at = ?,
            status = CASE WHEN status = 'error' THEN 'idle' ELSE status END,
            status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
            background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
-       WHERE provider = ? AND session_id = ? AND (unread_since IS NOT NULL OR status = 'error')`,
+       WHERE provider = ? AND session_id = ?
+         AND (unread_since IS NOT NULL OR done_since IS NOT NULL OR status = 'error')`,
       [ackedAt, ackedAt, provider, sessionId],
     );
     return result.changes > 0 ? "applied" : "ignored";
@@ -851,17 +863,24 @@ export const syncPaseoStates = (
       } else {
         // Cleared, absent flag, or archived: only a record written (or
         // archived) after the local news is fresh proof that the user viewed
-        // the session in Paseo.
+        // the session in Paseo. Viewing clears unread alone; the done ledger
+        // clears only for an archived record — the terminal gesture — under
+        // the same freshness guard, so a passive view never takes a finished
+        // card off the board and a stale archive never takes down a result
+        // the session landed afterwards.
         const clearTime = laterInstant(state.updatedAt, state.archivedAt);
+        const doneClearTime = state.archivedAt === null ? null : clearTime;
         const result = db.run(
           `UPDATE active_sessions
            SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?, origin_parent_ref = ?,
-               unread_since = CASE WHEN ? IS NOT NULL AND ? > unread_since THEN NULL ELSE unread_since END
+               unread_since = CASE WHEN ? IS NOT NULL AND ? > unread_since THEN NULL ELSE unread_since END,
+               done_since = CASE WHEN ? IS NOT NULL AND ? > done_since THEN NULL ELSE done_since END
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND (
                origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
                OR origin_parent_ref IS NOT ?
                OR (unread_since IS NOT NULL AND ? IS NOT NULL AND ? > unread_since)
+               OR (done_since IS NOT NULL AND ? IS NOT NULL AND ? > done_since)
              )`,
           [
             state.agentId,
@@ -869,6 +888,8 @@ export const syncPaseoStates = (
             state.parentAgentId,
             clearTime,
             clearTime,
+            doneClearTime,
+            doneClearTime,
             state.provider,
             state.sessionId,
             state.agentId,
@@ -876,6 +897,8 @@ export const syncPaseoStates = (
             state.parentAgentId,
             clearTime,
             clearTime,
+            doneClearTime,
+            doneClearTime,
           ],
         );
         changed += result.changes;
@@ -887,17 +910,24 @@ export const syncPaseoStates = (
       // a record written before the row's newest hook from undoing a turn
       // that genuinely started since. A background-armed row holds out until
       // its last hook predates the caller's cutoff — then the lost TaskStop
-      // is presumed and the flag disarms with the retirement.
+      // is presumed and the flag disarms with the retirement. The repaired
+      // turn still landed a result, so the retirement stamps `done_since`
+      // like the Stop it stands in for — unless the record is archived: the
+      // terminal gesture already dismissed the card.
       if (state.lastStatus !== null && SETTLED_PASEO_STATUSES.has(state.lastStatus) && state.updatedAt !== null) {
+        const doneStamp = state.archivedAt === null ? state.updatedAt : null;
         const settled = db.run(
           `UPDATE active_sessions
-           SET status = 'idle', status_since = ?, background_outstanding = 0
+           SET status = 'idle', status_since = ?, background_outstanding = 0,
+               done_since = CASE WHEN ? IS NOT NULL THEN ? ELSE done_since END
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND status IN ('working', 'waiting')
              AND ? > updated_at
              AND (background_outstanding = 0 OR (? IS NOT NULL AND updated_at < ?))`,
           [
             state.updatedAt,
+            doneStamp,
+            doneStamp,
             state.provider,
             state.sessionId,
             state.updatedAt,
@@ -911,6 +941,7 @@ export const syncPaseoStates = (
       // terminal gesture on the agent, so the failure has been seen and the
       // row retires like a settled working row — under the same strict
       // freshness guard, with the later of archivedAt/updatedAt as proof.
+      // (The done ledger's archive clear rides the cleared-path UPDATE above.)
       if (state.archivedAt !== null) {
         const archiveTime = laterInstant(state.archivedAt, state.updatedAt);
         const archivedError = db.run(

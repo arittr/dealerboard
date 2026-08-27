@@ -1,4 +1,5 @@
 .superpowers/
+.claude/
 .worktrees/
 .dirac-cache/
 dist/

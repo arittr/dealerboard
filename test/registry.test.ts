@@ -123,6 +123,7 @@ type Row = {
   status_since: string | null;
   origin_parent_ref: string | null;
   activity_line: string | null;
+  done_since: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -206,6 +207,7 @@ describe("applyRegistryEvents", () => {
       status_since: at(1),
       origin_parent_ref: null,
       activity_line: null,
+      done_since: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -299,6 +301,7 @@ describe("applyRegistryEvents", () => {
       status_since: at(4),
       origin_parent_ref: null,
       activity_line: null,
+      done_since: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
@@ -686,6 +689,102 @@ describe("unread ledger", () => {
     expect(row?.status).toBe("working");
     expect(row?.status_since).toBe(at(6));
     expect(row?.unread_since).toBeNull();
+  });
+});
+
+describe("done ledger", () => {
+  test("Stop transitioning to idle stamps done_since", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1"), simple("Stop", "s1", { at: at(9) })]);
+    expect(getRow("s1")?.done_since).toBe(at(9));
+  });
+
+  test("Stop with background work outstanding does NOT stamp done_since", () => {
+    applyRegistryEvents(db, [start("s1"), simple("BackgroundWorkStarted", "s1"), simple("Stop", "s1")]);
+    expect(getRow("s1")?.done_since).toBeNull();
+  });
+
+  test("a later Stop restamps done_since to the latest result", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("Stop", "s1", { at: at(5) }),
+      simple("Activity", "s1", { at: at(6) }),
+      simple("Stop", "s1", { at: at(9) }),
+    ]);
+    expect(getRow("s1")?.done_since).toBe(at(9));
+  });
+
+  test("StopFailure does not stamp done_since (the error status carries the visibility)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(9) })]);
+    expect(getRow("s1")?.done_since).toBeNull();
+  });
+
+  test("SessionStatusObserved settling to idle does not stamp done_since (repair, not a result)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1")]);
+    applyRegistryEvents(db, [
+      { kind: "SessionStatusObserved", provider: "claude", sessionId: "s1", status: "idle", observedAt: at(9) },
+    ]);
+    expect(getRow("s1")?.done_since).toBeNull();
+  });
+
+  test("reused SessionStart clears done_since (the session starts a new life)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(getRow("s1")?.done_since).toBe(at(5));
+    applyRegistryEvents(db, [start("s1", { at: at(30) })]);
+    expect(getRow("s1")?.done_since).toBeNull();
+  });
+
+  test("acknowledgeSession clears done_since alongside unread", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(acknowledgeSession(db, "claude", "s1", at(8))).toBe("applied");
+    const row = getRow("s1");
+    expect(row?.unread_since).toBeNull();
+    expect(row?.done_since).toBeNull();
+  });
+
+  test("acknowledgeSession applies on a done row a passive view already marked read", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    // Paseo's record proves the user viewed the result: unread clears, the
+    // done card stays on the board.
+    const viewed = syncPaseoStates(db, [
+      {
+        provider: "claude",
+        sessionId: "s1",
+        agentId: "a1",
+        requiresAttention: false,
+        isSubagent: false,
+        parentAgentId: null,
+        attentionTimestamp: null,
+        updatedAt: at(9),
+        archivedAt: null,
+        lastStatus: null,
+        title: null,
+      },
+    ]);
+    expect(viewed).toBe(1);
+    expect(getRow("s1")?.unread_since).toBeNull();
+    expect(getRow("s1")?.done_since).toBe(at(5));
+    // The explicit dismissal gesture still applies and takes the card off.
+    expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
+    expect(getRow("s1")?.done_since).toBeNull();
+    // A second ack with nothing left to clear reports ignored.
+    expect(acknowledgeSession(db, "claude", "s1", at(13))).toBe("ignored");
+  });
+
+  test("acknowledgeSession settling an error clears a lingering done_since from an earlier turn", () => {
+    applyRegistryEvents(db, [
+      start("s1"),
+      simple("Stop", "s1", { at: at(5) }),
+      simple("Activity", "s1", { at: at(6) }),
+      simple("StopFailure", "s1", { at: at(9) }),
+    ]);
+    expect(getRow("s1")?.done_since).toBe(at(5));
+    expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
+    const row = getRow("s1");
+    expect(row?.status).toBe("idle");
+    expect(row?.done_since).toBeNull();
   });
 });
 
@@ -1356,6 +1455,70 @@ describe("syncPaseoStates", () => {
 
     syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: null })]);
     expect(getRow("s1")?.status).toBe("working");
+  });
+
+  test("a fresh cleared record clears unread but never done_since (the done card outlives the passive view)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(getRow("s1")?.done_since).toBe(at(5));
+
+    const cleared = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:09.000Z" }),
+    ]);
+    expect(cleared).toBe(1);
+    expect(getRow("s1")?.unread_since).toBeNull();
+    expect(getRow("s1")?.done_since).toBe(at(5));
+  });
+
+  test("an archived record clears done_since (archiving is the user's terminal gesture)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    const archived = paseoState({ requiresAttention: false, archivedAt: "2026-08-06T00:00:09.000Z" });
+    expect(syncPaseoStates(db, [archived])).toBe(1);
+    expect(getRow("s1")?.done_since).toBeNull();
+    // The same archived record on a later pass has nothing left to clear.
+    expect(syncPaseoStates(db, [archived])).toBe(0);
+  });
+
+  test("a stale archived record does not clear a newer done_since", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(
+      syncPaseoStates(db, [paseoState({ requiresAttention: false, archivedAt: "2026-08-06T00:00:02.000Z" })]),
+    ).toBe(1); // origin stamping still lands
+    expect(getRow("s1")?.done_since).toBe(at(5));
+  });
+
+  test("the settled-record repair stamps done_since (the missed Stop's result still deserves the board)", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Activity", "s1", { at: at(2) })]);
+    // Stamp origin first so the settle pass below counts the repair alone.
+    expect(
+      syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "running", updatedAt: at(3) })]),
+    ).toBe(1);
+    const settleAt = "2026-08-06T00:10:00.000Z";
+    expect(
+      syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: settleAt })]),
+    ).toBe(1);
+    const row = getRow("s1");
+    expect(row?.status).toBe("idle");
+    expect(row?.done_since).toBe(settleAt);
+  });
+
+  test("an archived settled record retires without stamping done_since", () => {
+    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Activity", "s1", { at: at(2) })]);
+    expect(
+      syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "running", updatedAt: at(3) })]),
+    ).toBe(1);
+    expect(
+      syncPaseoStates(db, [
+        paseoState({
+          requiresAttention: false,
+          lastStatus: "idle",
+          updatedAt: "2026-08-06T00:10:00.000Z",
+          archivedAt: "2026-08-06T00:10:00.000Z",
+        }),
+      ]),
+    ).toBe(1);
+    const row = getRow("s1");
+    expect(row?.status).toBe("idle");
+    expect(row?.done_since).toBeNull();
   });
 
   test("un-stamps a row abandoned by provider-session rotation so the agent's ref has one carrier", () => {
