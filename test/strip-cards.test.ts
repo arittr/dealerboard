@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PlacedCard } from "../app/src/board";
 import {
+  ageLineText,
   applyCardFrame,
   boardRenderSignature,
   CARD_MODEL_LABEL_MAX_CODE_POINTS,
@@ -95,6 +96,16 @@ describe("elapsedSince", () => {
     expect(elapsedSince("2026-08-20T00:00:00.000Z", NOW_MS)).toBe("0s");
     expect(elapsedSince(null, NOW_MS)).toBeNull();
     expect(elapsedSince("not a timestamp", NOW_MS)).toBeNull();
+  });
+});
+
+describe("ageLineText", () => {
+  const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
+
+  test("words the open fact and degrades to null without a usable stamp", () => {
+    expect(ageLineText("2026-08-19T00:00:00.000Z", NOW_MS)).toBe("open 10m");
+    expect(ageLineText(null, NOW_MS)).toBeNull();
+    expect(ageLineText("not a timestamp", NOW_MS)).toBeNull();
   });
 });
 

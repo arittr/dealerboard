@@ -29,6 +29,12 @@ export const elapsedSince = (since: string | null, nowMs: number): string | null
   return elapsedLabel(nowMs - startedMs);
 };
 
+/** The dim corner fact "open 3h" — the session's age as a worded line; null without a usable stamp. */
+export const ageLineText = (openedAt: string | null, nowMs: number): string | null => {
+  const label = elapsedSince(openedAt, nowMs);
+  return label === null ? null : `open ${label}`;
+};
+
 /** The board's meta line has room for full model ids; the tile 10-point cap does not apply. */
 export const CARD_MODEL_LABEL_MAX_CODE_POINTS = 24;
 
@@ -77,7 +83,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
   const openedAt = "openedAt" in session ? session.openedAt : null;
   const timerSince = session.status === "working" ? openedAt : session.statusSince;
   const timer = elapsedSince(timerSince, nowMs);
-  const ageLabel = session.status === "working" ? null : elapsedSince(openedAt, nowMs);
+  const age = session.status === "working" ? null : ageLineText(openedAt, nowMs);
   return {
     provider: session.provider,
     letter: PROVIDER_LETTERS[session.provider],
@@ -92,8 +98,8 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     word: statusWord(session.status),
     timerSince: timer === null ? null : timerSince,
     timer,
-    age: ageLabel === null ? null : `open ${ageLabel}`,
-    ageSince: ageLabel === null ? null : openedAt,
+    age,
+    ageSince: age === null ? null : openedAt,
     originDisc: session.originKind === "paseo" && !session.originSubagent,
     subagent: card.subagent,
     indent: card.indent,

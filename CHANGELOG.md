@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The card's status corner now words every number and ends with the dot, so
+  numbers and dots align down each column: working cards headline the session
+  age ("open 2h") with a dim "quiet 4m" silence fact, while idle, waiting,
+  and error keep their status age ("waiting 12m") behind a dim "open 3h"
+  fact. The unlabeled working-burst timer is gone.
 - Acknowledging a session settles its error state: tap-ack and a Paseo
   archive retire an errored row to idle instead of leaving it red until the
   24h stale prune, so parent roll-ups clear once their failed subagents are

@@ -89,8 +89,12 @@ The orphan tail remains one deterministic full-width block.
   `#FF4D67`.
 - Provider chips: Claude `C`, Codex `X`, Kimi `K`, Pi `P`, oh-my-pi `O`,
   ZCode `Z`, DeepSeek `D`, Grok `G`, Qwen `Q`, Evener `E`.
-- The head shows title and the row's own status timer. Waiting and error keep
-  a visible status word; working and idle rely on color and motion.
+- The head shows the title and the status corner: an optional dim fact, a
+  worded bright number, and the status dot last, so every card's number and
+  dot align down the column's right rail. Working cards headline the session
+  age (`open 2h`); idle, waiting, and error spell their status age
+  (`waiting 12m`) behind a dim `open 3h` fact. Sessions published without
+  `openedAt` (an old daemon) simply omit the open facts.
 - The meta row can show model, project, and one fixed activity category.
 - A Paseo parent has a filled violet origin disc. A subagent has a `sub` pill,
   dimmed card, indent, and violet spine. Orphans keep subagent styling without
@@ -99,9 +103,10 @@ The orphan tail remains one deterministic full-width block.
   behavior. Paseo children remain independently actionable.
 
 Working liveness decays with time since the last event. Recent work is bright
-blue; long silence desaturates toward slate. After ten minutes, the card uses
-the explicit `quiet <elapsed>` treatment. This reports observation age, not a
-claim that the agent is stalled.
+blue; long silence desaturates toward slate. From the 30s fade threshold the
+corner leads with a dim `quiet <elapsed>` fact; after ten minutes it stands
+down and the card uses the explicit `quiet <elapsed>` treatment. This reports
+observation age, not a claim that the agent is stalled.
 
 ### Rail contract
 

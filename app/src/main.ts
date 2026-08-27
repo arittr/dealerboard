@@ -44,7 +44,7 @@ import {
   revealTranscript,
   type SnapshotPayload,
 } from "./bridge";
-import { boardRenderSignature, cardKey, renderBoard, sessionLastEventAt } from "./cards";
+import { ageLineText, boardRenderSignature, cardKey, renderBoard, sessionLastEventAt } from "./cards";
 import { createDismissals, flickRemoves } from "./dismissals";
 import {
   createClickSuppression,
@@ -178,6 +178,12 @@ const tickStatusLines = (): void => {
     const text = elapsedLabel(nowMs - startedMs);
     if (timer.textContent !== text) {
       timer.textContent = text;
+    }
+  }
+  for (const age of document.querySelectorAll<HTMLElement>("#board .cardage")) {
+    const text = ageLineText(age.dataset["since"] ?? null, nowMs);
+    if (text !== null && age.textContent !== text) {
+      age.textContent = text;
     }
   }
 };

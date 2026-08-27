@@ -287,7 +287,8 @@ body[data-fullscreen] #board {
   background: #a78bfa;
 }
 
-/* Status row: dot + word + tabular timer, right-aligned on the head line. */
+/* Status row: dim fact, worded bright timer, dot last — right-aligned on the
+   head line so every card's number and dot share the column's right rail. */
 .card-status {
   grid-column: 2;
   grid-row: 1;
@@ -305,12 +306,8 @@ body[data-fullscreen] #board {
   background: var(--st, #94a3b8);
 }
 .status-word {
-  color: #94a3b8;
-  font-size: 0.859vw; /* 22px native */
-}
-.card.status-waiting .status-word,
-.card.status-error .status-word {
   color: #e8eef7;
+  font-size: 0.859vw; /* 22px native */
   font-weight: 700;
 }
 .cardtimer {
@@ -319,10 +316,11 @@ body[data-fullscreen] #board {
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
-/* The working card's silence gap ("· 48s"), dim beside the bright timer; the
-   liveness ticker fills it once the edge starts fading and empties it when
-   the quiet label takes over. */
-.cardgap {
+/* The corner's dim leading facts, middot-separated from the bright unit:
+   the working card's silence gap ("quiet 48s" — liveness-ticker owned, empty
+   while fresh) and the other states' session age ("open 3h"). */
+.cardgap,
+.cardage {
   color: #7c8ba1;
   font-size: 0.859vw; /* 22px native */
   font-weight: 600;
@@ -331,8 +329,9 @@ body[data-fullscreen] #board {
 .cardgap:empty {
   display: none;
 }
-.cardgap::before {
-  content: "· ";
+.cardgap::after,
+.cardage::after {
+  content: " ·";
   opacity: 0.55;
 }
 
@@ -441,7 +440,8 @@ body[data-fullscreen] #board {
   font-size: 0.938vw; /* 24px native */
   font-weight: 600;
 }
-.card.sub .cardgap {
+.card.sub .cardgap,
+.card.sub .cardage {
   font-size: 0.781vw; /* 20px native */
 }
 .card.sub .status-dot {
