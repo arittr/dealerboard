@@ -240,3 +240,10 @@ to ready and re-run the ratify gate. -->
   healed per the ratified 0/1/≥2 contract; bounded budget spend.
 - **Deciders:** steering-session (execution); Drew (visual sign-off,
   pending)
+
+## 2026-08-27 12:56 — Run closed: accepted and merged
+- **Decided:** Drew accepted the receipt and ordered the merge to main
+  ("just merge it pls and restart the daemon and app", 2026-08-27) —
+  recorded as the visual sign-off on the acceptance receipt above. Spec
+  status flips to completed. SDD run row already in ~/.agents/run-ledger.md.
+- **Deciders:** user
