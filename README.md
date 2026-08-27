@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app/src-tauri/icons/icon.png" width="128" alt="Dealerboard app icon">
+</p>
+
 # Dealerboard
 
 Dealerboard is a macOS-local status board for coding agents. It turns provider
