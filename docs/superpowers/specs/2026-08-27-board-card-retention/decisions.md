@@ -184,3 +184,75 @@ to ready and re-run the ratify gate. -->
   dispositions in the "Ratify gate findings 1-25 dispositioned" entry.
 - **Sign-off:** Drew — "Ratify, then plan" (2026-08-27, in response to
   "Ratify the amended notebook and move to the implementation plan?")
+
+## 2026-08-28 — Plan review round 2: NOT READY; two-bounce reached; steering seat takes over
+- **Decided:** Sol's round-2 review (agent 1e3392da, on plan commit
+  54d8044) returned 13 resolved, 7 reopened (F1, F2, F8, F9, F12, F16,
+  F18), and 11 new findings (N1–N11). Two plan-review rejections =
+  two-bounce: gating stops per the standing rule (never loop gates); the
+  steering seat resolved all 18 remaining findings conversationally,
+  editing the plan directly. Resolutions:
+  - F1 + N1 merged into one semantic fix (spec R11 amended — see below):
+    the causal guard keys on the result's identity stamp (`unread_since`),
+    never on the auxiliary `done_since` hold; consumption clears the
+    row's ledgers together. This fixed Task 3's SQL (33 placeholders → 6)
+    and Task 12's unwrapped watermarks, and added the viewed-done-card
+    and ended-card causal-dismiss tests (Tasks 3–4).
+  - F2: watermark capture moved to pointer-down via a new pure seam,
+    `app/src/gesture-target.ts` (`capturePendingPress`), unit-tested
+    including the ingest-mid-stroke case; `flickAway` consumes
+    `pending.watermark`. (The `flickAway` consumption line itself is main.ts
+    DOM glue, untestable under bun per house style — the capture contract
+    is what's pinned.)
+  - F8 + F9 + N5: prune rebuilt as an in-memory connected-component keep
+    set (native + resolved Paseo edges, undirected) — no DDL (the daemon
+    connection forbids it), normalized resolver input matching the
+    projection, whole-component retention with sibling/descendant/live-
+    child tests.
+  - F12 + N10: action-sheet Dismiss gated by the shared `flickRemoves`
+    predicate with matrix tests; the `flickRemoves` expression itself is
+    unchanged (the appended tests are marked regression pins — the claimed
+    red was impossible, Sol was right).
+  - F16 + N9: Task 8 reordered — protocol AND projection tests (incl. the
+    :108 exact literal) write and run red before any producer change.
+  - F18: Task 13 enumerates all four PlacedCard/seed factories (incl. the
+    new strip-gesture-target factory).
+  - N2: Task 9 publishes aggregated `doneSince` alongside aggregated
+    `unreadSince`, so a roll-up-held parent is flickable.
+  - N3: fresh Paseo flags that land an unread stamp clear `viewed_since`
+    (Task 5), and the sweep defensively excludes unread rows (Task 7).
+  - N4: roll-up aggregation stops at descendants that publish their own
+    card (active subagents, fail-safe roots) — no rail double-count;
+    nested-depth tests added.
+  - N6: the stale-archive test now expects the parent's origin unstamp
+    (a counted change) while asserting the newer child ledgers survive.
+  - N7: Task 5's projection integration test is listed in its red/green
+    runs and commit.
+  - N8: the expiry daemon test stops the daemon, advances past 24h, and
+    starts a fresh daemon — wall-clock expiry across downtime.
+  - N11: Task 14's registry header lists every clearing path (incl.
+    archive, sweep, manual clear); the design-doc Interaction text
+    excludes active cards from flick.
+- **Because:** the reviewer's findings were verified against the plan and
+  code; the two-bounce rule assigns resolution to the steering seat
+  instead of a third gate round.
+- **Deciders:** steering-session (kimi/k3)
+
+## 2026-08-28 — Consistency repair: R11 keys consumption on the result identity (FLAGGED for Drew)
+- **Decided:** Spec R11 amended post-ratification: causal consumption keys
+  on the row's `unread_since` (the result's identity stamp) rather than
+  comparing each stamp to the watermark. The ratified text ("clears only
+  stamps ≤ its stamp") would have made an ended card's `done_since` hold
+  (stamped at SessionEnd, later than its unread) unconsumable by the flick
+  that saw the card — contradicting R10's own contract. This is a
+  consistency repair inside the ratified intent ("a newer result survives
+  the gesture"), not a reversal: no requirement's acceptance behavior
+  changes except that the ended-card and viewed-done-card dismissals now
+  work at all. FLAGGED: if this reading is wrong, it's a one-paragraph
+  spec change plus Task 3's SQL.
+- **Because:** the ledger invariant already names `unread_since` non-null
+  ⟺ unviewed; the result's identity is its unread stamp, and auxiliary
+  holds (`done_since` at SessionEnd) exist only to hold the card for that
+  result.
+- **Deciders:** steering-session under the two-bounce takeover; flagged
+  for Drew's review at run close

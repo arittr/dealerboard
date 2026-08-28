@@ -232,15 +232,25 @@ Ledger invariants after this change:
 - [ ] **R11 — Causal gestures.** `viewSession` and `acknowledgeSession`
       accept an optional watermark (the `unread_since` value visible in
       the snapshot the gesture was issued from; the app passes it, the
-      deck and bare CLI do not). With a watermark, the command clears only
-      stamps ≤ the watermark — a newer result that landed after the
-      snapshot survives the gesture and keeps the card badged and held.
-      Without a watermark the command is unconditional (operator/deck
-      intent). View is non-destructive by construction (the card persists
-      either way); the watermark is what makes dismiss safe.
+      deck and bare CLI do not). The watermark identifies the newest
+      *result* the user saw: a row is consumable iff its current
+      `unread_since` is null or ≤ the watermark — consumption then clears
+      the row's ledgers together. Auxiliary hold stamps never gate
+      consumption: a `done_since` stamped later than its result's unread
+      (the ended-card hold, R10) follows the result, and a viewed done
+      card (unread already cleared) is consumable by the causal-null
+      watermark that saw it. A result that lands after the snapshot
+      re-stamps `unread_since` newer than the watermark and protects the
+      whole row. Without a watermark the command is unconditional
+      (operator/deck intent). View is non-destructive by construction
+      (the card persists either way); the watermark is what makes dismiss
+      safe.
   - Acceptance: flicking a card whose session produced a newer result
     after the last snapshot leaves the card on the board with the new
-    result badged; the same flick with no newer result dismisses.
+    result badged; the same flick with no newer result dismisses; a flick
+    of a viewed done card carrying a causal-null watermark dismisses it;
+    dismissing an ended card whose done hold postdates its unread
+    consumes the whole card.
 
 ## Gesture × state matrix
 
