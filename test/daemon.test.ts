@@ -527,6 +527,81 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
+  test("prune spares a stale result whose view clock is live, and removes it once the sweep has dismissed it", () => {
+    // The result is five days old (lease long expired) and viewed recently.
+    startSession("viewed", "2026-08-01T00:00:00.000Z");
+    const viewedAt = "2026-08-06T01:00:00.000Z";
+    const view = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      viewSession(view, "claude", "viewed", viewedAt);
+    } finally {
+      view.close();
+    }
+    const rowCount = (): number => {
+      const db = openRegistryDatabase(paths.database, "readonly");
+      try {
+        return (db.query("SELECT COUNT(*) AS n FROM active_sessions").get() as { n: number }).n;
+      } finally {
+        db.close();
+      }
+    };
+
+    // 23:59 after the view: inside the window, the card is published and its row kept.
+    const nearlyExpiredMs = Date.parse(viewedAt) + VIEWED_EXPIRY_TTL_MS - 60_000;
+    const first = makeHarness({ nowMs: () => nearlyExpiredMs, now: () => new Date(nearlyExpiredMs).toISOString() });
+    first.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions.map((session) => session.sessionId)).toEqual(["viewed"]);
+      expect(rowCount()).toBe(1);
+    } finally {
+      first.daemon.stop();
+    }
+
+    // Past the window: the same tick sweeps (dismisses) and then prunes the stale row.
+    const expiredMs = Date.parse(viewedAt) + VIEWED_EXPIRY_TTL_MS + 60_000;
+    const second = makeHarness({ nowMs: () => expiredMs, now: () => new Date(expiredMs).toISOString() });
+    second.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions).toEqual([]);
+      expect(rowCount()).toBe(0);
+    } finally {
+      second.daemon.stop();
+    }
+  });
+
+  test("the zcode 1h lease does not prune a viewed zcode result before view + 24h", () => {
+    const resultAt = "2026-08-06T00:00:00.000Z";
+    apply([
+      {
+        kind: "SessionStart",
+        provider: "zcode",
+        sessionId: "z1",
+        title: "Title for z1",
+        project: null,
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: null,
+        observedAt: resultAt,
+      },
+      { kind: "Stop", provider: "zcode", sessionId: "z1", observedAt: resultAt },
+    ]);
+    const view = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      viewSession(view, "zcode", "z1", "2026-08-06T00:30:00.000Z");
+    } finally {
+      view.close();
+    }
+    // Two hours after the result: past the zcode lease, inside the view window.
+    const laterMs = Date.parse(resultAt) + 2 * 60 * 60 * 1000;
+    const harness = makeHarness({ nowMs: () => laterMs, now: () => new Date(laterMs).toISOString() });
+    harness.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions.map((session) => session.sessionId)).toEqual(["z1"]);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
   test("daemon restart with unviewed results: everything is still present", () => {
     startSession("kept", "2026-08-01T00:00:00.000Z"); // old AND unviewed
     const first = makeHarness();

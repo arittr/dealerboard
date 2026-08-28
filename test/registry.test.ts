@@ -1951,6 +1951,9 @@ describe("pruneStaleSessions", () => {
     ]);
     viewSession(db, "claude", "stale-viewed", "2026-08-01T02:00:00.000Z");
 
+    // The daemon's order on one tick: the sweep dismisses the long-expired
+    // view first, then prune sees a stale row with nothing holding it.
+    expect(sweepExpiredResults(db, "2026-08-26T00:00:00.000Z", "2026-08-27T00:00:00.000Z")).toBe(1);
     expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(1);
     expect(allRows().map((row) => row.session_id)).toEqual(["stale-unviewed"]);
   });
@@ -1991,9 +1994,13 @@ describe("pruneStaleSessions", () => {
         .sort(),
     ).toEqual(["orchestrator", "worker"]);
 
-    // Once the result is viewed, nothing unviewed remains and the whole
-    // stale tree goes.
+    // Once the result is viewed, its clock holds the whole component until
+    // the sweep dismisses it (a standalone prune alone leaves the overdue
+    // clock in place); then nothing holds the stale tree and it all goes.
     viewSession(db, "claude", "worker", "2026-08-01T01:00:00.000Z");
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(2);
+    expect(sweepExpiredResults(db, "2026-08-26T00:00:00.000Z", "2026-08-27T00:00:00.000Z")).toBe(1);
     expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(2);
     expect(countRows()).toBe(0);
   });
@@ -2050,6 +2057,81 @@ describe("pruneStaleSessions", () => {
 
     expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
     expect(countRows()).toBe(2);
+  });
+
+  describe("the live view clock", () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const iso = (ms: number): string => new Date(ms).toISOString();
+
+    test("a viewed result inside its post-view window survives prune however stale its lease", () => {
+      // The result landed long ago (lease long expired) and was viewed
+      // recently: the 24h post-view expiry owns its removal, not the prune.
+      const viewedAt = "2026-08-26T00:00:00.000Z";
+      applyRegistryEvents(db, [
+        start("s1", { at: "2026-08-01T00:00:00.000Z" }),
+        simple("Stop", "s1", { at: "2026-08-01T00:00:01.000Z" }),
+      ]);
+      viewSession(db, "claude", "s1", viewedAt);
+
+      // 23:59 after the view — the daemon's tick order: sweep, then prune.
+      const nearlyExpiredMs = Date.parse(viewedAt) + DAY_MS - 60_000;
+      expect(sweepExpiredResults(db, iso(nearlyExpiredMs - DAY_MS), iso(nearlyExpiredMs))).toBe(0);
+      expect(pruneStaleSessions(db, iso(nearlyExpiredMs - DAY_MS))).toBe(0);
+      expect(getRow("s1")).toMatchObject({ done_since: "2026-08-01T00:00:01.000Z", viewed_since: viewedAt });
+
+      // Past the window: the sweep dismisses, then prune removes the stale row.
+      const expiredMs = Date.parse(viewedAt) + DAY_MS + 60_000;
+      expect(sweepExpiredResults(db, iso(expiredMs - DAY_MS), iso(expiredMs))).toBe(1);
+      expect(pruneStaleSessions(db, iso(expiredMs - DAY_MS))).toBe(1);
+      expect(getRow("s1")).toBeNull();
+    });
+
+    test("a viewed error card is held by its clock too", () => {
+      applyRegistryEvents(db, [
+        start("s1", { at: "2026-08-01T00:00:00.000Z" }),
+        simple("StopFailure", "s1", { at: "2026-08-01T00:00:01.000Z" }),
+      ]);
+      viewSession(db, "claude", "s1", "2026-08-26T00:00:00.000Z");
+      expect(pruneStaleSessions(db, "2026-08-25T00:00:00.000Z")).toBe(0);
+      expect(getRow("s1")).toMatchObject({ status: "error", viewed_since: "2026-08-26T00:00:00.000Z" });
+    });
+
+    test("a viewed zcode result outlives its 1h lease until view + 24h", () => {
+      applyRegistryEvents(db, [
+        start("z1", { provider: "zcode", at: "2026-08-26T00:00:00.000Z" }),
+        simple("Stop", "z1", { provider: "zcode", at: "2026-08-26T00:00:01.000Z" }),
+      ]);
+      viewSession(db, "zcode", "z1", "2026-08-26T00:30:00.000Z");
+      // 2h after the result: past the zcode lease, inside the view window.
+      expect(pruneStaleSessions(db, "2026-08-25T02:00:00.000Z", "2026-08-26T01:00:00.000Z")).toBe(0);
+      expect(countRows()).toBe(1);
+    });
+
+    test("a viewed row with no held result is not a clock: a stale bare view is pruned", () => {
+      // Viewing an active card stamps viewed_since without a result to hold;
+      // once the session goes quiet past its lease there is nothing to keep.
+      applyRegistryEvents(db, [
+        start("s1", { at: "2026-08-01T00:00:00.000Z" }),
+        simple("Activity", "s1", { at: "2026-08-01T00:00:01.000Z" }),
+      ]);
+      viewSession(db, "claude", "s1", "2026-08-26T00:00:00.000Z");
+      expect(getRow("s1")).toMatchObject({ status: "working", viewed_since: "2026-08-26T00:00:00.000Z" });
+      expect(pruneStaleSessions(db, "2026-08-25T00:00:00.000Z")).toBe(1);
+    });
+
+    test("a clocked Paseo child keeps its stale parent (component closure)", () => {
+      applyRegistryEvents(db, [
+        { ...start("orchestrator", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+        { ...start("worker", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-1" } },
+      ]);
+      db.run(
+        "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'",
+      );
+      applyRegistryEvents(db, [simple("Stop", "worker", { at: "2026-08-01T00:00:02.000Z" })]);
+      viewSession(db, "claude", "worker", "2026-08-26T00:00:00.000Z");
+      expect(pruneStaleSessions(db, "2026-08-25T00:00:00.000Z")).toBe(0);
+      expect(countRows()).toBe(2);
+    });
   });
 });
 

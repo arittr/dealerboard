@@ -12,7 +12,8 @@
  * The database holds active state only: SubagentStop deletes child rows,
  * and the daemon's age-based prune plus the manual
  * `clearSession`/`clearAllSessions`/`pruneStaleSessions` repairs delete
- * trees — prune skipping any tree that still holds an unviewed result. A
+ * trees — prune skipping any tree that still holds an unviewed result or
+ * a live view clock (a viewed finished result awaiting its expiry). A
  * Stop or StopFailure always retains its row. SessionEnd deletes a row
  * only when nothing is unviewed; otherwise it
  * retains the row as a terminal "ended" card (idle, `ended_at` stamped)
@@ -1305,24 +1306,33 @@ export const updateSessionActivityLines = (db: Database, updates: readonly Sessi
  * operator-driven single-cutoff prunes (`sessions prune`) apply one age to
  * every provider. A row inside its lease keeps its whole connected component
  * alive, and so does any row holding an unviewed result (`unread_since`
- * non-null) — the native tree joined with the resolved Paseo tree: prune is
- * liveness cleanup, never a purge of results the user has not seen. The
- * operator's intentional purges are clear/clear-all and dismiss/archive.
- * `updated_at` holds an ISO-8601 UTC timestamp, so the
- * lexical comparison is chronological. Returns the number of stale top-level
- * rows (SQLite's own change count would also include cascade-deleted
- * children).
+ * non-null) or a live view clock (`viewed_since` non-null on a row still
+ * holding a finished result — `done_since` or an `error` status) — the
+ * native tree joined with the resolved Paseo tree: prune is liveness
+ * cleanup, never a purge of results the user has not seen, and never a
+ * shortcut past the 24h post-view expiry that owns a viewed result's
+ * removal. The clock's age is not compared here: the daemon runs
+ * `sweepExpiredResults` before prune on the same tick, so an overdue clock
+ * is already dismissed by the time prune looks; a standalone operator
+ * `sessions prune` may therefore leave an overdue clocked row in place
+ * until the next daemon sweep. The operator's intentional purges are
+ * clear/clear-all and dismiss/archive. `updated_at` holds an ISO-8601 UTC
+ * timestamp, so the lexical comparison is chronological. Returns the number
+ * of stale top-level rows (SQLite's own change count would also include
+ * cascade-deleted children).
  */
 export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffIso: string = cutoffIso): number =>
   inWriteTransaction(db, () => {
     // A connected component — the native tree joined with the resolved
-    // Paseo tree — is kept or pruned as one unit: a row inside its lease or
-    // holding an unviewed result keeps its whole component (ancestors,
-    // descendants, and Paseo siblings alike). Prune is liveness cleanup,
-    // never a purge of results the user has not seen.
+    // Paseo tree — is kept or pruned as one unit: a row inside its lease,
+    // holding an unviewed result, or running a live view clock keeps its
+    // whole component (ancestors, descendants, and Paseo siblings alike).
+    // Prune is liveness cleanup, never a purge of results the user has not
+    // seen or has not yet had the post-view window to act on.
     const rows = db
       .query(
         `SELECT provider, session_id, parent_session_id, updated_at, unread_since,
+                done_since, viewed_since, status,
                 origin_kind, origin_ref, origin_subagent, origin_parent_ref
            FROM active_sessions`,
       )
@@ -1332,6 +1342,9 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
       parent_session_id: string | null;
       updated_at: string;
       unread_since: string | null;
+      done_since: string | null;
+      viewed_since: string | null;
+      status: SessionStatus;
       origin_kind: string | null;
       origin_ref: string | null;
       origin_subagent: number;
@@ -1375,12 +1388,15 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
     for (const [childKey, parentKey] of paseoLinks) {
       link(childKey, parentKey);
     }
-    // Seeds: rows inside their lease and rows holding unviewed results.
+    // Seeds: rows inside their lease, rows holding unviewed results, and
+    // rows whose view clock is live — a viewed finished result (done, or an
+    // error) that the expiry sweep, not the prune, will release.
     const keep = new Set<string>();
     const stack: string[] = [];
     for (const row of rows) {
       const inLease = row.provider === "zcode" ? row.updated_at >= zcodeCutoffIso : row.updated_at >= cutoffIso;
-      if (inLease || row.unread_since !== null) {
+      const liveViewClock = row.viewed_since !== null && (row.done_since !== null || row.status === "error");
+      if (inLease || row.unread_since !== null || liveViewClock) {
         const key = keyOf(row.provider, row.session_id);
         if (!keep.has(key)) {
           keep.add(key);

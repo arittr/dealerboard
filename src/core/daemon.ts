@@ -21,8 +21,10 @@
  * expire), and a prune pass (delete sessions
  * whose whole tree is stale — the last hook of every descendant older than
  * the stale TTL, one hour for zcode, which has no SessionEnd hook, a day for
- * everyone else, skipping any tree that still holds an unviewed result —
- * so a live subagent always keeps its thread) every minute. A poll gap
+ * everyone else, skipping any tree that still holds an unviewed result or
+ * a live view clock — the sweep runs first on the tick, so an overdue
+ * clock is dismissed before prune looks — so a live subagent always keeps
+ * its thread) every minute. A poll gap
  * beyond the clock-jump threshold — the sleep signature of the host machine
  * — records a diagnostic. Maintenance failures record their own diagnostic
  * and never affect publication health.
