@@ -606,7 +606,9 @@ const FLICK_OUT_MS = 200;
  * viewed idle result) slides out; a live slat flashes like a routeless tap,
  * so the animation never promises a dismissal the registry will refuse. The
  * ack itself is fire-and-forget exactly like the tap's view: if it is
- * lost, the local dismissal expires and the slat honestly returns.
+ * lost, the local dismissal expires and the slat honestly returns; if the
+ * registry refuses it causally (a newer result landed in transit), the
+ * local hide ends as soon as a snapshot shows that newer result.
  */
 const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
   const settled = resolvePendingPress(currentCards, pending);
@@ -632,9 +634,16 @@ const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
   );
   // A re-render mid-slide cancels the animation (finished rejects): settle
   // either way — the dismissal must land or the card pops back for a beat.
+  // The local hide carries the flick's watermark so a causal refusal ends
+  // it; when the refusal is already visible at settle time the card never
+  // leaves the cards, no re-render follows, and the slid-out tile must snap
+  // back itself.
   const settle = (): void => {
-    dismissals.dismiss(provider, sessionId, Date.now());
+    dismissals.dismiss(provider, sessionId, Date.now(), settled.watermark);
     ingest(lastPayload);
+    if (resolvePendingPress(currentCards, pending) !== null) {
+      slide.cancel();
+    }
   };
   slide.finished.then(settle, settle);
 };
