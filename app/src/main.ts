@@ -47,6 +47,7 @@ import {
   viewSession,
 } from "./bridge";
 import { ageLineText, boardRenderSignature, cardKey, renderBoard, sessionLastEventAt } from "./cards";
+import { createPointerDiagnostic, mountPointerDiagnostic, POINTER_DIAGNOSTIC_ENABLED } from "./diagnostic";
 import { createDismissals, flickRemoves } from "./dismissals";
 /**
  * A pending press is bound to the pressed session's identity, never to a
@@ -105,6 +106,8 @@ let pendingPress: PendingPress | null = null;
  * never settle under a later tap.
  */
 let pressAwaitingClick: PendingPress | null = null;
+// Bring-up pointer diagnostic (removed with app/src/diagnostic.ts).
+const diagnostic = POINTER_DIAGNOSTIC_ENABLED ? createPointerDiagnostic(Date.now) : null;
 
 type SheetContext = {
   point: GesturePoint;
@@ -139,9 +142,11 @@ const jumpToPage = (page: number): void => {
   if (currentView === null) {
     return;
   }
+  const from = currentPage;
   // jumpBoard reports a page change as dirty, so applyBoard persists it and
   // later ingests (which reduce from the persisted settings) keep the page.
   applyBoard(jumpBoard(currentView, loadStoredSettings(), page));
+  diagnostic?.recordNavigation(from, currentPage);
   // renderRailNow is declared below; referenced here at click time.
   renderRailNow();
 };
@@ -257,6 +262,7 @@ const applyBoard = (result: BoardResult): void => {
   const signature = boardRenderSignature(page, degraded);
   const root = document.querySelector<HTMLElement>("#board");
   if (root !== null && signature !== renderedSignature) {
+    diagnostic?.recordRender();
     renderedSignature = signature;
     renderBoard(root, page, degraded);
     // Pulse on stamp advance (working cards only — planPulses gates on the
@@ -394,6 +400,9 @@ const start = async (): Promise<void> => {
   void startStripWindowManager();
   void ensureAutostart();
   wireInteraction();
+  if (diagnostic !== null) {
+    mountPointerDiagnostic(document.body, diagnostic);
+  }
   // Arm the push subscription before the first read so no publication can
   // land in the gap between the two; both sources order through the gate.
   try {
@@ -739,7 +748,9 @@ const scheduleLongPressTimer = (): void => {
 };
 
 const feedPointer = (input: GestureInput): void => {
-  handleGestureIntents(gestures.feed(input));
+  const intents = gestures.feed(input);
+  diagnostic?.recordIntents(intents);
+  handleGestureIntents(intents);
   scheduleLongPressTimer();
 };
 
@@ -747,6 +758,7 @@ const onStripPointerDown = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
+  diagnostic?.recordPointer("down", 1);
   // Suppression belongs to one stroke, and a touch drag fires no trailing
   // click at all — so any still-unconsumed suppression from the last stroke
   // dies here rather than eating this stroke's taps; the same goes for a
@@ -761,6 +773,7 @@ const onStripPointerMove = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
+  diagnostic?.recordPointer("move", event.getCoalescedEvents?.().length ?? 0);
   feedPointer({ kind: "move", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
 
@@ -768,6 +781,7 @@ const onStripPointerUp = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
+  diagnostic?.recordPointer("up", 1);
   feedPointer({ kind: "up", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
   // A press the stroke did not consume (no long-press, no flick) belongs to
   // the trailing click now: a clean tap settles it; a suppressed click
@@ -780,6 +794,7 @@ const onStripPointerCancel = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
+  diagnostic?.recordPointer("cancel", 1);
   feedPointer({ kind: "cancel", now: Date.now() });
   pendingPress = null;
   pressAwaitingClick = null;
@@ -818,6 +833,7 @@ const onContextMenu = (event: MouseEvent): void => {
  * The native menu stays cancelled at the document root regardless.
  */
 const onStripContextMenu = (event: MouseEvent): void => {
+  diagnostic?.recordPointer("context", 1);
   const pending = cardFromPointerEvent(event);
   if (pending !== null) {
     pendingPress = pending;

@@ -902,3 +902,18 @@ body[data-fullscreen] #rail {
   color: #ff4d67;
   font-weight: 700;
 }
+
+/* Bring-up pointer diagnostic overlay (removable with app/src/diagnostic.ts). */
+#pointer-diag {
+  position: fixed;
+  top: 6.5vh;
+  right: 26%;
+  z-index: 20;
+  padding: 0.5vh 0.4vw;
+  background: rgb(0 0 0 / 0.55);
+  color: #4ade80;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.7vw;
+  white-space: pre;
+  pointer-events: none;
+}
