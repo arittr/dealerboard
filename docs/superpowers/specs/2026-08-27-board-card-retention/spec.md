@@ -77,7 +77,7 @@ A card leaves the board **only** via this exhaustive list:
 | 3 | Paseo archive | Clears the row's ledgers, retires error; cascades ledger-clear to descendants (rows remain until prune) |
 | 4 | Reused `SessionStart` | Resets the row's own ledgers and `ended_at` ("a view and a new life"), as today |
 | 5 | Viewed expiry — daemon sweep | `viewed_since` older than 24h on a done/errored row → auto-dismiss that row |
-| 6 | Stale prune — 24h / 1h (zcode) whole-tree inactivity, daemon-scheduled and CLI `sessions prune` alike | Deletes rows, **skipping any tree containing an unviewed row** (`unread_since` non-null anywhere in the subtree) |
+| 6 | Stale prune — 24h / 1h (zcode) whole-tree inactivity, daemon-scheduled and CLI `sessions prune` alike | Deletes rows, **skipping any component containing an unviewed row** (`unread_since` non-null) **or a row holding a live view clock** (`viewed_since` non-null with `done_since`/`error` held — the R8 sweep dismisses expired clocks first, on the same tick) |
 
 Explicitly **not** removal paths any more:
 
@@ -113,13 +113,22 @@ Ledger invariants after this change:
 - **Only dealerboard view gestures stamp `viewed_since`.** Nothing in the
   Paseo overlay (attention flags, record writes, status repairs, archive)
   stamps it; no external evidence qualifies as "the user viewed this".
+- **A landing Paseo attention flag is a result:** when a flag stamps
+  `unread_since`, it also stamps `done_since` (`COALESCE` — an existing
+  hold is kept), so an idle card held only by attention survives being
+  viewed and follows the normal contract.
 - **A newer result cancels the old view clock:** any event that stamps a
   fresh result (`Stop` stamping unread+done, `StopFailure` stamping
   unread, the missed-completion repair stamping unread+done) also clears
   `viewed_since` back to null. The card is unviewed again until the next
   view.
-- `acked_at` is retained; it still guards Paseo re-stamps even though the
-  passive-view path that motivated it is deleted.
+- `acked_at` guards Paseo re-stamps. A view or dismiss that consumes
+  anything advances `acked_at` to the **gesture instant** (never the
+  consumed stamp — Paseo's attention record for a turn-end trails the
+  local Stop by a beat, and a consumed-stamp acked_at lets that trailing
+  record resurrect the badge). A gesture that consumes nothing leaves
+  `acked_at` alone, so a missed completion whose record postdates the
+  gesture still surfaces.
 
 ## Requirements
 
@@ -167,15 +176,25 @@ Ledger invariants after this change:
       (d) Provider-session rotation / duplicate-origin-ref cleanup touches
       status only — it must never clear `unread_since`/`done_since`; a
       retired carrier holding results renders as its own root card per R7.
+      (e) A landing attention flag (one that actually stamps
+      `unread_since`) also stamps `done_since` via `COALESCE` under the
+      same guards — attention is a result; it holds the card.
   - Acceptance: a Paseo record whose attention flag clears (whether by
     user or parent agent) leaves board ledgers untouched; archiving an
     orchestrator clears its card and its children's badges; a repaired
-    completion shows up in the parent's `pendingResults`.
+    completion shows up in the parent's `pendingResults`; an idle
+    flag-held card survives being viewed and expires 24h later.
 - [ ] **R6 — Roll-up visibility + badge.** `rootVisible` drops the
       `!isPaseoSubagent` carve-out: visibility = non-idle, or own
-      done/unread, or any descendant (Paseo lineage, any depth — the roll
-      goes to the root ancestor, the nearest *visible* card) holding
-      done/unread. Snapshot root entries gain `pendingResults: number` —
+      done/unread, or any descendant (Paseo lineage, any depth) holding
+      done/unread. Two distinct rules, do not conflate: **visibility**
+      propagates to the root ancestor (its card stays on the board while
+      any descendant holds a result); **facts** — the `pendingResults`
+      badge and the aggregated `unreadSince`/`doneSince` stamps —
+      aggregate to the nearest *self-publishing* card (aggregation stops
+      at active subagents and fail-safe roots, which publish their own
+      cards and carry their own facts). Snapshot root entries gain
+      `pendingResults: number` —
       count of descendants with `unread_since` non-null — and a published
       root's effective `unreadSince` aggregates its own with its
       descendants', so the rail count and the (legacy) Stream Deck list
@@ -209,9 +228,16 @@ Ledger invariants after this change:
     gesture; an unviewed done card of any age remains; a card that
     received a new result after the view (fresh `unread_since`,
     `viewed_since` cleared) remains.
-- [ ] **R9 — Prune respects the unviewed.** `pruneStaleSessions` — whether
-      invoked by the daemon's 60s schedule or by CLI `sessions prune` —
-      skips any tree containing a row with `unread_since` non-null.
+- [ ] **R9 — Prune respects the unviewed — and the live view clock.**
+      `pruneStaleSessions` — whether invoked by the daemon's 60s schedule
+      or by CLI `sessions prune` — skips any connected component
+      containing (a) a row with `unread_since` non-null, or (b) a row
+      holding a live view clock (`viewed_since` non-null with
+      `done_since`/`error` held) — a viewed result must survive prune
+      until its 24h window completes. The daemon runs the R8 sweep BEFORE
+      prune on the same tick, so expired clocks are already dismissed
+      when prune evaluates; a standalone CLI prune may leave an expired
+      clocked row until the next daemon sweep (harmless).
       TTLs otherwise unchanged (24h, 1h zcode). The operator's intentional
       purges are `sessions clear` / `clear-all` (and dismiss/archive),
       not prune.

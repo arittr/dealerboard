@@ -256,3 +256,44 @@ to ready and re-run the ratify gate. -->
   result.
 - **Deciders:** steering-session under the two-bounce takeover; flagged
   for Drew's review at run close
+
+## 2026-08-28 — Supersedes: acked_at advances to the exact consumed stamp
+- **Decided:** `acked_at` now advances to the GESTURE instant whenever a
+  view/dismiss consumes anything (and stays put when nothing was
+  consumed). This supersedes the plan-review F3 disposition (consumed
+  stamp) — Qwen's final review demonstrated empirically that Paseo stamps
+  attention for a turn-end ~350ms after the local Stop, so a consumed-stamp
+  `acked_at` let the trailing flag resurrect just-viewed/dismissed cards on
+  the next sync (the exact complaint family this redesign exists to kill).
+  Gesture-time is safe because acked_at suppression never clears local
+  state (the watermark protects in-transit results) and the gesture
+  instant can only postdate what the user saw.
+- **Deciders:** user (final-review adjudication, Qwen I2)
+
+## 2026-08-28 — Final-review dispositions (consistency repairs, flagged for Drew)
+- **Decided:** The dual final review (Sol + Qwen, both "with fixes")
+  produced five findings, all fixed in one consolidated wave
+  (1f0af9a..f425b13) and verified by scoped re-review:
+  1. Prune now also protects rows holding a live view clock (Sol C1) —
+     spec R9 + contract row 6 amended: the ratified R8 promise ("24h after
+     viewing") was silently defeasible by prune; the amendment is a
+     consistency repair of the R8/R9 seam, not a new rule.
+  2. A landing Paseo attention flag also stamps `done_since` (Sol I1) —
+     spec R5 gained item (e); a flag-only idle card no longer vanishes on
+     view.
+  3. acked_at → gesture time (Supersedes entry above).
+  4. Tap/sheet paths consume the pointer-down watermark capture (Sol I2 +
+     Qwen I1) — implementation gap against ratified R11, no spec text
+     change needed.
+  5. Rejected flicks un-hide on newer news (Sol I3) — same.
+  Qwen's three minors: M1 (ended-card prune interaction) was subsumed by
+  fix 1; M2 (R6 wording) folded in — visibility propagates to the root
+  ancestor, facts aggregate to the nearest self-publishing card; M3
+  (stray blank line) folded in. Sol triaged all six task-level deferred
+  minors safe-to-defer; #5 (gesture-target comment) became true under
+  fix 4.
+- **Because:** the whole point of the run — nothing leaves by being seen
+  or by finishing — had five seam-level leaks the per-task gates could
+  not see; the final whole-branch review was the net that caught them.
+- **Deciders:** steering-session under the two-bounce takeover; the one
+  settled-decision reversal (acked_at) is the user's ruling above.
