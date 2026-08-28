@@ -159,3 +159,34 @@ to ready and re-run the ratify gate. -->
   record.
 - **Deciders:** gate:ratify-cold-read (sol) + steering seat
   dispositions; user ratification pending
+
+## 2026-08-27 21:41 — Cross-spec note: board-card-retention coexists
+- **Decided:** Compatibility with the concurrently authored
+  2026-08-27-board-card-retention notebook is verified, not assumed:
+  its dismiss flick is vertical (gestures.ts FLICK_MIN_VERTICAL_PX,
+  horizontal-bounded), this spec's paging drag is horizontal, and the
+  axis-lock arbitration requirement here is the mechanism keeping them
+  separate — it is load-bearing for both notebooks. Retention keeps
+  more cards on the board, so page counts rise and this indicator
+  carries more weight; the pip column's ~8-page comfort range absorbs
+  that.
+- **Because:** Two specs landing the same day both touch board gesture
+  and card-population semantics; future readers of either should know
+  the interaction was checked.
+- **Deciders:** steering-session (user aware via sign-off exchange)
+
+## 2026-08-27 21:41 — Ratified
+- **Commit:** f6e0e0c
+- **Cold-read:** sol (codex/gpt-5.6-sol, reviewer profile, Paseo agent
+  9ada8f64) — 19 findings; 7 already covered by the spec as written,
+  12 dispositioned by amendment in the entry above; none declined,
+  none re-litigated settled decisions. The gate transcript's findings
+  list is the record.
+- **Sign-off:** Drew — "great, go ahead" (following "i think this makes
+  sense" on the design and "no that sgtm" on the recorded
+  recommendations), with the judgment-call dispositions — always-fill
+  invariant, mid-drag snapshot deferral, index-based page identity,
+  peek-not-viewing — explicitly surfaced and none vetoed.
+
+Any semantic edit to spec.md after this receipt voids it: flip status
+back to ready and re-run the ratify gate.
