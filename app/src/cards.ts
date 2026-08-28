@@ -66,6 +66,8 @@ export type CardViewModel = {
   subagent: boolean;
   indent: boolean;
   spine: SpineSegment;
+  /** First continued card of a split group on this page — renders the ↩ cont. tag. */
+  continuation: boolean;
   displayOnly: boolean;
   badge: number | null;
   degraded: boolean;
@@ -114,6 +116,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     subagent: card.subagent,
     indent: card.indent,
     spine: card.spine,
+    continuation: card.continuation,
     displayOnly: card.displayOnly,
     badge: card.displayOnly ? null : card.pendingResults > 0 ? card.pendingResults : card.descendantBadge,
     degraded: card.degraded,
@@ -164,6 +167,11 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
     const dot = document.createElement("span");
     dot.className = "unread-dot";
     chip.append(dot);
+  }
+  // The page-break marker: this card continues a group split from the page
+  // behind — spine-violet, so it reads as group identity, not status.
+  if (model.continuation) {
+    appendText(head, "cont-tag", "↩ cont.");
   }
   // A grouped sub's indent and spine already say it; only an orphan (neither)
   // still needs the pill.

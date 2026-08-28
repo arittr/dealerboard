@@ -174,6 +174,11 @@ describe("cardViewModel", () => {
     expect(cardViewModel(placed({ degraded: true }), NOW_MS).degraded).toBe(true);
   });
 
+  test("carries the continuation marker through the view model", () => {
+    expect(cardViewModel(placed({ continuation: true }), NOW_MS).continuation).toBe(true);
+    expect(cardViewModel(placed(), NOW_MS).continuation).toBe(false);
+  });
+
   test("unread tracks the ledger stamp; a working card's bright corner is the session age", () => {
     const model = cardViewModel(
       placed(
@@ -473,6 +478,20 @@ describe("head origin and lineage pills", () => {
       renderBoard(root as unknown as HTMLElement, { cards: [placed({ subagent: true })] }, false);
       expect(headClasses(root)).toEqual(["chip", "sub-pill", "card-title"]);
       expect(descendants(root).find((node) => hasClass(node, "sub-pill"))?.textContent).toBe("sub");
+    });
+  });
+
+  test("a continued card renders the ↩ cont. tag after the chip; ordinary cards do not", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, { cards: [placed({ continuation: true })] }, false);
+      const head = descendants(root).find((node) => hasClass(node, "card-head"));
+      expect(head?.children.map((node) => node.className.split(" ")[0])).toEqual(["chip", "cont-tag", "card-title"]);
+      const tag = descendants(root).find((node) => hasClass(node, "cont-tag"));
+      expect(tag?.textContent).toBe("↩ cont.");
+    });
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, { cards: [placed()] }, false);
+      expect(descendants(root).some((node) => hasClass(node, "cont-tag"))).toBe(false);
     });
   });
 });

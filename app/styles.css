@@ -418,6 +418,18 @@ body[data-fullscreen] #board {
   border-radius: 50%;
 }
 
+/* The split-group continuation marker ("↩ cont."): the first card a group
+   places on a continued page says where it came from, in the spine violet. */
+.cont-tag {
+  flex: none;
+  padding: 0.417vh 0.391vw; /* 3px 10px native */
+  border: max(1px, 0.0586vw) solid rgb(167 139 250 / 0.45); /* 1.5px native */
+  border-radius: 0.313vw; /* 8px native */
+  color: #a78bfa;
+  font-size: 0.781vw; /* 20px native */
+  white-space: nowrap;
+}
+
 /* The containment ring: a Paseo-dispatched parent's chip sits enclosed by
    the multiplexer's violet — a card-colored gap keeps it reading as an
    enclosure around the chip, not a border of it. */
