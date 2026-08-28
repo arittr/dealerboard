@@ -186,7 +186,7 @@ describe("applyRegistryEvents", () => {
     expect(getRow("evener-1", "evener")?.updated_at).toBe(at(3));
   });
 
-  test("drives one session through idle, working, waiting, idle, error, and absent", () => {
+  test("drives one session through idle, working, waiting, idle, error, and ended", () => {
     expect(applyRegistryEvents(db, [start("s1", { title: "First", project: "proj", at: at(1) })])).toEqual(["applied"]);
     expect(getRow("s1")).toEqual({
       provider: "claude",
@@ -232,9 +232,17 @@ describe("applyRegistryEvents", () => {
     expect(applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(5) })])).toEqual(["applied"]);
     expect(getRow("s1")).toMatchObject({ status: "error", logical_slot: 1, updated_at: at(5) });
 
+    // The failure at at(5) is unviewed, so the end retains the row as an
+    // ended card instead of deleting it.
     expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(6) })])).toEqual(["applied"]);
-    expect(getRow("s1")).toBeNull();
-    expect(countRows()).toBe(0);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: at(5),
+      done_since: at(4), // the Stop at at(4) stamped the hold; retention keeps it
+      ended_at: at(6),
+      updated_at: at(6),
+    });
+    expect(countRows()).toBe(1);
   });
 
   test("never recreates an ended session from late non-start events", () => {
@@ -2317,5 +2325,112 @@ describe("acknowledgeSession as dismiss", () => {
     // A flag raised after the consumed result is fresh news and re-badges.
     expect(syncPaseoStates(db, [flag(at(15))])).toBe(1);
     expect(getRow("s1")?.unread_since).toBe(at(15));
+  });
+});
+
+describe("SessionEnd retention (ended cards)", () => {
+  test("SessionEnd with an unviewed result retains the row as an ended card", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })])).toEqual(["applied"]);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: at(5),
+      done_since: at(5),
+      ended_at: at(9),
+      updated_at: at(9),
+    });
+  });
+
+  test("SessionEnd without an unviewed result deletes the row as today", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8)); // viewed: unread cleared
+    expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })])).toEqual(["applied"]);
+    expect(getRow("s1")).toBeNull();
+  });
+
+  test("a reused SessionStart revives the ended card in place", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
+    viewSession(db, "claude", "s1", at(11)); // start the clock before the new life
+    applyRegistryEvents(db, [start("s1", { at: at(12) })]);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      ended_at: null,
+      unread_since: null,
+      done_since: null,
+      viewed_since: null, // the new life clears any stale view clock too
+    });
+  });
+
+  test("a duplicate or late SessionEnd for an ended row is a no-op", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
+    expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(15) })])).toEqual(["ignored"]);
+    expect(getRow("s1")?.ended_at).toBe(at(9));
+  });
+
+  test("SessionEnd → Stop → SessionEnd produces one ended card", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    const results = applyRegistryEvents(db, [
+      simple("SessionEnd", "s1", { at: at(9) }),
+      simple("Stop", "s1", { at: at(12) }),
+      simple("SessionEnd", "s1", { at: at(15) }),
+    ]);
+    expect(results).toEqual(["applied", "applied", "ignored"]);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      ended_at: at(9),
+      unread_since: at(12),
+      done_since: at(12),
+      viewed_since: null, // the late Stop re-stamped a fresh result
+    });
+    expect(countRows()).toBe(1);
+  });
+
+  test("ending an error-only session stamps a done hold so the ended card survives its view", () => {
+    // StopFailure creates unread attention but no done_since. Retention must
+    // establish an idle hold, or the card would vanish the moment it is
+    // viewed (unread cleared, nothing left to hold it) — R10 keeps it for
+    // the full post-view window.
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: at(5),
+      done_since: at(9), // stamped at the end stamp
+      ended_at: at(9),
+    });
+
+    // View: badge off, clock starts — and the done hold keeps the card.
+    expect(viewSession(db, "claude", "s1", at(12))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({
+      unread_since: null,
+      done_since: at(9),
+      viewed_since: at(12),
+      ended_at: at(9),
+    });
+  });
+
+  test("ending a row that already holds a done stamp keeps that stamp", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
+    expect(getRow("s1")?.done_since).toBe(at(5)); // not regressed to the end stamp
+  });
+
+  test("a causal dismiss consumes an ended card whose done hold postdates the seen unread", () => {
+    // Failure at at(5) stamps unread only; the end at at(9) adds the done
+    // hold. The gesture's snapshot showed the unread at(5) — the dismiss must
+    // consume the whole ended card even though the auxiliary done stamp is
+    // newer than the watermark (consumption keys on the result identity).
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: at(5) })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: null,
+      done_since: null,
+      viewed_since: null,
+      ended_at: at(9), // the row itself remains until prune
+    });
   });
 });

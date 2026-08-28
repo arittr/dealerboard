@@ -79,6 +79,7 @@ type SessionRow = {
   origin_subagent: number;
   origin_parent_ref: string | null;
   unread_since: string | null;
+  ended_at: string | null;
   opened_at: string;
   updated_at: string;
 };
@@ -88,10 +89,10 @@ const COLUMNS =
 
 const getRow = (db: Database, provider: Provider, sessionId: string): SessionRow | null =>
   db
-    // origin_parent_ref postdates COLUMNS (schema v7) and the INSERT column
-    // lists stay frozen — select it here so the SessionObserved difference
-    // guard can see the stored value.
-    .query(`SELECT ${COLUMNS}, origin_parent_ref FROM active_sessions WHERE provider = ? AND session_id = ?`)
+    // origin_parent_ref and ended_at postdate COLUMNS (schema v7 and v17)
+    // and the INSERT column lists stay frozen — select them here so callers
+    // can see the stored values.
+    .query(`SELECT ${COLUMNS}, origin_parent_ref, ended_at FROM active_sessions WHERE provider = ? AND session_id = ?`)
     .get(provider, sessionId) as SessionRow | null;
 
 const toActiveSession = (row: SessionRow): ActiveSession => ({
@@ -193,9 +194,10 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
     // Reset to idle and refresh metadata; slot and opened_at stay put. Any
     // stale background flag drops too: shells a previous life left running
     // are no longer tracked, and their late completions clear a zero flag.
-    // The reuse is also a view and a new life: unread and done clear, and a
-    // fresh non-null origin replaces the stored one (null new evidence keeps
-    // it) while resetting the subagent bit and clearing the parent ref.
+    // The reuse is also a view and a new life: unread, done, the end mark,
+    // and the view clock clear, and a fresh non-null origin replaces the
+    // stored one (null new evidence keeps it) while resetting the subagent
+    // bit and clearing the parent ref.
     // A null event model never clears the stored one (COALESCE): providers
     // that omit the field on resume must not erase what an earlier start
     // stored. A paseo-origin row keeps its stored title — the overlay owns
@@ -207,6 +209,7 @@ const applySessionStart = (db: Database, event: Extract<RegistryEvent, { kind: "
            title = CASE WHEN origin_kind IS 'paseo' THEN title ELSE ? END,
            project = ?, ghostty_terminal_id = ?, transcript_path = ?,
            background_outstanding = 0, unread_since = NULL, done_since = NULL,
+           ended_at = NULL, viewed_since = NULL,
            status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
            origin_kind = COALESCE(?, origin_kind),
            origin_ref = CASE WHEN ? IS NOT NULL THEN ? ELSE origin_ref END,
@@ -507,7 +510,31 @@ const applySessionEnd = (db: Database, event: Extract<RegistryEvent, { kind: "Se
   if (existing === null || existing.parent_session_id !== null) {
     return "ignored";
   }
-  db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
+  // Ordering tolerance: a duplicate or late SessionEnd for a row already
+  // retained as an ended card is a no-op.
+  if (existing.ended_at !== null) {
+    return "ignored";
+  }
+  // Nothing unviewed: delete as today.
+  if (existing.unread_since === null) {
+    db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
+    return "applied";
+  }
+  // An unviewed result survives the session: retain the row as a terminal
+  // "ended" card — settle to idle, stamp ended_at, keep the ledgers. A row
+  // holding only unread (an error/attention result — StopFailure stamps no
+  // done) gets a done hold at the end stamp, or viewing it would clear the
+  // unread and leave nothing holding the card. Late events still process
+  // normally and simply re-stamp.
+  db.run(
+    `UPDATE active_sessions
+     SET status = 'idle', ended_at = ?, background_outstanding = 0,
+         done_since = COALESCE(done_since, ?),
+         status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
+         updated_at = ?
+     WHERE provider = ? AND session_id = ?`,
+    [event.observedAt, event.observedAt, event.observedAt, event.observedAt, event.provider, event.sessionId],
+  );
   return "applied";
 };
 
