@@ -763,10 +763,15 @@ const paseoSubtreeIdentities = (
  * same instant so the subtree's clocks run together. A causal watermark
  * protects any result newer than the stamp the gesture's snapshot showed;
  * a null-stamp watermark (the snapshot showed no unread) consumes nothing.
- * Viewing advances `acked_at` to the exact consumed stamp — never the
- * gesture time — so the Paseo flag mirror can neither resurrect an
- * already-viewed flag nor swallow news that has not synced yet. Never
- * touches `updated_at`.
+ * A view that consumes a result (clears an unread stamp) advances
+ * `acked_at` to the gesture instant; one that consumes nothing leaves it
+ * alone. The gesture time — not the consumed stamp — is the right
+ * watermark: Paseo stamps its attention flag for a turn-end slightly after
+ * the local Stop, so a flag trailing the consumed stamp would otherwise
+ * resurrect a card the user just viewed. It is safe because suppression
+ * through `acked_at` never clears local state (the causal watermark is what
+ * protects a result in transit), and the gesture instant can only postdate
+ * what the user saw. Never touches `updated_at`.
  */
 export const viewSession = (
   db: Database,
@@ -784,26 +789,28 @@ export const viewSession = (
       // A row is consumable when the gesture is unconditional, when it has
       // no unread (it matches the snapshot the user saw), or when its unread
       // stamp is at or before the watermark. A causal null-stamp watermark
-      // therefore consumes nothing: only unread-free rows match it.
+      // therefore consumes nothing: only unread-free rows match it. The
+      // acked_at CASE reads unread_since before this statement clears it:
+      // only a view that actually consumes a stamp advances the watermark.
       const result = isTarget
         ? db.run(
             `UPDATE active_sessions
              SET unread_since = NULL,
                  viewed_since = ?,
-                 acked_at = NULLIF(max(COALESCE(acked_at, ''), COALESCE(unread_since, '')), '')
+                 acked_at = CASE WHEN unread_since IS NOT NULL THEN ? ELSE acked_at END
              WHERE provider = ? AND session_id = ?
                AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))`,
-            [viewedAt, identity.provider, identity.sessionId, causal, wm, wm],
+            [viewedAt, viewedAt, identity.provider, identity.sessionId, causal, wm, wm],
           )
         : db.run(
             `UPDATE active_sessions
              SET unread_since = NULL,
                  viewed_since = ?,
-                 acked_at = NULLIF(max(COALESCE(acked_at, ''), COALESCE(unread_since, '')), '')
+                 acked_at = CASE WHEN unread_since IS NOT NULL THEN ? ELSE acked_at END
              WHERE provider = ? AND session_id = ?
                AND (done_since IS NOT NULL OR unread_since IS NOT NULL)
                AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))`,
-            [viewedAt, identity.provider, identity.sessionId, causal, wm, wm],
+            [viewedAt, viewedAt, identity.provider, identity.sessionId, causal, wm, wm],
           );
       changed += result.changes;
     }
@@ -817,10 +824,16 @@ export const viewSession = (
  * idle — with the background flag disarmed, like every other retirement.
  * Cascades the same semantics to every resolved Paseo-lineage descendant
  * (clears their ledgers, retires their errors; rows are never deleted).
- * `acked_at` advances to the exact stamp of the result(s) consumed — never
- * the gesture time — so the Paseo flag mirror can neither resurrect an
- * already-viewed flag nor swallow news that has not synced yet; a dismiss
- * that consumes nothing leaves it alone.
+ * Every row the dismissal reaches consumed something (a stamp cleared or an
+ * error retired — the guard admits nothing else), so each advances
+ * `acked_at` to the gesture instant; a dismiss that reaches nothing leaves
+ * it alone. The gesture time — not the consumed stamp — is the right
+ * watermark for the same reason as in `viewSession`: Paseo's attention
+ * flag trails the local Stop by a beat, and a flag between the consumed
+ * stamp and the gesture would otherwise resurrect the card the user just
+ * flicked away. Suppression through `acked_at` never clears local state
+ * (the causal watermark below protects a result in transit), and the
+ * gesture instant can only postdate what the user saw.
  *
  * The causal watermark identifies the newest result the gesture's snapshot
  * showed: a row is consumable iff its current `unread_since` is null or at
@@ -849,10 +862,7 @@ export const acknowledgeSession = (
          SET unread_since = NULL,
              done_since = NULL,
              viewed_since = NULL,
-             acked_at = NULLIF(
-               max(COALESCE(acked_at, ''), COALESCE(unread_since, ''), COALESCE(done_since, '')),
-               ''
-             ),
+             acked_at = ?,
              status = CASE WHEN status = 'error' THEN 'idle' ELSE status END,
              status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
              background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
@@ -860,6 +870,7 @@ export const acknowledgeSession = (
            AND (unread_since IS NOT NULL OR done_since IS NOT NULL OR status = 'error')
            AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))`,
         [
+          ackedAt, // acked_at: the gesture instant (every matched row consumed something)
           ackedAt, // error retirement's status_since (gesture time)
           identity.provider,
           identity.sessionId,

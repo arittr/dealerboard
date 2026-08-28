@@ -672,9 +672,10 @@ describe("unread ledger", () => {
     expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
     const row = getRow("s1");
     expect(row?.unread_since).toBeNull();
-    expect(row?.acked_at).toBe(at(9));
+    expect(row?.acked_at).toBe(at(12)); // the gesture instant
     expect(row?.updated_at).toBe(before);
     expect(acknowledgeSession(db, "claude", "s1", at(13))).toBe("ignored"); // already read
+    expect(getRow("s1")?.acked_at).toBe(at(12)); // nothing consumed → no advance
   });
 
   test("acknowledgeSession retires an error row to idle (the error is a result; viewing settles it)", () => {
@@ -690,7 +691,7 @@ describe("unread ledger", () => {
     expect(row?.status_since).toBe(at(12));
     expect(row?.background_outstanding).toBe(0);
     expect(row?.unread_since).toBeNull();
-    expect(row?.acked_at).toBe(at(9));
+    expect(row?.acked_at).toBe(at(12)); // the retirement is a consumption: gesture time
     expect(row?.updated_at).toBe(before);
   });
 
@@ -1326,10 +1327,12 @@ describe("syncPaseoStates", () => {
     expect(viewSession(db, "claude", "s1", "2026-08-06T00:10:00.000Z")).toBe("applied");
     expect(getRow("s1")).toMatchObject({ status: "error", unread_since: null });
 
-    expect(acknowledgeSession(db, "claude", "s1", at(30))).toBe("applied");
-    // The dismissal consumes nothing new (the view already consumed the
-    // at(9) stamp), so acked_at stays at the consumed stamp.
-    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(30), acked_at: at(9) });
+    expect(getRow("s1")?.acked_at).toBe("2026-08-06T00:10:00.000Z"); // the view's gesture time
+    const dismissedAt = "2026-08-06T00:12:00.000Z";
+    expect(acknowledgeSession(db, "claude", "s1", dismissedAt)).toBe("applied");
+    // Retiring the error is itself a consumption: acked_at advances to the
+    // dismiss gesture's instant.
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: dismissedAt, acked_at: dismissedAt });
   });
 
   test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {
@@ -1796,46 +1799,78 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null });
   });
 
-  test("the repair stamps a missed result newer than the consumed stamp (no suppression)", () => {
+  test("the repair stamps a missed result whose record postdates the user's gesture (no suppression)", () => {
     applyRegistryEvents(db, [
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
       simple("Activity", "s1", { at: at(2) }),
     ]);
     // A paseo flag raised unread at at(3); the user dismissed it at at(6) —
-    // acked_at advances to the consumed stamp at(3), not the gesture time.
+    // acked_at advances to the gesture instant.
     syncPaseoStates(db, [paseoState({ attentionTimestamp: at(3) })]);
     expect(acknowledgeSession(db, "claude", "s1", at(6))).toBe("applied");
-    expect(getRow("s1")?.acked_at).toBe(at(3));
-    // The settled record reports the turn finished at at(5): newer than the
-    // consumed stamp, so the missed result must surface, not be suppressed.
+    expect(getRow("s1")?.acked_at).toBe(at(6));
+    // The settled record reports the turn finished at at(7): after the
+    // gesture, so the missed result must surface, not be suppressed.
     const changed = syncPaseoStates(db, [
-      paseoState({ requiresAttention: false, updatedAt: at(5), lastStatus: "idle" }),
+      paseoState({ requiresAttention: false, updatedAt: at(7), lastStatus: "idle" }),
     ]);
     expect(changed).toBe(1);
     expect(getRow("s1")).toMatchObject({
       status: "idle",
-      unread_since: at(5),
-      done_since: at(5),
+      unread_since: at(7),
+      done_since: at(7),
       viewed_since: null,
     });
   });
 
-  test("the repair retires without stamping when the record is not newer than the ack", () => {
+  test("the repair retires without stamping when the record predates the user's gesture", () => {
     applyRegistryEvents(db, [
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
       simple("Activity", "s1", { at: at(2) }),
     ]);
     syncPaseoStates(db, [paseoState({ attentionTimestamp: at(3) })]);
     expect(acknowledgeSession(db, "claude", "s1", at(6))).toBe("applied");
-    expect(getRow("s1")?.acked_at).toBe(at(3));
-    // A record written at at(3) — not strictly newer than the consumed
-    // stamp — still proves the turn ended (retirement applies), but its
-    // stamp is stale news the user already dismissed: no ledger write.
+    expect(getRow("s1")?.acked_at).toBe(at(6));
+    // A record written at at(5) — before the dismiss gesture — still proves
+    // the turn ended (retirement applies), but whatever it reports the user
+    // had already dismissed: no ledger write.
     const changed = syncPaseoStates(db, [
-      paseoState({ requiresAttention: false, updatedAt: at(3), lastStatus: "idle" }),
+      paseoState({ requiresAttention: false, updatedAt: at(5), lastStatus: "idle" }),
     ]);
     expect(changed).toBe(1);
     expect(getRow("s1")).toMatchObject({ status: "idle", unread_since: null, done_since: null, viewed_since: null });
+  });
+
+  test("a flag trailing the local Stop by milliseconds cannot resurrect a just-viewed card", () => {
+    // Paseo stamps attention for a turn-end slightly AFTER the local Stop.
+    // The user views the card before the flag syncs: the next sync must
+    // neither re-badge the card nor cancel its view clock.
+    const stopAt = "2026-08-06T00:00:01.000Z";
+    const trailingFlag = "2026-08-06T00:00:01.350Z";
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: stopAt }),
+    ]);
+    expect(viewSession(db, "claude", "s1", at(5))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, viewed_since: at(5), acked_at: at(5) });
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: trailingFlag })])).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: null, viewed_since: at(5), done_since: stopAt });
+  });
+
+  test("a flag trailing the local Stop cannot resurrect a flick-dismissed card", () => {
+    const stopAt = "2026-08-06T00:00:01.000Z";
+    const trailingFlag = "2026-08-06T00:00:01.350Z";
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: stopAt }),
+    ]);
+    expect(acknowledgeSession(db, "claude", "s1", at(5), { unreadSince: stopAt })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null, acked_at: at(5) });
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: trailingFlag })])).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null });
+    // A flag raised after the gesture is fresh news and re-badges (holding the card).
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: at(9) })])).toBe(1);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(9) });
   });
 
   test("the repair never regresses a flag-stamped unread newer than the settle", () => {
@@ -2574,16 +2609,17 @@ describe("viewSession", () => {
     expect(getRow("s1")).toMatchObject({ viewed_since: at(12), done_since: at(5) });
   });
 
-  test("viewing advances acked_at to the exact consumed stamp, not the gesture time", () => {
+  test("viewing that consumes a result advances acked_at to the gesture instant", () => {
     applyRegistryEvents(db, [
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
       simple("Stop", "s1", { at: at(5) }),
     ]);
     expect(viewSession(db, "claude", "s1", at(12))).toBe("applied");
-    expect(getRow("s1")?.acked_at).toBe(at(5)); // the consumed result's stamp
+    expect(getRow("s1")?.acked_at).toBe(at(12)); // the gesture, not the consumed stamp
 
-    // A same-stamp flag synced late cannot resurrect the badge (the Paseo
-    // mirror's guard is strictly newer-than), but genuinely newer news can.
+    // Any flag at or before the gesture synced late cannot resurrect the
+    // badge (the Paseo mirror's guard is strictly newer-than), but news
+    // raised after the gesture can.
     const flag = (attentionTimestamp: string) => ({
       provider: "claude" as const,
       sessionId: "s1",
@@ -2598,6 +2634,7 @@ describe("viewSession", () => {
       title: null,
     });
     expect(syncPaseoStates(db, [flag(at(5))])).toBe(0);
+    expect(syncPaseoStates(db, [flag(at(12))])).toBe(0);
     expect(getRow("s1")?.unread_since).toBeNull();
     expect(syncPaseoStates(db, [flag(at(15))])).toBe(1);
     expect(getRow("s1")?.unread_since).toBe(at(15));
@@ -2759,13 +2796,13 @@ describe("acknowledgeSession as dismiss", () => {
     expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null, viewed_since: null });
   });
 
-  test("dismiss advances acked_at to the consumed stamp, so a same-stamp flag synced late stays suppressed", () => {
+  test("dismiss advances acked_at to the gesture instant, so a flag synced late stays suppressed", () => {
     applyRegistryEvents(db, [
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
       simple("Stop", "s1", { at: at(5) }),
     ]);
     expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
-    expect(getRow("s1")?.acked_at).toBe(at(5)); // the consumed stamp, not at(12)
+    expect(getRow("s1")?.acked_at).toBe(at(12)); // the gesture, not the consumed stamp at(5)
 
     const flag = (attentionTimestamp: string) => ({
       provider: "claude" as const,
