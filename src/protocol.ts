@@ -114,6 +114,10 @@ export type ProjectedSession = {
   unreadSince: string | null;
   /** ISO-8601 UTC when the latest undismissed result landed; null once dismissed or while none. */
   doneSince: string | null;
+  /** Count of Paseo-lineage descendants holding an unviewed result (rolled-up pending results). */
+  pendingResults: number;
+  /** ISO-8601 UTC when the session ended holding an unviewed result and was retained; null otherwise. */
+  endedAt: string | null;
   /** ISO-8601 UTC of the row's own last status change (subtree lifts never restamp); null when never stamped. */
   statusSince: string | null;
   /** The last tool call as "Tool target" (≤64 code points; claude/codex only); null otherwise. */
@@ -147,6 +151,10 @@ export type ProjectedAgentNode = {
   unreadSince: string | null;
   /** ISO-8601 UTC when the latest undismissed result landed; null once dismissed or while none. */
   doneSince: string | null;
+  /** Count of Paseo-lineage descendants holding an unviewed result (rolled-up pending results). */
+  pendingResults: number;
+  /** ISO-8601 UTC when the session ended holding an unviewed result and was retained; null otherwise. */
+  endedAt: string | null;
   logicalSlot: number | null;
   ghosttyTerminalId: string | null;
   transcriptPath: string | null;
@@ -291,6 +299,14 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
   if (!isNullableBoundedString(doneSince)) {
     return invalid("agent.doneSince must be null or a bounded string");
   }
+  const pendingResults = "pendingResults" in value ? value["pendingResults"] : 0;
+  if (!isNonNegativeInteger(pendingResults)) {
+    return invalid("agent.pendingResults must be a non-negative integer");
+  }
+  const endedAt = "endedAt" in value ? value["endedAt"] : null;
+  if (!isNullableBoundedString(endedAt)) {
+    return invalid("agent.endedAt must be null or a bounded string");
+  }
   const logicalSlot = value["logicalSlot"];
   if (logicalSlot !== null && (typeof logicalSlot !== "number" || !Number.isInteger(logicalSlot))) {
     return invalid("agent.logicalSlot must be null or an integer");
@@ -340,7 +356,9 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
       originSubagent ||
       originParentRef !== null ||
       unreadSince !== null ||
-      doneSince !== null
+      doneSince !== null ||
+      pendingResults !== 0 ||
+      endedAt !== null
     ) {
       return invalid("agent native role invariants are invalid");
     }
@@ -370,6 +388,8 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
     activityLine,
     unreadSince,
     doneSince,
+    pendingResults,
+    endedAt,
     logicalSlot,
     ghosttyTerminalId,
     transcriptPath,
@@ -519,6 +539,14 @@ const parseSession = (value: unknown): ProjectedSession => {
   if (!isNullableBoundedString(doneSince)) {
     return invalid("session.doneSince must be null or a bounded string");
   }
+  const pendingResults = "pendingResults" in value ? value["pendingResults"] : 0;
+  if (!isNonNegativeInteger(pendingResults)) {
+    return invalid("session.pendingResults must be a non-negative integer");
+  }
+  const endedAt = "endedAt" in value ? value["endedAt"] : null;
+  if (!isNullableBoundedString(endedAt)) {
+    return invalid("session.endedAt must be null or a bounded string");
+  }
   return {
     provider: value["provider"] as Provider,
     sessionId: value["sessionId"],
@@ -534,6 +562,8 @@ const parseSession = (value: unknown): ProjectedSession => {
     originSubagent: value["originSubagent"] === undefined ? false : (value["originSubagent"] as boolean),
     unreadSince,
     doneSince,
+    pendingResults,
+    endedAt,
     statusSince,
     activityLine,
     transcriptPath,

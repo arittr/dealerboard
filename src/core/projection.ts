@@ -37,6 +37,7 @@ export type ProjectionRow = {
   originSubagent: number;
   unreadSince: string | null;
   doneSince: string | null;
+  endedAt: string | null;
   statusSince: string | null;
   activityLine: string | null;
   transcriptPath: string | null;
@@ -343,6 +344,8 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     activityLine: result.row.activityLine,
     unreadSince: result.row.unreadSince,
     doneSince: result.row.doneSince,
+    pendingResults: 0,
+    endedAt: result.row.endedAt,
     logicalSlot: result.slot,
     ghosttyTerminalId: result.row.ghosttyTerminalId,
     transcriptPath: result.row.transcriptPath,
@@ -393,6 +396,8 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     lastEventAt: result.row.lastEventAt,
     unreadSince: null,
     doneSince: null,
+    pendingResults: 0,
+    endedAt: null,
     logicalSlot: null,
     ghosttyTerminalId: null,
     transcriptPath: null,
@@ -501,6 +506,7 @@ type StoredRow = {
   origin_subagent: unknown;
   unread_since: unknown;
   done_since: unknown;
+  ended_at: unknown;
   status_since: unknown;
   activity_line: unknown;
   transcript_path: unknown;
@@ -573,7 +579,8 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     !isBinary(row.origin_subagent) ||
     !isStringOrNull(row.unread_since) ||
     !isStringOrNull(row.done_since) ||
-    !isStringOrNull(row.status_since)
+    !isStringOrNull(row.status_since) ||
+    !isStringOrNull(row.ended_at)
   ) {
     throw new ProjectionError("corrupt-row");
   }
@@ -619,6 +626,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
     originSubagent: row.origin_subagent,
     unreadSince: row.unread_since,
     doneSince: row.done_since,
+    endedAt: row.ended_at,
     statusSince: row.status_since,
     activityLine: row.activity_line,
     transcriptPath: row.transcript_path,
@@ -628,7 +636,7 @@ const toProjectionRow = (row: StoredRow): ProjectionRow => {
 };
 
 const PROJECTION_COLUMNS =
-  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, opened_at, origin_kind, origin_ref, origin_subagent, unread_since, done_since, status_since, activity_line, transcript_path, origin_parent_ref, updated_at";
+  "provider, session_id, parent_session_id, status, title, project, logical_slot, ghostty_terminal_id, model, opened_at, origin_kind, origin_ref, origin_subagent, unread_since, done_since, status_since, activity_line, transcript_path, origin_parent_ref, updated_at, ended_at";
 
 /**
  * Read one consistent snapshot in a read transaction this function owns:

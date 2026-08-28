@@ -34,6 +34,8 @@ const session = (
   originSubagent: false,
   unreadSince: null,
   doneSince: null,
+  pendingResults: 0,
+  endedAt: null,
   statusSince: null,
   activityLine: null,
   transcriptPath: null,

@@ -40,6 +40,7 @@ const row = (
     originSubagent?: number;
     unreadSince?: string | null;
     doneSince?: string | null;
+    endedAt?: string | null;
     statusSince?: string | null;
     activityLine?: string | null;
     transcriptPath?: string | null;
@@ -66,6 +67,7 @@ const row = (
     // visibility filter pass null explicitly (a `??` default would swallow it).
     unreadSince: options.unreadSince === undefined ? "2026-08-16T00:00:00.000Z" : options.unreadSince,
     doneSince: options.doneSince ?? null,
+    endedAt: options.endedAt ?? null,
     statusSince: options.statusSince ?? null,
     activityLine: options.activityLine ?? null,
     transcriptPath: options.transcriptPath ?? null,
@@ -123,6 +125,8 @@ describe("projectRows", () => {
       originSubagent: false,
       unreadSince: "2026-08-16T00:00:00.000Z",
       doneSince: null,
+      pendingResults: 0,
+      endedAt: null,
       statusSince: null,
       activityLine: null,
       transcriptPath: null,
@@ -1137,6 +1141,8 @@ describe("readProjection", () => {
             originSubagent: false,
             unreadSince: null,
             doneSince: null,
+            pendingResults: 0,
+            endedAt: null,
             statusSince: "2026-08-06T00:00:04.000Z",
             activityLine: null,
             transcriptPath: null,
@@ -1160,6 +1166,8 @@ describe("readProjection", () => {
             activityLine: null,
             unreadSince: null,
             doneSince: null,
+            pendingResults: 0,
+            endedAt: null,
             logicalSlot: 1,
             ghosttyTerminalId: null,
             transcriptPath: null,
@@ -1184,6 +1192,8 @@ describe("readProjection", () => {
             activityLine: null,
             unreadSince: null,
             doneSince: null,
+            pendingResults: 0,
+            endedAt: null,
             logicalSlot: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
@@ -1208,6 +1218,8 @@ describe("readProjection", () => {
             activityLine: null,
             unreadSince: null,
             doneSince: null,
+            pendingResults: 0,
+            endedAt: null,
             logicalSlot: null,
             ghosttyTerminalId: null,
             transcriptPath: null,
@@ -1593,6 +1605,87 @@ describe("readProjection", () => {
       rmSync(tempHome, { recursive: true, force: true });
     }
   });
+
+  test("an ended root publishes endedAt through the snapshot", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "ended",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-26T05:00:00.000Z",
+          },
+          { kind: "Stop", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:01:00.000Z" },
+          { kind: "SessionEnd", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:02:00.000Z" },
+        ]);
+      } finally {
+        writer.close();
+      }
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions[0]).toMatchObject({
+          sessionId: "ended",
+          endedAt: "2026-08-26T05:02:00.000Z",
+          pendingResults: 0,
+        });
+        expect(snapshot.agents?.[0]).toMatchObject({
+          sessionId: "ended",
+          endedAt: "2026-08-26T05:02:00.000Z",
+          pendingResults: 0,
+        });
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a corrupt ended_at and rolls back the read transaction", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "bad-ended-at",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-26T05:00:00.000Z",
+          },
+        ]);
+        writer.run("UPDATE active_sessions SET ended_at = x'00' WHERE session_id = 'bad-ended-at'");
+      } finally {
+        writer.close();
+      }
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        expect(() => readProjection(reader)).toThrow(new ProjectionError("corrupt-row"));
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("writeSnapshotAtomically", () => {
@@ -1621,6 +1714,8 @@ describe("writeSnapshotAtomically", () => {
         originSubagent: false,
         unreadSince: null,
         doneSince: null,
+        pendingResults: 0,
+        endedAt: null,
         statusSince: null,
         activityLine: null,
         transcriptPath: null,

@@ -29,6 +29,8 @@ const valid: SessionSnapshotV2 = {
       originSubagent: false,
       unreadSince: null,
       doneSince: null,
+      pendingResults: 0,
+      endedAt: null,
       statusSince: null,
       activityLine: null,
       transcriptPath: null,
@@ -54,6 +56,8 @@ const agent = (overrides: Partial<ProjectedAgentNode> = {}): ProjectedAgentNode 
   activityLine: null,
   unreadSince: null,
   doneSince: null,
+  pendingResults: 0,
+  endedAt: null,
   logicalSlot: 1,
   ghosttyTerminalId: null,
   transcriptPath: null,
@@ -604,6 +608,49 @@ describe("parseSessionSnapshot", () => {
     expect(parseSessionSnapshot({ ...valid, sessions: [absent] }).sessions[0]?.doneSince).toBeNull();
     const malformed = { ...valid, sessions: [{ ...firstSession(), doneSince: 12 }] };
     expect(() => parseSessionSnapshot(malformed)).toThrow("session.doneSince");
+  });
+
+  test("pendingResults parses when present, defaults to 0 when the key is absent, and rejects non-integers", () => {
+    expect(parseSessionSnapshot(withSession({ pendingResults: 2 })).sessions[0]?.pendingResults).toBe(2);
+    // Cross-version tolerance: a snapshot written before the field existed
+    // carries no key at all and parses to 0.
+    const absent = { ...firstSession() } as Partial<ProjectedSession>;
+    delete absent.pendingResults;
+    expect(parseSessionSnapshot({ ...valid, sessions: [absent] }).sessions[0]?.pendingResults).toBe(0);
+    expect(() => parseSessionSnapshot(withSession({ pendingResults: -1 }))).toThrow("session.pendingResults");
+    expect(() => parseSessionSnapshot(withSession({ pendingResults: 1.5 }))).toThrow("session.pendingResults");
+    expect(() => parseSessionSnapshot(withSession({ pendingResults: "2" as unknown as number }))).toThrow(
+      "session.pendingResults",
+    );
+  });
+
+  test("endedAt parses when present, defaults to null when the key is absent, and rejects non-strings", () => {
+    const stamp = "2026-08-27T05:00:00.000Z";
+    expect(parseSessionSnapshot(withSession({ endedAt: stamp })).sessions[0]?.endedAt).toBe(stamp);
+    const absent = { ...firstSession() } as Partial<ProjectedSession>;
+    delete absent.endedAt;
+    expect(parseSessionSnapshot({ ...valid, sessions: [absent] }).sessions[0]?.endedAt).toBeNull();
+    const malformed = { ...valid, sessions: [{ ...firstSession(), endedAt: 12 }] };
+    expect(() => parseSessionSnapshot(malformed)).toThrow("session.endedAt");
+  });
+
+  test("native agent nodes reject pendingResults and endedAt (display-only rows carry no retention facts)", () => {
+    const native = agent({
+      sessionId: "native-child",
+      role: "subagent",
+      lineage: "native",
+      parent: { provider: "claude", sessionId: "agent-root" },
+      logicalSlot: null,
+    });
+    expect(parseSessionSnapshot({ ...valid, agents: [agent(), native] }).agents?.map((node) => node.sessionId)).toEqual(
+      ["agent-root", "native-child"],
+    );
+    expect(() => parseSessionSnapshot({ ...valid, agents: [agent(), { ...native, pendingResults: 1 }] })).toThrow(
+      "agent native role invariants are invalid",
+    );
+    expect(() =>
+      parseSessionSnapshot({ ...valid, agents: [agent(), { ...native, endedAt: "2026-08-27T05:00:00.000Z" }] }),
+    ).toThrow("agent native role invariants are invalid");
   });
 });
 
