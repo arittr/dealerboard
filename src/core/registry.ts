@@ -35,7 +35,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { Provider, RegistryEvent, SessionStatus } from "../protocol";
+import type { Provider, RegistryEvent, SessionOriginKind, SessionStatus } from "../protocol";
 import type { PaseoAgentStatus } from "./paseo";
 
 export type MutationResult = "applied" | "ignored";
@@ -53,7 +53,7 @@ export type ActiveSession = {
   backgroundOutstanding: number;
   transcriptPath: string | null;
   model: string | null;
-  originKind: "paseo" | "terminal" | null;
+  originKind: SessionOriginKind | null;
   originRef: string | null;
   originSubagent: number;
   unreadSince: string | null;
@@ -73,7 +73,7 @@ type SessionRow = {
   background_outstanding: number;
   transcript_path: string | null;
   model: string | null;
-  origin_kind: "paseo" | "terminal" | null;
+  origin_kind: SessionOriginKind | null;
   origin_ref: string | null;
   origin_subagent: number;
   origin_parent_ref: string | null;

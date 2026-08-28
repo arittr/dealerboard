@@ -258,6 +258,12 @@ describe("renderKey output contract", () => {
     const nullOrigin = decode(sessionModel(), 0);
     expect(nullOrigin).not.toContain("originpip");
   });
+
+  test("a roborev session renders a filled origin disc in the roborev hue", () => {
+    const roborev = decode(sessionModel({ originKind: "roborev", originRef: "shim" }), 0);
+    expect(roborev).toContain('<circle class="originpip" cx="122" cy="122" r="9" fill="#22D3EE"/>');
+    expect(roborev).not.toContain("#A78BFA");
+  });
 });
 
 describe("status treatments", () => {

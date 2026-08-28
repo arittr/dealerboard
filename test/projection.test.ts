@@ -223,6 +223,61 @@ describe("projectRows", () => {
     expect(sessions[0]).toMatchObject({ originKind: "paseo", originRef: "a1", originSubagent: true });
   });
 
+  test("a stored roborev-origin root reads back as a plain primary", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "review",
+            title: null,
+            project: "kernel-d3-sdd",
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: "claude-opus-4-8",
+            origin: { kind: "roborev", ref: "shim" },
+            observedAt: "2026-08-27T00:00:01.000Z",
+          },
+          {
+            kind: "Activity",
+            provider: "claude",
+            sessionId: "review",
+            observedAt: "2026-08-27T00:00:02.000Z",
+          },
+        ]);
+      } finally {
+        writer.close();
+      }
+
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions[0]).toMatchObject({
+          sessionId: "review",
+          originKind: "roborev",
+          originRef: "shim",
+          originSubagent: false,
+        });
+        expect(snapshot.agents?.[0]).toMatchObject({
+          sessionId: "review",
+          originKind: "roborev",
+          role: "primary",
+          lineage: null,
+          parent: null,
+        });
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
   test("projects the data-surface fields from the root row", () => {
     const sessions = projectRows([
       row("s", {

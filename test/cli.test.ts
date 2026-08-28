@@ -118,14 +118,14 @@ const sqliteError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
 describe("init", () => {
-  test("creates a version 15 database and stays silent on stdout", async () => {
+  test("creates a version 16 database and stays silent on stdout", async () => {
     const harness = makeHarness();
     expect(await runCli(["init"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("");
 
     const db = openRegistryDatabase(paths.database, "readonly");
     try {
-      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+      expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 16 });
     } finally {
       db.close();
     }
@@ -508,6 +508,29 @@ describe("event ingress", () => {
     expect(await runCli(["event", "kimi"], harness.deps)).toBe(0);
     expect(harness.diagnostics).toEqual([]);
     expect(listRows()[0]).toMatchObject({ originKind: "paseo", originRef: "agent-xyz" });
+  });
+
+  test("event stamps roborev origin from ROBOREV_SPAWN at SessionStart", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { ROBOREV_SPAWN: "shim" },
+      stdin: stdinOf(startEvent("s1")),
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([]);
+    expect(listRows()[0]).toMatchObject({ originKind: "roborev", originRef: "shim" });
+  });
+
+  test("the roborev marker outranks stale Paseo and terminal markers inherited by the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { ROBOREV_SPAWN: "shim", PASEO_AGENT_ID: "agent-xyz", TERM_PROGRAM: "ghostty" },
+      stdin: stdinOf(startEvent("s1")),
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ originKind: "roborev", originRef: "shim" });
   });
 
   test("event stamps terminal origin from TERM_PROGRAM when no Paseo marker", async () => {
@@ -1232,7 +1255,7 @@ describe("sessions commands", () => {
 
     const restore = new Database(paths.database);
     try {
-      restore.exec("PRAGMA user_version = 15");
+      restore.exec("PRAGMA user_version = 16");
     } finally {
       restore.close();
     }

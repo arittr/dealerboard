@@ -430,6 +430,17 @@ describe("parseSessionSnapshot", () => {
     expect(() => parseSessionSnapshot(withSession({ originSubagent: "yes" as unknown as boolean }))).toThrow();
   });
 
+  test("parseSession and agent nodes accept a roborev originKind", () => {
+    const parsed = parseSessionSnapshot(withSession({ originKind: "roborev", originRef: "shim" }));
+    expect(parsed.sessions[0]).toMatchObject({ originKind: "roborev", originRef: "shim" });
+
+    const graph = parseSessionSnapshot({
+      ...valid,
+      agents: [agent({ originKind: "roborev", originRef: "shim" })],
+    });
+    expect(graph.agents?.[0]).toMatchObject({ originKind: "roborev", originRef: "shim" });
+  });
+
   test("rejects non-Claude activation targets and every non-v2 schema", () => {
     expect(() => parseSessionSnapshot(withSession({ provider: "codex", ghosttyTerminalId: "terminal-1" }))).toThrow();
     expect(() => parseSessionSnapshot(withSession({ provider: "kimi", ghosttyTerminalId: "terminal-1" }))).toThrow();

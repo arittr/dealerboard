@@ -154,12 +154,16 @@ describe("cardViewModel", () => {
     expect(label?.endsWith("…")).toBe(true);
   });
 
-  test("paseo origin only for Paseo parents; badge is the bare descendant count", () => {
+  test("origin ring only for Paseo parents and roborev sessions; badge is the bare descendant count", () => {
     const paseoParent = cardViewModel(placed({}, { originKind: "paseo", descendantCount: 2 }), NOW_MS);
-    expect(paseoParent.paseoOrigin).toBe(true);
+    expect(paseoParent.originRing).toBe("paseo");
     expect(paseoParent.badge).toBe(2);
     const paseoSub = cardViewModel(placed({ subagent: true }, { originKind: "paseo", originSubagent: true }), NOW_MS);
-    expect(paseoSub.paseoOrigin).toBe(false);
+    expect(paseoSub.originRing).toBeNull();
+    const roborev = cardViewModel(placed({}, { originKind: "roborev" }), NOW_MS);
+    expect(roborev.originRing).toBe("roborev");
+    const terminal = cardViewModel(placed({}, { originKind: "terminal" }), NOW_MS);
+    expect(terminal.originRing).toBeNull();
   });
 
   test("degraded passes through to the model (the card's ! flag)", () => {
@@ -400,6 +404,15 @@ describe("head origin and lineage pills", () => {
       expect(chip !== undefined && hasClass(chip, "paseo")).toBe(true);
       expect(descendants(root).some((node) => hasClass(node, "paseo-pill"))).toBe(false);
       expect(descendants(root).some((node) => hasClass(node, "origin-disc"))).toBe(false);
+    });
+  });
+
+  test("a roborev session's chip wears the containment ring in the roborev hue", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, { cards: [placed({}, { originKind: "roborev" })] }, false);
+      const chip = descendants(root).find((node) => hasClass(node, "chip"));
+      expect(chip !== undefined && hasClass(chip, "roborev")).toBe(true);
+      expect(chip !== undefined && hasClass(chip, "paseo")).toBe(false);
     });
   });
 

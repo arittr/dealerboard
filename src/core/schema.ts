@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 15;
+export const LATEST_SCHEMA_VERSION = 16;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -450,6 +450,84 @@ ALTER TABLE active_sessions
 `;
 
 /**
+ * v16 widens the origin_kind CHECK for roborev-spawned reviewer sessions.
+ * SQLite cannot alter a CHECK, so the post-v15 table is rebuilt following the
+ * v13 pattern: rename aside, create the final table as a verbatim clone with
+ * only the origin_kind list changed, copy rows with an explicit full column
+ * list, recreate the partial unique index.
+ */
+const SCHEMA_VERSION_16 = `
+ALTER TABLE active_sessions RENAME TO active_sessions_v15_archived;
+
+CREATE TABLE active_sessions (
+  provider TEXT NOT NULL CHECK (provider IN ('claude', 'codex', 'kimi', 'pi', 'omp', 'zcode', 'deepseek', 'grok', 'qwen', 'evener')),
+  session_id TEXT NOT NULL,
+  parent_session_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('idle', 'working', 'waiting', 'error')),
+  title TEXT,
+  project TEXT,
+  logical_slot INTEGER,
+  opened_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  ghostty_terminal_id TEXT
+  CHECK (
+    ghostty_terminal_id IS NULL
+    OR (
+      provider = 'claude'
+      AND parent_session_id IS NULL
+      AND length(ghostty_terminal_id) BETWEEN 1 AND 256
+    )
+  ),
+  background_outstanding INTEGER NOT NULL DEFAULT 0
+  CHECK (background_outstanding IN (0, 1)),
+  transcript_path TEXT
+  CHECK (transcript_path IS NULL OR length(transcript_path) BETWEEN 1 AND 256),
+  model TEXT
+  CHECK (model IS NULL OR length(model) BETWEEN 1 AND 256),
+  origin_kind TEXT
+  CHECK (origin_kind IS NULL OR origin_kind IN ('paseo', 'terminal', 'roborev')),
+  origin_ref TEXT
+  CHECK (origin_ref IS NULL OR length(origin_ref) BETWEEN 1 AND 256),
+  origin_subagent INTEGER NOT NULL DEFAULT 0
+  CHECK (origin_subagent IN (0, 1)),
+  unread_since TEXT,
+  acked_at TEXT,
+  status_since TEXT,
+  origin_parent_ref TEXT
+  CHECK (origin_parent_ref IS NULL OR length(origin_parent_ref) BETWEEN 1 AND 256),
+  activity_line TEXT
+  CHECK (activity_line IS NULL OR length(activity_line) BETWEEN 1 AND 64),
+  done_since TEXT,
+  PRIMARY KEY (provider, session_id),
+  FOREIGN KEY (provider, parent_session_id)
+    REFERENCES active_sessions(provider, session_id) ON DELETE CASCADE,
+  CHECK (
+    (parent_session_id IS NULL AND logical_slot IS NOT NULL AND logical_slot > 0)
+    OR
+    (parent_session_id IS NOT NULL AND logical_slot IS NULL)
+  )
+) WITHOUT ROWID;
+
+INSERT INTO active_sessions
+  (provider, session_id, parent_session_id, status, title, project, logical_slot,
+   opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path,
+   model, origin_kind, origin_ref, origin_subagent, unread_since, acked_at,
+   status_since, origin_parent_ref, activity_line, done_since)
+SELECT
+  provider, session_id, parent_session_id, status, title, project, logical_slot,
+  opened_at, updated_at, ghostty_terminal_id, background_outstanding, transcript_path,
+  model, origin_kind, origin_ref, origin_subagent, unread_since, acked_at,
+  status_since, origin_parent_ref, activity_line, done_since
+FROM active_sessions_v15_archived;
+
+DROP TABLE active_sessions_v15_archived;
+
+CREATE UNIQUE INDEX active_sessions_unique_slot
+  ON active_sessions(logical_slot)
+  WHERE logical_slot IS NOT NULL;
+`;
+
+/**
  * Ordered migrations keyed by the schema version each one produces. Entries
  * below v5 alter the original table and run in one transaction before the
  * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
@@ -566,6 +644,28 @@ const migrateToV13 = (db: Database): void => {
       throw new Error(`schema v13 rebuild left ${String(violations.length)} foreign key violation(s)`);
     }
     db.exec("PRAGMA user_version = 13");
+    db.exec("COMMIT");
+    committed = true;
+  } finally {
+    if (!committed) {
+      db.exec("ROLLBACK");
+    }
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+};
+
+/** The v16 rebuild manages its own BEGIN/COMMIT for the same reason v13 does. */
+const migrateToV16 = (db: Database): void => {
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+  let committed = false;
+  try {
+    db.exec(SCHEMA_VERSION_16);
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      throw new Error(`schema v16 rebuild left ${String(violations.length)} foreign key violation(s)`);
+    }
+    db.exec("PRAGMA user_version = 16");
     db.exec("COMMIT");
     committed = true;
   } finally {
@@ -720,6 +820,12 @@ export const initializeDatabase = (paths: AppPaths): void => {
           db.exec("PRAGMA user_version = 15");
         });
         migrateToV15();
+      }
+      // v16 widens the origin_kind CHECK for roborev. A v16 database must
+      // never re-enter its unconditional-stamp rebuild, and it runs last so
+      // the archive copy always starts from the final post-v15 shape.
+      if (version < 16) {
+        migrateToV16(db);
       }
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);

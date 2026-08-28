@@ -98,8 +98,9 @@ The orphan tail remains one deterministic full-width block.
 - The meta row can show model, project, and one fixed activity category.
 - A Paseo parent's chip wears the containment ring: a violet enclosure with
   a card-colored gap — the harness inside the multiplexer. The ring's shape
-  is the semantic; a future multiplexer would be a different hue, same
-  grammar. A grouped subagent has a dimmed card, indent, and violet spine —
+  is the semantic; each multiplexer keeps its own hue, same grammar. roborev
+  is the second occupant: a reviewer its daemon dispatched wears the ring in
+  cyan. A grouped subagent has a dimmed card, indent, and violet spine —
   the tree is its identification, so no pill. Orphans keep subagent styling
   without indent or spine, and only they still carry the `sub` pill.
 - Native children never expose tap, acknowledgment, routing, or action-sheet
