@@ -12,7 +12,7 @@
 
 **Spec authority:** `docs/superpowers/specs/2026-08-27-board-paging-peek/spec.md` (ratified). Decisions log: `decisions.md` in the same directory. When in doubt, the spec wins over this plan.
 
-**Sequencing:** Task 1 (the pointer diagnostic) is first and carries a hard decision gate: its on-strip receipt must confirm the pointer-move stream is usable before Tasks 4–10 proceed (Tasks 2–3, the packing work, are gesture-independent and may proceed while the receipt is pending). If move delivery is broken on the Xeneon, STOP and report to Drew — the spec says drag-follow degrades and the gesture design must be revisited; do not build Tasks 4–10 on a broken stream. Every gesture/settle constant is a named export tuned on device in Task 9; tests reference the constants symbolically, never literals, so tuning never breaks the suite.
+**Sequencing:** Task 1 (the pointer diagnostic) is first and carries a hard decision gate: its on-strip receipt must confirm the pointer-move stream is usable before Tasks 4–10 proceed (Tasks 2–3, the packing work, are gesture-independent and may proceed while the receipt is pending). If move delivery is broken on the Xeneon, STOP and report to Drew — the spec says drag-follow degrades and the gesture design must be revisited; do not build Tasks 4–10 on a broken stream. Every gesture/settle constant is a named export tuned on device in Task 9, and threshold-dependent tests hold a **symbolic-constant contract**: displacements that exercise `COMMIT_FRACTION`/`DRAG_LOCK_MIN_PX` derive from those exports against the test's named board width, sample timings derive from `VELOCITY_WINDOW_MS`, and resistance assertions use `RUBBER_BAND_FACTOR` — a literal that encodes a tunable value is a plan defect. That contract, not hope, is what makes tuning unable to break the suite.
 
 **Cross-spec note:** the sibling notebook `2026-08-27-board-card-retention` (status: ready, NOT ratified) touches dismiss gestures and board population. This plan bases on current main only. The axis-lock arbitration built here is the compatibility mechanism between the two specs (decisions.md 2026-08-27 21:41): the vertical dismiss flick's tests stay green unchanged through every task, and the axis-race tests pin that vertical-dominant strokes fall through to today's behavior.
 
@@ -33,12 +33,12 @@ Copied from the spec — every task implicitly obeys these:
 
 1. **Split threshold = 0: a group that fits no single column always pours into the page's remaining slots.** The spec's open question offers a minimum-remaining-slots threshold but names the trade: any threshold above zero weakens the measurable invariant "every page except the last is full" by up to that many slots. The invariant is the requirement's stated acceptance, so zero is the only value that satisfies it exactly; the continuation marker plus the peek (the continuation is visibly pullable into view — decisions.md, reflow entry) answer the split-readability concern the threshold would have served.
 2. **Continuation marker = an "↩ cont." pill** (the spec's stated default from the mockups), rendered in the card head directly after the chip, styled in the group-spine violet (`#a78bfa` family) so it reads as group identity, matching the sub-pill's construction. It appears on the first card a split group places on each page after its first — never at column breaks (spec edge case: column-break spine behavior is unchanged).
-3. **Axis-lock constants (bring-up placeholders, tuned in Task 9):** `DRAG_LOCK_MIN_PX = 16` (just past the existing 12px `MOVE_SLOP_PX`, so any locked drag has already killed the long-press), dominance = strictly `|dx| > |dy|` (a diagonal tie locks vertical, so paging never steals the dismiss axis). Vertical dominance locks the stroke out of paging for its lifetime; its release classifies exactly as today (flick thresholds unchanged).
+3. **Axis-lock constants (bring-up placeholders, tuned in Task 9):** `DRAG_LOCK_MIN_PX = 16`, dominance = strictly `|dx| > |dy|` (a diagonal tie locks vertical, so paging never steals the dismiss axis). A horizontal lock kills the stroke's hold outcomes structurally — the tick and context cases explicitly reject `dragging` strokes — so no ordering between `DRAG_LOCK_MIN_PX` and `MOVE_SLOP_PX` is load-bearing and Task 9 may tune either freely. Vertical dominance locks the stroke out of paging for its lifetime; its release classifies exactly as today (flick thresholds unchanged).
 4. **Commit constants (bring-up placeholders, tuned in Task 9):** `COMMIT_FRACTION = 0.25` (the spec's ~25% of board width), `COMMIT_VELOCITY_PX_PER_MS = 0.6` measured over a trailing `VELOCITY_WINDOW_MS = 100` sample window, `RUBBER_BAND_FACTOR = 0.3`. A release with no samples inside the window (sparse WKWebView delivery) settles by distance alone (velocity 0) — the same robustness posture as today's release-position reclassification.
-5. **The paging surface is `#pager` (board viewport + peek band), enforced structurally — the rail carries no handlers.** Every recognizer-feeding listener (pointerdown/move/up/cancel and the recognizer-routed contextmenu) lives on the paging surface, never on `#strip`, and the surface takes pointer capture at pointerdown so a stroke that wanders over the rail or the window edge keeps reporting to it until it ends — the active-pointer continuation belongs to the surface; the rail still hosts nothing. `touch-action: none` and `-webkit-touch-callout: none` move to the same boundary. Exactly two things stay on the common ancestor, and neither is rail gesture handling: the capture-phase trailing-click swallow (a board stroke can release over the rail, firing its click on `#strip`) and a pointerdown that only calls `clickSuppression.beginStroke()` (suppression hygiene — without it, a stale armed suppression left by a click-less touch drag would eat the next pip tap). Window-leave snap-back rides `window` blur plus `lostpointercapture` → cancel; on the physical touchscreen a finger exiting the glass ends as up/cancel through the capture. The peek band is in-zone because it is the incoming page's own drag affordance ("the drag affordance is the same object as the indicator" — decisions.md). Until the Task 7 re-layout exists, the surface is `#board`; Task 7 widens it to `#pager`. The document-level contextmenu `preventDefault` stays global — it is native-menu (cursor-warp) suppression, not gesture routing.
-6. **Sheet-open suppression is structural.** The action-sheet overlay is a fixed full-window element appended to `document.body`, outside `#strip`, so no pointer event during a sheet reaches the strip's handlers — no paging gesture can begin (requirement satisfied by construction). The same-touch path is covered in the recognizer: a locked drag suppresses the platform hold verdict (`context`) and the long-press tick, pinned by tests.
+5. **The active gesture surface is `#pager`; the suppression boundary is `#paging-region`; the rail is a sibling outside both.** `#paging-region` wraps `#pager` and `#pips` but not `#rail`. The recognizer feed (pointerdown/move/up/cancel and the recognizer-routed contextmenu), `touch-action: none`, and `-webkit-touch-callout: none` live only on `#pager`. The region owns only stroke bookkeeping (`clickSuppression.beginStroke()`) and the capture-phase trailing-click swallow, so pip taps clear stale suppression without becoming paging drags and a captured board stroke's trailing click is swallowed even if the finger crossed the rail; no rail event traverses either listener. The `#pager` surface takes pointer capture at pointerdown, so a board stroke that wanders toward the rail or window edge keeps reporting to the surface until it ends; the rail still hosts no handlers and cannot receive a suppressed click. `#strip` hosts no gesture-system listener or touch-action. Window-leave snap-back rides `window` blur plus `lostpointercapture` → cancel; on the physical touchscreen a finger exiting the glass ends as up/cancel through the capture. The peek band is in-zone as the incoming page's own drag affordance ("the drag affordance is the same object as the indicator" — decisions.md); pips remain click-only secondary navigation. Before Task 7 creates the wrapper, `#board` is both the active surface and the suppression boundary, and `#strip` is already inert; Task 7 replaces those roles with `#pager` and `#paging-region`. The document-level contextmenu `preventDefault` stays global — it is native-menu (cursor-warp) suppression, not gesture routing.
+6. **Sheet-open suppression is structural.** The action-sheet overlay is a fixed full-window element appended to `document.body`, outside `#paging-region`, so no pointer event during a sheet reaches the paging region — no paging gesture can begin (requirement satisfied by construction). The same-touch path is covered in the recognizer: a locked drag suppresses the platform hold verdict (`context`) and the long-press tick, pinned by tests.
 7. **Drag rendering mounts transient adjacent grids on a translating track; the static board pipeline is untouched.** `#board` keeps its id, reconciliation, tickers, and pulse plumbing; adjacent pages are throwaway `renderBoard` outputs that live only for the drag. Adjacent pages sit at gutter-overlap spacing (`calc(100% − 1.5625vw)`), so the incoming page's first column rises exactly where the peek slivers sit — that is the "sliver grows into the real card" continuity. Both neighbors mount at drag-start (a finger can cross zero mid-drag). The ~18px→14px step where the outgoing page's edge hands off to the static return sliver at commit-settle is accepted; Task 9 polishes on glass if it reads badly.
-8. **Snapshot deferral spans drag-start through settle-animation end** (`PagingSession.defersSnapshots()`, phase ≠ idle): the newest payload is stashed and applied once at settle, so the board, peek, and pips never repack under the finger. The stash-and-flush is itself a tested unit — `createDeferredLatest` in `paging.ts` (latest wins, applies exactly once, never while deferral holds) — and every ingest path in the driver routes through it, so the ordering contract is red-first tested, not driver folklore. The settle order is fixed: `settled()` → commit jump to the settle's captured target → flush, so the deferred snapshot reduces against the page the user actually landed on. The 1s status/liveness tickers keep running — they mutate text and decay colors in place, which is not a repack, and the alternative (frozen timers mid-drag) would misreport time.
+8. **Snapshot deferral spans drag-start through settle-animation end** (`PagingSession.defersSnapshots()`, phase ≠ idle): the newest payload is stashed and applied once at settle, so the board, peek, and pips never repack under the finger. The stash-and-flush is itself a tested unit — `createDeferredLatest` in `paging.ts` (latest wins, applies exactly once, never while deferral holds) — and every ingest path in the driver routes through it, so the ordering contract is red-first tested, not driver folklore. Local re-reductions (the dismissal flick's settle re-applying board state) go through the latch's `resubmitLatest()` — which re-submits the newest payload ever submitted, applied or stashed — never through a driver-held copy of an older payload, so a stale local re-ingest can never overwrite a newer deferred snapshot. The settle order is fixed: `settled()` → commit jump to the settle's captured target → flush, so the deferred snapshot reduces against the page the user actually landed on. The 1s status/liveness tickers keep running — they mutate text and decay colors in place, which is not a repack, and the alternative (frozen timers mid-drag) would misreport time.
 9. **Pip hit area = 54×56 native px** (the 22px band plus 16px invisible slop each side via overflow margins, 56px tall rows); the horizontal slop overlapping the peek band's edge is accepted — pips paint later in DOM order so they win the 16px strip, and the peek band remains a huge page-level target. **The return tap target is the whole 40px gutter** (the 14px sliver alone is below any touch size); the sliver is the visual inside it.
 10. **`RailModel` loses `page`/`pageCount` and `RailActions` is deleted.** The spec deletes `.rail-pager` and `.page-dot`; nothing else in the rail consumes paging state, so carrying it would be dead weight in the render signature. `jumpToPage` survives in the driver, now fed by pips and bands.
 11. **Test surface:** extend `test/strip-gestures.test.ts`, `test/strip-board.test.ts`, `test/strip-cards.test.ts`, `test/strip-rail.test.ts` where they already cover the surface; new files only where none exists — `test/strip-paging.test.ts`, `test/strip-indicators.test.ts`, and `test/strip-diagnostic.test.ts` (the last is bring-up instrumentation, removed with its module in Task 10 under the spec's "removable, no permanent logging" contract — an explicitly ratified removal, not a silent test deletion).
@@ -63,8 +63,8 @@ Copied from the spec — every task implicitly obeys these:
 | `test/strip-indicators.test.ts` | Indicator model/renderer tests | 6 (create) |
 | `app/src/rail.ts` | Pager removal; `RailModel` slims | 7 |
 | `test/strip-rail.test.ts` | Rail tests (pager gone) | 7 |
-| `app/index.html` | Strip shell: pager/viewport/track/bands/pips | 7 |
-| `app/styles.css` | Geometry (40px gutter, bands, pips, 638px rail), `.cont-tag`, track/adjacent, diag overlay | 1, 3, 7, 8, 10 |
+| `app/index.html` | Strip shell: paging-region/pager/viewport/track/bands/pips/rail | 7 |
+| `app/styles.css` | Gesture boundary (5), geometry (40px gutter, bands, pips, 638px rail), `.cont-tag`, track/adjacent, diag overlay | 1, 3, 5, 7, 8, 10 |
 | `app/src/main.ts` | Driver: diagnostic wiring (1), drag pipeline + deferral (5), indicators + taps (7), drag visuals (8), diagnostic removal (10) | 1, 5, 7, 8, 10 |
 | `docs/design.md` | Packing paragraph (2); strip layout/rail/interaction contract (7) | 2, 7 |
 | `app/src/dismissals.ts`, `app/src/liveness.ts`, `app/src/press.ts`, `src/plugin/layout.ts` | Untouched (verified sufficient) | — |
@@ -73,7 +73,7 @@ Copied from the spec — every task implicitly obeys these:
 
 ### Task 1: Bring-up pointer diagnostic — which layer eats the swipe?
 
-**Goal:** removable on-device instrumentation that localizes the reported swipe failure to exactly one of four layers — event delivery (raw pointer events reaching the strip handlers), recognition (recognizer intents), navigation (page jumps), render (board re-renders) — with an on-strip verification receipt that gates the rest of the gesture work. The spec forbids permanent logging; this module and its test are deleted in Task 10.
+**Goal:** removable on-device instrumentation that localizes the reported swipe failure to exactly one of four layers — event delivery (raw pointer events reaching the paging surface), recognition (recognizer intents), navigation (page jumps), render (board re-renders) — with an on-strip verification receipt that gates the rest of the gesture work. The spec forbids permanent logging; this module and its test are deleted in Task 10.
 
 **Files:**
 - Create: `app/src/diagnostic.ts`
@@ -156,7 +156,7 @@ Create `app/src/diagnostic.ts`:
  * Bring-up pointer diagnostic — REMOVABLE (spec: on-device diagnostic during
  * bring-up, no permanent logging; deleted after threshold tuning). Localizes
  * a failed swipe to one of four layers, each on its own summary line:
- * delivery (raw pointer events reaching the strip handlers, with a 1s move
+ * delivery (raw pointer events reaching the paging-facing handlers, with a 1s move
  * rate and the last coalesced-batch size), recognition (intents the
  * recognizer emitted), navigation (page jumps), render (board re-renders).
  * Pure counters here; main.ts feeds records and mounts the overlay.
@@ -251,14 +251,14 @@ import { createPointerDiagnostic, mountPointerDiagnostic, POINTER_DIAGNOSTIC_ENA
 const diagnostic = POINTER_DIAGNOSTIC_ENABLED ? createPointerDiagnostic(Date.now) : null;
 ```
 
-**(b)** Delivery layer — first line of each strip pointer handler's body after its `isPrimary` guard, and in the contextmenu handler:
+**(b)** Delivery layer — first line of each paging-surface pointer handler's body after its `isPrimary` guard, and in the contextmenu handler:
 
 ```ts
-  diagnostic?.recordPointer("down", 1);      // onStripPointerDown
-  diagnostic?.recordPointer("move", event.getCoalescedEvents?.().length ?? 0); // onStripPointerMove
-  diagnostic?.recordPointer("up", 1);        // onStripPointerUp
-  diagnostic?.recordPointer("cancel", 1);    // onStripPointerCancel
-  diagnostic?.recordPointer("context", 1);   // onStripContextMenu
+  diagnostic?.recordPointer("down", 1);      // onSurfacePointerDown
+  diagnostic?.recordPointer("move", event.getCoalescedEvents?.().length ?? 0); // onSurfacePointerMove
+  diagnostic?.recordPointer("up", 1);        // onSurfacePointerUp
+  diagnostic?.recordPointer("cancel", 1);    // onSurfacePointerCancel
+  diagnostic?.recordPointer("context", 1);   // onSurfaceContextMenu
 ```
 
 **(c)** Recognition layer — restructure `feedPointer` so the intents pass through the recorder:
@@ -678,7 +678,7 @@ git commit -m "feat(app): render the continuation marker on split-group page bre
 
 **Interfaces:**
 - Consumes: nothing from the app (pure).
-- Produces (Task 5 wires these; Task 8 animates from them): `COMMIT_FRACTION`, `COMMIT_VELOCITY_PX_PER_MS`, `RUBBER_BAND_FACTOR`; `type PageDirection = "previous" | "next"`; `type DragBounds = { page: number; pageCount: number; boardWidth: number }` (the 0-based page under the finger at drag start); `type DragSettle = { kind: "commit"; direction: PageDirection; from: number; target: number } | { kind: "snap-back" }`; `dragOffset(dx, bounds): number`; `settleDrag(dx, velocity, bounds): DragSettle`; `createPagingSession(): PagingSession` with `phase(): "idle" | "dragging" | "settling"`, `defersSnapshots(): boolean`, `allowsNavigation(): boolean` (false while a gesture or settle owns the board — the driver gates `jumpToPage` on it), `start(bounds): boolean` (refused unless idle), `move(dx): number | null` (null unless dragging — a refused stroke must not touch the track), `release(dx, velocity): DragSettle | null` and `cancel(): DragSettle | null` (null unless a live drag exists — the driver animates only non-null verdicts, which makes settling single-flight by construction), `settled()`; and `createDeferredLatest<T>(shouldDefer, apply)` with `submit(value)` / `flush()` — the latch `main.ts` routes every ingest through.
+- Produces (Task 5 wires these; Task 8 animates from them): `COMMIT_FRACTION`, `COMMIT_VELOCITY_PX_PER_MS`, `RUBBER_BAND_FACTOR`; `type PageDirection = "previous" | "next"`; `type DragBounds = { page: number; pageCount: number; boardWidth: number }` (the 0-based page under the finger at drag start); `type DragSettle = { kind: "commit"; direction: PageDirection; from: number; target: number } | { kind: "snap-back" }`; `dragOffset(dx, bounds): number`; `settleDrag(dx, velocity, bounds): DragSettle`; `createPagingSession(): PagingSession` with `phase(): "idle" | "dragging" | "settling"`, `defersSnapshots(): boolean`, `allowsNavigation(): boolean` (false while a gesture or settle owns the board — the driver gates `jumpToPage` on it), `start(bounds): boolean` (refused unless idle), `move(dx): number | null` (null unless dragging — a refused stroke must not touch the track), `release(dx, velocity): DragSettle | null` and `cancel(): DragSettle | null` (null unless a live drag exists — the driver animates only non-null verdicts, which makes settling single-flight by construction), `settled()`; and `createDeferredLatest<T>(shouldDefer, apply)` with `submit(value)` / `flush()` / `resubmitLatest()` (re-submits the newest value ever submitted, applied or stashed — the driver's local re-reduction path, e.g. the dismissal flick's settle; a no-op before any submit) — the latch `main.ts` routes every ingest through.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -697,12 +697,20 @@ import {
   settleDrag,
 } from "../app/src/paging";
 
+const BOARD_WIDTH = 1000;
+
 const bounds = (overrides: Partial<DragBounds> = {}): DragBounds => ({
   page: 1,
   pageCount: 3,
-  boardWidth: 1000,
+  boardWidth: BOARD_WIDTH,
   ...overrides,
 });
+
+// Symbolic-constant contract (see the plan header): displacements derive from
+// COMMIT_FRACTION against the named test board so Task 9 tuning cannot break
+// the suite. BELOW is also the fling test's below-distance displacement.
+const PAST = BOARD_WIDTH * COMMIT_FRACTION + 60; // commits by distance at any tuning
+const BELOW = (BOARD_WIDTH * COMMIT_FRACTION) / 2; // never commits by distance
 
 describe("dragOffset", () => {
   test("tracks the finger 1:1 toward an existing page", () => {
@@ -720,20 +728,20 @@ describe("dragOffset", () => {
   });
 
   test("clamps to one page of travel", () => {
-    expect(dragOffset(-1400, bounds())).toBe(-1000);
-    expect(dragOffset(1400, bounds())).toBe(1000);
+    expect(dragOffset(-BOARD_WIDTH * 1.4, bounds())).toBe(-BOARD_WIDTH);
+    expect(dragOffset(BOARD_WIDTH * 1.4, bounds())).toBe(BOARD_WIDTH);
   });
 });
 
 describe("settleDrag", () => {
   test("commits past the distance threshold, carrying its origin and target pages", () => {
-    expect(settleDrag(-COMMIT_FRACTION * 1000, 0, bounds())).toEqual({
+    expect(settleDrag(-COMMIT_FRACTION * BOARD_WIDTH, 0, bounds())).toEqual({
       kind: "commit",
       direction: "next",
       from: 1,
       target: 2,
     });
-    expect(settleDrag(COMMIT_FRACTION * 1000, 0, bounds())).toEqual({
+    expect(settleDrag(COMMIT_FRACTION * BOARD_WIDTH, 0, bounds())).toEqual({
       kind: "commit",
       direction: "previous",
       from: 1,
@@ -742,24 +750,24 @@ describe("settleDrag", () => {
   });
 
   test("snaps back below the threshold without a fling", () => {
-    expect(settleDrag(-COMMIT_FRACTION * 1000 + 1, 0, bounds())).toEqual({ kind: "snap-back" });
+    expect(settleDrag(-COMMIT_FRACTION * BOARD_WIDTH + 1, 0, bounds())).toEqual({ kind: "snap-back" });
   });
 
   test("a direction-matched fling commits below the distance threshold", () => {
-    expect(settleDrag(-40, -COMMIT_VELOCITY_PX_PER_MS, bounds())).toMatchObject({ kind: "commit", direction: "next" });
-    expect(settleDrag(40, COMMIT_VELOCITY_PX_PER_MS, bounds())).toMatchObject({
+    expect(settleDrag(-BELOW, -COMMIT_VELOCITY_PX_PER_MS, bounds())).toMatchObject({ kind: "commit", direction: "next" });
+    expect(settleDrag(BELOW, COMMIT_VELOCITY_PX_PER_MS, bounds())).toMatchObject({
       kind: "commit",
       direction: "previous",
     });
   });
 
   test("a fling opposing the displacement does not commit", () => {
-    expect(settleDrag(-200, COMMIT_VELOCITY_PX_PER_MS * 2, bounds())).toEqual({ kind: "snap-back" });
+    expect(settleDrag(-BELOW, COMMIT_VELOCITY_PX_PER_MS * 2, bounds())).toEqual({ kind: "snap-back" });
   });
 
   test("never commits toward a page that does not exist, however hard the fling", () => {
-    expect(settleDrag(-900, -9, bounds({ page: 2 }))).toEqual({ kind: "snap-back" });
-    expect(settleDrag(900, 9, bounds({ page: 0 }))).toEqual({ kind: "snap-back" });
+    expect(settleDrag(-2 * PAST, -9, bounds({ page: 2 }))).toEqual({ kind: "snap-back" });
+    expect(settleDrag(2 * PAST, 9, bounds({ page: 0 }))).toEqual({ kind: "snap-back" });
   });
 
   test("a zero-displacement release snaps back", () => {
@@ -775,7 +783,7 @@ describe("createPagingSession", () => {
     expect(session.start(bounds())).toBe(true);
     expect(session.phase()).toBe("dragging");
     expect(session.defersSnapshots()).toBe(true);
-    expect(session.release(-400, 0)).toEqual({ kind: "commit", direction: "next", from: 1, target: 2 });
+    expect(session.release(-PAST, 0)).toEqual({ kind: "commit", direction: "next", from: 1, target: 2 });
     expect(session.phase()).toBe("settling");
     expect(session.defersSnapshots()).toBe(true);
     session.settled();
@@ -785,12 +793,12 @@ describe("createPagingSession", () => {
 
   test("settle re-entry: a settling board is not grabbable, and stray verdicts are nobody's", () => {
     const session = createPagingSession();
-    expect(session.release(-100, 0)).toBeNull(); // no drag ever started
+    expect(session.release(-BELOW, 0)).toBeNull(); // no drag ever started
     expect(session.start(bounds({ page: 0 }))).toBe(true);
-    expect(session.release(-400, 0)).toEqual({ kind: "commit", direction: "next", from: 0, target: 1 });
+    expect(session.release(-PAST, 0)).toEqual({ kind: "commit", direction: "next", from: 0, target: 1 });
     expect(session.start(bounds({ page: 0 }))).toBe(false); // refused mid-settle
     expect(session.phase()).toBe("settling");
-    expect(session.release(-100, 0)).toBeNull(); // the refused stroke settles nothing
+    expect(session.release(-BELOW, 0)).toBeNull(); // the refused stroke settles nothing
     expect(session.cancel()).toBeNull(); // and cannot cancel the live settle either
     session.settled();
     expect(session.start(bounds({ page: 1 }))).toBe(true);
@@ -801,7 +809,7 @@ describe("createPagingSession", () => {
     expect(session.allowsNavigation()).toBe(true);
     session.start(bounds());
     expect(session.allowsNavigation()).toBe(false);
-    session.release(-400, 0);
+    session.release(-PAST, 0);
     expect(session.allowsNavigation()).toBe(false);
     session.settled();
     expect(session.allowsNavigation()).toBe(true);
@@ -809,11 +817,11 @@ describe("createPagingSession", () => {
 
   test("move answers offsets only while dragging — a refused stroke must not touch the track", () => {
     const session = createPagingSession();
-    expect(session.move(-300)).toBeNull();
+    expect(session.move(-BELOW)).toBeNull();
     session.start(bounds({ page: 2 }));
-    expect(session.move(-300)).toBe(-300 * RUBBER_BAND_FACTOR);
-    session.release(-300, 0);
-    expect(session.move(-300)).toBeNull();
+    expect(session.move(-BELOW)).toBe(-BELOW * RUBBER_BAND_FACTOR);
+    session.release(-BELOW, 0);
+    expect(session.move(-BELOW)).toBeNull();
   });
 
   test("cancel settles a live drag as snap-back", () => {
@@ -833,7 +841,7 @@ describe("createDeferredLatest", () => {
     session.start(bounds());
     deferral.submit(2);
     deferral.submit(3); // latest wins
-    session.release(-400, 0);
+    session.release(-PAST, 0);
     deferral.flush(); // still settling: nothing applies
     expect(applied).toEqual([1]);
     session.settled();
@@ -849,11 +857,39 @@ describe("createDeferredLatest", () => {
     const deferral = createDeferredLatest<number>(session.defersSnapshots, (value) => applied.push(value));
     session.start(bounds());
     deferral.submit(2);
-    session.release(-400, 0);
+    session.release(-PAST, 0);
     session.settled();
     deferral.submit(4); // idle again: applies directly and drops the stashed 2
     deferral.flush();
     expect(applied).toEqual([4]);
+  });
+
+  test("a local re-submission never resurrects an older payload over a deferred one", () => {
+    // The dismissal-flick composition the review flagged: A applied, a drag
+    // defers B, the flick's settle re-reduces locally — it must re-submit the
+    // NEWEST payload (B), not a driver-held copy of A.
+    const session = createPagingSession();
+    const applied: number[] = [];
+    const deferral = createDeferredLatest<number>(session.defersSnapshots, (value) => applied.push(value));
+    deferral.submit(1); // A: idle, applies
+    session.start(bounds());
+    deferral.submit(2); // B: deferred
+    deferral.resubmitLatest(); // the flick settles mid-drag: latest is B, stash stays B
+    session.release(-PAST, 0);
+    session.settled();
+    deferral.flush();
+    expect(applied).toEqual([1, 2]); // B once — A never came back
+  });
+
+  test("resubmitLatest with no deferral re-applies the newest immediately; before any submit it is a no-op", () => {
+    const session = createPagingSession();
+    const applied: number[] = [];
+    const deferral = createDeferredLatest<number>(session.defersSnapshots, (value) => applied.push(value));
+    deferral.resubmitLatest(); // nothing ever submitted
+    expect(applied).toEqual([]);
+    deferral.submit(7);
+    deferral.resubmitLatest(); // idle: the local re-reduction applies now
+    expect(applied).toEqual([7, 7]);
   });
 });
 ```
@@ -983,26 +1019,37 @@ export const createPagingSession = (): PagingSession => {
  * Latest-wins deferral: while shouldDefer() holds, submitted values stash
  * (newest replaces older); flush() applies the pending value exactly once,
  * and only after deferral has lifted. A direct apply supersedes any stash.
+ * resubmitLatest() re-submits the newest value ever submitted — applied or
+ * stashed — so a local re-reduction (the dismissal flick's settle) can never
+ * resurrect an older payload over a newer deferred one.
  */
 export const createDeferredLatest = <T>(
   shouldDefer: () => boolean,
   apply: (value: T) => void,
-): { submit: (value: T) => void; flush: () => void } => {
+): { submit: (value: T) => void; flush: () => void; resubmitLatest: () => void } => {
   let pending: { value: T } | null = null;
+  let latest: { value: T } | null = null;
+  const submit = (value: T): void => {
+    latest = { value };
+    if (shouldDefer()) {
+      pending = { value };
+      return;
+    }
+    pending = null;
+    apply(value);
+  };
   return {
-    submit: (value) => {
-      if (shouldDefer()) {
-        pending = { value };
-        return;
-      }
-      pending = null;
-      apply(value);
-    },
+    submit,
     flush: () => {
       if (pending !== null && !shouldDefer()) {
         const { value } = pending;
         pending = null;
         apply(value);
+      }
+    },
+    resubmitLatest: () => {
+      if (latest !== null) {
+        submit(latest.value);
       }
     },
   };
@@ -1025,11 +1072,12 @@ git commit -m "feat(app): paging decisions - offsets, settle rule, single-flight
 
 ### Task 5: Recognizer axis lock and the drag intent stream; the driver rewires paging
 
-**Goal:** the recognizer classifies by axis lock during the stroke instead of at release: horizontal dominance past a small threshold starts a paging drag (streamed `drag-move` dx, `drag-end` with a trailing-window velocity, `drag-cancel` on cancellation), and once locked, tap, long-press, and vertical outcomes are suppressed for that touch; vertical-dominant strokes fall through to today's behavior unchanged. Every `drag-end` is preceded by a `drag-start` within its stroke — a sample-starved stroke that locks only at release emits both in one batch, so the driver's session always has bounds before it settles. The old release-time `swipe` intent and its constants are deleted. The recognizer-feeding handlers move off `#strip` onto the board surface with pointer capture — the rail hosts no handlers (spec constraint; Interpretation 5) — and the driver feeds the single-flight paging session, routes every ingest through the deferral latch, and (interim, until Task 8's visuals) applies commits as instant jumps to the settle's own captured target.
+**Goal:** the recognizer classifies by axis lock during the stroke instead of at release: horizontal dominance past a small threshold starts a paging drag (streamed `drag-move` dx, `drag-end` with a trailing-window velocity, `drag-cancel` on cancellation), and once locked, tap, long-press, and vertical outcomes are suppressed for that touch; vertical-dominant strokes fall through to today's behavior unchanged. Every `drag-end` is preceded by a `drag-start` within its stroke — a sample-starved stroke that locks only at release emits both in one batch, so the driver's session always has bounds before it settles. The old release-time `swipe` intent and its constants are deleted. The recognizer-feeding handlers move onto `#pager` with pointer capture; `#paging-region` owns only suppression bookkeeping and trailing-click swallowing, and the rail is outside both (spec constraint; Interpretation 5). The driver feeds the single-flight paging session, routes every ingest through the deferral latch, and (interim, until Task 8's visuals) applies commits as instant jumps to the settle's own captured target.
 
 **Files:**
 - Modify: `app/src/gestures.ts` (module docstring 1–8, `GestureIntent`/constants 20–31, `Stroke`/recognizer 33–127; `GestureInput` is unchanged)
 - Modify: `app/src/main.ts` (imports; module state near line 93; `ingest` at 313; `onSwipe`/`handleGestureIntents` at 648–684; the pointer handlers at 708–741; `jumpToPage` at 126; `wireInteraction` at 783)
+- Modify: `app/styles.css` (move the temporary `touch-action`/callout boundary from `#strip` to `#board`; Task 7 moves it again to `#pager`)
 - Test: `test/strip-gestures.test.ts`
 - Test: `test/strip-paging.test.ts` (the recognizer-to-session integration test)
 - Test: `test/strip-diagnostic.test.ts` (intent-batch fixture swap — the `swipe` literal dies with the union member)
@@ -1097,14 +1145,17 @@ describe("drag axis lock", () => {
 
   test("release-position fallback: a sample-free horizontal release is a full drag batch", () => {
     // Pointermove delivery is not guaranteed (coalesced or dropped): the
-    // final position alone must still produce a drag — drag-start FIRST, so
-    // the driver's session has bounds before the settle — decided by
-    // distance (no samples inside the window means velocity 0; the release
-    // instant sits beyond any tuned window).
+    // final position alone must still produce a drag — drag-start FIRST (so
+    // the driver's session has bounds), then drag-move carrying the release
+    // displacement (so even this path paints a visible offset before the
+    // settle returns — a failed swipe is never a silent no-op), then the
+    // distance-decided end (no samples inside the window means velocity 0;
+    // the release instant sits beyond any tuned window).
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(400, 300, 0));
     expect(recognizer.feed(up(400 - DRAG_LOCK_MIN_PX - 10, 302, VELOCITY_WINDOW_MS * 2))).toEqual([
       { kind: "drag-start" },
+      { kind: "drag-move", dx: -(DRAG_LOCK_MIN_PX + 10) },
       { kind: "drag-end", dx: -(DRAG_LOCK_MIN_PX + 10), velocity: 0 },
       { kind: "suppress-click" },
     ]);
@@ -1188,25 +1239,50 @@ The flick describe and the remaining long-press/context/suppression tests stay v
 **(d)** The recognizer-to-session integration test — in `test/strip-paging.test.ts` (created in Task 4), add the recognizer import and a new describe. It pins the end-to-end contract the review demanded: a sample-starved horizontal release still pages, because `drag-start` gives the session bounds before `drag-end` asks for the verdict:
 
 ```ts
-import { createGestureRecognizer } from "../app/src/gestures";
+import { createGestureRecognizer, VELOCITY_WINDOW_MS } from "../app/src/gestures";
 ```
 
 ```ts
 describe("recognizer to session", () => {
-  test("a sample-free horizontal release still pages: drag-start precedes drag-end", () => {
+  // A tiny mirror of the driver's intent loop: start feeds bounds, moves
+  // become track offsets, the end asks for the verdict. Displacements derive
+  // from COMMIT_FRACTION (symbolic-constant contract).
+  const runStroke = (releaseDx: number): { offsets: number[]; settle: DragSettle | null } => {
     const recognizer = createGestureRecognizer();
     const session = createPagingSession();
-    recognizer.feed({ kind: "down", point: { x: 400, y: 300 }, now: 0 });
+    const offsets: number[] = [];
     let settle: DragSettle | null = null;
-    for (const intent of recognizer.feed({ kind: "up", point: { x: 100, y: 300 }, now: 1000 })) {
+    recognizer.feed({ kind: "down", point: { x: 400, y: 300 }, now: 0 });
+    for (const intent of recognizer.feed({
+      kind: "up",
+      point: { x: 400 + releaseDx, y: 300 },
+      now: VELOCITY_WINDOW_MS * 2,
+    })) {
       if (intent.kind === "drag-start") {
-        session.start({ page: 0, pageCount: 2, boardWidth: 1000 });
+        session.start({ page: 0, pageCount: 2, boardWidth: BOARD_WIDTH });
+      }
+      if (intent.kind === "drag-move") {
+        const offset = session.move(intent.dx);
+        if (offset !== null) {
+          offsets.push(offset);
+        }
       }
       if (intent.kind === "drag-end") {
         settle = session.release(intent.dx, intent.velocity);
       }
     }
+    return { offsets, settle };
+  };
+
+  test("a sample-free horizontal release still pages: drag-start precedes drag-end", () => {
+    const { settle } = runStroke(-PAST);
     expect(settle).toEqual({ kind: "commit", direction: "next", from: 0, target: 1 });
+  });
+
+  test("a sample-free below-commit release is a visible failed swipe: nonzero offset, then snap-back", () => {
+    const { offsets, settle } = runStroke(-BELOW);
+    expect(offsets).toEqual([-BELOW]); // the track moved before the settle returned
+    expect(settle).toEqual({ kind: "snap-back" });
   });
 });
 ```
@@ -1240,7 +1316,9 @@ export type GestureIntent =
 
 export const LONG_PRESS_MS = 500;
 export const MOVE_SLOP_PX = 12;
-/** Axis-lock threshold — a locked drag has always already killed the long-press (16 > MOVE_SLOP_PX). Tuned on device. */
+/** Axis-lock threshold. Freely tunable: the lock itself kills the stroke's
+ *  hold outcomes (the tick and context cases reject dragging strokes), so no
+ *  ordering with MOVE_SLOP_PX is load-bearing. Tuned on device. */
 export const DRAG_LOCK_MIN_PX = 16;
 /** Trailing sample window for the release velocity. Tuned on device. */
 export const VELOCITY_WINDOW_MS = 100;
@@ -1282,7 +1360,7 @@ const releaseVelocity = (samples: readonly Sample[], x: number, now: number): nu
 };
 ```
 
-**(d)** The `feed` cases (`longPressDueAt` is unchanged — a locked drag has `moved: true`, so it already answers null):
+**(d)** The `feed` cases (a locked stroke's hold deadline is dead by explicit check — the tick case rejects `dragging` — never by an assumed `DRAG_LOCK_MIN_PX`/`MOVE_SLOP_PX` ordering, so tuning either constant cannot resurrect a mid-drag long-press):
 
 ```ts
       case "down": {
@@ -1326,7 +1404,13 @@ const releaseVelocity = (samples: readonly Sample[], x: number, now: number): nu
         return stroke.dragging ? [{ kind: "drag-move", dx }] : [];
       }
       case "tick": {
-        if (stroke !== null && !stroke.moved && !stroke.longPressed && input.now >= stroke.deadline) {
+        if (
+          stroke !== null &&
+          !stroke.moved &&
+          !stroke.longPressed &&
+          !stroke.dragging && // a locked drag's hold deadline is dead at any tuning
+          input.now >= stroke.deadline
+        ) {
           stroke.longPressed = true;
           return [{ kind: "longpress", point: stroke.start }];
         }
@@ -1357,11 +1441,14 @@ const releaseVelocity = (samples: readonly Sample[], x: number, now: number): nu
             velocity: releaseVelocity(finished.samples, input.point.x, input.now),
           };
           // A sample-starved stroke may lock only here: the driver learns of
-          // the drag and its settle in one batch — drag-start always
-          // precedes drag-end within a stroke, so the session has bounds.
+          // the drag, its displacement, and its settle in one batch —
+          // drag-start always precedes drag-end within a stroke (the session
+          // has bounds), and the interposed drag-move carries the release
+          // displacement so even this path paints a visible offset before
+          // the settle returns.
           return finished.dragging
             ? [end, { kind: "suppress-click" }]
-            : [{ kind: "drag-start" }, end, { kind: "suppress-click" }];
+            : [{ kind: "drag-start" }, { kind: "drag-move", dx }, end, { kind: "suppress-click" }];
         }
         // Vertical is the dismiss axis: horizontal is taken by paging, so a
         // vertical-dominant release flicks the pressed card away instead.
@@ -1410,7 +1497,7 @@ const snapshotDeferral = createDeferredLatest<SnapshotPayload | null>(
 );
 ```
 
-**(c)** Snapshot deferral — rename the existing `ingest` function to `ingestNow` (body unchanged) and add in its old place, so every call site (`ingestPush`, `readAndIngest`, `flickAway`'s settle) stays untouched:
+**(c)** Snapshot deferral — rename the existing `ingest` function to `ingestNow` (preserve its `lastPayload = payload` assignment as the last-applied payload) and add the latch wrapper in its old place, so the source-snapshot call sites (`ingestPush`, `readAndIngest`) stay untouched:
 
 ```ts
 /** All snapshot application goes through the deferral latch: nothing
@@ -1421,7 +1508,22 @@ const ingest = (payload: SnapshotPayload | null): void => {
 };
 ```
 
-**(d)** The rail leaves the gesture system: the recognizer-feeding handlers move from `#strip` to the board surface, which captures the pointer so a stroke that wanders over the rail or the window edge keeps reporting until it ends. Rename `onStripPointerDown/Move/Up/Cancel` and `onStripContextMenu` to `onSurfacePointerDown/Move/Up/Cancel` and `onSurfaceContextMenu` — the move/up/cancel/context bodies are unchanged (diagnostic lines included); the down handler becomes:
+`createDeferredLatest.submit` records its latest submitted value before it checks `shouldDefer`. Therefore a source push B remains the authoritative latest value even while `ingestNow` has not applied it and `lastPayload` still names applied payload A; `resubmitLatest()` can re-reduce B without pretending that local dismissal is a new source snapshot.
+
+One call site DOES change: `flickAway`'s settle closure re-reduces the board after a local dismissal, and today it does that by re-ingesting the driver's own `lastPayload` copy. Mid-drag that copy is stale — a newer payload may be sitting deferred in the latch, and re-submitting the old one would overwrite it (the review's concrete failure: A applied → drag defers B → flick settles A over B). The settle closure becomes:
+
+```ts
+  const settle = (): void => {
+    dismissals.dismiss(provider, sessionId, Date.now());
+    // Local re-reduction through the latch's own latest — never a driver-held
+    // copy, which can be older than a deferred payload.
+    snapshotDeferral.resubmitLatest();
+  };
+```
+
+(`lastPayload` keeps its other duties as the last-applied payload; `resubmitLatest` is pinned red-first by the Task 4 latch tests, including the exact A/B overwrite sequence.)
+
+**(d)** The rail leaves the gesture system: the recognizer-feeding handlers move from `#strip` to `#pager`, which captures the pointer so a board stroke that wanders toward the rail or the window edge keeps reporting until it ends. Rename `onStripPointerDown/Move/Up/Cancel` and `onStripContextMenu` to `onSurfacePointerDown/Move/Up/Cancel` and `onSurfaceContextMenu` — the move/up/cancel/context bodies are unchanged (diagnostic lines included); the down handler becomes:
 
 ```ts
 const onSurfacePointerDown = (event: PointerEvent): void => {
@@ -1439,17 +1541,17 @@ const onSurfacePointerDown = (event: PointerEvent): void => {
 };
 ```
 
-(the `clickSuppression.beginStroke()` line moves OUT of this handler, into the bookkeeping listener below). Add the strip-level stroke hygiene and the window-leave cancel:
+(the `clickSuppression.beginStroke()` line moves OUT of this handler, into the paging-region bookkeeping listener below). Add the region-level stroke hygiene and the window-leave cancel:
 
 ```ts
 /**
- * Stroke bookkeeping on the common ancestor: suppression belongs to one
+ * Stroke bookkeeping on the pager+pips wrapper: suppression belongs to one
  * stroke, and a touch drag fires no trailing click at all — any unconsumed
  * suppression from the last stroke dies at the next stroke's birth, wherever
- * it lands (a rail or pip tap must never be eaten by a stale arm). This
- * listener feeds no recognizer: the rail stays outside the gesture system.
+ * it lands inside the paging region (a pip tap must never be eaten by a stale
+ * arm). This listener feeds no recognizer, and the wrapper excludes the rail.
  */
-const onStripStrokeBookkeeping = (event: PointerEvent): void => {
+const onGestureRegionStrokeBookkeeping = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
@@ -1466,14 +1568,20 @@ const onWindowBlur = (): void => {
 **(e)** `wireInteraction` becomes:
 
 ```ts
+const onGestureRegionClickCapture = (event: MouseEvent): void => {
+  swallowSuppressedClick(clickSuppression, event);
+};
+
 const wireInteraction = (): void => {
   document.querySelector<HTMLElement>("#board")?.addEventListener("click", onBoardClick);
-  const strip = document.querySelector<HTMLElement>("#strip");
-  strip?.addEventListener("pointerdown", onStripStrokeBookkeeping);
-  strip?.addEventListener("click", onStripClickCapture, true);
-  // The paging surface owns every recognizer-feeding handler; the rail
-  // hosts none (Task 7 widens the surface to #pager with the peek band).
-  const surface = document.querySelector<HTMLElement>("#board");
+  // Before Task 7's shell exists, #board is both surfaces. It is already a
+  // sibling of #rail, so the rail never traverses either listener.
+  const region = document.querySelector<HTMLElement>("#board");
+  region?.addEventListener("pointerdown", onGestureRegionStrokeBookkeeping, true);
+  region?.addEventListener("click", onGestureRegionClickCapture, true);
+  // The paging surface owns every recognizer-feeding handler; Task 7 retargets
+  // this selector to #pager while keeping the rail outside the boundary.
+  const surface = region;
   surface?.addEventListener("pointerdown", onSurfacePointerDown);
   surface?.addEventListener("pointermove", onSurfacePointerMove);
   surface?.addEventListener("pointerup", onSurfacePointerUp);
@@ -1491,7 +1599,9 @@ const wireInteraction = (): void => {
 };
 ```
 
-(`lostpointercapture` also fires after every ordinary `pointerup` — the recognizer's stroke is already closed then, so the extra cancel feed is a no-op, pinned by the recognizer's cancel-without-lock test. The sheet-open case needs no wiring: the fixed overlay lives outside `#strip`, so no pointer event during a sheet reaches these handlers at all. Strokes that BEGIN on the rail or a pip now never enter the recognizer — the zone is structural.)
+In `app/styles.css`, move `touch-action: none` and `-webkit-touch-callout: none` off `#strip` and onto `#board` for this interim shell; Task 7 moves them to `#pager` when the peek band becomes part of the active surface.
+
+(`lostpointercapture` also fires after every ordinary `pointerup` — the recognizer's stroke is already closed then, so the extra cancel feed is a no-op, pinned by the recognizer's cancel-without-lock test. The sheet-open case needs no wiring: the fixed overlay lives outside `#paging-region` (and outside the interim `#board` boundary), so no pointer event during a sheet reaches these handlers at all. Strokes that BEGIN on the rail never enter either boundary listener; strokes that begin on a pip after Task 7 enter only the region bookkeeping and never the recognizer — the zone is structural.)
 
 **(f)** Replace `onSwipe` (delete it) with the width helper, gate `jumpToPage`, and replace the `case "swipe"` with the four drag cases. The driver acts only on non-null session verdicts — a stroke whose `start` was refused (mid-settle) settles nothing:
 
@@ -1547,13 +1657,13 @@ const boardRegionWidth = (): number => document.querySelector<HTMLElement>("#boa
 
 - [ ] **Step 5: Run tests and gates**
 
-Run: `bun test test/strip-gestures.test.ts test/strip-paging.test.ts test/strip-diagnostic.test.ts && bun test && bun run typecheck && bun run build:app && bunx biome check app/src/gestures.ts app/src/main.ts test/strip-gestures.test.ts test/strip-paging.test.ts test/strip-diagnostic.test.ts`
+Run: `bun test test/strip-gestures.test.ts test/strip-paging.test.ts test/strip-diagnostic.test.ts && bun test && bun run typecheck && bun run build:app && bunx biome check app/src/gestures.ts app/src/main.ts app/styles.css test/strip-gestures.test.ts test/strip-paging.test.ts test/strip-diagnostic.test.ts`
 Expected: PASS — the full suite, both tsconfigs (the `swipe` removal must leave no dead references, including the diagnostic test's fixture), and the app bundle.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add app/src/gestures.ts app/src/main.ts test/strip-gestures.test.ts test/strip-paging.test.ts test/strip-diagnostic.test.ts
+git add app/src/gestures.ts app/src/main.ts app/styles.css test/strip-gestures.test.ts test/strip-paging.test.ts test/strip-diagnostic.test.ts
 git commit -m "feat(app): axis-locked drag intents replace release-time swipe classification"
 ```
 
@@ -1935,7 +2045,7 @@ git commit -m "feat(app): sliver and pip indicator models and band renderers"
 
 ### Task 7: The strip re-layout — 40px gutter, bands, pips, 638px rail
 
-**Goal:** the strip becomes `pager (viewport+peek) | pips | rail` on fixed tracks: the board gutter grows 16 → 40 native px, the 54px peek band and 22px pip column exist on every page (constant geometry — content visibility rides `data-present`), the rail narrows 760 → 638 native px and loses its pager (`.rail-pager`/`.page-dot` deleted, `RailModel` slims), and the driver renders the indicators and wires the three tap surfaces (peek → forward, gutter band → back, pips → jump).
+**Goal:** the strip becomes `paging-region (pager (viewport+peek) | pips) | rail` on fixed tracks: the board gutter grows 16 → 40 native px, the 54px peek band and 22px pip column exist on every page (constant geometry — content visibility rides `data-present`), the rail narrows 760 → 638 native px and loses its pager (`.rail-pager`/`.page-dot` deleted, `RailModel` slims), and the driver renders the indicators and wires the three tap surfaces (peek → forward, gutter band → back, pips → jump). The wrapper is also the structural event boundary that keeps the rail outside gesture-system listeners.
 
 **Files:**
 - Modify: `app/index.html` (the `#strip` shell)
@@ -1947,7 +2057,7 @@ git commit -m "feat(app): sliver and pip indicator models and band renderers"
 
 **Interfaces:**
 - Consumes: Task 6's renderers and `indicatorsRenderSignature`; the existing `jumpToPage` (clamped by `jumpBoard`).
-- Produces: static shell ids `#pager`, `#board-viewport`, `#board-track`, `#return-band`, `#peek-band`, `#pips`; `#board` gains class `board-grid` (the grid rules move to the class so Task 8's adjacent pages reuse them). `renderRail(root, model)` — two parameters, `RailActions` gone, `RailModel` without `page`/`pageCount`. Task 8 relies on `#board-viewport` (clip) and `#board-track` (transform).
+- Produces: static shell ids `#paging-region`, `#pager`, `#board-viewport`, `#board-track`, `#return-band`, `#peek-band`, `#pips`; `#board` gains class `board-grid` (the grid rules move to the class so Task 8's adjacent pages reuse them). `renderRail(root, model)` — two parameters, `RailActions` gone, `RailModel` without `page`/`pageCount`. Task 8 relies on `#board-viewport` (clip) and `#board-track` (transform).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2035,29 +2145,36 @@ Replace `app/index.html`'s `<main>`:
 
 ```html
     <main id="strip">
-      <div id="pager">
-        <div id="board-viewport">
-          <div id="board-track">
-            <div id="board" class="board-grid"></div>
+      <div id="paging-region">
+        <div id="pager">
+          <div id="board-viewport">
+            <div id="board-track">
+              <div id="board" class="board-grid"></div>
+            </div>
+            <button id="return-band" type="button" aria-label="Previous page" data-present="false"></button>
           </div>
-          <button id="return-band" type="button" aria-label="Previous page" data-present="false"></button>
+          <button id="peek-band" type="button" aria-label="Next page" data-present="false"></button>
         </div>
-        <button id="peek-band" type="button" aria-label="Next page" data-present="false"></button>
+        <nav id="pips" data-present="false"></nav>
       </div>
-      <nav id="pips" data-present="false"></nav>
       <aside id="rail"></aside>
     </main>
 ```
 
 In `app/styles.css` (native px converted at 2560×720: px / 25.6 = vw, px / 7.2 = vh):
 
-**(a)** `#strip` columns become pager | pips | rail:
+**(a)** `#strip` columns become paging-region | rail, and the wrapper contains pager | pips:
 
 ```css
 #strip {
   display: grid;
-  grid-template-columns: 1fr 0.859vw 24.9219%; /* board+peek | 22px pip band | 638px rail */
+  grid-template-columns: 1fr 24.9219%; /* paging-region | 638px rail */
   height: 100vh;
+}
+#paging-region {
+  display: grid;
+  grid-template-columns: 1fr 0.859vw; /* pager | 22px pip band */
+  min-width: 0;
 }
 #pager {
   display: grid;
@@ -2281,7 +2398,7 @@ const renderIndicatorsNow = (): void => {
 
 Call it as the last line of `applyBoard` (outside the board's signature skip — a page appended elsewhere changes the indicators without changing the current page's cards).
 
-**(c)** The gesture surface widens to the pager: in `wireInteraction`, change the `const surface = document.querySelector<HTMLElement>("#board")` line to `"#pager"` and update its comment — the peek band is now inside the surface (it is the incoming page's drag affordance), the pip column and rail outside it. All six surface listeners (down/move/up/cancel/lostpointercapture/contextmenu) ride the same variable; nothing else changes.
+**(c)** The gesture surface widens to the pager and the suppression boundary moves to the new wrapper: in `wireInteraction`, change the interim `const region = document.querySelector<HTMLElement>("#board")` to `"#paging-region"` and `const surface = region` to `document.querySelector<HTMLElement>("#pager")`. The peek band is now inside the active surface (it is the incoming page's drag affordance), while `#pips` is inside `#paging-region` but remains click-only and the rail is outside the region entirely. All six recognizer listeners (down/move/up/cancel/lostpointercapture/contextmenu) ride the `surface` variable; the two suppression listeners ride `#paging-region`.
 
 **(d)** `boardRegionWidth` retargets to the viewport:
 
@@ -2319,7 +2436,7 @@ git commit -m "feat(app): strip re-layout - peek band, pip column, 40px gutter, 
 
 ### Task 8: Drag-follow visuals — the track, adjacent pages, commit and snap-back
 
-**Goal:** the board physically follows the finger: `#board-track` translates by the session's offset, both existing neighbor pages mount as transient grids at gutter-overlap spacing (the incoming column rises exactly under the peek slivers), release animates to commit or snap-back (a failed swipe is motion-and-return, never a silent no-op), and settle applies any deferred snapshot. Rubber-band drags render no adjacent page — the resisted give itself is the "nowhere to go" signal. Re-entrancy is owned by the session (Task 4): a settling board refuses new drags, stray releases return null (the driver animates only non-null verdicts, so settling is single-flight), a commit jumps to the settle's own captured target (a mid-settle repack or navigation cannot retarget it), and `jumpToPage`'s navigation gate keeps pip/band taps out of a live settle.
+**Goal:** the board physically follows the finger: `#board-track` translates by the session's offset, both existing neighbor pages mount as transient grids at gutter-overlap spacing (the incoming column rises exactly under the peek slivers), release animates to commit or snap-back (including a sample-starved below-threshold release whose preceding `drag-move` makes failure visible), and settle applies any deferred snapshot. Rubber-band drags render no adjacent page — the resisted give itself is the "nowhere to go" signal. Re-entrancy is owned by the session (Task 4): a settling board refuses new drags, stray releases return null (the driver animates only non-null verdicts, so settling is single-flight), a commit jumps to the settle's own captured target (a mid-settle repack or navigation cannot retarget it), and `jumpToPage`'s navigation gate keeps pip/band taps out of a live settle.
 
 **Files:**
 - Modify: `app/src/main.ts` (the drag cases in `handleGestureIntents`; new track/adjacent helpers)
@@ -2462,7 +2579,7 @@ Add `DragSettle` to the `./paging` import and `BoardPage` is already imported.
       }
 ```
 
-(The Task 5 interim path called `settled()`/`snapshotDeferral.flush()` inline in the drag-end/cancel cases; both now live inside `finishSettle`'s `done`, in the tested order: settled → commit jump to the captured target → flush.)
+(The Task 5 interim path called `settled()`/`snapshotDeferral.flush()` inline in the drag-end/cancel cases; both now live inside `finishSettle`'s `done`, in the tested order: settled → commit jump to the captured target → flush. Do not optimize away the snap-back transition when `target === 0`: Task 5's sample-starved below-commit controller test proves the preceding `drag-move` painted a nonzero offset, so this transition is the required visible failure feedback.)
 
 In `app/styles.css`, after the `#board-track` rule:
 
@@ -2592,7 +2709,7 @@ bun run install:app
 open -a Dealerboard
 ```
 
-On the physical strip, one line per check in the completion report: a drag commits in both directions; a short drag snaps back; a single-page board rubber-bands; pip, peek-band, and gutter taps jump; a vertical flick still dismisses; touch-and-hold still opens the action sheet; no diagnostic overlay renders anywhere. If the strip is unavailable, say so, leave this step and the task open, and do not proceed to the commit — the removal ships only verified.
+On the physical strip, one line per check in the completion report: a drag commits in both directions; a short drag visibly moves then snaps back; a single-page board rubber-bands; a drag beginning on the rail is inert and the rail never moves; a drag while the action sheet is open is inert; a pointer-cancel and a window-blur both snap back; a snapshot arriving mid-drag stays stable until settle; pip, peek-band, and gutter taps jump; a vertical flick still dismisses; touch-and-hold still opens the action sheet; no diagnostic overlay renders anywhere. If the strip is unavailable, say so, leave this step and the task open, and do not proceed to the commit — the removal ships only verified.
 
 - [ ] **Step 4: Commit**
 
@@ -2608,7 +2725,7 @@ git commit -m "chore(app): remove bring-up pointer diagnostic"
 | Spec requirement | Task(s) |
 | --- | --- |
 | Diagnostic-first: localize the swipe failure to delivery / recognition / navigation / render; gates threshold tuning | 1 (module — whole-batch recognition line — + receipt + decision gate), 9 (tuning precondition), 10 (removal + final-artifact smoke — "no permanent logging") |
-| Swipe zone is the board region only; rail takes no handlers, never moves | 5 (recognizer-feeding handlers scoped to the board surface with pointer capture; `#strip` keeps only stroke bookkeeping + the trailing-click swallow), 7 (`#pager` boundary; `touch-action` moves with it), 9 (#3) |
+| Swipe zone is the board region only; rail takes no handlers, never moves | 5 (recognizer handlers on `#pager`; suppression bookkeeping/swallowing on `#paging-region`, which excludes the rail), 7 (`#paging-region` shell and `#pager` boundary; `touch-action` moves with it), 9 (#3) |
 | Drag-follow with snap-back; ~25% / velocity commit; failure is motion-and-return | 4 (settle/offset tests), 5 (drag intent stream), 8 (track + animations), 9 (#1, #2 + tuning) |
 | Gesture arbitration by axis lock; locked touch suppresses tap/long-press/vertical; vertical falls through unchanged | 5 (axis-race, context/tick suppression, fall-through tests; flick tests kept verbatim) |
 | Settle integrity: single-flight settling, captured commit targets, gated navigation; a sample-starved release still pages | 4 (re-entry, `allowsNavigation`, from/target tests), 5 (drag-start-precedes-drag-end recognizer test + recognizer-to-session integration test), 8 (driver animates only non-null verdicts; `finishSettle` jumps to `settle.target` after `settled()`) |
@@ -2625,5 +2742,5 @@ git commit -m "chore(app): remove bring-up pointer diagnostic"
 | Peek visibility is not viewing; unread/ack semantics unchanged | 6 (renderers wire only `onJumpToPage` — no ack path exists), 9 (#16) |
 | Degraded renders indicators from last-good; OFFLINE/empty hides them | 6 (models ignore `degraded`, empty pages → `data-present="false"`), 9 (#15) |
 | Single page: no indicators, gutter remains, rubber-band both directions | 4 (per-direction resistance tests), 6 (hidden models), 9 (#3 of Step 2) |
-| On-glass acceptance (golden question): sliver + mini-dot legibility, rail fit — physical-strip receipt | 9 (REQUIRED receipt; user-decides items are explicit checks #8, #9, #11) |
+| On-glass acceptance (golden question): sliver + mini-dot legibility, rail fit — physical-strip receipt | 9 (REQUIRED receipt; user-decides items are explicit checks #11, #12, rail-fit check #14) |
 | Cross-spec: retention coexistence via axis lock | 5 (vertical fall-through pinned; flick tests untouched), header cross-spec note |

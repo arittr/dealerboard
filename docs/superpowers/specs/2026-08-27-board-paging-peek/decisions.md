@@ -190,3 +190,26 @@ to ready and re-run the ratify gate. -->
 
 Any semantic edit to spec.md after this receipt voids it: flip status
 back to ready and re-run the ratify gate.
+
+## 2026-08-27 23:33 — Plan-review two-bounce disposition
+- **Decided:** Sol's second plan-review pass (Paseo agent 4c6389f7,
+  codex/gpt-5.6-sol) remained NOT READY after verifying the first-pass
+  resolutions. Seven first-pass findings were resolved; the remaining rail
+  boundary issue and four newly exposed blockers were handled in the plan:
+  `#paging-region` now excludes the rail, source payload freshness is kept
+  ahead of deferral and local dismissal re-reduces through
+  `resubmitLatest()`, a release-only failed drag carries a `drag-move`
+  before snap-back, the long-press tick rejects locked drags independently
+  of threshold ordering, and threshold-dependent tests derive from named
+  constants. The two receipt advisories were also folded in.
+- **Process:** The plan-review gate had rejected the same artifact twice, so
+  the two-bounce rule closed the gate loop; no third review was fired. The
+  steering seat completed the disposition conversationally against the
+  ratified spec and current main. The spec itself was not edited, and the
+  unratified retention plan was not part of this disposition.
+- **Because:** The remaining findings were concrete plan defects, not reasons
+  to change the settled design. The smallest fixes make the execution order,
+  event boundary, deferred-snapshot ordering, failure feedback, tuning
+  contract, and final-artifact receipt explicit.
+- **Deciders:** Drew — "try again, we ran out of fable credits"; steering
+  seat disposition under the two-bounce rule.
