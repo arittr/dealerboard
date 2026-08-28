@@ -13,7 +13,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync } from "node:fs";
 import { type AppPaths, ensureAppDirectories } from "./paths";
 
-export const LATEST_SCHEMA_VERSION = 16;
+export const LATEST_SCHEMA_VERSION = 17;
 
 export class UnsupportedSchemaVersion extends Error {
   readonly found: number;
@@ -528,6 +528,23 @@ CREATE UNIQUE INDEX active_sessions_unique_slot
 `;
 
 /**
+ * v17 adds the retention ledgers, one additive ALTER per column:
+ * `viewed_since` is stamped only by a dealerboard view gesture and is the
+ * expiry clock's sole input; `ended_at` is stamped when a SessionEnd
+ * retains a row holding an unviewed result as a terminal "ended" card.
+ * Both are nullable and unconstrained like unread_since.
+ */
+const SCHEMA_VERSION_17_VIEWED_SINCE = `
+ALTER TABLE active_sessions
+  ADD COLUMN viewed_since TEXT;
+`;
+
+const SCHEMA_VERSION_17_ENDED_AT = `
+ALTER TABLE active_sessions
+  ADD COLUMN ended_at TEXT;
+`;
+
+/**
  * Ordered migrations keyed by the schema version each one produces. Entries
  * below v5 alter the original table and run in one transaction before the
  * v5 rebuild; the rebuild itself is special-cased in `initializeDatabase`
@@ -826,6 +843,27 @@ export const initializeDatabase = (paths: AppPaths): void => {
       // the archive copy always starts from the final post-v15 shape.
       if (version < 16) {
         migrateToV16(db);
+      }
+      // v17 adds the retention ledger columns. Shape-driven like the v15
+      // repair — the column list, not the version, decides whether each
+      // ALTER applies — so a retried or re-stamped init never dies on a
+      // duplicate column, and a partially shaped v16 database (either
+      // column missing) converges. One transaction, so the ALTERs and the
+      // stamp commit together.
+      if (version < 17) {
+        const migrateToV17 = db.transaction(() => {
+          const columns = db.query("SELECT name FROM pragma_table_info('active_sessions')").all() as Array<{
+            name: string;
+          }>;
+          if (!columns.some((column) => column.name === "viewed_since")) {
+            db.exec(SCHEMA_VERSION_17_VIEWED_SINCE);
+          }
+          if (!columns.some((column) => column.name === "ended_at")) {
+            db.exec(SCHEMA_VERSION_17_ENDED_AT);
+          }
+          db.exec("PRAGMA user_version = 17");
+        });
+        migrateToV17();
       }
     }
     chmodSync(paths.database, DATABASE_FILE_MODE);

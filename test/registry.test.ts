@@ -124,6 +124,8 @@ type Row = {
   origin_parent_ref: string | null;
   activity_line: string | null;
   done_since: string | null;
+  viewed_since: string | null;
+  ended_at: string | null;
 };
 
 const getRow = (sessionId: string, provider: Provider = "claude"): Row | null =>
@@ -208,6 +210,8 @@ describe("applyRegistryEvents", () => {
       origin_parent_ref: null,
       activity_line: null,
       done_since: null,
+      viewed_since: null,
+      ended_at: null,
     });
 
     expect(applyRegistryEvents(db, [simple("Activity", "s1", { at: at(2) })])).toEqual(["applied"]);
@@ -302,6 +306,8 @@ describe("applyRegistryEvents", () => {
       origin_parent_ref: null,
       activity_line: null,
       done_since: null,
+      viewed_since: null,
+      ended_at: null,
     });
     expect(getRow("s2")?.logical_slot).toBe(2);
   });
