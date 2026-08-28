@@ -510,6 +510,29 @@ describe("event ingress", () => {
     expect(listRows()[0]).toMatchObject({ originKind: "paseo", originRef: "agent-xyz" });
   });
 
+  test("event stamps roborev origin from ROBOREV_SPAWN at SessionStart", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { ROBOREV_SPAWN: "shim" },
+      stdin: stdinOf(startEvent("s1")),
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(harness.diagnostics).toEqual([]);
+    expect(listRows()[0]).toMatchObject({ originKind: "roborev", originRef: "shim" });
+  });
+
+  test("the roborev marker outranks stale Paseo and terminal markers inherited by the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      environment: { ROBOREV_SPAWN: "shim", PASEO_AGENT_ID: "agent-xyz", TERM_PROGRAM: "ghostty" },
+      stdin: stdinOf(startEvent("s1")),
+    });
+
+    expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ originKind: "roborev", originRef: "shim" });
+  });
+
   test("event stamps terminal origin from TERM_PROGRAM when no Paseo marker", async () => {
     initRegistry();
     const harness = makeHarness({

@@ -22,8 +22,8 @@ export type Provider = (typeof PROVIDER_KEYS)[number];
 
 export type SessionStatus = "idle" | "working" | "waiting" | "error";
 
-/** Who spawned a session: a paseo agent or an interactive terminal. */
-export type SessionOriginKind = "paseo" | "terminal";
+/** Who spawned a session: a paseo agent, an interactive terminal, or the roborev review daemon. */
+export type SessionOriginKind = "paseo" | "terminal" | "roborev";
 
 export type SessionOrigin = { kind: SessionOriginKind; ref: string };
 
@@ -180,7 +180,7 @@ const MAX_STRING_CODE_POINTS = 256;
 
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
-const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal"]);
+const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal", "roborev"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -305,7 +305,7 @@ const parseAgent = (value: unknown): ProjectedAgentNode => {
   }
   const originKind = value["originKind"];
   if (originKind !== null && (typeof originKind !== "string" || !ORIGIN_KINDS.has(originKind))) {
-    return invalid("agent.originKind must be paseo, terminal, or null");
+    return invalid("agent.originKind must be paseo, terminal, roborev, or null");
   }
   const originRef = value["originRef"];
   if (!isNullableBoundedString(originRef)) {
@@ -479,7 +479,7 @@ const parseSession = (value: unknown): ProjectedSession => {
   // an older daemon's snapshot (which predates them) still parses.
   if (value["originKind"] !== undefined && value["originKind"] !== null) {
     if (typeof value["originKind"] !== "string" || !ORIGIN_KINDS.has(value["originKind"])) {
-      return invalid("session.originKind must be paseo, terminal, or null");
+      return invalid("session.originKind must be paseo, terminal, roborev, or null");
     }
   }
   if (value["originRef"] !== undefined && !isNullableBoundedString(value["originRef"])) {
