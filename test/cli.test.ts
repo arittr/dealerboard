@@ -1342,12 +1342,142 @@ describe("sessions commands", () => {
       ["sessions", "clear", "claude", "s1", "extra"],
       ["sessions", "ack", "bogus", "s1"],
       ["sessions", "ack", "claude", "s1", "extra"],
+      ["sessions", "view"],
+      ["sessions", "view", "bogus", "s1"],
+      ["sessions", "view", "claude", "s1", "2026-08-06T00:00:00.000Z", "extra"],
       ["sessions", "clear-all", "extra"],
     ]) {
       const harness = makeHarness();
       expect(await runCli(args, harness.deps)).not.toBe(0);
       expect(harness.stderr()).not.toBe("");
       expect(harness.stdout()).toBe("");
+    }
+  });
+
+  test("sessions view clears the badge, keeps the card, and stamps viewed_since", async () => {
+    initRegistry();
+    const startHarness = makeHarness({ stdin: stdinOf(startEvent("v1")) });
+    expect(await runCli(["event", "claude"], startHarness.deps)).toBe(0);
+    const stop = makeHarness({ stdin: stdinOf(JSON.stringify({ hook_event_name: "Stop", session_id: "v1" })) });
+    expect(await runCli(["event", "claude"], stop.deps)).toBe(0);
+
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "view", "claude", "v1"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.stderr()).toBe("");
+    // The card stays: done_since holds it; the badge is gone; the clock runs.
+    expect(listRows()[0]).toMatchObject({ status: "idle", unreadSince: null });
+
+    const db = openRegistryDatabase(paths.database, "readonly");
+    try {
+      const row = db.query("SELECT done_since, viewed_since FROM active_sessions WHERE session_id = 'v1'").get() as {
+        done_since: string | null;
+        viewed_since: string | null;
+      };
+      expect(row.done_since).toBe(NOW);
+      expect(row.viewed_since).toBe(NOW);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("sessions view validates args", async () => {
+    initRegistry();
+    for (const args of [
+      ["sessions", "view", "bogus", "x"],
+      ["sessions", "view", "claude"],
+      ["sessions", "view", "claude", ""],
+      ["sessions", "view", "claude", "s1", "2026-08-06T00:00:00.000Z", "extra"],
+    ]) {
+      const harness = makeHarness();
+      expect(await runCli(args, harness.deps)).toBe(1);
+      expect(harness.stderr()).toContain("usage: dealerboard <command>");
+      expect(harness.stdout()).toBe("");
+    }
+  });
+
+  test("sessions ack accepts an optional watermark and protects newer results", async () => {
+    initRegistry();
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "w1",
+          title: null,
+          project: null,
+          ghosttyTerminalId: null,
+          transcriptPath: null,
+          model: null,
+          observedAt: NOW,
+        },
+        { kind: "Stop", provider: "claude", sessionId: "w1", observedAt: LATER },
+      ]);
+    } finally {
+      db.close();
+    }
+    // The watermark equals the stamp the gesture's snapshot showed (NOW-era);
+    // the LATER result is newer and survives.
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "ack", "claude", "w1", NOW], harness.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ unreadSince: LATER });
+
+    // The "-" token is a causal-null watermark: it consumes nothing.
+    expect(await runCli(["sessions", "ack", "claude", "w1", "-"], harness.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ unreadSince: LATER }); // still protected
+
+    // No watermark (the deck/bare-CLI shape) dismisses unconditionally.
+    expect(await runCli(["sessions", "ack", "claude", "w1"], harness.deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ unreadSince: null });
+  });
+
+  test("sessions view honors the same watermark discipline", async () => {
+    initRegistry();
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "v2",
+          title: null,
+          project: null,
+          ghosttyTerminalId: null,
+          transcriptPath: null,
+          model: null,
+          observedAt: NOW,
+        },
+        { kind: "Stop", provider: "claude", sessionId: "v2", observedAt: LATER },
+      ]);
+    } finally {
+      db.close();
+    }
+    // A causal-null view protects the result it never saw.
+    expect(await runCli(["sessions", "view", "claude", "v2", "-"], makeHarness().deps)).toBe(0);
+    expect(listRows()[0]).toMatchObject({ unreadSince: LATER });
+    const viewedRow = openRegistryDatabase(paths.database, "readonly");
+    try {
+      expect(viewedRow.query("SELECT viewed_since FROM active_sessions WHERE session_id = 'v2'").get()).toEqual({
+        viewed_since: null,
+      });
+    } finally {
+      viewedRow.close();
+    }
+  });
+
+  test("a watermark must be a canonical instant or the '-' token", async () => {
+    initRegistry();
+    for (const args of [
+      ["sessions", "ack", "claude", "s1", "extra"], // the pre-existing pin: still rejected, now as a non-canonical watermark
+      ["sessions", "ack", "claude", "s1", "2026-08-06"], // date only — not canonical
+      ["sessions", "ack", "claude", "s1", "not-a-time"],
+      ["sessions", "view", "claude", "s1", "extra"],
+    ]) {
+      const harness = makeHarness();
+      expect(await runCli(args, harness.deps)).toBe(1);
+      expect(harness.stdout()).toBe("");
+      expect(harness.stderr()).not.toBe("");
     }
   });
 });

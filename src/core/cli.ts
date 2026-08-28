@@ -7,7 +7,8 @@
  *   dealerboard daemon
  *   dealerboard sessions list
  *   dealerboard sessions clear <provider> <session-id>
- *   dealerboard sessions ack <provider> <session-id>
+ *   dealerboard sessions ack <provider> <session-id> [watermark]
+ *   dealerboard sessions view <provider> <session-id> [watermark]
  *   dealerboard sessions clear-all
  *   dealerboard sessions prune [max-age-hours]
  *
@@ -37,9 +38,11 @@ import {
   applyRegistryEvents,
   clearAllSessions,
   clearSession,
+  type GestureWatermark,
   listSessions,
   pruneStaleSessions,
   syncPaseoStates,
+  viewSession,
 } from "./registry";
 import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { createSessionFactsResolver } from "./titles";
@@ -131,7 +134,8 @@ commands:
   daemon
   sessions list
   sessions clear <provider> <session-id>
-  sessions ack <provider> <session-id>
+  sessions ack <provider> <session-id> [watermark]
+  sessions view <provider> <session-id> [watermark]
   sessions clear-all
   sessions prune [max-age-hours]
 `;
@@ -150,6 +154,28 @@ const parsePruneMaxAgeHours = (args: readonly string[]): number | undefined => {
     }
   }
   return undefined;
+};
+
+/** The causal-null watermark token: the gesture's snapshot showed no unread. */
+const CAUSAL_NULL_WATERMARK = "-";
+
+/**
+ * Decode the optional watermark argument: absent = unconditional (null);
+ * the `-` token = causal with a null stamp; a canonical UTC instant = causal
+ * with that stamp. Anything else is a usage error (undefined).
+ */
+const parseGestureWatermark = (arg: string | undefined): GestureWatermark | null | undefined => {
+  if (arg === undefined) {
+    return null;
+  }
+  if (arg === CAUSAL_NULL_WATERMARK) {
+    return { unreadSince: null };
+  }
+  const epoch = Date.parse(arg);
+  if (Number.isNaN(epoch) || new Date(epoch).toISOString() !== arg) {
+    return undefined;
+  }
+  return { unreadSince: arg };
 };
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : "unknown error");
@@ -335,21 +361,54 @@ const runSessions = (args: readonly string[], deps: ResolvedDependencies): numbe
       }
     }
     case "ack": {
-      const [providerArg, sessionId, ...extra] = rest;
-      if (!isProvider(providerArg) || sessionId === undefined || sessionId.length === 0 || extra.length > 0) {
+      const [providerArg, sessionId, watermarkArg, ...extra] = rest;
+      const watermark = parseGestureWatermark(watermarkArg);
+      if (
+        !isProvider(providerArg) ||
+        sessionId === undefined ||
+        sessionId.length === 0 ||
+        extra.length > 0 ||
+        watermark === undefined
+      ) {
         deps.stderr(USAGE);
         return 1;
       }
       try {
         const db = deps.openDatabase(deps.paths.database, "readwrite");
         try {
-          acknowledgeSession(db, providerArg, sessionId, deps.now());
+          acknowledgeSession(db, providerArg, sessionId, deps.now(), watermark);
         } finally {
           db.close();
         }
         return 0;
       } catch (error) {
         deps.stderr(`sessions ack failed: ${errorMessage(error)}\n`);
+        return 1;
+      }
+    }
+    case "view": {
+      const [providerArg, sessionId, watermarkArg, ...extra] = rest;
+      const watermark = parseGestureWatermark(watermarkArg);
+      if (
+        !isProvider(providerArg) ||
+        sessionId === undefined ||
+        sessionId.length === 0 ||
+        extra.length > 0 ||
+        watermark === undefined
+      ) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      try {
+        const db = deps.openDatabase(deps.paths.database, "readwrite");
+        try {
+          viewSession(db, providerArg, sessionId, deps.now(), watermark);
+        } finally {
+          db.close();
+        }
+        return 0;
+      } catch (error) {
+        deps.stderr(`sessions view failed: ${errorMessage(error)}\n`);
         return 1;
       }
     }
