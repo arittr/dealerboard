@@ -8,10 +8,11 @@
 import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../../src/plugin/ghostty-focus";
 import type { Provider } from "../../src/protocol";
 import type { BoardSession } from "./board";
+import type { GestureWatermark } from "./bridge";
 import { routeForSession } from "./routing";
 
 export type PressDeps = {
-  ack: (provider: Provider, sessionId: string) => Promise<void>;
+  ack: (provider: Provider, sessionId: string, watermark: GestureWatermark | null) => Promise<void>;
   openUrl: (url: string) => Promise<void>;
   focusGhostty: (script: string, terminalId: string) => Promise<void>;
   readPaseoServerId: () => Promise<string>;
@@ -31,7 +32,7 @@ export const pressBoardCard = async (card: BoardPressTarget, deps: PressDeps): P
 };
 
 export const pressSessionTile = async (session: BoardSession, deps: PressDeps): Promise<void> => {
-  void deps.ack(session.provider, session.sessionId).catch(() => {});
+  void deps.ack(session.provider, session.sessionId, null).catch(() => {});
   const route = routeForSession(session);
   try {
     switch (route.kind) {

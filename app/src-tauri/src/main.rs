@@ -157,13 +157,58 @@ fn run(program: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
-/// The app's only write path back to the daemon, mirroring the plugin's
-/// session-ack: the installed binary, fixed subcommand argv, no shell.
+/// The causal content of a view/dismiss gesture: the unread stamp visible
+/// when the gesture was issued. `None` inside means the snapshot showed no
+/// unread — still causal, encoded as the CLI's `-` token. A missing
+/// watermark (`Option::None`) is the unconditional operator/deck shape.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GestureWatermark {
+    unread_since: Option<String>,
+}
+
+/// Encode the three watermark states into the CLI argv: no fifth argument
+/// (unconditional), the canonical stamp, or the `-` causal-null token.
+fn session_gesture_args(
+    verb: &str,
+    provider: &str,
+    session_id: &str,
+    watermark: Option<GestureWatermark>,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "sessions".into(),
+        verb.into(),
+        provider.into(),
+        session_id.into(),
+    ];
+    if let Some(watermark) = watermark {
+        args.push(watermark.unread_since.unwrap_or_else(|| "-".into()));
+    }
+    args
+}
+
+/// The app's only write paths back to the daemon, mirroring the plugin's
+/// session-ack: the installed binary, fixed subcommand argv, no shell. The
+/// watermark makes the dismiss causal — results newer than the snapshot's
+/// stamp survive the gesture.
 #[tauri::command]
-async fn ack_session(provider: &str, session_id: &str) -> Result<(), String> {
+async fn ack_session(provider: &str, session_id: &str, watermark: Option<GestureWatermark>) -> Result<(), String> {
     let executable = app_support_root()?.join("bin/dealerboard");
     let path = executable.to_string_lossy().to_string();
-    run(&path, &["sessions", "ack", provider, session_id])
+    let args = session_gesture_args("ack", provider, session_id, watermark);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run(&path, &refs)
+}
+
+/// View gesture: clears the unread badge and starts the viewed-expiry
+/// clock; the card stays on the board (dismiss is `ack_session`).
+#[tauri::command]
+async fn view_session(provider: &str, session_id: &str, watermark: Option<GestureWatermark>) -> Result<(), String> {
+    let executable = app_support_root()?.join("bin/dealerboard");
+    let path = executable.to_string_lossy().to_string();
+    let args = session_gesture_args("view", provider, session_id, watermark);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run(&path, &refs)
 }
 
 /// Reveal a session transcript in Finder: `/usr/bin/open -R <path>`, fixed
@@ -348,6 +393,7 @@ fn main() {
             read_token_usage_snapshot,
             read_paseo_server_id,
             ack_session,
+            view_session,
             reveal_transcript,
             clear_session,
             open_url,
@@ -623,5 +669,40 @@ mod tests {
         assert_eq!(payloads[0].contents, r#"{"n":1}"#);
 
         std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn gesture_args_unconditional_omit_the_watermark() {
+        // The deck/bare-CLI shape: four args, no fifth.
+        assert_eq!(
+            session_gesture_args("ack", "claude", "s1", None),
+            vec!["sessions", "ack", "claude", "s1"]
+        );
+        assert_eq!(
+            session_gesture_args("view", "kimi", "session 1", None),
+            vec!["sessions", "view", "kimi", "session 1"]
+        );
+    }
+
+    #[test]
+    fn gesture_args_carry_a_causal_stamp() {
+        let watermark = GestureWatermark {
+            unread_since: Some("2026-08-06T00:00:00.000Z".into()),
+        };
+        assert_eq!(
+            session_gesture_args("ack", "claude", "s1", Some(watermark)),
+            vec!["sessions", "ack", "claude", "s1", "2026-08-06T00:00:00.000Z"]
+        );
+    }
+
+    #[test]
+    fn gesture_args_encode_a_null_stamp_watermark_as_the_causal_null_token() {
+        // The snapshot showed no unread: the gesture is still causal and
+        // must not collapse into the unconditional four-arg shape.
+        let watermark = GestureWatermark { unread_since: None };
+        assert_eq!(
+            session_gesture_args("view", "claude", "s1", Some(watermark)),
+            vec!["sessions", "view", "claude", "s1", "-"]
+        );
     }
 }

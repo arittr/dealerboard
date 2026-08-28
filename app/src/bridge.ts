@@ -6,6 +6,12 @@ import type { Provider } from "../../src/protocol";
 
 export type SnapshotPayload = { mtimeMs: number; contents: string };
 
+/** The causal content of a gesture: the unread stamp the rendered snapshot
+ * showed. `null` (absent watermark) is the unconditional operator shape;
+ * `{ unreadSince: null }` is a causal gesture issued from a snapshot with
+ * no unread. These two states must never collapse into each other. */
+export type GestureWatermark = { unreadSince: string | null };
+
 export const readSnapshot = (): Promise<SnapshotPayload> => invoke<SnapshotPayload>("read_snapshot");
 
 export const readQuotaSnapshot = (): Promise<SnapshotPayload> => invoke<SnapshotPayload>("read_quota_snapshot");
@@ -15,8 +21,13 @@ export const readTokenUsageSnapshot = (): Promise<SnapshotPayload> =>
 
 export const readPaseoServerId = (): Promise<string> => invoke<string>("read_paseo_server_id");
 
-export const ackSession = (provider: Provider, sessionId: string): Promise<void> =>
-  invoke<void>("ack_session", { provider, sessionId });
+/** View gesture: clears the unread badge and starts the viewed-expiry clock; the card stays. */
+export const viewSession = (provider: Provider, sessionId: string, watermark: GestureWatermark | null): Promise<void> =>
+  invoke<void>("view_session", { provider, sessionId, watermark });
+
+/** Dismiss gesture: takes the card off the board. The watermark makes it causal — newer results survive. */
+export const ackSession = (provider: Provider, sessionId: string, watermark: GestureWatermark | null): Promise<void> =>
+  invoke<void>("ack_session", { provider, sessionId, watermark });
 
 export const revealTranscript = (path: string): Promise<void> => invoke<void>("reveal_transcript", { path });
 

@@ -556,7 +556,7 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
       });
       return;
     case "ack":
-      return trackSheetAction(ackSession(session.provider, session.sessionId), context, generation, "Ack failed");
+      return trackSheetAction(ackSession(session.provider, session.sessionId, null), context, generation, "Ack failed");
     case "reveal": {
       const path = transcriptPathOf(session);
       if (path === null) {
@@ -600,7 +600,7 @@ const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
     return;
   }
   const { provider, sessionId } = ref.card.session;
-  void ackSession(provider, sessionId).catch(() => {});
+  void ackSession(provider, sessionId, null).catch(() => {});
   const slide = tile.animate(
     [
       { transform: "translateY(0)", opacity: 1 },
