@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { GestureWatermark } from "../app/src/bridge";
 import { type PressDeps, pressBoardCard, pressSessionTile } from "../app/src/press";
 import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../src/plugin/ghostty-focus";
 import type { ProjectedSession } from "../src/protocol";
@@ -40,7 +41,6 @@ const makeDeps = (options: DepsOptions = {}) => {
       calls.push({ fn: "view", args: [provider, sessionId, watermark] });
       return options.failView === true ? Promise.reject(new Error("view down")) : Promise.resolve();
     },
-
     openUrl: (url) => {
       calls.push({ fn: "openUrl", args: [url] });
       return options.failOpenUrl === true ? Promise.reject(new Error("open_url failed")) : Promise.resolve();
@@ -64,10 +64,13 @@ const callNames = (calls: RecordedCall[]): string[] => calls.map((call) => call.
 
 const flashCount = (calls: RecordedCall[]): number => calls.filter((call) => call.fn === "flash").length;
 
+/** The watermark a tap captures at pointer-down: the stamp the card showed. */
+const seen = (unreadSince: string | null = null): GestureWatermark => ({ unreadSince });
+
 describe("pressSessionTile", () => {
   test("a rejected view is fire-and-forget: routing still runs and nothing flashes", async () => {
     const { deps, calls } = makeDeps({ failView: true });
-    await pressSessionTile(session({ provider: "codex" }), deps);
+    await pressSessionTile(session({ provider: "codex" }), seen(), deps);
     expect(callNames(calls)).toEqual(["view", "openUrl"]);
     expect(flashCount(calls)).toBe(0);
   });
@@ -76,6 +79,7 @@ describe("pressSessionTile", () => {
     const { deps, calls } = makeDeps();
     await pressSessionTile(
       session({ provider: "claude", ghosttyTerminalId: "term-9", unreadSince: "2026-08-26T05:00:00.000Z" }),
+      seen("2026-08-26T05:00:00.000Z"),
       deps,
     );
     expect(calls[0]).toEqual({
@@ -90,45 +94,60 @@ describe("pressSessionTile", () => {
     // a snapshot with no unread is { unreadSince: null }, NOT a bare null
     // (which would be unconditional and could consume a result in transit).
     const { deps, calls } = makeDeps();
-    await pressSessionTile(session({ provider: "kimi" }), deps);
+    await pressSessionTile(session({ provider: "kimi" }), seen(), deps);
     expect(calls[0]).toEqual({ fn: "view", args: ["kimi", "session-1", { unreadSince: null }] });
+  });
+
+  test("views with the pointer-down watermark, never the session's current stamp", async () => {
+    // A snapshot ingested mid-stroke moved the card's badge to at(9); the
+    // press captured at(5). The view consumes only what the user saw.
+    const { deps, calls } = makeDeps();
+    await pressSessionTile(
+      session({ provider: "codex", unreadSince: "2026-08-26T05:09:00.000Z" }),
+      seen("2026-08-26T05:00:00.000Z"),
+      deps,
+    );
+    expect(calls[0]).toEqual({
+      fn: "view",
+      args: ["codex", "session-1", { unreadSince: "2026-08-26T05:00:00.000Z" }],
+    });
   });
 
   test("viewing does not dismiss: the tap never calls ack", async () => {
     const { deps, calls } = makeDeps();
-    await pressSessionTile(session({ doneSince: "2026-08-26T05:00:00.000Z" }), deps);
+    await pressSessionTile(session({ doneSince: "2026-08-26T05:00:00.000Z" }), seen(), deps);
     expect(callNames(calls)).not.toContain("ack");
   });
 
   test("paseo route resolves the server id and opens the url-encoded agent deep link", async () => {
     const { deps, calls } = makeDeps();
-    await pressSessionTile(session({ originKind: "paseo", originRef: "agent 42/x" }), deps);
+    await pressSessionTile(session({ originKind: "paseo", originRef: "agent 42/x" }), seen(), deps);
     expect(callNames(calls)).toEqual(["view", "readPaseoServerId", "openUrl"]);
     expect(calls[2]?.args).toEqual(["paseo://h/server%2Fone%20two/agent/agent%2042%2Fx"]);
   });
 
   test("ghostty route focuses the exact shared AppleScript on the terminal id", async () => {
     const { deps, calls } = makeDeps();
-    await pressSessionTile(session({ provider: "claude", ghosttyTerminalId: "term-9" }), deps);
+    await pressSessionTile(session({ provider: "claude", ghosttyTerminalId: "term-9" }), seen(), deps);
     expect(calls[1]?.args).toEqual([FOCUS_GHOSTTY_TERMINAL_SCRIPT, "term-9"]);
   });
 
   test("url route opens the routed url", async () => {
     const { deps, calls } = makeDeps();
-    await pressSessionTile(session({ provider: "kimi" }), deps);
+    await pressSessionTile(session({ provider: "kimi" }), seen(), deps);
     expect(calls[1]?.args).toEqual(["http://127.0.0.1:58627/sessions/session-1"]);
   });
 
   test("a routing failure flashes exactly once", async () => {
     const { deps, calls } = makeDeps({ failOpenUrl: true });
-    await pressSessionTile(session({ provider: "codex" }), deps);
+    await pressSessionTile(session({ provider: "codex" }), seen(), deps);
     expect(callNames(calls)).toEqual(["view", "openUrl", "flash"]);
     expect(flashCount(calls)).toBe(1);
   });
 
   test("an unroutable session flashes without any activation call", async () => {
     const { deps, calls } = makeDeps();
-    await pressSessionTile(session({ provider: "grok" }), deps);
+    await pressSessionTile(session({ provider: "grok" }), seen(), deps);
     expect(callNames(calls)).toEqual(["view", "flash"]);
     expect(flashCount(calls)).toBe(1);
   });
@@ -137,6 +156,7 @@ describe("pressSessionTile", () => {
     const { deps, calls } = makeDeps();
     await pressSessionTile(
       session({ endedAt: "2026-08-26T05:00:00.000Z", unreadSince: "2026-08-26T04:00:00.000Z" }),
+      seen("2026-08-26T04:00:00.000Z"),
       deps,
     );
     expect(callNames(calls)).toEqual(["view"]);
@@ -150,7 +170,7 @@ describe("pressSessionTile", () => {
 describe("pressBoardCard", () => {
   test("a display-only card schedules no view, route, or flash", async () => {
     const { deps, calls } = makeDeps();
-    await pressBoardCard({ session: session({ provider: "evener" }), displayOnly: true }, deps);
+    await pressBoardCard({ session: session({ provider: "evener" }), displayOnly: true }, seen(), deps);
     expect(calls).toEqual([]);
   });
 });

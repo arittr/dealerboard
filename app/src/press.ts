@@ -2,11 +2,13 @@
  * Tile press = view, then route. Viewing clears the unread badge and starts
  * the card's expiry clock; the card itself stays — dismissal is a separate
  * gesture (flick or action sheet). The view is fire-and-forget with the
- * session's unread stamp as the causality watermark (a failed view only
- * means the badge stays until the next lifecycle event — never flash for
- * it). Routing failures flash the tile, matching the plugin's activation
- * alert. An ended card views but never routes: its session is gone, only
- * the result remains.
+ * caller's causality watermark — the stamp the card showed at pointer-down,
+ * never the session's current stamp, which a snapshot ingested mid-stroke
+ * may have moved past what the user saw (a failed view only means the
+ * badge stays until the next lifecycle event — never flash for it).
+ * Routing failures flash the tile, matching the plugin's activation alert.
+ * An ended card views but never routes: its session is gone, only the
+ * result remains.
  */
 
 import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../../src/plugin/ghostty-focus";
@@ -28,18 +30,27 @@ export type BoardPressTarget = {
   displayOnly: boolean;
 };
 
-export const pressBoardCard = async (card: BoardPressTarget, deps: PressDeps): Promise<void> => {
+export const pressBoardCard = async (
+  card: BoardPressTarget,
+  watermark: GestureWatermark,
+  deps: PressDeps,
+): Promise<void> => {
   if (card.displayOnly) {
     return;
   }
-  await pressSessionTile(card.session, deps);
+  await pressSessionTile(card.session, watermark, deps);
 };
 
-export const pressSessionTile = async (session: BoardSession, deps: PressDeps): Promise<void> => {
+export const pressSessionTile = async (
+  session: BoardSession,
+  watermark: GestureWatermark,
+  deps: PressDeps,
+): Promise<void> => {
   // A tap is always a causal gesture issued from the rendered snapshot: the
-  // watermark object carries the stamp the user saw — `{ unreadSince: null }`
-  // when the card had no badge — never the bare-null unconditional shape.
-  void deps.view(session.provider, session.sessionId, { unreadSince: session.unreadSince }).catch(() => {});
+  // watermark object carries the stamp the user saw at pointer-down —
+  // `{ unreadSince: null }` when the card had no badge — never the bare-null
+  // unconditional shape.
+  void deps.view(session.provider, session.sessionId, watermark).catch(() => {});
   if (session.endedAt !== null) {
     return;
   }

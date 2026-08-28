@@ -35,6 +35,7 @@ import {
   ackSession,
   clearSession,
   focusGhostty,
+  type GestureWatermark,
   onSnapshotChanged,
   openUrl,
   readPaseoServerId,
@@ -51,9 +52,10 @@ import { createDismissals, flickRemoves } from "./dismissals";
  * A pending press is bound to the pressed session's identity, never to a
  * dense tile index: a pushed snapshot can re-render the grid during the
  * stroke, and an index captured at press time may already point at a
- * different session when the long-press sheet opens or the flick lands.
+ * different session when the long-press sheet opens, the flick lands, or
+ * the trailing click settles the tap.
  */
-import { capturePendingPress, type PendingPress } from "./gesture-target";
+import { capturePendingPress, type PendingPress, resolvePendingPress } from "./gesture-target";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -68,7 +70,6 @@ import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
-import { interactiveBoardCard, resolveInteractiveBoardCard } from "./tile-identity";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
 import { startStripWindowManager } from "./window";
 
@@ -94,13 +95,24 @@ const gestures = createGestureRecognizer();
 const clickSuppression = createClickSuppression();
 const dismissals = createDismissals();
 let gestureTimer: number | null = null;
+/** The press of the stroke in progress: captured at pointer-down, consumed by a long-press or flick. */
 let pendingPress: PendingPress | null = null;
+/**
+ * The press a finished stroke handed to its trailing click: a clean tap's
+ * click arrives after pointer-up, so the capture outlives the stroke until
+ * the click settles it. Dropped when the next stroke begins (a moved
+ * stroke's click is swallowed, and a touch drag fires none), so it can
+ * never settle under a later tap.
+ */
+let pressAwaitingClick: PendingPress | null = null;
 
 type SheetContext = {
   point: GesturePoint;
   session: BoardSession;
   label: string;
   tile: HTMLElement;
+  /** The pointer-down watermark: the sheet's Open and Dismiss consume only what the press saw. */
+  watermark: GestureWatermark;
 };
 
 let sheetOverlay: HTMLElement | null = null;
@@ -410,25 +422,33 @@ const flashCard = (card: HTMLElement): void => {
   setTimeout(() => card.classList.remove("flash"), FLASH_MS);
 };
 
-const onBoardClick = (event: MouseEvent): void => {
-  if (!(event.target instanceof HTMLElement)) {
+/**
+ * The clean tap's settlement. The click carries no capture of its own — its
+ * target may even be a card that re-rendered into the pressed one's place
+ * mid-stroke — so it settles the press captured at pointer-down: the
+ * pressed identity re-resolved against the current cards (left the grid →
+ * cancel, never retarget), viewed with the pointer-down watermark.
+ */
+const onBoardClick = (): void => {
+  const pending = pressAwaitingClick;
+  pressAwaitingClick = null;
+  if (pending === null) {
     return;
   }
-  const card = event.target.closest<HTMLElement>("[data-card-index]");
-  if (card === null) {
+  const settled = resolvePendingPress(currentCards, pending);
+  if (settled === null) {
     return;
   }
-  const index = Number(card.dataset["cardIndex"]);
-  const currentCard = interactiveBoardCard(currentCards[index]);
-  if (currentCard === null) {
+  const tile = document.querySelector<HTMLElement>(`#board [data-card-index="${settled.index}"]`);
+  if (tile === null) {
     return;
   }
-  void pressBoardCard(currentCard, {
+  void pressBoardCard(settled.card, settled.watermark, {
     view: viewSession,
     openUrl,
     focusGhostty,
     readPaseoServerId,
-    flash: () => flashCard(card),
+    flash: () => flashCard(tile),
   });
 };
 
@@ -537,13 +557,13 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
   // Re-render with every action disabled while the settlement is in flight.
   openActionSheet(context);
   const generation = sheetActions.generation;
-  const { session, tile } = context;
+  const { session, tile, watermark } = context;
   switch (id) {
     case "open":
       // Routing failures already surface through pressSessionTile's tile
       // flash; the sheet's job is done either way.
       dismissActionSheet();
-      void pressSessionTile(session, {
+      void pressSessionTile(session, watermark, {
         view: viewSession,
         openUrl,
         focusGhostty,
@@ -553,7 +573,7 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
       return;
     case "ack":
       return trackSheetAction(
-        ackSession(session.provider, session.sessionId, { unreadSince: session.unreadSince }),
+        ackSession(session.provider, session.sessionId, watermark),
         context,
         generation,
         "Dismiss failed",
@@ -589,20 +609,20 @@ const FLICK_OUT_MS = 200;
  * lost, the local dismissal expires and the slat honestly returns.
  */
 const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
-  const ref = resolveInteractiveBoardCard(currentCards, pending.identity);
-  if (ref === null) {
+  const settled = resolvePendingPress(currentCards, pending);
+  if (settled === null) {
     return;
   }
-  const tile = document.querySelector<HTMLElement>(`#board [data-card-index="${ref.index}"]`);
+  const tile = document.querySelector<HTMLElement>(`#board [data-card-index="${settled.index}"]`);
   if (tile === null) {
     return;
   }
-  if (!flickRemoves(ref.card.session)) {
+  if (!flickRemoves(settled.card.session)) {
     flashCard(tile);
     return;
   }
-  const { provider, sessionId } = ref.card.session;
-  void ackSession(provider, sessionId, pending.watermark).catch(() => {});
+  const { provider, sessionId } = settled.card.session;
+  void ackSession(provider, sessionId, settled.watermark).catch(() => {});
   const slide = tile.animate(
     [
       { transform: "translateY(0)", opacity: 1 },
@@ -622,17 +642,24 @@ const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
 const openActionSheetFor = (pending: PendingPress): void => {
   // Resolve by identity against the current cards: if the pressed session
   // left the board during the hold, cancel — never retarget the sheet (and
-  // its Clear action) at whichever session shifted into the old index.
-  const ref = resolveInteractiveBoardCard(currentCards, pending.identity);
-  if (ref === null) {
+  // its Clear action) at whichever session shifted into the old index. The
+  // sheet carries the pointer-down watermark for its Open and Dismiss.
+  const settled = resolvePendingPress(currentCards, pending);
+  if (settled === null) {
     return;
   }
-  const tile = document.querySelector<HTMLElement>(`#board [data-card-index="${ref.index}"]`);
+  const tile = document.querySelector<HTMLElement>(`#board [data-card-index="${settled.index}"]`);
   if (tile === null) {
     return;
   }
   sheetActions = advanceSheetGeneration(sheetActions);
-  openActionSheet({ point: pending.point, session: ref.card.session, label: ref.card.label, tile });
+  openActionSheet({
+    point: pending.point,
+    session: settled.card.session,
+    label: settled.card.label,
+    tile,
+    watermark: settled.watermark,
+  });
 };
 
 /**
@@ -713,8 +740,10 @@ const onStripPointerDown = (event: PointerEvent): void => {
   }
   // Suppression belongs to one stroke, and a touch drag fires no trailing
   // click at all — so any still-unconsumed suppression from the last stroke
-  // dies here rather than eating this stroke's taps.
+  // dies here rather than eating this stroke's taps; the same goes for a
+  // press whose click never came.
   clickSuppression.beginStroke();
+  pressAwaitingClick = null;
   pendingPress = cardFromPointerEvent(event);
   feedPointer({ kind: "down", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
@@ -731,6 +760,10 @@ const onStripPointerUp = (event: PointerEvent): void => {
     return;
   }
   feedPointer({ kind: "up", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
+  // A press the stroke did not consume (no long-press, no flick) belongs to
+  // the trailing click now: a clean tap settles it; a suppressed click
+  // never reaches the board and the next stroke drops it.
+  pressAwaitingClick = pendingPress;
   pendingPress = null;
 };
 
@@ -740,6 +773,7 @@ const onStripPointerCancel = (event: PointerEvent): void => {
   }
   feedPointer({ kind: "cancel", now: Date.now() });
   pendingPress = null;
+  pressAwaitingClick = null;
 };
 
 /**
