@@ -955,8 +955,9 @@ export type PaseoSyncState = {
  *   too, under the same freshness guard with the later of `archivedAt` and
  *   `updatedAt` as the settle time. `status_since` adopts the record's
  *   settle time; the repaired turn's result stamps unread alongside done —
- *   unless the record is archived or older than the row's ack — so the
- *   settlement badges the card.
+ *   unless the record is archived, older than the row's ack, or older than
+ *   either existing ledger stamp — so the settlement badges the card
+ *   without regressing newer news.
  * - A background-armed row normally outlives its Stop on purpose — the
  *   shell still acts on the session's behalf, exactly as in applyStop. But
  *   the disarming edge (TaskStop) can be lost the same way the turn-end
@@ -1138,34 +1139,54 @@ export const syncPaseoStates = (
       // done_since and unread_since like the Stop it stands in for — the
       // settlement badges the card instead of holding it silently — and
       // clears any stale viewed clock. Unless the record is archived (the
-      // terminal gesture already dismissed the card) or the stamp predates
+      // terminal gesture already dismissed the card), the stamp predates
       // the row's acked_at (the user already dismissed what the record
-      // reports).
+      // reports), or either existing ledger stamp is newer (a stale settle
+      // never regresses news that landed after it).
       if (state.lastStatus !== null && SETTLED_PASEO_STATUSES.has(state.lastStatus) && state.updatedAt !== null) {
         const doneStamp = state.archivedAt === null ? state.updatedAt : null;
         const settled = db.run(
           `UPDATE active_sessions
            SET status = 'idle', status_since = ?, background_outstanding = 0,
                done_since = CASE
-                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN ? ELSE done_since END,
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at)
+                   AND (unread_since IS NULL OR ? > unread_since)
+                   AND (done_since IS NULL OR ? > done_since)
+                 THEN ? ELSE done_since END,
                unread_since = CASE
-                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN ? ELSE unread_since END,
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at)
+                   AND (unread_since IS NULL OR ? > unread_since)
+                   AND (done_since IS NULL OR ? > done_since)
+                 THEN ? ELSE unread_since END,
                viewed_since = CASE
-                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN NULL ELSE viewed_since END
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at)
+                   AND (unread_since IS NULL OR ? > unread_since)
+                   AND (done_since IS NULL OR ? > done_since)
+                 THEN NULL ELSE viewed_since END
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND status IN ('working', 'waiting')
              AND ? > updated_at
              AND (background_outstanding = 0 OR (? IS NOT NULL AND updated_at < ?))`,
           [
             state.updatedAt, // status_since: the record's settle time
+            // One shared stamp condition per CASE: the settle stamp
+            // postdates the ack AND both existing ledger stamps, so a
+            // stale settlement never regresses newer news and the view
+            // clock clears only when a stamp actually lands.
             doneStamp,
             doneStamp,
-            doneStamp, // done_since stamp (guard ×2 + value)
             doneStamp,
             doneStamp,
-            doneStamp, // unread_since stamp (guard ×2 + value)
+            doneStamp, // done CASE (guard ×4 + value)
             doneStamp,
-            doneStamp, // viewed_since clear (guard ×2)
+            doneStamp,
+            doneStamp,
+            doneStamp,
+            doneStamp, // unread CASE (guard ×4 + value)
+            doneStamp,
+            doneStamp,
+            doneStamp,
+            doneStamp, // viewed clear (guard ×4)
             state.provider,
             state.sessionId, // identity
             state.updatedAt, // freshness: strictly newer than the last hook

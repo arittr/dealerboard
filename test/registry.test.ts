@@ -1758,6 +1758,31 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")).toMatchObject({ status: "idle", unread_since: null, done_since: null, viewed_since: null });
   });
 
+  test("the repair never regresses a flag-stamped unread newer than the settle", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Activity", "s1", { at: at(2) }),
+    ]);
+    // A flag raises unread at at(9) — news newer than the row's last hook.
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: at(9) })])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(at(9));
+
+    // The settled record at at(5) postdates the row's last hook (so the
+    // retirement applies) but predates the unread stamp: the settle is
+    // stale news — no ledger write, and the view clock stays untouched.
+    const changed = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: at(5), lastStatus: "idle" }),
+    ]);
+    expect(changed).toBe(1); // the retirement alone
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      status_since: at(5),
+      unread_since: at(9),
+      done_since: null,
+      viewed_since: null,
+    });
+  });
+
   test("the rotation cleanup never clears ledgers (a retired carrier keeps its results)", () => {
     applyRegistryEvents(db, [
       { ...start("old-carrier"), origin: { kind: "paseo", ref: "a1" } },
