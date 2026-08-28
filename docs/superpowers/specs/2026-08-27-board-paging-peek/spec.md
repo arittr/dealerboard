@@ -46,6 +46,19 @@ space is reserved anywhere.
     velocity flick — exact values tuned on device) completes the turn,
     any other release animates back to rest. A failed swipe is visible
     as motion-and-return, never a silent no-op.
+- [ ] Requirement: Gesture arbitration by axis lock.
+  - Acceptance: a touch becomes a paging drag only when horizontal
+    displacement dominates past a small threshold (exact constants
+    impl-detail); once locked, tap, long-press, and vertical outcomes
+    are suppressed for that touch, and vertical-dominant strokes fall
+    through to today's behavior unchanged. No paging gesture begins
+    while the action sheet is open; pointer cancellation or leaving
+    the window snaps back.
+- [ ] Requirement: Snapshots defer during a drag.
+  - Acceptance: a snapshot arriving mid-gesture does not repack or
+    re-render the board, peek, or pips under the finger; the latest
+    pending snapshot applies when the gesture settles (commit or
+    snap-back).
 - [ ] Requirement: Constant geometry across pages and states.
   - Acceptance: the board's left gutter is 40px native (was 16) on every
     page, whether or not the return sliver is present; cards never shift
@@ -62,26 +75,41 @@ space is reserved anywhere.
     dimmed card surface (sub vs primary surfaces distinguished), status
     edge color per row, unread corner dot per row. Absent on the last
     page. During a drag the peek is continuous with the incoming page —
-    the sliver grows into the real card under the finger.
+    the sliver grows into the real card under the finger. The peek band
+    is one page-level tap target (jump forward), as is the return
+    sliver (jump back); sliver rows are never individually interactive
+    and never participate in card-index routing.
 - [ ] Requirement: Pip column.
   - Acceptance: a 22px vertical band between peek and rail shows one pip
     per page, top = page 1, vertically centered; the current page's pip
     is enlarged and lit; every other pip carries at most one corner
     mini-dot — amber if that page holds unread, else blue if any session
     there is working, else none. The current pip carries no mini-dot
-    (the board itself shows its own state). Tapping a pip jumps to that
-    page. Hidden entirely when only one page exists.
+    (the board itself shows its own state). Page aggregates are the OR
+    of the page's placed cards' existing view-model bits — the unread
+    bit each card itself renders (display-only cards contribute none)
+    and status === working — derived from the current snapshot only; no
+    new persisted or historical page state. Tapping a pip jumps to that
+    page; each pip's hit area spans the full band width plus invisible
+    slop to a comfortable touch size (exact slop impl-detail) — pips
+    are the secondary navigation, the swipe is primary. Hidden entirely
+    when only one page exists.
 - [ ] Requirement: Rail narrows to 638px native.
   - Acceptance: rail content (tokens, sparkline, unread line, quota
     meters) renders without wrapping or clipping at 638px, including the
     longest realistic quota note beside its percent; `.rail-pager` and
     `.page-dot` are deleted.
-- [ ] Requirement: Split large groups.
-  - Acceptance: a group larger than the current page's remaining slots
-    fills them and continues on the next page with a continuation
-    marker on its first continued card; the kickoff scenario (five
-    singles + a nine-card group) renders with no empty column on
-    page 1.
+- [ ] Requirement: General packing contract — groups fill and continue.
+  - Acceptance: packing order and first-fit semantics are unchanged;
+    the only change is that a group no longer page-breaks — a group
+    larger than the current page's remaining slots fills them and
+    continues on subsequent pages (a group larger than a full page
+    spans as many pages as it needs), its first continued card on each
+    page carrying a continuation marker. The rule is sequence-general
+    (6+7, 4+9, 1+12, multiple large groups all follow it), giving the
+    measurable invariant: every page except the last is full. The
+    kickoff scenario (five singles + a nine-card group) renders with
+    no empty column on page 1.
 
 ## Constraints
 
@@ -94,6 +122,11 @@ space is reserved anywhere.
   colors, no text labels in the bands.
 - The rail is outside the gesture system entirely — no handlers, no
   translation, no visual response to board drags.
+- Page identity is the numeric index, clamped when repacking shrinks
+  the page count; no per-page persistent state exists — "seen"/unread
+  state lives per-session, exactly as today.
+- Peek visibility is not viewing: a page's cards showing as slivers
+  never clears unread; acknowledgment semantics are unchanged.
 - WKWebView touch delivery on the Xeneon is unverified for sustained
   drags (the contextmenu-synthesis workaround in main.ts proves the OS
   interposes on touch). An on-device pointer-event diagnostic gates
@@ -140,15 +173,20 @@ space is reserved anywhere.
   length on the physical strip, or do they need to grow (mini-dots to
   12–14px)? — tag: user-decides (on-glass check during bring-up)
 - Does WKWebView deliver a reliable pointer-move stream during sustained
-  touch drags on the Xeneon? If not, drag-follow degrades and the
-  gesture design must be revisited. — tag: impl-detail (diagnostic
-  first; it gates threshold tuning)
+  touch drags on the Xeneon? The bring-up diagnostic must identify the
+  failing layer of the reported swipe — event delivery, recognition,
+  navigation, or render — not assume delivery is the culprit. If the
+  move stream is broken, drag-follow degrades and the gesture design
+  must be revisited. — tag: impl-detail (diagnostic first; it gates
+  threshold tuning)
 - Exact commit threshold values (fraction of width, velocity constant,
   rubber-band resistance at the ends). — tag: impl-detail (tuned on
   device)
 - Minimum remaining slots worth splitting a group into (splitting a
-  group to place one card may read worse than leaving the gap). — tag:
-  impl-detail
+  group to place one card may read worse than leaving the gap). Any
+  threshold above zero weakens the every-page-full-but-the-last
+  invariant by up to that many slots — pick with that trade named. —
+  tag: impl-detail
 - Continuation marker form on a split group's first continued card (the
   mockups show an "↩ cont." tag; a spine-only treatment is plausible).
   — tag: impl-detail (default to the mockup's tag)
@@ -158,8 +196,9 @@ space is reserved anywhere.
 
 ## Assumptions
 
-- Realistic page counts stay small (≤4); the pip column's vertical
-  centering has ample room at any plausible count.
+- Realistic page counts stay small (≤4); the pip column reads well to
+  roughly eight pages and merely crowds beyond — accepted without an
+  overflow treatment (YAGNI).
 - Board pages remain full replacements (no partially-scrolled rest
   states).
 - The visual-companion mockups under
@@ -171,13 +210,22 @@ space is reserved anywhere.
 ## Edge cases considered
 
 - Single page: no peek, no return sliver, no pip column; the 40px gutter
-  remains (constant geometry).
+  remains (constant geometry). A drag still engages with rubber-band
+  resistance in both directions — the give-and-return itself says there
+  is nowhere to go.
 - Current page disappears (sessions end while viewing a later page):
   page index clamps to the last page; indicator re-renders.
 - Drag past the first or last page: rubber-band resistance, snap back.
 - Unread on the current page: shown by the card itself; the current pip
   stays clean.
-- Degraded/OFFLINE board: indicator elements hidden along with cards.
+- Degraded (last-good state retained): indicator elements render from
+  the same last-good snapshot as the cards, under the app's explicit
+  degraded contract — pips make no freshness claim the cards don't, and
+  paging stays available. OFFLINE/empty board: indicator elements
+  hidden along with cards.
+- Group continuity at a column break within a page is unchanged from
+  today (the spine is per-column); the continuation marker applies at
+  page breaks only.
 - A split group whose parent card lands as the last slot of a page: the
   continuation marker carries the group identity onto the next page.
 

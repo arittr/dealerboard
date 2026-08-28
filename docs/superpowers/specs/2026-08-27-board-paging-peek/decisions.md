@@ -115,3 +115,47 @@ to ready and re-run the ratify gate. -->
   continuation is visibly pullable into view. Split threshold and
   marker form stay open as impl-details in the spec.
 - **Deciders:** user ("no that sgtm" to the recorded recommendation)
+
+## 2026-08-27 21:06 — Ratify-gate cold-read dispositioned (19 findings)
+- **Decided:** Sol's cold-read (Paseo agent 9ada8f64, reviewer profile,
+  reading problem.md + code pointers only) returned 19 findings; all
+  dispositioned. Already covered by the spec as written: root-cause
+  discipline partially (1 — diagnostic gates tuning), atomicity
+  reversal (2), peek space source (4), announcement content (6), swipe
+  definition (11), gesture start zone (13), failure feedback (14),
+  completion evidence (19). Amended into the spec this pass:
+  - (3) packing generalized: groups fill-and-continue in unchanged
+    first-fit order, sequence-general, invariant "every page except
+    the last is full";
+  - (5) peek/return bands are page-level tap targets; sliver rows
+    never individually interactive, never in card-index routing;
+  - (7, 8) pip aggregates = OR of the page's cards' existing
+    view-model bits from the current snapshot; no new persisted or
+    historical page state;
+  - (9) page identity = clamped numeric index; no per-page "seen"
+    state exists;
+  - (10) peek visibility is not viewing — unread/ack semantics
+    unchanged;
+  - (12, 13) axis-lock arbitration; sheet-open suppression;
+    cancel/window-leave snaps back;
+  - (14) single-page drags rubber-band (nowhere-to-go is visible);
+  - (15) snapshots defer during an active drag, apply at settle;
+  - (16) column-break spine behavior unchanged; continuation marker is
+    page-break-only;
+  - (17) degraded renders indicator from the same last-good snapshot
+    as cards; paging stays available;
+  - (18) pip hit areas get invisible slop to touch size; pips are
+    secondary to the swipe; pip column accepted to ~8 pages, no
+    overflow treatment (YAGNI);
+  - (1) the bring-up diagnostic must localize the failing layer
+    (delivery / recognition / navigation / render), not assume
+    delivery.
+- **Rejected:** No finding declined outright; none re-litigated settled
+  decisions.
+- **Because:** Every disposition either states the answer already
+  implied by the settled design's logic (reuse of existing per-card
+  semantics, YAGNI on new state) or records a contract the spec had
+  left implicit. The findings list in the gate transcript is the
+  record.
+- **Deciders:** gate:ratify-cold-read (sol) + steering seat
+  dispositions; user ratification pending
