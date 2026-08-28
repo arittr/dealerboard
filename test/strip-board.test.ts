@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { type BoardGroup, groupedAgentOrder, groupedOrder, jumpBoard, packBoard, reduceBoard } from "../app/src/board";
+import {
+  BOARD_COLUMNS,
+  BOARD_ROWS,
+  type BoardGroup,
+  groupedAgentOrder,
+  groupedOrder,
+  jumpBoard,
+  packBoard,
+  reduceBoard,
+} from "../app/src/board";
 import type { ProjectedAgentNode, ProjectedSession } from "../src/protocol";
 
 const session = (slot: number, overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
@@ -265,33 +274,82 @@ describe("packBoard", () => {
     expect(cell(pages[0]!, "s21")).toEqual([0, 4]);
   });
 
-  test("a group that fits no column starts the next page (4+4+4 → pages of 8 and 4)", () => {
+  const sequence = (...sizes: number[]): BoardGroup[] => sizes.map((size, index) => groupOf(index * 100 + 1, size));
+
+  test("a group that fits no single column pours into the page's remaining slots", () => {
     const pages = packBoard([groupOf(1, 4), groupOf(11, 4), groupOf(21, 4)], false);
-    expect(pages).toHaveLength(2);
-    expect(pages[0]!.cards).toHaveLength(8);
-    expect(cell(pages[1]!, "s21")).toEqual([0, 0]);
+    expect(pages).toHaveLength(1);
+    expect(cell(pages[0]!, "s21")).toEqual([0, 4]);
+    expect(cell(pages[0]!, "s22")).toEqual([0, 5]);
+    expect(cell(pages[0]!, "s23")).toEqual([1, 4]);
+    expect(cell(pages[0]!, "s24")).toEqual([1, 5]);
+    // A column break within a page carries no marker — page breaks only.
+    expect(pages[0]!.cards.every((card) => !card.continuation)).toBe(true);
   });
 
-  test("backfill never crosses back to an earlier page", () => {
-    // 4+4+4 opens page 2; a later 2-group lands on page 2, not page 1's gaps
-    const pages = packBoard([groupOf(1, 4), groupOf(11, 4), groupOf(21, 4), groupOf(31, 2)], false);
-    expect(pages).toHaveLength(2);
-    expect(cell(pages[1]!, "s31")).toEqual([0, 4]);
+  test("a 7-12 group no longer demands an empty page: it fills the current one and continues", () => {
+    const pages = packBoard([groupOf(90, 1), groupOf(1, 8)], false);
+    expect(pages).toHaveLength(1);
+    expect(cell(pages[0]!, "s1")).toEqual([0, 1]);
+    expect(cell(pages[0]!, "s6")).toEqual([1, 0]);
+    expect(cell(pages[0]!, "s8")).toEqual([1, 2]);
   });
 
-  test("a 7-12 group needs an empty page: wraps col 0 into col 1, else opens the next page", () => {
-    const fresh = packBoard([groupOf(1, 8)], false);
-    expect(cell(fresh[0]!, "s7")).toEqual([1, 0]);
-    const after = packBoard([groupOf(90, 1), groupOf(1, 8)], false);
-    expect(after).toHaveLength(2);
-    expect(cell(after[1]!, "s1")).toEqual([0, 0]);
-  });
-
-  test("a >12 group fills whole pages from a fresh page and continues across the seam", () => {
-    const pages = packBoard([groupOf(90, 1), groupOf(1, 14)], false);
+  test("a >12 group spans as many pages as it needs, marker on each continued page", () => {
+    const pages = packBoard([groupOf(90, 1), groupOf(1, 26)], false);
     expect(pages).toHaveLength(3);
+    expect(pages[0]!.cards).toHaveLength(12);
     expect(pages[1]!.cards).toHaveLength(12);
-    expect(cell(pages[2]!, "s13")).toEqual([0, 0]);
+    const markers = pages.map((page) => page.cards.filter((card) => card.continuation).map((c) => c.session.sessionId));
+    expect(markers).toEqual([[], ["s12"], ["s24"]]);
+  });
+
+  test("a later small group backfills the last page's gaps, never an earlier page", () => {
+    // 14-group: page 1 full, page 2 holds two cards; the 2-group backfills page 2.
+    const pages = packBoard([groupOf(1, 14), groupOf(101, 2)], false);
+    expect(pages).toHaveLength(2);
+    expect(cell(pages[1]!, "s101")).toEqual([0, 2]);
+  });
+
+  test("the kickoff scenario fills page 1: five singles + a nine-card group leave no empty column", () => {
+    const singles = Array.from({ length: 5 }, (_, index) => groupOf(index * 10 + 61, 1));
+    const pages = packBoard([...singles, groupOf(1, 9)], false);
+    expect(pages).toHaveLength(2);
+    expect(pages[0]!.cards).toHaveLength(12);
+    expect(cell(pages[0]!, "s1")).toEqual([0, 5]); // the group's first card takes the last col-0 slot
+    expect(cell(pages[0]!, "s2")).toEqual([1, 0]);
+    expect(pages[1]!.cards.map((card) => [card.session.sessionId, card.continuation])).toEqual([
+      ["s8", true],
+      ["s9", false],
+    ]);
+    expect(pages[0]!.cards.every((card) => !card.continuation)).toBe(true);
+  });
+
+  test("fill-and-continue is sequence-general: every page except the last is full", () => {
+    for (const sizes of [
+      [6, 7],
+      [4, 9],
+      [1, 12],
+      [14, 14],
+      [5, 9, 4, 8],
+    ]) {
+      const pages = packBoard(sequence(...sizes), false);
+      for (const page of pages.slice(0, -1)) {
+        expect(page.cards).toHaveLength(BOARD_COLUMNS * BOARD_ROWS);
+      }
+    }
+  });
+
+  test("a split whose parent lands in the page's last slot marks the next page's first sub", () => {
+    const singles = Array.from({ length: 11 }, (_, index) => groupOf(200 + index * 10, 1));
+    const pages = packBoard([...singles, groupOf(1, 3)], false);
+    expect(cell(pages[0]!, "s1")).toEqual([1, 5]);
+    // The marker carries the group identity onto the next page: the first
+    // continued card is a grouped sub (indent + spine as today).
+    expect(pages[1]!.cards.map((card) => [card.session.sessionId, card.continuation, card.subagent])).toEqual([
+      ["s2", true, true],
+      ["s3", false, true],
+    ]);
   });
 
   test("grouped subs get indent + spine (mid/end); primaries and orphans get none", () => {

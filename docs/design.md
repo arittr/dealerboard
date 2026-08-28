@@ -85,8 +85,10 @@ The strip targets a 2560×720 physical display and scales proportionally in a
 display exists.
 
 Primary groups sort by logical slot. Immediate children sort by open time,
-provider, and identity, then render depth-first. Groups of six or fewer never
-split; groups of 7–12 require an empty page; larger groups fill full pages.
+provider, and identity, then render depth-first. Groups that fit a single
+column never split; any other group fills the current page's remaining slots
+and continues across pages, its first card on each continued page carrying a
+continuation marker, so every page except the last is full.
 The orphan tail remains one deterministic full-width block.
 
 ### Card contract

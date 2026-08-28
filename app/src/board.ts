@@ -1,7 +1,7 @@
 /**
  * Pure grouped-board reducer for the strip: parent-grouped ordering (subagents
  * attach under their nearest on-grid Paseo ancestor, orphans form one tail
- * block), group-atomic page packing, and validated page settings. No DOM, no
+ * fill-and-continue page packing (every page except the last is full), and validated page settings. No DOM, no
  * I/O; the rendering layer is app/src/cards.ts and the driver app/src/main.ts.
  */
 
@@ -197,6 +197,8 @@ export type PlacedCard = BoardCardSeed & {
   degraded: boolean;
   indent: boolean;
   spine: SpineSegment;
+  /** First continued card of a split group on this page (page-break marker). */
+  continuation: boolean;
   /** 0-based column within the page. */
   column: number;
   /** 0-based row within the column. */
@@ -220,11 +222,14 @@ const withSpines = (group: BoardGroup): SpinedSeed[] =>
 type MutablePage = { used: number[]; cards: PlacedCard[] };
 
 /**
- * Group-atomic first-fit (spec "Packing and paging"): small groups take the
- * first column with room on the current page (later groups may backfill an
- * earlier gap on that page, never an earlier page); a 7-12 group needs two
- * empty columns so it starts on the current page only while it is empty;
- * a larger group fills whole pages from a fresh page.
+ * First-fit with fill-and-continue (spec "General packing contract"): a group
+ * that fits a single column takes the first column with room on the current
+ * page (later groups may backfill an earlier gap on that page, never an
+ * earlier page — every earlier page is full by construction); any other group
+ * pours into the page's remaining slots in column order and continues across
+ * pages, its first card on each later page carrying the continuation marker.
+ * A new page only opens once the current one is completely full, so every
+ * page except the last is full.
  */
 export const packBoard = (groups: readonly BoardGroup[], degraded: boolean): BoardPage[] => {
   const pages: MutablePage[] = [];
@@ -234,8 +239,8 @@ export const packBoard = (groups: readonly BoardGroup[], degraded: boolean): Boa
     return page;
   };
   const current = (): MutablePage => pages[pages.length - 1] ?? openPage();
-  const place = (page: MutablePage, column: number, seed: SpinedSeed): void => {
-    page.cards.push({ ...seed, degraded, column, row: page.used[column] ?? 0 });
+  const place = (page: MutablePage, column: number, seed: SpinedSeed, continuation: boolean): void => {
+    page.cards.push({ ...seed, degraded, continuation, column, row: page.used[column] ?? 0 });
     page.used[column] = (page.used[column] ?? 0) + 1;
   };
 
@@ -244,30 +249,29 @@ export const packBoard = (groups: readonly BoardGroup[], degraded: boolean): Boa
     if (seeds.length === 0) {
       continue;
     }
-    if (seeds.length <= BOARD_ROWS) {
-      let page = current();
-      let column = page.used.findIndex((used) => used + seeds.length <= BOARD_ROWS);
-      if (column === -1) {
-        page = openPage();
-        column = 0;
-      }
+    let page = current();
+    const fit = page.used.findIndex((used) => used + seeds.length <= BOARD_ROWS);
+    if (fit !== -1) {
       for (const seed of seeds) {
-        place(page, column, seed);
+        place(page, fit, seed, false);
       }
-    } else {
-      const empty = current().cards.length === 0;
-      let page = empty ? current() : openPage();
-      let column = 0;
-      for (const seed of seeds) {
-        if ((page.used[column] ?? 0) >= BOARD_ROWS) {
-          column += 1;
-          if (column >= BOARD_COLUMNS) {
-            page = openPage();
-            column = 0;
-          }
+      continue;
+    }
+    let placedAny = false;
+    let column = 0;
+    for (const seed of seeds) {
+      while ((page.used[column] ?? 0) >= BOARD_ROWS) {
+        column += 1;
+        if (column >= BOARD_COLUMNS) {
+          page = openPage();
+          column = 0;
         }
-        place(page, column, seed);
       }
+      // A fresh page reached mid-group is a page break: its first card
+      // carries the marker. A group that merely STARTS on a fresh page
+      // (placedAny still false) is not continued from anywhere.
+      place(page, column, seed, placedAny && page.cards.length === 0);
+      placedAny = true;
     }
   }
   return pages.map((page) => ({ cards: page.cards }));

@@ -59,6 +59,7 @@ const placedCard = (session: ProjectedSession): PlacedCard => ({
   degraded: false,
   indent: false,
   spine: "none",
+  continuation: false,
   column: 0,
   row: 0,
 });
