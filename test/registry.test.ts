@@ -918,6 +918,39 @@ describe("repair commands", () => {
     expect(clearAllSessions(db)).toBe("applied");
     expect(countRows()).toBe(0);
   });
+
+  test("clearSession deletes resolved Paseo-linked descendants too", () => {
+    applyRegistryEvents(db, [
+      { ...start("orchestrator"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker-a"), origin: { kind: "paseo", ref: "agent-a" } },
+      { ...start("worker-b"), origin: { kind: "paseo", ref: "agent-b" } },
+      { ...start("unrelated"), origin: { kind: "paseo", ref: "agent-z" } },
+    ]);
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id IN ('worker-a', 'worker-b')",
+    );
+    applyRegistryEvents(db, [simple("Stop", "worker-a", { at: at(5) }), simple("Stop", "worker-b", { at: at(6) })]);
+
+    expect(clearSession(db, "claude", "orchestrator")).toBe("applied");
+    // The whole Paseo subtree is gone; unrelated roots survive.
+    expect(allRows().map((row) => row.session_id)).toEqual(["unrelated"]);
+  });
+
+  test("clearSession follows only resolved links: an ambiguous ref keeps the alleged child", () => {
+    applyRegistryEvents(db, [
+      { ...start("dup-a"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("dup-b"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker"), origin: { kind: "paseo", ref: "agent-1" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'");
+
+    expect(clearSession(db, "claude", "dup-a")).toBe("applied");
+    expect(
+      allRows()
+        .map((row) => row.session_id)
+        .sort(),
+    ).toEqual(["dup-b", "worker"]);
+  });
 });
 
 describe("transcript paths", () => {
@@ -1906,6 +1939,116 @@ describe("pruneStaleSessions", () => {
 
     expect(pruneStaleSessions(db, singleCutoff)).toBe(1);
     expect(listSessions(db)).toEqual([]);
+  });
+
+  test("skips any tree containing an unviewed row, no matter how stale", () => {
+    applyRegistryEvents(db, [
+      start("stale-unviewed", { at: "2026-08-01T00:00:00.000Z" }),
+      simple("Stop", "stale-unviewed", { at: "2026-08-01T00:00:01.000Z" }),
+      start("stale-viewed", { at: "2026-08-01T00:00:00.000Z" }),
+      simple("Stop", "stale-viewed", { at: "2026-08-01T00:00:01.000Z" }),
+    ]);
+    viewSession(db, "claude", "stale-viewed", "2026-08-01T02:00:00.000Z");
+
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(1);
+    expect(allRows().map((row) => row.session_id)).toEqual(["stale-unviewed"]);
+  });
+
+  test("an unviewed zcode row survives its 1h TTL", () => {
+    applyRegistryEvents(db, [
+      start("z1", { provider: "zcode", at: "2026-08-26T00:00:00.000Z" }),
+      simple("Stop", "z1", { provider: "zcode", at: "2026-08-26T00:00:01.000Z" }),
+    ]);
+    expect(pruneStaleSessions(db, "2026-08-26T03:00:00.000Z", "2026-08-26T01:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(1);
+  });
+
+  test("an unviewed child keeps its stale native tree", () => {
+    applyRegistryEvents(db, [
+      start("parent", { at: "2026-08-01T00:00:00.000Z" }),
+      subStart("child", "parent", { at: "2026-08-01T00:00:01.000Z" }),
+    ]);
+    db.run("UPDATE active_sessions SET unread_since = '2026-08-01T00:00:02.000Z' WHERE session_id = 'child'");
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(2);
+  });
+
+  test("an unviewed Paseo descendant keeps its whole resolved tree, ancestors included", () => {
+    // Paseo descendants are separate root rows; the unviewed one must keep
+    // its stale ancestors, not orphan them.
+    applyRegistryEvents(db, [
+      { ...start("orchestrator", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-1" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'");
+    applyRegistryEvents(db, [simple("Stop", "worker", { at: "2026-08-01T00:00:02.000Z" })]);
+
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
+    expect(
+      allRows()
+        .map((row) => row.session_id)
+        .sort(),
+    ).toEqual(["orchestrator", "worker"]);
+
+    // Once the result is viewed, nothing unviewed remains and the whole
+    // stale tree goes.
+    viewSession(db, "claude", "worker", "2026-08-01T01:00:00.000Z");
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(2);
+    expect(countRows()).toBe(0);
+  });
+
+  test("an ambiguous ref never links for prune either: the unviewed row keeps only itself", () => {
+    applyRegistryEvents(db, [
+      { ...start("dup-a", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("dup-b", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-1" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'");
+    applyRegistryEvents(db, [simple("Stop", "worker", { at: "2026-08-01T00:00:02.000Z" })]);
+
+    // agent-0 is ambiguous, so the worker is its own root: it keeps itself
+    // (unviewed) but not the two stale alleged parents.
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(2);
+    expect(allRows().map((row) => row.session_id)).toEqual(["worker"]);
+  });
+
+  test("an unviewed row keeps its whole connected component — Paseo siblings and stale descendants included", () => {
+    // The tree is kept or pruned as one unit, like native trees today: one
+    // unviewed member (worker-a) keeps the orchestrator, its viewed sibling
+    // worker-b, and the orchestrator's own stale done child worker-c.
+    applyRegistryEvents(db, [
+      { ...start("orchestrator", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker-a", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-a" } },
+      { ...start("worker-b", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-b" } },
+      { ...start("worker-c", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-c" } },
+    ]);
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id IN ('worker-a', 'worker-b', 'worker-c')",
+    );
+    applyRegistryEvents(db, [
+      simple("Stop", "worker-a", { at: "2026-08-01T00:00:02.000Z" }),
+      simple("Stop", "worker-b", { at: "2026-08-01T00:00:03.000Z" }),
+      simple("Stop", "worker-c", { at: "2026-08-01T00:00:04.000Z" }),
+    ]);
+    viewSession(db, "claude", "worker-b", "2026-08-01T01:00:00.000Z");
+    viewSession(db, "claude", "worker-c", "2026-08-01T01:00:00.000Z");
+
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(4);
+  });
+
+  test("a live Paseo child keeps its quiet parent from being pruned", () => {
+    // Lease protection also follows the component: the child's fresh
+    // updated_at keeps the whole linked tree, not just itself.
+    applyRegistryEvents(db, [
+      { ...start("orchestrator", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker", { at: "2026-08-26T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-1" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'");
+    applyRegistryEvents(db, [simple("Activity", "worker", { at: "2026-08-27T00:30:00.000Z" })]);
+
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(2);
   });
 });
 

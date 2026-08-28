@@ -638,16 +638,27 @@ export const listTitleTargets = (db: Database): TitleTarget[] =>
     });
 
 /**
- * Repair one selected session: select the exact `(provider, sessionId)` row,
- * then delete that composite identity — cascading to its descendants — inside
- * one write transaction. Never touches schema or recreates the database.
+ * Repair one selected session: delete that composite identity — cascading
+ * to its native descendants by foreign key AND to its resolved Paseo-linked
+ * descendants (clearing an orchestrator clears its whole logical tree) —
+ * inside one write transaction. Ambiguous refs are never followed
+ * (projection-equivalent resolution). Never touches schema or recreates
+ * the database.
  */
 export const clearSession = (db: Database, provider: Provider, sessionId: string): MutationResult =>
   inWriteTransaction(db, () => {
     if (getRow(db, provider, sessionId) === null) {
       return "ignored";
     }
-    db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [provider, sessionId]);
+    // Resolve the lineage BEFORE deleting anything: the walk reads origin
+    // rows the deletes are about to remove.
+    const subtree = paseoSubtreeIdentities(db, provider, sessionId);
+    for (const identity of subtree) {
+      db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [
+        identity.provider,
+        identity.sessionId,
+      ]);
+    }
     return "applied";
   });
 
@@ -1276,43 +1287,106 @@ export const updateSessionActivityLines = (db: Database, updates: readonly Sessi
  * zcode has no SessionEnd hook, so its rows lease out on a shorter cutoff
  * supplied by the caller; `zcodeCutoffIso` defaults to `cutoffIso` so
  * operator-driven single-cutoff prunes (`sessions prune`) apply one age to
- * every provider. A row inside its lease keeps every ancestor alive: a thread
- * with a live subagent is never pruned, no matter how quiet the parent's own
- * hooks have gone. `updated_at` holds an ISO-8601 UTC timestamp, so the
+ * every provider. A row inside its lease keeps its whole connected component
+ * alive, and so does any row holding an unviewed result (`unread_since`
+ * non-null) — the native tree joined with the resolved Paseo tree: prune is
+ * liveness cleanup, never a purge of results the user has not seen. The
+ * operator's intentional purges are clear/clear-all and dismiss/archive.
+ * `updated_at` holds an ISO-8601 UTC timestamp, so the
  * lexical comparison is chronological. Returns the number of stale top-level
  * rows (SQLite's own change count would also include cascade-deleted
  * children).
  */
 export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffIso: string = cutoffIso): number =>
   inWriteTransaction(db, () => {
-    // Rows inside their lease, plus every ancestor of such a row. A kept
-    // top-level row's tree is never deleted, so children only ever go with a
-    // fully stale tree via the cascade.
-    const keepSet = `WITH RECURSIVE keep(provider, session_id) AS (
-         SELECT provider, session_id FROM active_sessions
-          WHERE (provider = 'zcode' AND updated_at >= ?1) OR (provider != 'zcode' AND updated_at >= ?2)
-         UNION
-         SELECT child.provider, child.parent_session_id
-           FROM active_sessions AS child
-           JOIN keep ON keep.provider = child.provider AND keep.session_id = child.session_id
-          WHERE child.parent_session_id IS NOT NULL
-       )
-       SELECT provider, session_id FROM keep`;
-    const stale = db
+    // A connected component — the native tree joined with the resolved
+    // Paseo tree — is kept or pruned as one unit: a row inside its lease or
+    // holding an unviewed result keeps its whole component (ancestors,
+    // descendants, and Paseo siblings alike). Prune is liveness cleanup,
+    // never a purge of results the user has not seen.
+    const rows = db
       .query(
-        `SELECT COUNT(*) AS n FROM active_sessions
-         WHERE parent_session_id IS NULL
-           AND (provider, session_id) NOT IN (${keepSet})`,
+        `SELECT provider, session_id, parent_session_id, updated_at, unread_since,
+                origin_kind, origin_ref, origin_subagent, origin_parent_ref
+           FROM active_sessions`,
       )
-      .get(zcodeCutoffIso, cutoffIso) as { n: number } | null;
-    const count = stale?.n ?? 0;
-    if (count > 0) {
-      db.run(
-        `DELETE FROM active_sessions
-         WHERE parent_session_id IS NULL
-           AND (provider, session_id) NOT IN (${keepSet})`,
-        [zcodeCutoffIso, cutoffIso],
-      );
+      .all() as Array<{
+      provider: Provider;
+      session_id: string;
+      parent_session_id: string | null;
+      updated_at: string;
+      unread_since: string | null;
+      origin_kind: string | null;
+      origin_ref: string | null;
+      origin_subagent: number;
+      origin_parent_ref: string | null;
+    }>;
+    const keyOf = (provider: string, sessionId: string): string => `${provider}\u0000${sessionId}`;
+    // Undirected adjacency: native parent_session_id edges (both ways) plus
+    // the resolved Paseo links (both ways — a live child keeps its quiet
+    // parent, and an unviewed child keeps its siblings).
+    const neighbors = new Map<string, string[]>();
+    const link = (a: string, b: string): void => {
+      const aList = neighbors.get(a);
+      if (aList === undefined) {
+        neighbors.set(a, [b]);
+      } else {
+        aList.push(b);
+      }
+      const bList = neighbors.get(b);
+      if (bList === undefined) {
+        neighbors.set(b, [a]);
+      } else {
+        bList.push(a);
+      }
+    };
+    for (const row of rows) {
+      if (row.parent_session_id !== null) {
+        link(keyOf(row.provider, row.session_id), keyOf(row.provider, row.parent_session_id));
+      }
+    }
+    const paseoLinks = resolvePaseoParentLinks(
+      rows
+        .filter((row) => row.origin_kind === "paseo" && row.parent_session_id === null)
+        .map((row) => ({
+          provider: row.provider,
+          sessionId: row.session_id,
+          originRef: row.origin_ref,
+          originSubagent: row.origin_subagent,
+          originParentRef: row.origin_parent_ref,
+        })),
+    );
+    for (const [childKey, parentKey] of paseoLinks) {
+      link(childKey, parentKey);
+    }
+    // Seeds: rows inside their lease and rows holding unviewed results.
+    const keep = new Set<string>();
+    const stack: string[] = [];
+    for (const row of rows) {
+      const inLease = row.provider === "zcode" ? row.updated_at >= zcodeCutoffIso : row.updated_at >= cutoffIso;
+      if (inLease || row.unread_since !== null) {
+        const key = keyOf(row.provider, row.session_id);
+        if (!keep.has(key)) {
+          keep.add(key);
+          stack.push(key);
+        }
+      }
+    }
+    for (let key = stack.pop(); key !== undefined; key = stack.pop()) {
+      for (const next of neighbors.get(key) ?? []) {
+        if (!keep.has(next)) {
+          keep.add(next);
+          stack.push(next);
+        }
+      }
+    }
+    // Only top-level rows are deleted; their native children cascade.
+    let count = 0;
+    for (const row of rows) {
+      if (row.parent_session_id === null && !keep.has(keyOf(row.provider, row.session_id))) {
+        db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [row.provider, row.session_id]);
+        count += 1;
+      }
     }
     return count;
   });

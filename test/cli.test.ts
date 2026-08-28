@@ -1158,6 +1158,75 @@ describe("sessions commands", () => {
     }
   });
 
+  test("sessions prune skips trees holding an unviewed result", async () => {
+    initRegistry();
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "unviewed",
+          title: null,
+          project: null,
+          ghosttyTerminalId: null,
+          transcriptPath: null,
+          model: null,
+          observedAt: "2026-08-01T00:00:00.000Z",
+        },
+        { kind: "Stop", provider: "claude", sessionId: "unviewed", observedAt: "2026-08-01T00:00:01.000Z" },
+      ]);
+    } finally {
+      db.close();
+    }
+    // A month later: stale by any TTL, but the result was never viewed.
+    const harness = makeHarness({ now: () => "2026-09-01T00:00:00.000Z" });
+    expect(await runCli(["sessions", "prune", "0.5"], harness.deps)).toBe(0);
+    expect(harness.stdout()).toBe("pruned 0 sessions\n");
+    expect(listRows().map((row) => row.sessionId)).toEqual(["unviewed"]);
+  });
+
+  test("sessions clear removes Paseo-linked descendants with the orchestrator", async () => {
+    initRegistry();
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "orchestrator",
+          title: null,
+          project: null,
+          ghosttyTerminalId: null,
+          transcriptPath: null,
+          model: null,
+          observedAt: NOW,
+          origin: { kind: "paseo", ref: "agent-0" },
+        },
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "worker",
+          title: null,
+          project: null,
+          ghosttyTerminalId: null,
+          transcriptPath: null,
+          model: null,
+          observedAt: NOW,
+          origin: { kind: "paseo", ref: "agent-1" },
+        },
+      ]);
+      db.run(
+        "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'",
+      );
+    } finally {
+      db.close();
+    }
+    const harness = makeHarness();
+    expect(await runCli(["sessions", "clear", "claude", "orchestrator"], harness.deps)).toBe(0);
+    expect(listRows()).toEqual([]);
+  });
+
   test("sessions ack clears a session's unread state", async () => {
     initRegistry();
     const start = makeHarness({ stdin: stdinOf(startEvent("a1")) });

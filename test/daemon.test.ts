@@ -12,7 +12,7 @@ import {
 import type { DiagnosticRecord } from "../src/core/diagnostics";
 import { type AppPaths, resolveAppPaths } from "../src/core/paths";
 import { ProjectionError, readProjection } from "../src/core/projection";
-import { applyRegistryEvents, syncPaseoStates } from "../src/core/registry";
+import { applyRegistryEvents, syncPaseoStates, viewSession } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
 import { parseSessionSnapshot, type RegistryEvent, type SessionSnapshotV2 } from "../src/protocol";
@@ -448,7 +448,22 @@ describe("ProjectionDaemon maintenance", () => {
   });
 
   test("prunes sessions whose last hook is older than the TTL and republishes", () => {
-    startSession("stale", "2026-08-01T00:00:00.000Z");
+    // The stale row is idle and never-unread (projection-invisible, the
+    // canonical ages-out shape): a row holding an unviewed result must
+    // survive the prune instead (covered by the Paseo-tree test below).
+    apply([
+      {
+        kind: "SessionStart",
+        provider: "claude",
+        sessionId: "stale",
+        title: null,
+        project: null,
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: null,
+        observedAt: "2026-08-01T00:00:00.000Z",
+      },
+    ]);
     startSession("fresh", NOW);
     const harness = makeHarness();
     harness.daemon.start();
@@ -767,6 +782,81 @@ describe("ProjectionDaemon maintenance", () => {
       expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
     } finally {
       harness.daemon.stop();
+    }
+  });
+
+  test("daemon prune keeps the whole Paseo tree of an unviewed row until it is viewed", () => {
+    apply([
+      {
+        kind: "SessionStart",
+        provider: "claude",
+        sessionId: "orchestrator",
+        title: null,
+        project: null,
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: null,
+        origin: { kind: "paseo", ref: "agent-0" },
+        observedAt: "2026-08-01T00:00:00.000Z",
+      },
+      {
+        kind: "SessionStart",
+        provider: "claude",
+        sessionId: "worker",
+        title: null,
+        project: null,
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: null,
+        origin: { kind: "paseo", ref: "agent-1" },
+        observedAt: "2026-08-01T00:00:01.000Z",
+      },
+      { kind: "Stop", provider: "claude", sessionId: "worker", observedAt: "2026-08-01T00:00:02.000Z" },
+    ]);
+    const link = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      link.run(
+        "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'",
+      );
+    } finally {
+      link.close();
+    }
+
+    const sessionIds = (): string[] => {
+      const db = openRegistryDatabase(paths.database, "readonly");
+      try {
+        return (
+          db.query("SELECT session_id FROM active_sessions ORDER BY session_id").all() as { session_id: string }[]
+        ).map((row) => row.session_id);
+      } finally {
+        db.close();
+      }
+    };
+
+    // The first daemon's startup tick ran the prune pass: the stale tree
+    // survives because one member is unviewed.
+    const first = makeHarness();
+    first.daemon.start();
+    first.daemon.stop();
+    expect(sessionIds()).toEqual(["orchestrator", "worker"]);
+
+    // View the result; a later daemon (clock past the TTL) prunes the
+    // now-fully-viewed tree — both root rows.
+    const view = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      viewSession(view, "claude", "worker", NOW);
+    } finally {
+      view.close();
+    }
+    const second = makeHarness({
+      nowMs: () => Date.parse("2026-08-27T00:00:00.000Z"),
+      now: () => "2026-08-27T00:00:00.000Z",
+    });
+    second.daemon.start();
+    try {
+      expect(sessionIds()).toEqual([]);
+    } finally {
+      second.daemon.stop();
     }
   });
 });
