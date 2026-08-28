@@ -837,7 +837,7 @@ git commit -m "feat(registry): viewSession clears the badge and starts the viewe
 
 **Interfaces:**
 - Consumes: `paseoSubtreeIdentities` and `GestureWatermark` from Task 2; `viewSession` (used in test setups).
-- Produces: `export const acknowledgeSession = (db: Database, provider: Provider, sessionId: string, ackedAt: string, watermark: GestureWatermark | null = null): MutationResult` — dismiss: clears `unread_since`/`done_since`/`viewed_since`, retires `error → idle`, cascades the same semantics to resolved Paseo-lineage descendants (rows are never deleted). `acked_at` advances only to the exact stamp of the stamps consumed (never gesture time). A causal watermark consumes only stamps ≤ its stamp; `{ unreadSince: null }` consumes nothing and protects anything in transit; `null` is unconditional (operator CLI, deck press — today's behavior exactly).
+- Produces: `export const acknowledgeSession = (db: Database, provider: Provider, sessionId: string, ackedAt: string, watermark: GestureWatermark | null = null): MutationResult` — dismiss: clears `unread_since`/`done_since`/`viewed_since`, retires `error → idle`, cascades the same semantics to resolved Paseo-lineage descendants (rows are never deleted). `acked_at` advances only to the exact stamp of the stamps consumed (never gesture time). **The causal guard keys on the result's identity stamp — the row's `unread_since` — never on the auxiliary `done_since` hold:** a row is consumable iff its current `unread_since` is null or ≤ the watermark. A viewed done card (unread cleared by the view) is consumable by the causal-null watermark that saw it; an ended card whose `done_since` was stamped at SessionEnd (later than its `unread_since`) is consumed whole, because the hold follows the result. A fresh result re-stamps `unread_since` newer than the watermark and protects the entire row. `{ unreadSince: null }` consumes rows with no newer result; `null` is unconditional (operator CLI, deck press — today's behavior exactly).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -933,6 +933,17 @@ describe("acknowledgeSession as dismiss", () => {
     expect(getRow("child-b")).toMatchObject({ unread_since: at(9), done_since: at(9) });
   });
 
+  test("a causal-null dismiss consumes a viewed done card the snapshot showed", () => {
+    // The done card was viewed (badge cleared, clock running) — the snapshot
+    // showed it with no unread. The null-stamp watermark must still consume
+    // the done hold: consumption keys on the result identity (unread), and
+    // the done hold follows the result.
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: null })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null, viewed_since: null });
+  });
+
   test("dismiss advances acked_at to the consumed stamp, so a same-stamp flag synced late stays suppressed", () => {
     applyRegistryEvents(db, [
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
@@ -976,7 +987,7 @@ Expected: FAIL — the cascade/watermark behaviors do not exist yet (e.g. descen
 
 - [ ] **Step 3: Replace `acknowledgeSession`**
 
-Replace the doc comment and function (registry.ts :625-652) with the version below. The statement binds `causal` (1 when a watermark is present, 0 when unconditional) and `wm` (the watermark's stamp, null for a null-stamp watermark). Binding map, in order: unread-clear `causal, wm, wm`; done-clear `causal, wm, wm`; acked_at consumed-unread `causal, wm, wm`; acked_at consumed-done `causal, wm, wm`; status-retire `causal, wm, wm`; status_since-retire `causal, wm, wm, ackedAt`; background-retire `causal, wm, wm`; identity `provider, sessionId`; guard-unread `causal, wm, wm`; guard-done `causal, wm, wm`; guard-error `causal, wm, wm` — 33 placeholders, 33 bound values.
+Replace the doc comment and function (registry.ts :625-652) with the version below. The causal guard keys on the result's identity stamp (`unread_since`) — never on the auxiliary `done_since` hold, which SessionEnd can stamp later than the unread it stands for (Task 4). A row is consumable when the gesture is unconditional, when the row has no unread (the snapshot showed exactly this state), or when its unread stamp is at or before the watermark; consumption then clears every ledger and retires an error together. The statement binds `causal` (1 when a watermark is present, 0 when unconditional) and `wm` (the watermark's stamp, null for a null-stamp watermark). Binding map, in order: error retirement's `status_since` ← `ackedAt`; identity ← `provider, sessionId`; causal guard ← `causal, wm, wm` — 6 placeholders, 6 bound values.
 
 ```typescript
 /**
@@ -989,12 +1000,17 @@ Replace the doc comment and function (registry.ts :625-652) with the version bel
  * `acked_at` advances to the exact stamp of the result(s) consumed — never
  * the gesture time — so the Paseo flag mirror can neither resurrect an
  * already-viewed flag nor swallow news that has not synced yet; a dismiss
- * that consumes nothing leaves it alone. A causal watermark consumes only
- * stamps at or before the stamp the gesture's snapshot showed; a null-stamp
- * watermark (the snapshot showed no unread) consumes nothing and protects
- * anything in transit; no watermark is unconditional (operator CLI, deck
- * press). The retirement's `status_since` is the gesture time. Never
- * touches updated_at.
+ * that consumes nothing leaves it alone.
+ *
+ * The causal watermark identifies the newest result the gesture's snapshot
+ * showed: a row is consumable iff its current `unread_since` is null or at
+ * or before the watermark. Consumption then clears the row's ledgers
+ * together — the auxiliary `done_since` hold follows the result and never
+ * gates it (an ended card's hold postdates its unread; a viewed done card
+ * has no unread at all). A fresh result re-stamps `unread_since` newer than
+ * the watermark and protects the whole row. No watermark is unconditional
+ * (operator CLI, deck press). The retirement's `status_since` is the
+ * gesture time. Never touches updated_at.
  */
 export const acknowledgeSession = (
   db: Database,
@@ -1010,45 +1026,24 @@ export const acknowledgeSession = (
     for (const identity of paseoSubtreeIdentities(db, provider, sessionId)) {
       const result = db.run(
         `UPDATE active_sessions
-         SET unread_since = CASE WHEN ? = 0 OR (? IS NOT NULL AND unread_since <= ?) THEN NULL ELSE unread_since END,
-             done_since = CASE WHEN ? = 0 OR (? IS NOT NULL AND done_since <= ?) THEN NULL ELSE done_since END,
+         SET unread_since = NULL,
+             done_since = NULL,
              viewed_since = NULL,
              acked_at = NULLIF(
-               max(
-                 COALESCE(acked_at, ''),
-                 COALESCE(CASE WHEN unread_since IS NOT NULL AND (? = 0 OR (? IS NOT NULL AND unread_since <= ?)) THEN unread_since ELSE NULL END, ''),
-                 COALESCE(CASE WHEN done_since IS NOT NULL AND (? = 0 OR (? IS NOT NULL AND done_since <= ?)) THEN done_since ELSE NULL END, '')
-               ),
+               max(COALESCE(acked_at, ''), COALESCE(unread_since, ''), COALESCE(done_since, '')),
                ''
              ),
-             status = CASE
-               WHEN status = 'error' AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))
-               THEN 'idle' ELSE status END,
-             status_since = CASE
-               WHEN status = 'error' AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))
-               THEN ? ELSE status_since END,
-             background_outstanding = CASE
-               WHEN status = 'error' AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))
-               THEN 0 ELSE background_outstanding END
+             status = CASE WHEN status = 'error' THEN 'idle' ELSE status END,
+             status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
+             background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
          WHERE provider = ? AND session_id = ?
-           AND (
-             (unread_since IS NOT NULL AND (? = 0 OR (? IS NOT NULL AND unread_since <= ?)))
-             OR (done_since IS NOT NULL AND (? = 0 OR (? IS NOT NULL AND done_since <= ?)))
-             OR (status = 'error' AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?)))
-           )`,
+           AND (unread_since IS NOT NULL OR done_since IS NOT NULL OR status = 'error')
+           AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))`,
         [
-          causal, wm, wm, // unread clear
-          causal, wm, wm, // done clear
-          causal, wm, wm, // acked_at: consumed unread stamp
-          causal, wm, wm, // acked_at: consumed done stamp
-          causal, wm, wm, // error retirement
-          causal, wm, wm, ackedAt, // error retirement's status_since
-          causal, wm, wm, // error retirement's background disarm
+          ackedAt, // error retirement's status_since (gesture time)
           identity.provider,
           identity.sessionId,
-          causal, wm, wm, // guard: consumable unread
-          causal, wm, wm, // guard: consumable done
-          causal, wm, wm, // guard: consumable error
+          causal, wm, wm, // causal guard on the result identity (unread_since)
         ],
       );
       changed += result.changes;
@@ -1057,7 +1052,7 @@ export const acknowledgeSession = (
   });
 ```
 
-(All CASE conditions read pre-update column values within one statement. The `acked_at` maximum covers the existing watermark plus exactly the stamps this statement consumes; `NULLIF(…, '')` restores NULL when there was nothing to advance.)
+(All expressions read pre-update column values within one statement: `acked_at` advances to the latest of its prior value and the stamps this row actually held — the consumed result's identity stamp, and its auxiliary hold. `NULLIF(…, '')` restores NULL when there was nothing to advance. The WHERE's first clause is the something-to-consume guard that makes a no-op dismiss report `ignored`; the second is the causal guard.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1180,6 +1175,23 @@ describe("SessionEnd retention (ended cards)", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
     applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
     expect(getRow("s1")?.done_since).toBe(at(5)); // not regressed to the end stamp
+  });
+
+  test("a causal dismiss consumes an ended card whose done hold postdates the seen unread", () => {
+    // Failure at at(5) stamps unread only; the end at at(9) adds the done
+    // hold. The gesture's snapshot showed the unread at(5) — the dismiss must
+    // consume the whole ended card even though the auxiliary done stamp is
+    // newer than the watermark (consumption keys on the result identity).
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: at(5) })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: null,
+      done_since: null,
+      viewed_since: null,
+      ended_at: at(9), // the row itself remains until prune
+    });
   });
 });
 ```
@@ -1320,12 +1332,12 @@ git commit -m "feat(registry): SessionEnd keeps unviewed results as ended cards"
 ### Task 5: Paseo overlay — passive views inert, archive cascade, repaired settlements badge (R5)
 
 **Files:**
-- Modify: `src/core/registry.ts` (syncPaseoStates doc comment :735-800, function body :802-975 — flagged branch :838-862 stays; else branch :863-905 restructured; settled-record repair :906-937)
-- Test: `test/registry.test.ts`
+- Modify: `src/core/registry.ts` (syncPaseoStates doc comment :735-800, function body :802-975 — flagged branch :838-862 gains the view-clock reset; else branch :863-905 restructured; settled-record repair :906-937)
+- Test: `test/registry.test.ts`, `test/projection.test.ts` (the archive-unlinking integration test in item 8)
 
 **Interfaces:**
 - Consumes: `viewed_since` semantics from Tasks 2-3; `paseoSubtreeIdentities` (resolved lineage) from Task 2.
-- Produces: (a) non-archived cleared/absent-flag records no longer write ledgers (origin stamping only — passive views are inert); (b) archived records UNSTAMP the archived row's origin (archiving is terminal: the row stops representing the agent, which breaks the Paseo link so still-active descendants fail-safe into their own orphan roots per R7) and cascade a freshness-guarded ledger clear (`unread_since`, `done_since`, `viewed_since`) over the resolved Paseo subtree; (c) the settled-record repair stamps `unread_since` alongside `done_since` (unless archived, or older than the row's `acked_at`), clears `viewed_since`; (d) rotation cleanup untouched (status-only) — pinned by a new test.
+- Produces: (a) non-archived cleared/absent-flag records no longer write ledgers (origin stamping only — passive views are inert); (b) archived records UNSTAMP the archived row's origin (archiving is terminal: the row stops representing the agent, which breaks the Paseo link so still-active descendants fail-safe into their own orphan roots per R7) and cascade a freshness-guarded ledger clear (`unread_since`, `done_since`, `viewed_since`) over the resolved Paseo subtree; (c) the settled-record repair stamps `unread_since` alongside `done_since` (unless archived, or older than the row's `acked_at`), clearing `viewed_since`; (d) a fresh attention flag that lands an unread stamp also clears `viewed_since` — new news makes the card unviewed again, so the expiry sweep can never treat a fresh flag as already viewed; (e) rotation cleanup untouched (status-only) — pinned by a new test.
 
 - [ ] **Step 1: Update and add the pinned tests**
 
@@ -1598,7 +1610,7 @@ In `test/registry.test.ts`, within `describe("syncPaseoStates", …)`:
 The remaining new tests from item 7 continue in the same registry `describe` block:
 
 ```typescript
-  test("a stale archive does not clear newer descendant news", () => {
+  test("a stale archive un-stamps the parent but never clears newer descendant news", () => {
     applyRegistryEvents(db, [
       { ...start("parent"), origin: { kind: "paseo", ref: "a1" } },
       { ...start("child"), origin: { kind: "paseo", ref: "a2" } },
@@ -1609,8 +1621,27 @@ The remaining new tests from item 7 continue in the same registry `describe` blo
     const archived = syncPaseoStates(db, [
       paseoState({ sessionId: "parent", requiresAttention: false, updatedAt: at(8), archivedAt: at(9) }),
     ]);
-    expect(archived).toBe(0);
+    // The archive is terminal for the parent's representation of the agent:
+    // its origin un-stamps, which is a counted change. But the freshness
+    // guard (clearTime at(9) is not newer than the child's at(12)) protects
+    // the result that landed after the archive.
+    expect(archived).toBeGreaterThan(0);
+    expect(getRow("parent")).toMatchObject({ origin_kind: null, origin_ref: null, origin_subagent: 0 });
     expect(getRow("child")).toMatchObject({ unread_since: at(12), done_since: at(12) });
+  });
+
+  test("a fresh attention flag that lands an unread stamp cancels the view clock", () => {
+    // The card was viewed (clock running); a fresh flag is new news — the
+    // card is unviewed again, so the expiry sweep must never see a row with
+    // an unread stamp AND a live view clock.
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    viewSession(db, "claude", "s1", at(8));
+    const changed = syncPaseoStates(db, [paseoState({ attentionTimestamp: at(9) })]);
+    expect(changed).toBe(1);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), viewed_since: null });
   });
 
   test("the settled-record repair never resurrects a result dismissed after the record", () => {
@@ -1708,14 +1739,56 @@ The remaining new tests from item 7 continue in the same registry `describe` blo
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `bun test test/registry.test.ts`
-Expected: FAIL — cleared records still clear `unread_since`; the repair does not stamp unread; the archive cascade misses the child.
+Run: `bun test test/registry.test.ts test/projection.test.ts`
+Expected: FAIL — cleared records still clear `unread_since`; the repair does not stamp unread; the archive cascade misses the child; the flagged branch leaves `viewed_since` running; the projection integration test's archive does not unlink (projection.test.ts is in scope: item 8 lives there).
 
 - [ ] **Step 3: Implement the overlay changes**
 
 In `src/core/registry.ts`, inside `syncPaseoStates`:
 
-1. Replace the entire `else` branch (the block starting `} else {` with the comment `// Cleared, absent flag, or archived:` through its closing `}` before the settled-record comment) with two branches — archived first, then inert cleared:
+1. Replace the flagged branch's UPDATE (registry.ts :833-861) so a fresh flag that lands an unread stamp also cancels the view clock. The statement gains a `viewed_since` CASE whose condition mirrors exactly when the unread CASE writes (a strictly-newer-than-ack flag landing on an unread-free row); binding map, in order: origin ← `state.agentId, state.isSubagent ? 1 : 0, state.parentAgentId`; unread CASE ← `flagTime, flagTime, flagTime`; viewed CASE ← `flagTime, flagTime`; identity ← `state.provider, state.sessionId`; freshness guard ← `state.agentId, state.isSubagent ? 1 : 0, state.parentAgentId, flagTime, flagTime` — 15 placeholders, 15 bound values.
+
+```typescript
+        const result = db.run(
+          `UPDATE active_sessions
+           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?, origin_parent_ref = ?,
+               unread_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN COALESCE(unread_since, ?)
+                 ELSE unread_since
+               END,
+               viewed_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) AND unread_since IS NULL THEN NULL
+                 ELSE viewed_since
+               END
+           WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+             AND (
+               origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
+               OR origin_parent_ref IS NOT ?
+               OR (? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) AND unread_since IS NULL)
+             )`,
+          [
+            state.agentId,
+            state.isSubagent ? 1 : 0,
+            state.parentAgentId,
+            flagTime,
+            flagTime,
+            flagTime,
+            flagTime,
+            flagTime,
+            state.provider,
+            state.sessionId,
+            state.agentId,
+            state.isSubagent ? 1 : 0,
+            state.parentAgentId,
+            flagTime,
+            flagTime,
+          ],
+        );
+```
+
+(The `viewed_since` CASE reads the pre-update `unread_since`: it fires exactly when this statement lands a fresh unread stamp — `COALESCE(unread_since, ?)` writes only onto null — so a repeated flag on an already-badged card never disturbs the clock, and a fresh flag always cancels it.)
+
+2. Replace the entire `else` branch (the block starting `} else {` with the comment `// Cleared, absent flag, or archived:` through its closing `}` before the settled-record comment) with two branches — archived first, then inert cleared:
 
 ```typescript
       } else if (state.archivedAt !== null) {
@@ -1860,19 +1933,19 @@ In the `- A settled record (` bullet, replace the sentence `` `status_since` ado
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `bun test test/registry.test.ts`
+Run: `bun test test/registry.test.ts test/projection.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Full suite + typecheck**
 
 Run: `bun test && bun run typecheck`
-Expected: PASS. (`test/daemon.test.ts`'s paseo-pass tests exercise the flagged path only, which is unchanged — no edits expected there.)
+Expected: PASS. (`test/daemon.test.ts`'s paseo-pass tests exercise the flagged path only — its only change is the viewed-clock reset, which those tests never seed — no edits expected there.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/core/registry.ts test/registry.test.ts
-git commit -m "feat(registry): Paseo views go inert; archive cascades; repairs badge"
+git add src/core/registry.ts test/registry.test.ts test/projection.test.ts
+git commit -m "feat(registry): Paseo views go inert; archive cascades; repairs badge; fresh flags cancel the view clock"
 ```
 
 ---
@@ -1886,7 +1959,7 @@ git commit -m "feat(registry): Paseo views go inert; archive cascades; repairs b
 **Interfaces:**
 - Consumes: `resolvePaseoParentLinks` and `paseoSubtreeIdentities` from Task 2.
 - Produces:
-  - `pruneStaleSessions(db, cutoffIso, zcodeCutoffIso?)` skips any tree containing a row with `unread_since` non-null — where "tree" is the NATIVE tree plus the whole RESOLVED Paseo tree: every resolved Paseo ancestor of an unviewed row is kept as well, whether prune is invoked by the daemon or CLI `sessions prune` (shared code path).
+  - `pruneStaleSessions(db, cutoffIso, zcodeCutoffIso?)` skips any tree containing a row with `unread_since` non-null — where "tree" is the whole CONNECTED COMPONENT: the native tree joined with the resolved Paseo tree, so an unviewed row keeps its ancestors, its descendants, and its Paseo siblings alike (one unit, like native trees today), whether prune is invoked by the daemon or CLI `sessions prune` (shared code path). The keep set is computed in memory — no DDL (the daemon connection's invariant test rejects CREATE/DROP/ALTER, daemon.test.ts:391), and the Paseo links come from the same normalized top-level input the projection feeds `resolvePaseoParentLinks`.
   - `clearSession(db, provider, sessionId)` deletes the target row and its descendants — native FK cascade AND resolved Paseo-linked descendants (the clearing contract's manual-clear row). Ambiguous refs are never followed (projection-equivalent resolution).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1959,6 +2032,45 @@ In `test/registry.test.ts`, inside `describe("pruneStaleSessions", …)`, append
     // (unviewed) but not the two stale alleged parents.
     expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(2);
     expect(allRows().map((row) => row.session_id)).toEqual(["worker"]);
+  });
+
+  test("an unviewed row keeps its whole connected component — Paseo siblings and stale descendants included", () => {
+    // The tree is kept or pruned as one unit, like native trees today: one
+    // unviewed member (worker-a) keeps the orchestrator, its viewed sibling
+    // worker-b, and the orchestrator's own stale done child worker-c.
+    applyRegistryEvents(db, [
+      { ...start("orchestrator", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker-a", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-a" } },
+      { ...start("worker-b", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-b" } },
+      { ...start("worker-c", { at: "2026-08-01T00:00:01.000Z" }), origin: { kind: "paseo", ref: "agent-c" } },
+    ]);
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id IN ('worker-a', 'worker-b', 'worker-c')",
+    );
+    applyRegistryEvents(db, [
+      simple("Stop", "worker-a", { at: "2026-08-01T00:00:02.000Z" }),
+      simple("Stop", "worker-b", { at: "2026-08-01T00:00:03.000Z" }),
+      simple("Stop", "worker-c", { at: "2026-08-01T00:00:04.000Z" }),
+    ]);
+    viewSession(db, "claude", "worker-b", "2026-08-01T01:00:00.000Z");
+    viewSession(db, "claude", "worker-c", "2026-08-01T01:00:00.000Z");
+
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(4);
+  });
+
+  test("a live Paseo child keeps its quiet parent from being pruned", () => {
+    // Lease protection also follows the component: the child's fresh
+    // updated_at keeps the whole linked tree, not just itself.
+    applyRegistryEvents(db, [
+      { ...start("orchestrator", { at: "2026-08-01T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("worker", { at: "2026-08-26T00:00:00.000Z" }), origin: { kind: "paseo", ref: "agent-1" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'worker'");
+    applyRegistryEvents(db, [simple("Activity", "worker", { at: "2026-08-27T00:30:00.000Z" })]);
+
+    expect(pruneStaleSessions(db, "2026-08-27T00:00:00.000Z")).toBe(0);
+    expect(countRows()).toBe(2);
   });
 ```
 
@@ -2187,101 +2299,99 @@ export const clearSession = (db: Database, provider: Provider, sessionId: string
   });
 ```
 
-2. Replace `pruneStaleSessions` with the Paseo-tree-aware version. The resolved Paseo ancestors of every unviewed row are materialized into a temp table that seeds the recursive keep set alongside the lease/unviewed rows; the native recursion then carries protection up native parentage exactly as before:
+2. Replace `pruneStaleSessions` with the component-aware version. The keep set is computed in memory — never with DDL: the daemon connection's invariant test (daemon.test.ts:391) rejects every CREATE/DROP/ALTER, and Paseo lineage resolution lives in `resolvePaseoParentLinks`, which SQL cannot express. The lineage input is normalized exactly like the projection's call site (Paseo-kind, top-level rows only — raw origin fields of native or non-Paseo rows never reach the resolver):
 
 ```typescript
 export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffIso: string = cutoffIso): number =>
   inWriteTransaction(db, () => {
-    // Resolved-Paseo protection: an unviewed row keeps its whole logical
-    // tree, so every resolved Paseo ancestor (unique refs, cycles excluded
-    // — projection-equivalent) joins the keep set. SQL cannot express that
-    // resolution, so compute it here and seed the recursive CTE from a
-    // temp table.
+    // A connected component — the native tree joined with the resolved
+    // Paseo tree — is kept or pruned as one unit: a row inside its lease or
+    // holding an unviewed result keeps its whole component (ancestors,
+    // descendants, and Paseo siblings alike). Prune is liveness cleanup,
+    // never a purge of results the user has not seen.
     const rows = db
       .query(
-        `SELECT provider, session_id, origin_ref, origin_subagent, origin_parent_ref, unread_since
+        `SELECT provider, session_id, parent_session_id, updated_at, unread_since,
+                origin_kind, origin_ref, origin_subagent, origin_parent_ref
            FROM active_sessions`,
       )
       .all() as Array<{
-      provider: Provider;
-      session_id: string;
-      origin_ref: string | null;
-      origin_subagent: number;
-      origin_parent_ref: string | null;
-      unread_since: string | null;
-    }>;
-    const links = resolvePaseoParentLinks(
-      rows.map((row) => ({
-        provider: row.provider,
-        sessionId: row.session_id,
-        originRef: row.origin_ref,
-        originSubagent: row.origin_subagent,
-        originParentRef: row.origin_parent_ref,
-      })),
-    );
-    db.exec(
-      `CREATE TEMP TABLE IF NOT EXISTS prune_keep_paseo (
-         provider TEXT NOT NULL,
-         session_id TEXT NOT NULL,
-         PRIMARY KEY (provider, session_id)
-       )`,
-    );
-    db.exec("DELETE FROM prune_keep_paseo");
-    const protectedKeys = new Set<string>();
+        provider: Provider;
+        session_id: string;
+        parent_session_id: string | null;
+        updated_at: string;
+        unread_since: string | null;
+        origin_kind: string | null;
+        origin_ref: string | null;
+        origin_subagent: number;
+        origin_parent_ref: string | null;
+      }>;
+    const keyOf = (provider: string, sessionId: string): string => `${provider}\u0000${sessionId}`;
+    // Undirected adjacency: native parent_session_id edges (both ways) plus
+    // the resolved Paseo links (both ways — a live child keeps its quiet
+    // parent, and an unviewed child keeps its siblings).
+    const neighbors = new Map<string, string[]>();
+    const link = (a: string, b: string): void => {
+      const aList = neighbors.get(a);
+      if (aList === undefined) {
+        neighbors.set(a, [b]);
+      } else {
+        aList.push(b);
+      }
+      const bList = neighbors.get(b);
+      if (bList === undefined) {
+        neighbors.set(b, [a]);
+      } else {
+        bList.push(a);
+      }
+    };
     for (const row of rows) {
-      if (row.unread_since === null) {
-        continue;
-      }
-      const visited = new Set<string>();
-      let current: string | undefined = `${row.provider}\u0000${row.session_id}`;
-      while (current !== undefined && !visited.has(current)) {
-        visited.add(current);
-        current = links.get(current);
-      }
-      for (const key of visited) {
-        protectedKeys.add(key);
+      if (row.parent_session_id !== null) {
+        link(keyOf(row.provider, row.session_id), keyOf(row.provider, row.parent_session_id));
       }
     }
-    for (const key of protectedKeys) {
-      const separator = key.indexOf("\u0000");
-      db.run("INSERT OR IGNORE INTO prune_keep_paseo (provider, session_id) VALUES (?, ?)", [
-        key.slice(0, separator),
-        key.slice(separator + 1),
-      ]);
+    const paseoLinks = resolvePaseoParentLinks(
+      rows
+        .filter((row) => row.origin_kind === "paseo" && row.parent_session_id === null)
+        .map((row) => ({
+          provider: row.provider,
+          sessionId: row.session_id,
+          originRef: row.origin_ref,
+          originSubagent: row.origin_subagent,
+          originParentRef: row.origin_parent_ref,
+        })),
+    );
+    for (const [childKey, parentKey] of paseoLinks) {
+      link(childKey, parentKey);
     }
-    // Rows inside their lease, rows holding unviewed results, and the
-    // protected Paseo identities all seed the keep set; every ancestor of a
-    // kept row joins it. A kept top-level row's tree is never deleted, so
-    // children only ever go with a fully stale, fully viewed tree via the
-    // cascade.
-    const keepSet = `WITH RECURSIVE keep(provider, session_id) AS (
-         SELECT provider, session_id FROM active_sessions
-          WHERE (provider = 'zcode' AND updated_at >= ?1) OR (provider != 'zcode' AND updated_at >= ?2)
-             OR unread_since IS NOT NULL
-         UNION
-         SELECT provider, session_id FROM prune_keep_paseo
-         UNION
-         SELECT child.provider, child.parent_session_id
-           FROM active_sessions AS child
-           JOIN keep ON keep.provider = child.provider AND keep.session_id = child.session_id
-          WHERE child.parent_session_id IS NOT NULL
-       )
-       SELECT provider, session_id FROM keep`;
-    const stale = db
-      .query(
-        `SELECT COUNT(*) AS n FROM active_sessions
-         WHERE parent_session_id IS NULL
-           AND (provider, session_id) NOT IN (${keepSet})`,
-      )
-      .get(zcodeCutoffIso, cutoffIso) as { n: number } | null;
-    const count = stale?.n ?? 0;
-    if (count > 0) {
-      db.run(
-        `DELETE FROM active_sessions
-         WHERE parent_session_id IS NULL
-           AND (provider, session_id) NOT IN (${keepSet})`,
-        [zcodeCutoffIso, cutoffIso],
-      );
+    // Seeds: rows inside their lease and rows holding unviewed results.
+    const keep = new Set<string>();
+    const stack: string[] = [];
+    for (const row of rows) {
+      const inLease = row.provider === "zcode" ? row.updated_at >= zcodeCutoffIso : row.updated_at >= cutoffIso;
+      if (inLease || row.unread_since !== null) {
+        const key = keyOf(row.provider, row.session_id);
+        if (!keep.has(key)) {
+          keep.add(key);
+          stack.push(key);
+        }
+      }
+    }
+    for (let key = stack.pop(); key !== undefined; key = stack.pop()) {
+      for (const next of neighbors.get(key) ?? []) {
+        if (!keep.has(next)) {
+          keep.add(next);
+          stack.push(next);
+        }
+      }
+    }
+    // Only top-level rows are deleted; their native children cascade.
+    let count = 0;
+    for (const row of rows) {
+      if (row.parent_session_id === null && !keep.has(keyOf(row.provider, row.session_id))) {
+        db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [row.provider, row.session_id]);
+        count += 1;
+      }
     }
     return count;
   });
@@ -2290,10 +2400,10 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
 3. Update `pruneStaleSessions`'s doc comment — replace the sentence beginning `A row inside its lease keeps every ancestor alive` with:
 
 ```
- * A row inside its lease keeps every ancestor alive, and so does any row
- * holding an unviewed result (`unread_since` non-null) — including the
- * unviewed row's whole resolved Paseo tree: prune is liveness cleanup,
- * never a purge of results the user has not seen. The operator's
+ * A row inside its lease keeps its whole connected component alive, and so
+ * does any row holding an unviewed result (`unread_since` non-null) — the
+ * native tree joined with the resolved Paseo tree: prune is liveness
+ * cleanup, never a purge of results the user has not seen. The operator's
  * intentional purges are clear/clear-all and dismiss/archive.
 ```
 
@@ -2411,6 +2521,16 @@ describe("sweepExpiredResults", () => {
     expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(9), viewed_since: null });
   });
 
+  test("a row holding unread news is never swept, even with an expired view clock (defensive)", () => {
+    // Every fresh-result path clears viewed_since (Stop/StopFailure in Task
+    // 2, the Paseo flag and repair in Task 5) — but if an inconsistent state
+    // ever exists, unread means unviewed, and unviewed never expires.
+    seedDoneViewed("s1");
+    db.run("UPDATE active_sessions SET unread_since = ? WHERE session_id = 's1'", [at(9)]);
+    expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(5) });
+  });
+
   test("an ended error card lives out its post-view window, then the sweep dismisses it", () => {
     // The full R10 chain: failure → end (retained with a done hold) → view
     // (clock starts, card stays) → expiry (dismissed after the window).
@@ -2451,9 +2571,10 @@ Append after `pruneStaleSessions` in `src/core/registry.ts`:
  * wall-clock time counts — sleep and daemon downtime included — because
  * expiry evaluates on the next tick using the cutoff the caller computes
  * from now. Rows never viewed (`viewed_since` null) are never swept, and
- * neither are working or waiting rows: a resumed turn can retain a stale
- * done ledger, and expiry must not delete an active card's result. Returns
- * the rows swept.
+ * neither are rows holding unread news (unviewed by definition — a
+ * defensive guard: every fresh-result path already clears the clock) or
+ * working/waiting rows: a resumed turn can retain a stale done ledger, and
+ * expiry must not delete an active card's result. Returns the rows swept.
  */
 export const sweepExpiredResults = (db: Database, cutoffIso: string, sweptAt: string): number =>
   inWriteTransaction(db, () => {
@@ -2464,6 +2585,7 @@ export const sweepExpiredResults = (db: Database, cutoffIso: string, sweptAt: st
            status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
            background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
        WHERE viewed_since IS NOT NULL AND viewed_since <= ?
+         AND unread_since IS NULL
          AND status IN ('idle', 'error')
          AND (done_since IS NOT NULL OR status = 'error')`,
       [sweptAt, cutoffIso],
@@ -2542,7 +2664,7 @@ import { applyRegistryEvents, syncPaseoStates, viewSession } from "../src/core/r
 3. Append the sweep tests (same describe block, after the prune test):
 
 ```typescript
-  test("sweeps a done card 24h after its view and republishes", () => {
+  test("sweeps a done card 24h after its view — across a daemon restart, wall-clock — and republishes", () => {
     startSession("viewed");
     const viewedAt = "2026-08-06T01:00:00.000Z";
     const view = openRegistryDatabase(paths.database, "readwrite");
@@ -2553,21 +2675,25 @@ import { applyRegistryEvents, syncPaseoStates, viewSession } from "../src/core/r
     }
     startSession("unviewed", "2026-08-01T00:00:00.000Z"); // five days old, never viewed
 
+    // The first daemon runs at view time: inside the window, both cards.
     const clock = fakeClock(Date.parse(viewedAt));
-    const harness = makeHarness({ nowMs: clock.nowMs });
-    harness.daemon.start();
-    try {
-      // Inside the window: both cards present.
-      expect(readSnapshotFile().sessions.map((session) => session.sessionId).sort()).toEqual(["unviewed", "viewed"]);
+    const first = makeHarness({ nowMs: clock.nowMs });
+    first.daemon.start();
+    expect(readSnapshotFile().sessions.map((session) => session.sessionId).sort()).toEqual(["unviewed", "viewed"]);
+    first.daemon.stop();
 
-      // Wall-clock 24h+ later (sleep or daemon downtime included): the
-      // viewed card is swept on the first tick after; the unviewed one
-      // survives at any age.
-      clock.advance(VIEWED_EXPIRY_TTL_MS + 60_000);
-      harness.tick();
+    // The machine sleeps / the daemon is down past the 24h mark. A FRESH
+    // daemon instance reopens the database; its first maintenance pass
+    // sweeps the viewed card (wall-clock expiry needs no running daemon)
+    // while the unviewed one survives at any age.
+    const laterMs = Date.parse(viewedAt) + VIEWED_EXPIRY_TTL_MS + 60_000;
+    const laterIso = new Date(laterMs).toISOString();
+    const second = makeHarness({ nowMs: () => laterMs, now: () => laterIso });
+    second.daemon.start();
+    try {
       expect(readSnapshotFile().sessions.map((session) => session.sessionId)).toEqual(["unviewed"]);
     } finally {
-      harness.daemon.stop();
+      second.daemon.stop();
     }
   });
 
@@ -2693,7 +2819,7 @@ git commit -m "feat(daemon): viewed results expire 24h after viewing; unviewed n
 
 **Files:**
 - Modify: `src/protocol.ts` (ProjectedSession :104-133, ProjectedAgentNode :139-167, parseAgent :198-330, parseSession :356-480), `src/core/projection.ts` (ProjectionRow :24-46, StoredRow :533-555, toProjectionRow :570-660, PROJECTION_COLUMNS :662-663, rootFacts :307-328, nativeNode :351-376)
-- Test: `test/protocol.test.ts`, `test/projection.test.ts`, plus mechanical factory updates enumerated in Step 4
+- Test: `test/protocol.test.ts`, `test/projection.test.ts`, plus mechanical factory updates enumerated in Step 6
 
 **Interfaces:**
 - Consumes: `ended_at` column from Task 4.
@@ -2769,7 +2895,107 @@ and to the `agent` factory (after `doneSince: null,`):
 Run: `bun test test/protocol.test.ts`
 Expected: FAIL — the literals are type errors (`pendingResults`/`endedAt` missing from the types) and the parser rejects/ignores the new keys incorrectly.
 
-- [ ] **Step 3: Implement the protocol additions and the projection plumbing**
+- [ ] **Step 3: Write the failing projection tests**
+
+These are behavior tests — they must be seen failing BEFORE the producer changes (next steps).
+
+In `test/projection.test.ts`:
+
+1. `row()` helper — add `endedAt?: string | null;` to the options type and `endedAt: options.endedAt ?? null,` to the returned object (next to `doneSince`).
+
+2. Update every exact-literal projection expectation so the new required fields are pinned: in `"projects one consistent snapshot from a separately committed writer"` add `pendingResults: 0, endedAt: null` to the single session object (after `doneSince: null,`) and to all three agent objects (after each `doneSince: null,`); and in `"counts the full nested subtree as descendants and keeps root metadata"` (test/projection.test.ts:99 — the exact `expect(sessions[0]).toEqual({…})` literal at :108-129) add `pendingResults: 0,` and `endedAt: null,` after `doneSince: null,`. Both literals fail until the fields publish.
+
+3. Append to the `readProjection` describe:
+
+```typescript
+  test("an ended root publishes endedAt through the snapshot", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "ended",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-26T05:00:00.000Z",
+          },
+          { kind: "Stop", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:01:00.000Z" },
+          { kind: "SessionEnd", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:02:00.000Z" },
+        ]);
+      } finally {
+        writer.close();
+      }
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        expect(snapshot.sessions[0]).toMatchObject({
+          sessionId: "ended",
+          endedAt: "2026-08-26T05:02:00.000Z",
+          pendingResults: 0,
+        });
+        expect(snapshot.agents?.[0]).toMatchObject({
+          sessionId: "ended",
+          endedAt: "2026-08-26T05:02:00.000Z",
+          pendingResults: 0,
+        });
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a corrupt ended_at and rolls back the read transaction", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "bad-ended-at",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            observedAt: "2026-08-26T05:00:00.000Z",
+          },
+        ]);
+        writer.run("UPDATE active_sessions SET ended_at = x'00' WHERE session_id = 'bad-ended-at'");
+      } finally {
+        writer.close();
+      }
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        expect(() => readProjection(reader)).toThrow(new ProjectionError("corrupt-row"));
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+```
+
+- [ ] **Step 4: Run the projection tests to verify they fail**
+
+Run: `bun test test/projection.test.ts`
+Expected: FAIL — the exact literals lack the new fields, `endedAt` is never published, and the corrupt-`ended_at` guard does not exist.
+
+- [ ] **Step 5: Implement the protocol additions and the projection plumbing**
 
 The projection must populate the new required fields in this same task, or the repository does not typecheck. In `src/core/projection.ts`:
 
@@ -2885,100 +3111,7 @@ and add `pendingResults, endedAt` to the returned object (after `doneSince`).
 
 and add `pendingResults, endedAt` to the returned object (after `doneSince`).
 
-- [ ] **Step 4: Update the projection suite for the wired fields**
-
-In `test/projection.test.ts`:
-
-1. `row()` helper — add `endedAt?: string | null;` to the options type and `endedAt: options.endedAt ?? null,` to the returned object (next to `doneSince`).
-
-2. Update the full-literal assertions in `"projects one consistent snapshot from a separately committed writer"`: add `pendingResults: 0, endedAt: null` to the single session object (after `doneSince: null,`) and to all three agent objects (after each `doneSince: null,`).
-
-3. Append to the `readProjection` describe:
-
-```typescript
-  test("an ended root publishes endedAt through the snapshot", () => {
-    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
-    try {
-      const paths = resolveAppPaths(tempHome);
-      initializeDatabase(paths);
-      const writer = openRegistryDatabase(paths.database, "readwrite");
-      try {
-        applyRegistryEvents(writer, [
-          {
-            kind: "SessionStart",
-            provider: "claude",
-            sessionId: "ended",
-            title: null,
-            project: null,
-            ghosttyTerminalId: null,
-            transcriptPath: null,
-            model: null,
-            observedAt: "2026-08-26T05:00:00.000Z",
-          },
-          { kind: "Stop", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:01:00.000Z" },
-          { kind: "SessionEnd", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:02:00.000Z" },
-        ]);
-      } finally {
-        writer.close();
-      }
-      const reader = openRegistryDatabase(paths.database, "readonly");
-      try {
-        const snapshot = readProjection(reader);
-        expect(snapshot.sessions[0]).toMatchObject({
-          sessionId: "ended",
-          endedAt: "2026-08-26T05:02:00.000Z",
-          pendingResults: 0,
-        });
-        expect(snapshot.agents?.[0]).toMatchObject({
-          sessionId: "ended",
-          endedAt: "2026-08-26T05:02:00.000Z",
-          pendingResults: 0,
-        });
-      } finally {
-        reader.close();
-      }
-    } finally {
-      rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-
-  test("rejects a corrupt ended_at and rolls back the read transaction", () => {
-    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
-    try {
-      const paths = resolveAppPaths(tempHome);
-      initializeDatabase(paths);
-      const writer = openRegistryDatabase(paths.database, "readwrite");
-      try {
-        applyRegistryEvents(writer, [
-          {
-            kind: "SessionStart",
-            provider: "claude",
-            sessionId: "bad-ended-at",
-            title: null,
-            project: null,
-            ghosttyTerminalId: null,
-            transcriptPath: null,
-            model: null,
-            observedAt: "2026-08-26T05:00:00.000Z",
-          },
-        ]);
-        writer.run("UPDATE active_sessions SET ended_at = x'00' WHERE session_id = 'bad-ended-at'");
-      } finally {
-        writer.close();
-      }
-      const reader = openRegistryDatabase(paths.database, "readonly");
-      try {
-        expect(() => readProjection(reader)).toThrow(new ProjectionError("corrupt-row"));
-      } finally {
-        reader.close();
-      }
-    } finally {
-      rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-```
-
-- [ ] **Step 5: Update every typed factory/literal across the suites**
+- [ ] **Step 6: Update every typed factory/literal across the suites**
 
 Add `pendingResults: 0, endedAt: null` to each `ProjectedSession` factory body (next to `doneSince`) and to each `ProjectedAgentNode` factory body, in:
 
@@ -2997,17 +3130,17 @@ Add `pendingResults: 0, endedAt: null` to each `ProjectedSession` factory body (
 
 Add only these two fields; do not reorder existing fields. (The `PlacedCard`/`BoardCardSeed` literals in strip-cards, strip-tile-identity, and strip-board are NOT touched here — `BoardCardSeed.pendingResults` arrives in Task 13.)
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 7: Run tests to verify they pass**
 
 Run: `bun test test/protocol.test.ts test/projection.test.ts && bun test`
 Expected: PASS (`pendingResults` publishes the placeholder `0` until Task 9 computes it).
 
-- [ ] **Step 7: Typecheck + lint**
+- [ ] **Step 8: Typecheck + lint**
 
 Run: `bun run typecheck && biome check .`
 Expected: PASS — the whole repository compiles because projection populates both new required fields.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add src/protocol.ts src/core/projection.ts test/
@@ -3024,7 +3157,7 @@ git commit -m "feat(protocol): snapshot roots carry pendingResults and endedAt"
 
 **Interfaces:**
 - Consumes: the Task 8 wiring (`ProjectionRow.endedAt` carried; `pendingResults: 0` placeholder published; `resolvePaseoParentLinks` shared helper from Task 2, which `projectSnapshotRows` already uses since the Task 2 extraction).
-- Produces: finished Paseo subagents with a resolvable parent are hidden and roll their ledgers up to the root ancestor; unresolvable ancestry (dangling ref, ambiguous ref, cycle, missing parent row) promotes the subagent to its own root card (fail-safe); published roots carry the REAL `pendingResults` (count of Paseo descendants with `unreadSince`) and an aggregated `unreadSince` (the latest of own + descendants') — replacing Task 8's placeholder and per-row stamp; active subagent cards unchanged.
+- Produces: finished Paseo subagents with a resolvable parent are hidden and roll their ledgers up to the root ancestor; unresolvable ancestry (dangling ref, ambiguous ref, cycle, missing parent row) promotes the subagent to its own root card (fail-safe); published roots carry the REAL `pendingResults` (count of Paseo descendants with `unreadSince`) and aggregated `unreadSince` AND `doneSince` (the latest of own + descendants') — replacing Task 8's placeholder and per-row stamps; active subagent cards unchanged. **Aggregation stops at any descendant that publishes its own card** — an active (non-idle) subagent or a fail-safe root holding a ledger speaks for itself: its news is not counted into its ancestors (no rail double-count), and its own hidden descendants roll up to IT (the nearest visible card). The aggregated `doneSince` is the logical result-hold fact downstream gestures read: a parent held only by a viewed descendant's done publishes it, so `flickRemoves` accepts the flick.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3119,10 +3252,12 @@ In `test/projection.test.ts`:
     expect(rolled.map((session) => session.sessionId)).toEqual(["parent"]);
     expect(rolled[0]).toMatchObject({ pendingResults: 1, unreadSince: "2026-08-25T00:00:09.000Z" });
 
-    // Viewed (unread cleared) but done: the badge empties, the card stays.
+    // Viewed (unread cleared) but done: the badge empties, the card stays —
+    // and the parent's published doneSince carries the hold so downstream
+    // gestures (flickRemoves) can dismiss it.
     const viewed = projectRows([parent(), sub("idle", null, "2026-08-25T00:00:09.000Z")]);
     expect(viewed.map((session) => session.sessionId)).toEqual(["parent"]);
-    expect(viewed[0]).toMatchObject({ pendingResults: 0, unreadSince: null });
+    expect(viewed[0]).toMatchObject({ pendingResults: 0, unreadSince: null, doneSince: "2026-08-25T00:00:09.000Z" });
 
     // While the subagent works, both show (active cards unchanged).
     expect(projectRows([parent(), sub("working", null)]).map((session) => session.sessionId)).toEqual([
@@ -3306,6 +3441,58 @@ In `test/projection.test.ts`:
     ]);
     expect(sessions[0]).toMatchObject({ sessionId: "ended", endedAt: "2026-08-25T00:01:00.000Z" });
   });
+
+  test("an active subagent's own news is not double-counted into its parent's badge", () => {
+    // Sub is working (its own card) while holding unread news (a result
+    // landed, then work resumed). Its own card carries the badge; the parent
+    // must not also count it, or the rail would double-count.
+    const sessions = projectRows([
+      row("parent", { status: "idle", originKind: "paseo", originRef: "agent-0", originSubagent: 0, slot: 1 }),
+      row("sub", {
+        status: "working",
+        unreadSince: "2026-08-25T00:00:05.000Z",
+        doneSince: "2026-08-25T00:00:05.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["parent", "sub"]);
+    expect(sessions[0]).toMatchObject({ sessionId: "parent", pendingResults: 0, unreadSince: null, doneSince: null });
+    expect(sessions[1]).toMatchObject({ sessionId: "sub", unreadSince: "2026-08-25T00:00:05.000Z" });
+  });
+
+  test("roll-up stops at an active subagent: its finished children badge its own card, not the root's", () => {
+    // The leaf is a finished idle subagent of mid; mid is working (its own
+    // card). The leaf rolls up to mid — the nearest visible card — and the
+    // root counts neither.
+    const sessions = projectRows([
+      row("root", { status: "idle", originKind: "paseo", originRef: "agent-0", originSubagent: 0, slot: 1 }),
+      row("mid", {
+        status: "working",
+        originKind: "paseo",
+        originRef: "agent-m",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+      row("leaf", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:09.000Z",
+        doneSince: "2026-08-25T00:00:09.000Z",
+        originKind: "paseo",
+        originRef: "agent-l",
+        originSubagent: 1,
+        originParentRef: "agent-m",
+        slot: 3,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["root", "mid"]);
+    expect(sessions[0]).toMatchObject({ sessionId: "root", pendingResults: 0, unreadSince: null });
+    expect(sessions[1]).toMatchObject({ sessionId: "mid", pendingResults: 1, unreadSince: "2026-08-25T00:00:09.000Z" });
+  });
 ```
 
 (The full-literal updates and the corrupt-`ended_at` test already landed with the Task 8 wiring.)
@@ -3350,10 +3537,11 @@ In `src/core/projection.ts` (the Task 8 plumbing — `StoredRow.ended_at`, the `
     }
   }
 
-  // Per-root published facts: pendingResults counts Paseo descendants with
-  // an unviewed result; the published unreadSince aggregates the root's own
-  // stamp with its descendants' (the latest wins), so the rail count stays
-  // coherent without double-counting hidden children.
+  // Per-root published facts: pendingResults counts hidden Paseo descendants
+  // with an unviewed result; the published unreadSince/doneSince aggregate
+  // the root's own stamps with its HIDDEN descendants' (the latest wins), so
+  // the rail count stays coherent without double-counting children that
+  // publish their own cards.
   const paseoChildren = new Map<string, string[]>();
   for (const [childKey, parentKey] of paseoParent) {
     const siblings = paseoChildren.get(parentKey);
@@ -3363,12 +3551,21 @@ In `src/core/projection.ts` (the Task 8 plumbing — `StoredRow.ended_at`, the `
       siblings.push(childKey);
     }
   }
+  // A descendant that publishes its own card speaks for itself: active
+  // (non-idle) cards, and fail-safe roots (unresolvable lineage) holding a
+  // ledger. Aggregation stops at them — their news shows on their own card,
+  // and their hidden descendants roll up to THEM, never past them.
+  const speaksForItself = (result: RootResult, key: string): boolean =>
+    result.effectiveStatus !== "idle" ||
+    (!paseoParent.has(key) && (result.row.unreadSince !== null || result.row.doneSince !== null));
   const pendingResultsOf = new Map<string, number>();
   const aggregatedUnreadOf = new Map<string, string | null>();
+  const aggregatedDoneOf = new Map<string, string | null>();
   for (const result of rootResults) {
     const key = identityKey(result.row.provider, result.row.sessionId);
     let pending = 0;
     let aggregatedUnread = result.row.unreadSince;
+    let aggregatedDone = result.row.doneSince;
     const visited = new Set<string>([key]);
     const stack = [...(paseoChildren.get(key) ?? [])];
     for (let childKey = stack.pop(); childKey !== undefined; childKey = stack.pop()) {
@@ -3380,11 +3577,17 @@ In `src/core/projection.ts` (the Task 8 plumbing — `StoredRow.ended_at`, the `
       if (descendant === undefined) {
         throw new ProjectionError("corrupt-row");
       }
+      if (speaksForItself(descendant, childKey)) {
+        continue; // its own card carries its news — and its subtree's
+      }
       if (descendant.row.unreadSince !== null) {
         pending += 1;
         if (aggregatedUnread === null || descendant.row.unreadSince > aggregatedUnread) {
           aggregatedUnread = descendant.row.unreadSince;
         }
+      }
+      if (descendant.row.doneSince !== null && (aggregatedDone === null || descendant.row.doneSince > aggregatedDone)) {
+        aggregatedDone = descendant.row.doneSince;
       }
       for (const grandchildKey of paseoChildren.get(childKey) ?? []) {
         stack.push(grandchildKey);
@@ -3392,6 +3595,7 @@ In `src/core/projection.ts` (the Task 8 plumbing — `StoredRow.ended_at`, the `
     }
     pendingResultsOf.set(key, pending);
     aggregatedUnreadOf.set(key, aggregatedUnread);
+    aggregatedDoneOf.set(key, aggregatedDone);
   }
 
   const rootVisible = (result: RootResult): boolean => {
@@ -3425,7 +3629,7 @@ In `src/core/projection.ts` (the Task 8 plumbing — `StoredRow.ended_at`, the `
       statusSince: result.row.statusSince,
       activityLine: result.row.activityLine,
       unreadSince: aggregatedUnreadOf.get(key) ?? null,
-      doneSince: result.row.doneSince,
+      doneSince: aggregatedDoneOf.get(key) ?? null,
       pendingResults: pendingResultsOf.get(key) ?? 0,
       endedAt: result.row.endedAt,
       logicalSlot: result.slot,
@@ -3931,12 +4135,17 @@ git commit -m "feat(app): view_session command and watermark-carrying gestures"
 ### Task 12: App gestures — tap views, flick/sheet dismiss (R3, R11)
 
 **Files:**
-- Modify: `app/src/press.ts` (whole file), `app/src/main.ts` (imports :35-47, onBoardClick :413-432, runSheetAction "open"/"ack" cases :545-560, flickAway :589-620), `app/src/action-sheet.ts` (buildSheetModel label :55), `app/src/dismissals.ts` (flickRemoves :17-19 and header comment)
-- Test: `test/press.test.ts`, `test/strip-action-sheet.test.ts`, `test/strip-dismissals.test.ts`
+- Create: `app/src/gesture-target.ts` (pointer-down press capture — the pure, tested seam)
+- Modify: `app/src/press.ts` (whole file), `app/src/main.ts` (imports :35-47, PendingPress :91, cardFromPointerEvent :435-449, onBoardClick :413-432, runSheetAction "open"/"ack" cases :545-560, flickAway :589-620), `app/src/action-sheet.ts` (buildSheetModel :48-76 — label AND dismiss gating), `app/src/dismissals.ts` (header comment only — the `flickRemoves` expression itself is already correct and does not change)
+- Test: `test/press.test.ts`, `test/strip-action-sheet.test.ts`, `test/strip-dismissals.test.ts`, `test/strip-gesture-target.test.ts` (new)
 
 **Interfaces:**
 - Consumes: `viewSession`/`ackSession` with watermarks from Task 11; `endedAt` on `BoardSession` from Task 8.
-- Produces: `PressDeps.view: (provider: Provider, sessionId: string, watermark: string | null) => Promise<void>`; tap = view (watermark = the session's `unreadSince`) + route, except ended cards which never route; flick and sheet-Dismiss pass the same watermark to ack; action-sheet label "Dismiss".
+- Produces:
+  - `PressDeps.view: (provider: Provider, sessionId: string, watermark: GestureWatermark | null) => Promise<void>`; tap = view (watermark = the session's `unreadSince` wrapped as `{ unreadSince }` — the causal shape, never bare null) + route, except ended cards which never route.
+  - `export type PendingPress = { identity: SessionIdentity; point: GesturePoint; watermark: GestureWatermark }` and `export const capturePendingPress = (cards: readonly PlacedCard[], index: number, point: GesturePoint): PendingPress | null` from `app/src/gesture-target.ts` — the watermark freezes at pointer-DOWN; a snapshot ingested mid-stroke cannot move it.
+  - Sheet Dismiss is enabled only when `flickRemoves(session)` (the shared dismiss-eligibility predicate — error, or idle holding done/unread), carries the sheet-open snapshot's wrapped watermark, and is labeled "Dismiss".
+  - `flickAway` consumes `pending.watermark` (never the re-resolved card's current stamp).
 
 - [ ] **Step 1: Write the failing press tests**
 
@@ -4180,27 +4389,126 @@ export const pressSessionTile = async (session: BoardSession, deps: PressDeps): 
 };
 ```
 
-- [ ] **Step 4: Update the sheet label test and implementation**
+- [ ] **Step 4: Write the failing gesture-target and sheet-gating tests**
 
-In `test/strip-action-sheet.test.ts`, in the label-list assertion (the test that expects `"Ack"` in the item labels), change `"Ack"` to `"Dismiss"`.
-
-In `app/src/action-sheet.ts`, in `buildSheetModel`:
+Create `test/strip-gesture-target.test.ts`:
 
 ```typescript
-      { id: "ack", label: "Dismiss", enabled: !actionsLocked, confirming: false },
+import { describe, expect, test } from "bun:test";
+import type { PlacedCard } from "../app/src/board";
+import { capturePendingPress } from "../app/src/gesture-target";
+import type { ProjectedSession } from "../src/protocol";
+
+const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
+  provider: "claude",
+  sessionId: "session-1",
+  status: "idle",
+  title: "A session",
+  project: "dealerboard",
+  descendantCount: 0,
+  logicalSlot: 1,
+  ghosttyTerminalId: null,
+  model: null,
+  originKind: null,
+  originRef: null,
+  originSubagent: false,
+  unreadSince: null,
+  doneSince: null,
+  pendingResults: 0,
+  endedAt: null,
+  statusSince: null,
+  activityLine: null,
+  transcriptPath: null,
+  originParentRef: null,
+  lastEventAt: null,
+  ...overrides,
+});
+
+const card = (overrides: Partial<ProjectedSession> = {}, placed: Partial<PlacedCard> = {}): PlacedCard => ({
+  session: session(overrides),
+  label: "Label",
+  subagent: false,
+  parentProject: null,
+  displayOnly: false,
+  descendantBadge: 0,
+  degraded: false,
+  indent: false,
+  spine: "none",
+  column: 0,
+  row: 0,
+  ...placed,
+});
+
+describe("capturePendingPress", () => {
+  const point = { x: 10, y: 20 };
+
+  test("captures the pressed card's identity and its unread stamp at pointer-down", () => {
+    const pending = capturePendingPress([card({ unreadSince: "2026-08-26T05:00:00.000Z" })], 0, point);
+    expect(pending).toEqual({
+      identity: { provider: "claude", sessionId: "session-1" },
+      point,
+      watermark: { unreadSince: "2026-08-26T05:00:00.000Z" },
+    });
+  });
+
+  test("a card with no badge captures a null-stamp watermark — still causal, never the unconditional shape", () => {
+    expect(capturePendingPress([card()], 0, point)?.watermark).toEqual({ unreadSince: null });
+  });
+
+  test("a snapshot ingested mid-stroke cannot move the captured watermark", () => {
+    // Pointer-down sees the at(5) badge; before release a newer snapshot
+    // shows at(9). The pending press still carries at(5) — the flick
+    // consumes only the result the user saw when the gesture started.
+    const pending = capturePendingPress([card({ unreadSince: "2026-08-26T05:00:00.000Z" })], 0, point);
+    const afterIngest = [card({ unreadSince: "2026-08-26T05:09:00.000Z" })];
+    expect(pending?.watermark).toEqual({ unreadSince: "2026-08-26T05:00:00.000Z" });
+    expect(afterIngest[0]?.session.unreadSince).toBe("2026-08-26T05:09:00.000Z");
+  });
+
+  test("a display-only card captures nothing", () => {
+    expect(capturePendingPress([card({}, { displayOnly: true })], 0, point)).toBeNull();
+  });
+});
 ```
 
-- [ ] **Step 5: Update the flick-gate tests and implementation**
+In `test/strip-action-sheet.test.ts`:
 
-In `test/strip-dismissals.test.ts`, keep the existing `flickRemoves` tests and append:
+1. In the label-list assertion (the test that expects `"Ack"` in the item labels), change `"Ack"` to `"Dismiss"`.
+2. Append:
 
 ```typescript
-  test("an active card with a stale unread badge is still not flickable", () => {
+describe("dismiss gating (the gesture matrix)", () => {
+  const dismissEnabled = (overrides: Partial<ProjectedSession>): boolean =>
+    buildSheetModel(session(overrides), { title: "t", clipboardAvailable: true, clearArmed: false }).items.find(
+      (item) => item.id === "ack",
+    )?.enabled === true;
+
+  test("dismiss is disabled for active cards — working and waiting stay", () => {
+    expect(dismissEnabled({ status: "working" })).toBe(false);
+    expect(dismissEnabled({ status: "waiting" })).toBe(false);
+  });
+
+  test("dismiss is enabled for held results: idle-with-done, unread, and error", () => {
+    expect(dismissEnabled({ status: "idle", doneSince: "2026-08-26T05:00:00.000Z" })).toBe(true);
+    expect(dismissEnabled({ status: "idle", unreadSince: "2026-08-26T05:00:00.000Z" })).toBe(true);
+    expect(dismissEnabled({ status: "error" })).toBe(true);
+  });
+
+  test("dismiss is disabled for a bare idle card (nothing to settle)", () => {
+    expect(dismissEnabled({ status: "idle" })).toBe(false);
+  });
+});
+```
+
+In `test/strip-dismissals.test.ts`, append — **these are regression pins, not red tests**: the `flickRemoves` expression is already exactly this shape (dismissals.ts:15-18), and with Task 9's aggregated `doneSince` a roll-up-held parent needs no app-side change. They pin the gesture matrix against future regressions and pass immediately:
+
+```typescript
+  test("an active card with a stale unread badge is still not flickable (regression pin)", () => {
     expect(flickRemoves(session("s1", { status: "working", unreadSince: "2026-08-26T05:00:00.000Z" }))).toBe(false);
     expect(flickRemoves(session("s1", { status: "waiting", doneSince: "2026-08-26T05:00:00.000Z" }))).toBe(false);
   });
 
-  test("an ended card holding a result is flickable (dismiss takes it off)", () => {
+  test("an ended card holding a result is flickable (regression pin)", () => {
     expect(
       flickRemoves(
         session("s1", {
@@ -4211,9 +4519,70 @@ In `test/strip-dismissals.test.ts`, keep the existing `flickRemoves` tests and a
       ),
     ).toBe(true);
   });
+
+  test("a roll-up-held parent is flickable via its aggregated done stamp (regression pin)", () => {
+    // Task 9 publishes the descendant's done as the parent's doneSince; the
+    // app cannot and need not tell the difference.
+    expect(flickRemoves(session("s1", { status: "idle", doneSince: "2026-08-26T05:00:00.000Z", pendingResults: 0 }))).toBe(
+      true,
+    );
+  });
 ```
 
-`app/src/dismissals.ts` — replace `flickRemoves` and its file header comment with:
+- [ ] **Step 5: Run the new tests to verify they fail (and the pins to verify they hold)**
+
+Run: `bun test test/strip-gesture-target.test.ts test/strip-action-sheet.test.ts test/strip-dismissals.test.ts`
+Expected: FAIL for strip-gesture-target (module does not exist) and for the sheet-gating describe (Dismiss is currently always enabled); the strip-dismissals pins PASS (regression coverage — the expression is unchanged).
+
+- [ ] **Step 6: Implement gesture-target.ts and the action-sheet gating**
+
+Create `app/src/gesture-target.ts`:
+
+```typescript
+/**
+ * Pointer-down capture for board gestures. A pending press binds the pressed
+ * card's identity AND its causality watermark at pointer-DOWN: a snapshot
+ * ingested mid-stroke re-renders the grid, and reading the stamp at release
+ * could consume a result the user never saw. Flick and sheet dismissals
+ * consume `pending.watermark`, never the re-resolved card's current stamp.
+ */
+
+import type { GestureWatermark } from "./bridge";
+import type { PlacedCard } from "./board";
+import type { GesturePoint } from "./gestures";
+import { identityOf, interactiveBoardCard, type SessionIdentity } from "./tile-identity";
+
+export type PendingPress = {
+  identity: SessionIdentity;
+  point: GesturePoint;
+  /** The unread stamp the pressed card showed at pointer-down (`{ unreadSince: null }` when it showed no badge — still causal, never the unconditional bare null). */
+  watermark: GestureWatermark;
+};
+
+export const capturePendingPress = (
+  cards: readonly PlacedCard[],
+  index: number,
+  point: GesturePoint,
+): PendingPress | null => {
+  const card = interactiveBoardCard(cards[index]);
+  if (card === null) {
+    return null;
+  }
+  return { identity: identityOf(card.session), point, watermark: { unreadSince: card.session.unreadSince } };
+};
+```
+
+In `app/src/action-sheet.ts`, import the shared predicate and gate the Dismiss item with it:
+
+```typescript
+import { flickRemoves } from "./dismissals";
+```
+
+```typescript
+      { id: "ack", label: "Dismiss", enabled: !actionsLocked && flickRemoves(session), confirming: false },
+```
+
+In `app/src/dismissals.ts`, update ONLY the file header comment (the `flickRemoves` expression itself is unchanged — Task 9's aggregated `doneSince` is what makes roll-up-held parents flickable, no app-side predicate change):
 
 ```typescript
 /**
@@ -4223,24 +4592,13 @@ In `test/strip-dismissals.test.ts`, keep the existing `flickRemoves` tests and a
  * card never pops back for a beat between the animation and the ingest. An
  * entry expires after DISMISS_TTL_MS, so a row the registry refused to
  * settle honestly returns on a later ingest instead of staying silently
- * hidden.
+ * hidden. flickRemoves is the dismiss-eligibility predicate the whole app
+ * shares (flick and action sheet alike): error, or idle holding done/unread
+ * — active working/waiting cards can never be dismissed.
  */
-
-import type { Provider, SessionSnapshotV2 } from "../../src/protocol";
-import type { BoardSession } from "./board";
-
-export const DISMISS_TTL_MS = 5_000;
-
-/** True when a dismiss would take the slat off the board: any card holding
- * done/unread or in error. Active working/waiting cards stay — a dismiss
- * clears their ledgers but their status holds them, so the animation must
- * not promise a removal. */
-export const flickRemoves = (session: BoardSession): boolean =>
-  session.status === "error" ||
-  (session.status === "idle" && (session.unreadSince !== null || session.doneSince !== null));
 ```
 
-- [ ] **Step 6: Rewire main.ts**
+- [ ] **Step 7: Rewire main.ts**
 
 In `app/src/main.ts`:
 
@@ -4263,7 +4621,25 @@ import {
 } from "./bridge";
 ```
 
-2. `onBoardClick` — the `pressBoardCard` deps object:
+2. Add `import { capturePendingPress, type PendingPress } from "./gesture-target";` (replacing the local `type PendingPress = …` declaration at :85-91 — keep its comment, moved to the import site).
+
+3. `cardFromPointerEvent` — replace the body: resolve the DOM index as today, then delegate (the watermark freezes here, at pointer-down):
+
+```typescript
+const cardFromPointerEvent = (event: MouseEvent): PendingPress | null => {
+  if (!(event.target instanceof HTMLElement)) {
+    return null;
+  }
+  const card = event.target.closest<HTMLElement>("[data-card-index]");
+  if (card === null) {
+    return null;
+  }
+  const index = Number(card.dataset["cardIndex"]);
+  return capturePendingPress(currentCards, index, { x: event.clientX, y: event.clientY });
+};
+```
+
+4. `onBoardClick` — the `pressBoardCard` deps object:
 
 ```typescript
   void pressBoardCard(currentCard, {
@@ -4275,7 +4651,7 @@ import {
   });
 ```
 
-3. `runSheetAction` — the `"open"` case's `pressSessionTile` deps:
+5. `runSheetAction` — the `"open"` case's `pressSessionTile` deps:
 
 ```typescript
       void pressSessionTile(session, {
@@ -4287,39 +4663,39 @@ import {
       });
 ```
 
-4. `runSheetAction` — the `"ack"` case (the sheet's Dismiss action carries the watermark the sheet was opened from):
+6. `runSheetAction` — the `"ack"` case. The watermark is the sheet-OPEN snapshot's unread stamp (that is the state the sheet presented), wrapped in the causal shape — never a bare `string | null`:
 
 ```typescript
     case "ack":
       return trackSheetAction(
-        ackSession(session.provider, session.sessionId, session.unreadSince),
+        ackSession(session.provider, session.sessionId, { unreadSince: session.unreadSince }),
         context,
         generation,
         "Dismiss failed",
       );
 ```
 
-5. `flickAway` — the ack call:
+7. `flickAway` — the ack call consumes the pointer-DOWN watermark from the pending press, not the re-resolved card's current stamp:
 
 ```typescript
   const { provider, sessionId } = ref.card.session;
-  void ackSession(provider, sessionId, ref.card.session.unreadSince).catch(() => {});
+  void ackSession(provider, sessionId, pending.watermark).catch(() => {});
 ```
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [ ] **Step 8: Run tests to verify they pass**
 
-Run: `bun test test/press.test.ts test/strip-action-sheet.test.ts test/strip-dismissals.test.ts`
+Run: `bun test test/press.test.ts test/strip-action-sheet.test.ts test/strip-dismissals.test.ts test/strip-gesture-target.test.ts`
 Expected: PASS.
 
-- [ ] **Step 8: Full suite + typecheck + lint**
+- [ ] **Step 9: Full suite + typecheck + lint**
 
 Run: `bun test && bun run typecheck && biome check .`
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add app/src/press.ts app/src/main.ts app/src/action-sheet.ts app/src/dismissals.ts test/press.test.ts test/strip-action-sheet.test.ts test/strip-dismissals.test.ts
+git add app/src/press.ts app/src/main.ts app/src/action-sheet.ts app/src/dismissals.ts app/src/gesture-target.ts test/press.test.ts test/strip-action-sheet.test.ts test/strip-dismissals.test.ts test/strip-gesture-target.test.ts
 git commit -m "feat(app): tap views and routes; flick and sheet dismiss with watermarks"
 ```
 
@@ -4419,7 +4795,19 @@ export type BoardCardSeed = {
 
 3. In `groupedAgentOrder`, add `pendingResults: node.pendingResults,` to the `seed` helper's returned object.
 
-- [ ] **Step 4: Implement the card view model + class**
+- [ ] **Step 4: Update every PlacedCard/seed factory the required field breaks**
+
+Making `BoardCardSeed.pendingResults` required turns these existing factories into type errors — update each (defaults only; no behavior change):
+
+- `test/strip-cards.test.ts` — the `placed()` factory (:48-65): add `pendingResults: projected.pendingResults,` to the returned literal (next to `descendantBadge`).
+- `test/strip-board.test.ts` — the `groupOf()` factory (:225-236): add `pendingResults: 0,` to each card literal.
+- `test/strip-tile-identity.test.ts` — the `placedCard()` factory (:49-61): add `pendingResults: session.pendingResults,`.
+- `test/strip-gesture-target.test.ts` (created in Task 12) — the `card()` factory: add `pendingResults: 0,` to the returned literal.
+
+Run: `bun run typecheck`
+Expected: PASS — no remaining factory lacks the field.
+
+- [ ] **Step 5: Implement the card view model + class**
 
 In `app/src/cards.ts`:
 
@@ -4459,7 +4847,7 @@ export const cardClassName = (model: CardViewModel): string =>
     .join(" ");
 ```
 
-- [ ] **Step 5: Add the ended treatment to the stylesheet**
+- [ ] **Step 6: Add the ended treatment to the stylesheet**
 
 In `app/styles.css`, after the `.card.sub.status-error::after { display: none; }` block, add:
 
@@ -4476,20 +4864,20 @@ In `app/styles.css`, after the `.card.sub.status-error::after { display: none; }
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 7: Run tests to verify they pass**
 
 Run: `bun test test/strip-cards.test.ts test/strip-board.test.ts`
 Expected: PASS.
 
-- [ ] **Step 7: Full suite + typecheck**
+- [ ] **Step 8: Full suite + typecheck**
 
 Run: `bun test && bun run typecheck`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add app/src/board.ts app/src/cards.ts app/styles.css test/strip-cards.test.ts test/strip-board.test.ts
+git add app/src/board.ts app/src/cards.ts app/styles.css test/strip-cards.test.ts test/strip-board.test.ts test/strip-tile-identity.test.ts test/strip-gesture-target.test.ts
 git commit -m "feat(ui): pending-results badge and the ended-card treatment"
 ```
 
@@ -4521,10 +4909,13 @@ Replace the paragraphs of the module header comment in `src/core/registry.ts` be
  *
  * The unread ledger records results the user has not viewed: a turn ending
  * (Stop settling to idle, StopFailure, or the Paseo missed-completion
- * repair) stamps `unread_since`, and only an explicit view clears it —
- * `viewSession`, a dismissal, or a reused SessionStart. A passive Paseo
- * view never touches it. Prompts and status events never mark a session
- * read; unread is purely cosmetic (badge/styling) and never gates removal.
+ * repair) stamps `unread_since`, and the complete clearing list is: a
+ * dealerboard view (`viewSession`), a dismissal (`acknowledgeSession`), a
+ * Paseo archive, a reused SessionStart, the viewed-expiry sweep, and
+ * manual clear (`clearSession`/`clearAllSessions`, which delete the row).
+ * A passive Paseo view never touches it. Prompts and status events never
+ * mark a session read; unread is purely cosmetic (badge/styling) and never
+ * gates removal.
  *
  * The done ledger records finished results still owed a board slot: a Stop
  * settling to idle stamps `done_since`, and only an explicit dismissal
@@ -4574,8 +4965,9 @@ Replace the "Interaction" section's first paragraph (from `A tap acknowledges th
 A tap views the card — clearing its unread badge and starting its expiry
 clock — then routes Paseo, Claude/Ghostty, Codex, or Kimi when an exact
 target exists; an ended card views but never routes. Unsupported or
-unbound routes flash. A vertical flick dismisses any card holding
-done/unread or in error; a long press opens Open, Dismiss, Reveal
+unbound routes flash. A vertical flick dismisses a finished card — one
+holding done/unread or in error (active working/waiting cards can never be
+flicked away); a long press opens Open, Dismiss (same eligibility), Reveal
 transcript, Copy session ID, and double-confirmed Clear actions. Both
 dismiss paths carry the causality watermark of the stamp the gesture was
 issued from, so a result landing after the render survives the gesture.
