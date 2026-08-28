@@ -632,28 +632,6 @@ const migrateToV12 = (db: Database): void => {
   }
 };
 
-/** The v16 rebuild manages its own BEGIN/COMMIT for the same reason v13 does. */
-const migrateToV16 = (db: Database): void => {
-  db.exec("PRAGMA foreign_keys = OFF");
-  db.exec("BEGIN");
-  let committed = false;
-  try {
-    db.exec(SCHEMA_VERSION_16);
-    const violations = db.query("PRAGMA foreign_key_check").all();
-    if (violations.length > 0) {
-      throw new Error(`schema v16 rebuild left ${String(violations.length)} foreign key violation(s)`);
-    }
-    db.exec("PRAGMA user_version = 16");
-    db.exec("COMMIT");
-    committed = true;
-  } finally {
-    if (!committed) {
-      db.exec("ROLLBACK");
-    }
-    db.exec("PRAGMA foreign_keys = ON");
-  }
-};
-
 /** The v13 rebuild manages its own BEGIN/COMMIT for the same reason v12 does. */
 const migrateToV13 = (db: Database): void => {
   db.exec("PRAGMA foreign_keys = OFF");
@@ -666,6 +644,28 @@ const migrateToV13 = (db: Database): void => {
       throw new Error(`schema v13 rebuild left ${String(violations.length)} foreign key violation(s)`);
     }
     db.exec("PRAGMA user_version = 13");
+    db.exec("COMMIT");
+    committed = true;
+  } finally {
+    if (!committed) {
+      db.exec("ROLLBACK");
+    }
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+};
+
+/** The v16 rebuild manages its own BEGIN/COMMIT for the same reason v13 does. */
+const migrateToV16 = (db: Database): void => {
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+  let committed = false;
+  try {
+    db.exec(SCHEMA_VERSION_16);
+    const violations = db.query("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      throw new Error(`schema v16 rebuild left ${String(violations.length)} foreign key violation(s)`);
+    }
+    db.exec("PRAGMA user_version = 16");
     db.exec("COMMIT");
     committed = true;
   } finally {

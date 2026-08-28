@@ -6,4 +6,5 @@
 # Wire up via ~/.roborev/config.toml:
 #   claude_code_cmd = "<repo>/scripts/roborev-claude-shim"
 unset PASEO_AGENT_ID TERM_PROGRAM
-ROBOREV_SPAWN=shim exec claude "$@"
+export ROBOREV_SPAWN=shim
+exec claude "$@"

@@ -1581,6 +1581,15 @@ describe("schema v16 rebuild", () => {
     const stamp = new Database(paths.database, { readwrite: true });
     try {
       insertFull(stamp, "claude", "kept-v15", null, 7);
+      // Non-default values on every origin/ledger column: a value lost or
+      // transposed by the rebuild's copy cannot pass as a default.
+      stamp.run(
+        `UPDATE active_sessions
+         SET origin_kind = 'paseo', origin_ref = 'agent-9', origin_subagent = 1,
+             unread_since = '2026-08-27T01:00:00.000Z', acked_at = '2026-08-27T02:00:00.000Z',
+             done_since = '2026-08-27T03:00:00.000Z', activity_line = 'File'
+         WHERE session_id = 'kept-v15'`,
+      );
       stamp.exec("PRAGMA user_version = 15");
     } finally {
       stamp.close();
@@ -1592,8 +1601,24 @@ describe("schema v16 rebuild", () => {
     try {
       expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 16 });
       expect(
-        db.query("SELECT provider, logical_slot, done_since FROM active_sessions WHERE session_id = 'kept-v15'").get(),
-      ).toEqual({ provider: "claude", logical_slot: 7, done_since: null });
+        db
+          .query(
+            `SELECT provider, logical_slot, origin_kind, origin_ref, origin_subagent,
+                    unread_since, acked_at, done_since, activity_line
+             FROM active_sessions WHERE session_id = 'kept-v15'`,
+          )
+          .get(),
+      ).toEqual({
+        provider: "claude",
+        logical_slot: 7,
+        origin_kind: "paseo",
+        origin_ref: "agent-9",
+        origin_subagent: 1,
+        unread_since: "2026-08-27T01:00:00.000Z",
+        acked_at: "2026-08-27T02:00:00.000Z",
+        done_since: "2026-08-27T03:00:00.000Z",
+        activity_line: "File",
+      });
       const ddl = db.query("SELECT sql FROM sqlite_master WHERE name = 'active_sessions'").get() as { sql: string };
       expect(ddl.sql).toContain("'roborev'");
       expect(ddl.sql).toContain("done_since");

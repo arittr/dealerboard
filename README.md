@@ -186,8 +186,8 @@ itself.
 - **[roborev](https://github.com/roborev-dev/roborev):** background review
   sessions identify themselves when roborev spawns Claude through the
   bundled shim. Point `claude_code_cmd` in `~/.roborev/config.toml` at
-  `scripts/roborev-claude-shim`; identified cards wear the containment ring
-  in cyan.
+  `<repo>/scripts/roborev-claude-shim` (absolute path); identified cards
+  wear the containment ring in cyan.
 
 ## Local data and privacy
 
