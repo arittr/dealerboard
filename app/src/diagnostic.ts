@@ -54,12 +54,20 @@ export const createPointerDiagnostic = (now: () => number): PointerDiagnostic =>
     recordRender: () => {
       renderCount += 1;
     },
-    summary: () => [
-      `delivery d${counts.down} m${counts.move} u${counts.up} c${counts.cancel} ctx${counts.context} | ${moveStamps.length}/s x${lastCoalesced}`,
-      `recognize ${intentCount} | ${lastIntents}`,
-      `navigate ${navigationCount} | ${lastNavigation}`,
-      `render ${renderCount}`,
-    ],
+    summary: () => {
+      // Age at read time: the overlay refreshes on its own timer, not on
+      // pointer events, so a stopped stream must decay to 0/s without
+      // needing another move. lastCoalesced intentionally survives — it
+      // identifies the stream that stopped.
+      const at = now();
+      const recentMoves = moveStamps.filter((stamp) => at - stamp <= 1000).length;
+      return [
+        `delivery d${counts.down} m${counts.move} u${counts.up} c${counts.cancel} ctx${counts.context} | ${recentMoves}/s x${lastCoalesced}`,
+        `recognize ${intentCount} | ${lastIntents}`,
+        `navigate ${navigationCount} | ${lastNavigation}`,
+        `render ${renderCount}`,
+      ];
+    },
   };
 };
 

@@ -740,7 +740,12 @@ const scheduleLongPressTimer = (): void => {
     gestureTimer = setTimeout(
       () => {
         gestureTimer = null;
-        handleGestureIntents(gestures.feed({ kind: "tick", now: Date.now() }));
+        // The tick rides the same seam as pointer input so the diagnostic
+        // records its intents too. feedPointer is declared below — referenced
+        // here at fire time. After a tick no long-press is due anymore (the
+        // stroke fired, moved, or ended), so the reschedule in feedPointer
+        // terminates; only a clamped-early tick re-arms, at zero delay.
+        feedPointer({ kind: "tick", now: Date.now() });
       },
       Math.max(0, dueAt - Date.now()),
     );
