@@ -304,6 +304,20 @@ describe("packBoard", () => {
     expect(markers).toEqual([[], ["s12"], ["s24"]]);
   });
 
+  test("a group that merely starts on a fresh page carries no continuation marker", () => {
+    // The 12-group fills page 1 exactly; the 2-group then opens page 2 fresh —
+    // a page break without a group split, so no marker may appear.
+    const pages = packBoard([groupOf(1, 12), groupOf(101, 2)], false);
+    expect(pages).toHaveLength(2);
+    expect(pages[0]!.cards).toHaveLength(12);
+    expect(pages[0]!.cards.every((card) => !card.continuation)).toBe(true);
+    expect(pages[1]!.cards.map((card) => [card.session.sessionId, card.continuation])).toEqual([
+      ["s101", false],
+      ["s102", false],
+    ]);
+    expect(cell(pages[1]!, "s101")).toEqual([0, 0]);
+  });
+
   test("a later small group backfills the last page's gaps, never an earlier page", () => {
     // 14-group: page 1 full, page 2 holds two cards; the 2-group backfills page 2.
     const pages = packBoard([groupOf(1, 14), groupOf(101, 2)], false);

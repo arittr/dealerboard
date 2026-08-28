@@ -1,7 +1,7 @@
 /**
  * Pure grouped-board reducer for the strip: parent-grouped ordering (subagents
  * attach under their nearest on-grid Paseo ancestor, orphans form one tail
- * fill-and-continue page packing (every page except the last is full), and validated page settings. No DOM, no
+ * block), fill-and-continue page packing (every page except the last is full), and validated page settings. No DOM, no
  * I/O; the rendering layer is app/src/cards.ts and the driver app/src/main.ts.
  */
 
