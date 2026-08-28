@@ -169,3 +169,18 @@ to ready and re-run the ratify gate. -->
   lineage systems; "cannot associate" never means "discard", and an
   explicit subtree clear should mean the whole subtree.
 - **Deciders:** steering-session (gate findings accepted)
+
+## 2026-08-27 21:26 — Ratified
+- **Commit:** 5d71f23
+- **Cold-read:** codex/gpt-5.6-sol, one round (agent d7ced209, fast mode)
+  — 25 findings: 9 already covered by the spec as written, 14 folded in
+  as amendments (R10 ordering tolerance; R8 clock semantics + new-result
+  clock reset; R11 causal gestures; R9 CLI-prune skip; R6 root-ancestor
+  roll-up, aggregated root unread, active-subagent carve-out; R7
+  fail-safe promotion for unresolvable ancestry; lineage-aware
+  clear/archive; rotation never clears ledgers; repair settlements badge;
+  durability/boundedness; preserved invariants), 1 rejected
+  (native-child roll-up — the native parts of F8/F12). Per-finding
+  dispositions in the "Ratify gate findings 1-25 dispositioned" entry.
+- **Sign-off:** Drew — "Ratify, then plan" (2026-08-27, in response to
+  "Ratify the amended notebook and move to the implementation plan?")
