@@ -939,14 +939,13 @@ export type PaseoSyncState = {
  *   news at least as new as the flag is never regressed or churned. A flag
  *   raised at or before the row's `acked_at` is stale news — the user
  *   already viewed a newer state — and never resurrects unread.
- * - A cleared or absent-flag record clears `unread_since` only when its
- *   `updatedAt` is present and strictly newer than the stored unread stamp:
- *   a stale or timestamp-less record is not proof of viewing, so an older
- *   clear can never undo a newer Stop and a missing flag never clears.
- * - An archived record (`archivedAt` set) takes the cleared path even while
- *   its attention flag is still up — archiving is the user's terminal
- *   gesture on an agent — with the later of `archivedAt` and `updatedAt` as
- *   the proof-of-viewing time under the same freshness guard.
+ * - A cleared or absent-flag record is a passive view and is inert: it
+ *   stamps origin but never touches board ledgers — only dealerboard
+ *   gestures, archive, session restart, or expiry clear them. An archived
+ *   record (`archivedAt` set) is the exception — archiving is the user's
+ *   terminal gesture on an agent — and clears ledgers under the freshness
+ *   guard with the later of `archivedAt` and `updatedAt` as the
+ *   proof-of-viewing time, cascading the clear along Paseo lineage.
  * - A settled record (`lastStatus` idle or closed — no turn can be in
  *   flight) whose `updatedAt` is strictly newer than the row's last hook
  *   retires a stuck working or waiting row to idle: its turn-end hook was
@@ -955,7 +954,9 @@ export type PaseoSyncState = {
  *   record is archived: the terminal gesture settles an error row to idle
  *   too, under the same freshness guard with the later of `archivedAt` and
  *   `updatedAt` as the settle time. `status_since` adopts the record's
- *   settle time; unread stays the attention mirror's business.
+ *   settle time; the repaired turn's result stamps unread alongside done —
+ *   unless the record is archived or older than the row's ack — so the
+ *   settlement badges the card.
  * - A background-armed row normally outlives its Stop on purpose — the
  *   shell still acts on the session's behalf, exactly as in applyStop. But
  *   the disarming edge (TaskStop) can be lost the same way the turn-end
@@ -1028,6 +1029,10 @@ export const syncPaseoStates = (
                unread_since = CASE
                  WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN COALESCE(unread_since, ?)
                  ELSE unread_since
+               END,
+               viewed_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) AND unread_since IS NULL THEN NULL
+                 ELSE viewed_since
                END
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND (
@@ -1042,6 +1047,8 @@ export const syncPaseoStates = (
             flagTime,
             flagTime,
             flagTime,
+            flagTime,
+            flagTime,
             state.provider,
             state.sessionId,
             state.agentId,
@@ -1052,48 +1059,72 @@ export const syncPaseoStates = (
           ],
         );
         changed += result.changes;
-      } else {
-        // Cleared, absent flag, or archived: only a record written (or
-        // archived) after the local news is fresh proof that the user viewed
-        // the session in Paseo. Viewing clears unread alone; the done ledger
-        // clears only for an archived record — the terminal gesture — under
-        // the same freshness guard, so a passive view never takes a finished
-        // card off the board and a stale archive never takes down a result
-        // the session landed afterwards.
-        const clearTime = laterInstant(state.updatedAt, state.archivedAt);
-        const doneClearTime = state.archivedAt === null ? null : clearTime;
-        const result = db.run(
+      } else if (state.archivedAt !== null) {
+        // Resolve the lineage BEFORE un-stamping: the walk follows the
+        // archived row's origin_ref, which the un-stamp is about to clear.
+        const subtree = paseoSubtreeIdentities(db, state.provider, state.sessionId);
+        // Archiving is the user's terminal gesture on the agent — and the
+        // row's representation of it ends with it. Un-stamp origin: the
+        // archived row stops carrying the agent's ref, which breaks the
+        // Paseo link so still-active descendants fail-safe into their own
+        // orphan roots (the projection would otherwise keep promoting them
+        // into the archived parent). A record that un-archives later
+        // re-stamps origin through the flagged/cleared branches.
+        const unstamp = db.run(
           `UPDATE active_sessions
-           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?, origin_parent_ref = ?,
-               unread_since = CASE WHEN ? IS NOT NULL AND ? > unread_since THEN NULL ELSE unread_since END,
-               done_since = CASE WHEN ? IS NOT NULL AND ? > done_since THEN NULL ELSE done_since END
+           SET origin_kind = NULL, origin_ref = NULL, origin_subagent = 0, origin_parent_ref = NULL
+           WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
+             AND origin_kind = 'paseo'`,
+          [state.provider, state.sessionId],
+        );
+        changed += unstamp.changes;
+        // The terminal gesture also clears ledgers under the freshness
+        // guard, cascading over the RESOLVED Paseo subtree (unique refs,
+        // cycle-safe — paseoSubtreeIdentities) and clearing the view clock
+        // with them. Rows are never deleted; a stale archive never clears
+        // news that landed afterwards.
+        const clearTime = laterInstant(state.updatedAt, state.archivedAt);
+        for (const identity of subtree) {
+          const archived = db.run(
+            `UPDATE active_sessions
+             SET unread_since = CASE WHEN unread_since IS NOT NULL AND ? > unread_since THEN NULL ELSE unread_since END,
+                 done_since = CASE WHEN done_since IS NOT NULL AND ? > done_since THEN NULL ELSE done_since END,
+                 viewed_since = CASE WHEN viewed_since IS NOT NULL AND ? > viewed_since THEN NULL ELSE viewed_since END
+             WHERE provider = ? AND session_id = ?
+               AND (
+                 (unread_since IS NOT NULL AND ? > unread_since)
+                 OR (done_since IS NOT NULL AND ? > done_since)
+                 OR (viewed_since IS NOT NULL AND ? > viewed_since)
+               )`,
+            [clearTime, clearTime, clearTime, identity.provider, identity.sessionId, clearTime, clearTime, clearTime],
+          );
+          changed += archived.changes;
+        }
+      } else {
+        // Cleared or absent flag: a passive Paseo view — whether by the
+        // user or by a parent agent consuming its children — is inert.
+        // Origin stamping stays unconditional for matched top-level rows;
+        // board ledgers are untouched.
+        const origin = db.run(
+          `UPDATE active_sessions
+           SET origin_kind = 'paseo', origin_ref = ?, origin_subagent = ?, origin_parent_ref = ?
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND (
                origin_kind IS NOT 'paseo' OR origin_ref IS NOT ? OR origin_subagent IS NOT ?
                OR origin_parent_ref IS NOT ?
-               OR (unread_since IS NOT NULL AND ? IS NOT NULL AND ? > unread_since)
-               OR (done_since IS NOT NULL AND ? IS NOT NULL AND ? > done_since)
              )`,
           [
             state.agentId,
             state.isSubagent ? 1 : 0,
             state.parentAgentId,
-            clearTime,
-            clearTime,
-            doneClearTime,
-            doneClearTime,
             state.provider,
             state.sessionId,
             state.agentId,
             state.isSubagent ? 1 : 0,
             state.parentAgentId,
-            clearTime,
-            clearTime,
-            doneClearTime,
-            doneClearTime,
           ],
         );
-        changed += result.changes;
+        changed += origin.changes;
       }
       // A settled record strictly newer than the row's last hook repairs a
       // missed turn-end: retire working/waiting to idle with the record's
@@ -1102,29 +1133,44 @@ export const syncPaseoStates = (
       // a record written before the row's newest hook from undoing a turn
       // that genuinely started since. A background-armed row holds out until
       // its last hook predates the caller's cutoff — then the lost TaskStop
-      // is presumed and the flag disarms with the retirement. The repaired
-      // turn still landed a result, so the retirement stamps `done_since`
-      // like the Stop it stands in for — unless the record is archived: the
-      // terminal gesture already dismissed the card.
+      // is presumed and the flag disarms with the retirement.
+      // The repaired turn still landed a result, so the retirement stamps
+      // done_since and unread_since like the Stop it stands in for — the
+      // settlement badges the card instead of holding it silently — and
+      // clears any stale viewed clock. Unless the record is archived (the
+      // terminal gesture already dismissed the card) or the stamp predates
+      // the row's acked_at (the user already dismissed what the record
+      // reports).
       if (state.lastStatus !== null && SETTLED_PASEO_STATUSES.has(state.lastStatus) && state.updatedAt !== null) {
         const doneStamp = state.archivedAt === null ? state.updatedAt : null;
         const settled = db.run(
           `UPDATE active_sessions
            SET status = 'idle', status_since = ?, background_outstanding = 0,
-               done_since = CASE WHEN ? IS NOT NULL THEN ? ELSE done_since END
+               done_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN ? ELSE done_since END,
+               unread_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN ? ELSE unread_since END,
+               viewed_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN NULL ELSE viewed_since END
            WHERE provider = ? AND session_id = ? AND parent_session_id IS NULL
              AND status IN ('working', 'waiting')
              AND ? > updated_at
              AND (background_outstanding = 0 OR (? IS NOT NULL AND updated_at < ?))`,
           [
-            state.updatedAt,
+            state.updatedAt, // status_since: the record's settle time
             doneStamp,
             doneStamp,
+            doneStamp, // done_since stamp (guard ×2 + value)
+            doneStamp,
+            doneStamp,
+            doneStamp, // unread_since stamp (guard ×2 + value)
+            doneStamp,
+            doneStamp, // viewed_since clear (guard ×2)
             state.provider,
-            state.sessionId,
-            state.updatedAt,
+            state.sessionId, // identity
+            state.updatedAt, // freshness: strictly newer than the last hook
             backgroundSettleCutoffIso,
-            backgroundSettleCutoffIso,
+            backgroundSettleCutoffIso, // background grace
           ],
         );
         changed += settled.changes;

@@ -12,7 +12,7 @@ import {
   readProjection,
   resolvePaseoParentLinks,
 } from "../src/core/projection";
-import { applyRegistryEvents } from "../src/core/registry";
+import { applyRegistryEvents, syncPaseoStates } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
 import {
@@ -724,6 +724,93 @@ describe("projectRows", () => {
     expect(projectionErrorCode([row("a", { slot: null })])).toBe("top-level-without-positive-slot");
     expect(projectionErrorCode([row("a", { slot: 0 })])).toBe("top-level-without-positive-slot");
     expect(projectionErrorCode([row("a", { slot: -2 })])).toBe("top-level-without-positive-slot");
+  });
+
+  test("archived parent with active descendants: the children surface as orphan roots", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
+    try {
+      const paths = resolveAppPaths(tempHome);
+      initializeDatabase(paths);
+      const writer = openRegistryDatabase(paths.database, "readwrite");
+      try {
+        applyRegistryEvents(writer, [
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "parent",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            origin: { kind: "paseo", ref: "a1" },
+            observedAt: "2026-08-06T00:00:01.000Z",
+          },
+          {
+            kind: "SessionStart",
+            provider: "claude",
+            sessionId: "child",
+            title: null,
+            project: null,
+            ghosttyTerminalId: null,
+            transcriptPath: null,
+            model: null,
+            origin: { kind: "paseo", ref: "a2" },
+            observedAt: "2026-08-06T00:00:02.000Z",
+          },
+        ]);
+        writer.run(
+          "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'a1' WHERE session_id = 'child'",
+        );
+        applyRegistryEvents(writer, [
+          { kind: "Activity", provider: "claude", sessionId: "child", observedAt: "2026-08-06T00:00:05.000Z" },
+        ]);
+        syncPaseoStates(writer, [
+          {
+            provider: "claude",
+            sessionId: "parent",
+            agentId: "a1",
+            requiresAttention: false,
+            isSubagent: false,
+            parentAgentId: null,
+            attentionTimestamp: null,
+            updatedAt: "2026-08-06T00:00:08.000Z",
+            archivedAt: "2026-08-06T00:00:09.000Z",
+            lastStatus: null,
+            title: null,
+          },
+          {
+            provider: "claude",
+            sessionId: "child",
+            agentId: "a2",
+            requiresAttention: false,
+            isSubagent: true,
+            parentAgentId: "a1",
+            attentionTimestamp: null,
+            updatedAt: "2026-08-06T00:00:08.000Z",
+            archivedAt: null,
+            lastStatus: null,
+            title: null,
+          },
+        ]);
+      } finally {
+        writer.close();
+      }
+      const reader = openRegistryDatabase(paths.database, "readonly");
+      try {
+        const snapshot = readProjection(reader);
+        // The archived parent is gone from the board; the active child is
+        // its own card (parentless in the graph), not a promotion of the
+        // archived parent.
+        expect(snapshot.sessions.map((session) => session.sessionId)).toEqual(["child"]);
+        expect(snapshot.sessions[0]).toMatchObject({ status: "working", originSubagent: true });
+        expect(snapshot.agents?.find((node) => node.sessionId === "child")?.parent).toBeNull();
+      } finally {
+        reader.close();
+      }
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });
 

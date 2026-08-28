@@ -756,29 +756,13 @@ describe("done ledger", () => {
     expect(row?.done_since).toBeNull();
   });
 
-  test("acknowledgeSession applies on a done row a passive view already marked read", () => {
+  test("dismissal applies on a done row a dealerboard view already marked read", () => {
     applyRegistryEvents(db, [
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
       simple("Stop", "s1", { at: at(5) }),
     ]);
-    // Paseo's record proves the user viewed the result: unread clears, the
-    // done card stays on the board.
-    const viewed = syncPaseoStates(db, [
-      {
-        provider: "claude",
-        sessionId: "s1",
-        agentId: "a1",
-        requiresAttention: false,
-        isSubagent: false,
-        parentAgentId: null,
-        attentionTimestamp: null,
-        updatedAt: at(9),
-        archivedAt: null,
-        lastStatus: null,
-        title: null,
-      },
-    ]);
-    expect(viewed).toBe(1);
+    // A dealerboard view clears the badge; the done card stays on the board.
+    expect(viewSession(db, "claude", "s1", at(9))).toBe("applied");
     expect(getRow("s1")?.unread_since).toBeNull();
     expect(getRow("s1")?.done_since).toBe(at(5));
     // The explicit dismissal gesture still applies and takes the card off.
@@ -1130,7 +1114,7 @@ describe("syncPaseoStates", () => {
     title: null,
   });
 
-  test("stamps origin and mirrors attention both ways under the watermark", () => {
+  test("stamps origin and mirrors attention one way: flags set unread, cleared flags are inert", () => {
     applyRegistryEvents(db, [start("s1")]);
 
     // Flagged: unread adopts the record's attention timestamp.
@@ -1143,12 +1127,13 @@ describe("syncPaseoStates", () => {
       unread_since: FLAG_AT,
     });
 
-    // Cleared with a later record write (the user viewed it in Paseo) → unread cleared here.
+    // Cleared with a later record write: a passive Paseo view is inert —
+    // board ledgers only clear through dealerboard gestures or archive.
     const cleared = syncPaseoStates(db, [
       paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:12:00.000Z" }),
     ]);
-    expect(cleared).toBe(1);
-    expect(getRow("s1")?.unread_since).toBeNull();
+    expect(cleared).toBe(0);
+    expect(getRow("s1")?.unread_since).toBe(FLAG_AT);
   });
 
   test("falls back to updatedAt as the flag time when attentionTimestamp is absent", () => {
@@ -1157,28 +1142,25 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")?.unread_since).toBe(FLAG_AT);
   });
 
-  test("a stale cleared record does not clear newer local news (Stop → stale false)", () => {
-    const stopAt = at(5); // 2026-08-06T00:00:05.000Z
+  test("a cleared record never touches ledgers — stale or fresh (passive views are inert)", () => {
+    const stopAt = at(5);
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: stopAt })]);
     expect(getRow("s1")?.unread_since).toBe(stopAt);
 
     // Stamp origin first so the cleared passes below have nothing else to write.
     expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: "2026-08-06T00:00:01.000Z" })])).toBe(1);
 
-    // A cleared record whose updatedAt predates the Stop is stale evidence of
-    // viewing: it must not clear the newer local result.
-    const stale = syncPaseoStates(db, [
-      paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:02.000Z" }),
-    ]);
-    expect(stale).toBe(0);
+    // Stale cleared record: inert.
+    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:02.000Z" })])).toBe(
+      0,
+    );
+    // Fresh cleared record: still inert — only a dealerboard gesture or an
+    // archive clears board ledgers.
+    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:09.000Z" })])).toBe(
+      0,
+    );
     expect(getRow("s1")?.unread_since).toBe(stopAt);
-
-    // A cleared record written after the Stop is fresh proof of viewing.
-    const fresh = syncPaseoStates(db, [
-      paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:09.000Z" }),
-    ]);
-    expect(fresh).toBe(1);
-    expect(getRow("s1")?.unread_since).toBeNull();
+    expect(getRow("s1")?.done_since).toBe(stopAt);
   });
 
   test("a flagged record never overwrites an existing unread timestamp and never touches updated_at", () => {
@@ -1202,7 +1184,7 @@ describe("syncPaseoStates", () => {
     expect(syncPaseoStates(db, [paseoState({})])).toBe(1);
     expect(getRow("s1")).toMatchObject({ origin_kind: "paseo", origin_ref: "a1", unread_since: null });
 
-    // Cleared with no updatedAt must not clear even a Stop-stamped unread.
+    // Cleared with no updatedAt is inert like every cleared record.
     applyRegistryEvents(db, [simple("Stop", "s1", { at: at(5) })]);
     expect(syncPaseoStates(db, [paseoState({ requiresAttention: false })])).toBe(0);
     expect(getRow("s1")?.unread_since).toBe(at(5));
@@ -1291,8 +1273,9 @@ describe("syncPaseoStates", () => {
 
   test("a cleared record without an archive keeps an error row's failure visible", () => {
     applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(9) })]);
+    // The passive view is inert: the failure stays up with its unread badge.
     syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:10:00.000Z" })]);
-    expect(getRow("s1")).toMatchObject({ status: "error", unread_since: null });
+    expect(getRow("s1")).toMatchObject({ status: "error", unread_since: at(9) });
   });
 
   test("a stale archived record does not retire a newer error", () => {
@@ -1302,16 +1285,16 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")).toMatchObject({ status: "error", unread_since: at(9) });
   });
 
-  test("acknowledgeSession retires an error row Paseo already marked read", () => {
+  test("acknowledgeSession retires an error row a dealerboard view already marked read", () => {
     applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(9) })]);
-    // Viewed in Paseo without archiving: unread clears, the failure stays up.
-    syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:10:00.000Z" })]);
+    // A dealerboard view clears the badge; the failure stays up.
+    expect(viewSession(db, "claude", "s1", "2026-08-06T00:10:00.000Z")).toBe("applied");
     expect(getRow("s1")).toMatchObject({ status: "error", unread_since: null });
 
     expect(acknowledgeSession(db, "claude", "s1", at(30))).toBe("applied");
-    // The passive Paseo view already consumed the unread stamp, so the
-    // dismiss retires the error but has no stamp left to advance to.
-    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(30), acked_at: null });
+    // The dismissal consumes nothing new (the view already consumed the
+    // at(9) stamp), so acked_at stays at the consumed stamp.
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(30), acked_at: at(9) });
   });
 
   test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {
@@ -1323,7 +1306,8 @@ describe("syncPaseoStates", () => {
     expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: FLAG_AT })])).toBe(0);
 
     const read = paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:13:00.000Z" });
-    expect(syncPaseoStates(db, [read])).toBe(1);
+    // A passive view is inert: the repeated cleared record never counts.
+    expect(syncPaseoStates(db, [read])).toBe(0);
     expect(syncPaseoStates(db, [read])).toBe(0);
     expect(getRow("s1")?.updated_at).toBe(at(1));
   });
@@ -1369,19 +1353,19 @@ describe("syncPaseoStates", () => {
       syncPaseoStates(db, [paseoState({ isSubagent: true, parentAgentId: "agent-0", attentionTimestamp: FLAG_AT })]),
     ).toBe(1);
 
-    // Viewed in Paseo (cleared flag, fresh updatedAt): unread clears and the
-    // parent ref is re-stamped (or kept) by the other branch.
+    // Viewed in Paseo (cleared flag): the passive view never touches
+    // ledgers, but a changed parent ref still re-stamps origin.
     expect(
       syncPaseoStates(db, [
         paseoState({
           requiresAttention: false,
           isSubagent: true,
-          parentAgentId: "agent-0",
+          parentAgentId: "agent-1",
           updatedAt: "2026-08-06T00:12:00.000Z",
         }),
       ]),
     ).toBe(1);
-    expect(getRow("s1")).toMatchObject({ unread_since: null, origin_parent_ref: "agent-0" });
+    expect(getRow("s1")).toMatchObject({ unread_since: FLAG_AT, origin_parent_ref: "agent-1" });
   });
 
   test("retires a stuck working row when a settled record postdates its last hook", () => {
@@ -1474,15 +1458,13 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")?.status).toBe("working");
   });
 
-  test("a fresh cleared record clears unread but never done_since (the done card outlives the passive view)", () => {
-    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
-    expect(getRow("s1")?.done_since).toBe(at(5));
-
-    const cleared = syncPaseoStates(db, [
-      paseoState({ requiresAttention: false, updatedAt: "2026-08-06T00:00:09.000Z" }),
+  test("a fresh cleared record leaves both ledgers untouched (passive views are inert)", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
     ]);
-    expect(cleared).toBe(1);
-    expect(getRow("s1")?.unread_since).toBeNull();
+    expect(syncPaseoStates(db, [paseoState({ requiresAttention: false, updatedAt: at(9) })])).toBe(0);
+    expect(getRow("s1")?.unread_since).toBe(at(5));
     expect(getRow("s1")?.done_since).toBe(at(5));
   });
 
@@ -1497,25 +1479,29 @@ describe("syncPaseoStates", () => {
 
   test("a stale archived record does not clear a newer done_since", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    // The archive predates the Stop: the freshness guard keeps the result,
+    // and an archived record never stamps origin — the pass changes nothing.
     expect(
       syncPaseoStates(db, [paseoState({ requiresAttention: false, archivedAt: "2026-08-06T00:00:02.000Z" })]),
-    ).toBe(1); // origin stamping still lands
+    ).toBe(0);
     expect(getRow("s1")?.done_since).toBe(at(5));
   });
 
-  test("the settled-record repair stamps done_since (the missed Stop's result still deserves the board)", () => {
-    applyRegistryEvents(db, [start("s1", { at: at(1) }), simple("Activity", "s1", { at: at(2) })]);
-    // Stamp origin first so the settle pass below counts the repair alone.
-    expect(
-      syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "running", updatedAt: at(3) })]),
-    ).toBe(1);
-    const settleAt = "2026-08-06T00:10:00.000Z";
-    expect(
-      syncPaseoStates(db, [paseoState({ requiresAttention: false, lastStatus: "idle", updatedAt: settleAt })]),
-    ).toBe(1);
-    const row = getRow("s1");
-    expect(row?.status).toBe("idle");
-    expect(row?.done_since).toBe(settleAt);
+  test("the settled-record repair stamps unread+done so the repaired settlement badges", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Activity", "s1", { at: at(2) }),
+    ]);
+    const changed = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: at(9), lastStatus: "idle" }),
+    ]);
+    expect(changed).toBe(1); // exactly the settlement repair; origin already matches
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: at(9),
+      done_since: at(9),
+      viewed_since: null,
+    });
   });
 
   test("an archived settled record retires without stamping done_since", () => {
@@ -1532,7 +1518,7 @@ describe("syncPaseoStates", () => {
           archivedAt: "2026-08-06T00:10:00.000Z",
         }),
       ]),
-    ).toBe(1);
+    ).toBe(2); // the archive un-stamps origin; the repair retires the row
     const row = getRow("s1");
     expect(row?.status).toBe("idle");
     expect(row?.done_since).toBeNull();
@@ -1624,6 +1610,183 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")).toMatchObject({ origin_kind: "paseo", origin_ref: "b1" });
     expect(getRow("s2")).toMatchObject({ origin_kind: "paseo", origin_ref: "a1", unread_since: FLAG_AT });
     expect(getRow("s3")).toMatchObject({ origin_kind: null, origin_ref: null });
+  });
+
+  test("an archived record cascades the ledger clear (incl. viewed_since) to Paseo descendants", () => {
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "a1" } },
+      { ...start("child"), origin: { kind: "paseo", ref: "a2" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'a1' WHERE session_id = 'child'");
+    applyRegistryEvents(db, [simple("Stop", "parent", { at: at(5) }), simple("Stop", "child", { at: at(6) })]);
+    viewSession(db, "claude", "child", at(7)); // child has a live view clock too
+
+    const archived = syncPaseoStates(db, [
+      paseoState({ sessionId: "parent", requiresAttention: false, updatedAt: at(8), archivedAt: at(9) }),
+    ]);
+    expect(archived).toBeGreaterThan(0);
+    expect(getRow("parent")).toMatchObject({ unread_since: null, done_since: null, viewed_since: null });
+    expect(getRow("child")).toMatchObject({ unread_since: null, done_since: null, viewed_since: null });
+    expect(countRows()).toBe(2); // archive clears ledgers, never deletes rows
+  });
+
+  test("archiving unlinks the agent: active descendants become orphan roots", () => {
+    // Spec edge case "Parent archived with active descendants": the parent's
+    // ledgers clear and its card goes; still-active children render as
+    // orphan roots instead of promoting the archived parent back onto the
+    // board through the status roll-up.
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "a1" } },
+      { ...start("child"), origin: { kind: "paseo", ref: "a2" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'a1' WHERE session_id = 'child'");
+    applyRegistryEvents(db, [simple("Activity", "child", { at: at(5) })]); // child is working
+
+    const archived = syncPaseoStates(db, [
+      paseoState({ sessionId: "parent", requiresAttention: false, updatedAt: at(8), archivedAt: at(9) }),
+      // The child's own live record still reports its parent agent.
+      {
+        ...paseoState({
+          sessionId: "child",
+          isSubagent: true,
+          parentAgentId: "a1",
+          requiresAttention: false,
+          updatedAt: at(8),
+        }),
+        agentId: "a2",
+      },
+    ]);
+    expect(archived).toBeGreaterThan(0);
+    // The archived row loses its origin representation entirely — that is
+    // what breaks the link (the child's own record still names a1).
+    expect(getRow("parent")).toMatchObject({ origin_kind: null, origin_ref: null, origin_subagent: 0 });
+    expect(getRow("child")).toMatchObject({ origin_kind: "paseo", origin_ref: "a2", origin_parent_ref: "a1" });
+  });
+
+  test("a stale archive un-stamps the parent but never clears newer descendant news", () => {
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "a1" } },
+      { ...start("child"), origin: { kind: "paseo", ref: "a2" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'a1' WHERE session_id = 'child'");
+    applyRegistryEvents(db, [simple("Stop", "child", { at: at(12) })]);
+
+    const archived = syncPaseoStates(db, [
+      paseoState({ sessionId: "parent", requiresAttention: false, updatedAt: at(8), archivedAt: at(9) }),
+    ]);
+    // The archive is terminal for the parent's representation of the agent:
+    // its origin un-stamps, which is a counted change. But the freshness
+    // guard (clearTime at(9) is not newer than the child's at(12)) protects
+    // the result that landed after the archive.
+    expect(archived).toBeGreaterThan(0);
+    expect(getRow("parent")).toMatchObject({ origin_kind: null, origin_ref: null, origin_subagent: 0 });
+    expect(getRow("child")).toMatchObject({ unread_since: at(12), done_since: at(12) });
+  });
+
+  test("a fresh attention flag that lands an unread stamp cancels the view clock", () => {
+    // The card was viewed (clock running); a fresh flag is new news — the
+    // card is unviewed again, so the expiry sweep must never see a row with
+    // an unread stamp AND a live view clock.
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    viewSession(db, "claude", "s1", at(8));
+    const changed = syncPaseoStates(db, [paseoState({ attentionTimestamp: at(9) })]);
+    expect(changed).toBe(1);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), viewed_since: null });
+  });
+
+  test("the settled-record repair never resurrects a result dismissed after the record", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Activity", "s1", { at: at(2) }),
+    ]);
+    // The record was written at at(5)…
+    // …but the user's dismiss lands after it, and the sync processes later.
+    applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(4) })]);
+    viewSession(db, "claude", "s1", at(6));
+    expect(acknowledgeSession(db, "claude", "s1", at(7))).toBe("applied");
+    const changed = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: at(5), lastStatus: "idle" }),
+    ]);
+    // The row is idle now, so the settle guard (status IN working/waiting)
+    // already refuses; this pins that nothing re-stamps either ledger.
+    expect(changed).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null });
+  });
+
+  test("the repair stamps a missed result newer than the consumed stamp (no suppression)", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Activity", "s1", { at: at(2) }),
+    ]);
+    // A paseo flag raised unread at at(3); the user dismissed it at at(6) —
+    // acked_at advances to the consumed stamp at(3), not the gesture time.
+    syncPaseoStates(db, [paseoState({ attentionTimestamp: at(3) })]);
+    expect(acknowledgeSession(db, "claude", "s1", at(6))).toBe("applied");
+    expect(getRow("s1")?.acked_at).toBe(at(3));
+    // The settled record reports the turn finished at at(5): newer than the
+    // consumed stamp, so the missed result must surface, not be suppressed.
+    const changed = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: at(5), lastStatus: "idle" }),
+    ]);
+    expect(changed).toBe(1);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: at(5),
+      done_since: at(5),
+      viewed_since: null,
+    });
+  });
+
+  test("the repair retires without stamping when the record is not newer than the ack", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Activity", "s1", { at: at(2) }),
+    ]);
+    syncPaseoStates(db, [paseoState({ attentionTimestamp: at(3) })]);
+    expect(acknowledgeSession(db, "claude", "s1", at(6))).toBe("applied");
+    expect(getRow("s1")?.acked_at).toBe(at(3));
+    // A record written at at(3) — not strictly newer than the consumed
+    // stamp — still proves the turn ended (retirement applies), but its
+    // stamp is stale news the user already dismissed: no ledger write.
+    const changed = syncPaseoStates(db, [
+      paseoState({ requiresAttention: false, updatedAt: at(3), lastStatus: "idle" }),
+    ]);
+    expect(changed).toBe(1);
+    expect(getRow("s1")).toMatchObject({ status: "idle", unread_since: null, done_since: null, viewed_since: null });
+  });
+
+  test("the rotation cleanup never clears ledgers (a retired carrier keeps its results)", () => {
+    applyRegistryEvents(db, [
+      { ...start("old-carrier"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "old-carrier", { at: at(5) }),
+    ]);
+    // The agent rotated to a new provider session; the old carrier un-stamps.
+    const changed = syncPaseoStates(db, [
+      {
+        provider: "codex",
+        sessionId: "new-carrier",
+        agentId: "a1",
+        requiresAttention: false,
+        isSubagent: false,
+        parentAgentId: null,
+        attentionTimestamp: null,
+        updatedAt: at(9),
+        archivedAt: null,
+        lastStatus: null,
+        title: null,
+      },
+    ]);
+    expect(changed).toBeGreaterThan(0);
+    expect(getRow("old-carrier")).toMatchObject({
+      origin_kind: null,
+      origin_ref: null,
+      status: "idle",
+      unread_since: at(5), // the results survive the rotation
+      done_since: at(5),
+    });
   });
 });
 
