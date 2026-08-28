@@ -327,34 +327,137 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     }
   }
 
-  const rootVisible = (result: RootResult): boolean =>
+  // Ledger roll-up along Paseo lineage. A finished subagent's done/unread
+  // holds its root ancestor's card: walk each ledger-holding row up its
+  // parent chain marking every ancestor. Rows whose lineage cannot resolve
+  // (dangling ref, ambiguous ref, cycle — cycle members lost their
+  // paseoParent entry above) are their own root, so the walk never reaches
+  // them and their own ledger speaks for them (fail-safe promotion:
+  // "cannot associate" never means "discard").
+  const holdsLedgerKey = new Set<string>();
+  for (const result of rootResults) {
+    if (result.row.unreadSince !== null || result.row.doneSince !== null) {
+      holdsLedgerKey.add(identityKey(result.row.provider, result.row.sessionId));
+    }
+  }
+  const hasDescendantLedger = new Set<string>();
+  for (const result of rootResults) {
+    const key = identityKey(result.row.provider, result.row.sessionId);
+    if (!holdsLedgerKey.has(key)) {
+      continue;
+    }
+    const visited = new Set<string>();
+    let parentKey = paseoParent.get(key);
+    while (parentKey !== undefined && !visited.has(parentKey)) {
+      visited.add(parentKey);
+      hasDescendantLedger.add(parentKey);
+      parentKey = paseoParent.get(parentKey);
+    }
+  }
+
+  // Per-root published facts: pendingResults counts hidden Paseo descendants
+  // with an unviewed result; the published unreadSince/doneSince aggregate
+  // the root's own stamps with its HIDDEN descendants' (the latest wins), so
+  // the rail count stays coherent without double-counting children that
+  // publish their own cards.
+  const paseoChildren = new Map<string, string[]>();
+  for (const [childKey, parentKey] of paseoParent) {
+    const siblings = paseoChildren.get(parentKey);
+    if (siblings === undefined) {
+      paseoChildren.set(parentKey, [childKey]);
+    } else {
+      siblings.push(childKey);
+    }
+  }
+  // A descendant that publishes its own card speaks for itself: active
+  // (non-idle) cards, and fail-safe roots (unresolvable lineage) holding a
+  // ledger. Aggregation stops at them — their news shows on their own card,
+  // and their hidden descendants roll up to THEM, never past them.
+  const speaksForItself = (result: RootResult, key: string): boolean =>
     result.effectiveStatus !== "idle" ||
-    ((result.row.unreadSince !== null || result.row.doneSince !== null) && !isPaseoSubagent(result.row));
+    (!paseoParent.has(key) && (result.row.unreadSince !== null || result.row.doneSince !== null));
+  const pendingResultsOf = new Map<string, number>();
+  const aggregatedUnreadOf = new Map<string, string | null>();
+  const aggregatedDoneOf = new Map<string, string | null>();
+  for (const result of rootResults) {
+    const key = identityKey(result.row.provider, result.row.sessionId);
+    let pending = 0;
+    let aggregatedUnread = result.row.unreadSince;
+    let aggregatedDone = result.row.doneSince;
+    const visited = new Set<string>([key]);
+    const stack = [...(paseoChildren.get(key) ?? [])];
+    for (let childKey = stack.pop(); childKey !== undefined; childKey = stack.pop()) {
+      if (visited.has(childKey)) {
+        continue;
+      }
+      visited.add(childKey);
+      const descendant = rootResultsByIdentity.get(childKey);
+      if (descendant === undefined) {
+        throw new ProjectionError("corrupt-row");
+      }
+      if (speaksForItself(descendant, childKey)) {
+        continue; // its own card carries its news — and its subtree's
+      }
+      if (descendant.row.unreadSince !== null) {
+        pending += 1;
+        if (aggregatedUnread === null || descendant.row.unreadSince > aggregatedUnread) {
+          aggregatedUnread = descendant.row.unreadSince;
+        }
+      }
+      if (descendant.row.doneSince !== null && (aggregatedDone === null || descendant.row.doneSince > aggregatedDone)) {
+        aggregatedDone = descendant.row.doneSince;
+      }
+      for (const grandchildKey of paseoChildren.get(childKey) ?? []) {
+        stack.push(grandchildKey);
+      }
+    }
+    pendingResultsOf.set(key, pending);
+    aggregatedUnreadOf.set(key, aggregatedUnread);
+    aggregatedDoneOf.set(key, aggregatedDone);
+  }
+
+  const rootVisible = (result: RootResult): boolean => {
+    if (result.effectiveStatus !== "idle") {
+      return true;
+    }
+    const key = identityKey(result.row.provider, result.row.sessionId);
+    // A finished Paseo subagent with a resolvable parent stays hidden; its
+    // ledger holds the root ancestor instead. Active subagents keep their
+    // own cards (the effective-status clause above); idle subagent cards
+    // never appear.
+    if (isPaseoSubagent(result.row) && paseoParent.has(key)) {
+      return false;
+    }
+    return holdsLedgerKey.has(key) || hasDescendantLedger.has(key);
+  };
   const visibleRoots = rootResults.filter(rootVisible);
   const visibleRootKeys = new Set(visibleRoots.map((result) => identityKey(result.row.provider, result.row.sessionId)));
 
-  const rootFacts = (result: RootResult) => ({
-    provider: result.row.provider,
-    sessionId: result.row.sessionId,
-    status: result.effectiveStatus,
-    title: result.row.title,
-    project: result.row.project,
-    model: result.row.model,
-    statusSince: result.row.statusSince,
-    activityLine: result.row.activityLine,
-    unreadSince: result.row.unreadSince,
-    doneSince: result.row.doneSince,
-    pendingResults: 0,
-    endedAt: result.row.endedAt,
-    logicalSlot: result.slot,
-    ghosttyTerminalId: result.row.ghosttyTerminalId,
-    transcriptPath: result.row.transcriptPath,
-    originKind: result.row.originKind,
-    originRef: result.row.originRef,
-    originSubagent: isPaseoSubagent(result.row),
-    originParentRef: result.row.originParentRef,
-    lastEventAt: result.row.lastEventAt,
-  });
+  const rootFacts = (result: RootResult) => {
+    const key = identityKey(result.row.provider, result.row.sessionId);
+    return {
+      provider: result.row.provider,
+      sessionId: result.row.sessionId,
+      status: result.effectiveStatus,
+      title: result.row.title,
+      project: result.row.project,
+      model: result.row.model,
+      statusSince: result.row.statusSince,
+      activityLine: result.row.activityLine,
+      unreadSince: aggregatedUnreadOf.get(key) ?? null,
+      doneSince: aggregatedDoneOf.get(key) ?? null,
+      pendingResults: pendingResultsOf.get(key) ?? 0,
+      endedAt: result.row.endedAt,
+      logicalSlot: result.slot,
+      ghosttyTerminalId: result.row.ghosttyTerminalId,
+      transcriptPath: result.row.transcriptPath,
+      originKind: result.row.originKind,
+      originRef: result.row.originRef,
+      originSubagent: isPaseoSubagent(result.row),
+      originParentRef: result.row.originParentRef,
+      lastEventAt: result.row.lastEventAt,
+    };
+  };
 
   const projectedSessions = visibleRoots.map(
     (result): ProjectedSession => ({

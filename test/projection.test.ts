@@ -173,20 +173,28 @@ describe("projectRows", () => {
     expect(projected[0]?.doneSince).toBe(doneAt);
   });
 
-  test("an idle paseo subagent with only a done stamp stays hidden (mirrors the unread rule)", () => {
-    expect(
-      projectRows([
-        row("sub", {
-          status: "idle",
-          unreadSince: null,
-          doneSince: "2026-08-16T00:05:00.000Z",
-          originKind: "paseo",
-          originRef: "a1",
-          originSubagent: 1,
-          slot: 1,
-        }),
-      ]),
-    ).toEqual([]);
+  test("an idle paseo subagent with a done stamp stays hidden while its parent holds the roll-up", () => {
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("sub", {
+        status: "idle",
+        unreadSince: null,
+        doneSince: "2026-08-16T00:05:00.000Z",
+        originKind: "paseo",
+        originRef: "a1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["parent"]);
   });
 
   test("a native subagent node carries a null doneSince while its root exposes the stamp", () => {
@@ -307,20 +315,31 @@ describe("projectRows", () => {
     });
   });
 
-  test("an idle paseo subagent is hidden even when its result is unread", () => {
+  test("an idle paseo subagent is hidden even when its result is unread — the parent carries it", () => {
     // Subagent results are consumed by the orchestrating parent agent, so a
-    // finished paseo subagent must not hold the grid as an unread tile.
+    // finished paseo subagent must not hold the grid as an unread tile; the
+    // roll-up holds the root ancestor with a badge instead.
     const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
       row("sub", {
         status: "idle",
         unreadSince: "2026-08-16T00:00:00.000Z",
         originKind: "paseo",
         originRef: "agent-1",
         originSubagent: 1,
-        slot: 1,
+        originParentRef: "agent-0",
+        slot: 2,
       }),
     ]);
-    expect(sessions).toEqual([]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["parent"]);
+    expect(sessions[0]).toMatchObject({ pendingResults: 1, unreadSince: "2026-08-16T00:00:00.000Z" });
   });
 
   test("an active paseo subagent stays visible with its subagent mark", () => {
@@ -459,7 +478,7 @@ describe("projectRows", () => {
     ]);
   });
 
-  test("an idle paseo subagent retains neither itself nor its read-idle parent; losing the last active descendant hides the parent again", () => {
+  test("a finished subagent's ledger holds its read-idle parent; viewing empties the badge but done keeps the card", () => {
     const parent = () =>
       row("parent", {
         status: "idle",
@@ -469,10 +488,11 @@ describe("projectRows", () => {
         originSubagent: 0,
         slot: 1,
       });
-    const sub = (status: SessionStatus, unreadSince: string | null) =>
+    const sub = (status: SessionStatus, unreadSince: string | null, doneSince: string | null = null) =>
       row("sub", {
         status,
         unreadSince,
+        doneSince,
         originKind: "paseo",
         originRef: "agent-1",
         originSubagent: 1,
@@ -480,16 +500,25 @@ describe("projectRows", () => {
         slot: 2,
       });
 
-    // An unread-idle subagent is the parent's result to report: neither row shows.
-    expect(projectRows([parent(), sub("idle", "2026-08-25T00:00:09.000Z")])).toEqual([]);
+    // An unread finished subagent holds the parent with a badge.
+    const rolled = projectRows([parent(), sub("idle", "2026-08-25T00:00:09.000Z", "2026-08-25T00:00:09.000Z")]);
+    expect(rolled.map((session) => session.sessionId)).toEqual(["parent"]);
+    expect(rolled[0]).toMatchObject({ pendingResults: 1, unreadSince: "2026-08-25T00:00:09.000Z" });
 
-    // While the subagent works, both show.
+    // Viewed (unread cleared) but done: the badge empties, the card stays —
+    // and the parent's published doneSince carries the hold so downstream
+    // gestures (flickRemoves) can dismiss it.
+    const viewed = projectRows([parent(), sub("idle", null, "2026-08-25T00:00:09.000Z")]);
+    expect(viewed.map((session) => session.sessionId)).toEqual(["parent"]);
+    expect(viewed[0]).toMatchObject({ pendingResults: 0, unreadSince: null, doneSince: "2026-08-25T00:00:09.000Z" });
+
+    // While the subagent works, both show (active cards unchanged).
     expect(projectRows([parent(), sub("working", null)]).map((session) => session.sessionId)).toEqual([
       "parent",
       "sub",
     ]);
 
-    // Once the last active descendant is gone, ordinary visibility applies again.
+    // No ledger anywhere: the parent hides again.
     expect(projectRows([parent()])).toEqual([]);
   });
 
@@ -815,6 +844,241 @@ describe("projectRows", () => {
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }
+  });
+
+  test("an idle parent with two finished idle subagents stays visible with pendingResults and aggregated unread", () => {
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("sub-a", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:05.000Z",
+        doneSince: "2026-08-25T00:00:05.000Z",
+        originKind: "paseo",
+        originRef: "agent-a",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+      row("sub-b", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:09.000Z",
+        doneSince: "2026-08-25T00:00:09.000Z",
+        originKind: "paseo",
+        originRef: "agent-b",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 3,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["parent"]);
+    expect(sessions[0]).toMatchObject({ pendingResults: 2, unreadSince: "2026-08-25T00:00:09.000Z" });
+  });
+
+  test("roll-up reaches the root ancestor at nested depth", () => {
+    const sessions = projectRows([
+      row("grand", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-g",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("mid", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-m",
+        originSubagent: 1,
+        originParentRef: "agent-g",
+        slot: 2,
+      }),
+      row("leaf", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:09.000Z",
+        doneSince: "2026-08-25T00:00:09.000Z",
+        originKind: "paseo",
+        originRef: "agent-l",
+        originSubagent: 1,
+        originParentRef: "agent-m",
+        slot: 3,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["grand"]);
+    expect(sessions[0]).toMatchObject({ pendingResults: 1, unreadSince: "2026-08-25T00:00:09.000Z" });
+  });
+
+  test("aggregated root unread takes the latest stamp across own and descendants", () => {
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:01.000Z",
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("sub", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:09.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+    ]);
+    // The resolvable idle subagent is hidden by this task's own rule —
+    // only the parent card publishes, and the child's newer stamp is what
+    // the parent's aggregated unread reports.
+    expect(sessions.map((session) => session.sessionId)).toEqual(["parent"]);
+    expect(sessions[0]).toMatchObject({ pendingResults: 1, unreadSince: "2026-08-25T00:00:09.000Z" });
+  });
+
+  test("fail-safe promotion: a finished subagent with a dangling parent ref renders as its own card", () => {
+    const sessions = projectRows([
+      row("orphan", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:09.000Z",
+        doneSince: "2026-08-25T00:00:09.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "ghost",
+        slot: 1,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["orphan"]);
+    expect(sessions[0]).toMatchObject({ pendingResults: 0, unreadSince: "2026-08-25T00:00:09.000Z" });
+  });
+
+  test("fail-safe promotion: cyclic lineage surfaces every result-bearing row", () => {
+    const sessions = projectRows([
+      row("loop-a", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:01.000Z",
+        doneSince: "2026-08-25T00:00:01.000Z",
+        originKind: "paseo",
+        originRef: "agent-x",
+        originSubagent: 1,
+        originParentRef: "agent-y",
+        slot: 1,
+      }),
+      row("loop-b", {
+        status: "idle",
+        unreadSince: null,
+        doneSince: "2026-08-25T00:00:02.000Z",
+        originKind: "paseo",
+        originRef: "agent-y",
+        originSubagent: 1,
+        originParentRef: "agent-x",
+        slot: 2,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId).sort()).toEqual(["loop-a", "loop-b"]);
+  });
+
+  test("fail-safe promotion: a done subagent whose parent row was deleted renders as its own card", () => {
+    // The parent's origin_ref no longer exists in the registry.
+    const sessions = projectRows([
+      row("sub", {
+        status: "idle",
+        unreadSince: null,
+        doneSince: "2026-08-25T00:00:09.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-gone",
+        slot: 1,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["sub"]);
+  });
+
+  test("an ended root publishes endedAt and stays visible by its ledgers", () => {
+    const sessions = projectRows([
+      row("ended", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:09.000Z",
+        doneSince: "2026-08-25T00:00:09.000Z",
+        endedAt: "2026-08-25T00:01:00.000Z",
+        slot: 1,
+      }),
+    ]);
+    expect(sessions[0]).toMatchObject({ sessionId: "ended", endedAt: "2026-08-25T00:01:00.000Z" });
+  });
+
+  test("an active subagent's own news is not double-counted into its parent's badge", () => {
+    // Sub is working (its own card) while holding unread news (a result
+    // landed, then work resumed). Its own card carries the badge; the parent
+    // must not also count it, or the rail would double-count.
+    const sessions = projectRows([
+      row("parent", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("sub", {
+        status: "working",
+        unreadSince: "2026-08-25T00:00:05.000Z",
+        doneSince: "2026-08-25T00:00:05.000Z",
+        originKind: "paseo",
+        originRef: "agent-1",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["parent", "sub"]);
+    expect(sessions[0]).toMatchObject({ sessionId: "parent", pendingResults: 0, unreadSince: null, doneSince: null });
+    expect(sessions[1]).toMatchObject({ sessionId: "sub", unreadSince: "2026-08-25T00:00:05.000Z" });
+  });
+
+  test("roll-up stops at an active subagent: its finished children badge its own card, not the root's", () => {
+    // The leaf is a finished idle subagent of mid; mid is working (its own
+    // card). The leaf rolls up to mid — the nearest visible card — and the
+    // root counts neither.
+    const sessions = projectRows([
+      row("root", {
+        status: "idle",
+        unreadSince: null,
+        originKind: "paseo",
+        originRef: "agent-0",
+        originSubagent: 0,
+        slot: 1,
+      }),
+      row("mid", {
+        status: "working",
+        originKind: "paseo",
+        originRef: "agent-m",
+        originSubagent: 1,
+        originParentRef: "agent-0",
+        slot: 2,
+      }),
+      row("leaf", {
+        status: "idle",
+        unreadSince: "2026-08-25T00:00:09.000Z",
+        doneSince: "2026-08-25T00:00:09.000Z",
+        originKind: "paseo",
+        originRef: "agent-l",
+        originSubagent: 1,
+        originParentRef: "agent-m",
+        slot: 3,
+      }),
+    ]);
+    expect(sessions.map((session) => session.sessionId)).toEqual(["root", "mid"]);
+    expect(sessions[0]).toMatchObject({ sessionId: "root", pendingResults: 0, unreadSince: null });
+    expect(sessions[1]).toMatchObject({ sessionId: "mid", pendingResults: 1, unreadSince: "2026-08-25T00:00:09.000Z" });
   });
 });
 
