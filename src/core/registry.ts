@@ -1390,3 +1390,35 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
     }
     return count;
   });
+
+/**
+ * The viewed-expiry sweep: auto-dismiss every idle or error row whose most
+ * recent view is at or before the caller's cutoff and that still holds a
+ * finished result — `done_since` or an `error` status. Clears the ledgers
+ * (including any residual unread) and retires errors like a dismissal,
+ * stamping the retirement's `status_since` with `sweptAt` — the sweep's own
+ * instant, never the cutoff. The clock runs from the most recent view;
+ * wall-clock time counts — sleep and daemon downtime included — because
+ * expiry evaluates on the next tick using the cutoff the caller computes
+ * from now. Rows never viewed (`viewed_since` null) are never swept, and
+ * neither are rows holding unread news (unviewed by definition — a
+ * defensive guard: every fresh-result path already clears the clock) or
+ * working/waiting rows: a resumed turn can retain a stale done ledger, and
+ * expiry must not delete an active card's result. Returns the rows swept.
+ */
+export const sweepExpiredResults = (db: Database, cutoffIso: string, sweptAt: string): number =>
+  inWriteTransaction(db, () => {
+    const result = db.run(
+      `UPDATE active_sessions
+       SET done_since = NULL, unread_since = NULL, viewed_since = NULL,
+           status = CASE WHEN status = 'error' THEN 'idle' ELSE status END,
+           status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
+           background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
+       WHERE viewed_since IS NOT NULL AND viewed_since <= ?
+         AND unread_since IS NULL
+         AND status IN ('idle', 'error')
+         AND (done_since IS NOT NULL OR status = 'error')`,
+      [sweptAt, cutoffIso],
+    );
+    return result.changes;
+  });

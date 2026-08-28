@@ -8,6 +8,7 @@ import {
   DAEMON_POLL_INTERVAL_MS,
   type DaemonDependencies,
   ProjectionDaemon,
+  VIEWED_EXPIRY_TTL_MS,
 } from "../src/core/daemon";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
 import { type AppPaths, resolveAppPaths } from "../src/core/paths";
@@ -448,28 +449,28 @@ describe("ProjectionDaemon maintenance", () => {
   });
 
   test("prunes sessions whose last hook is older than the TTL and republishes", () => {
-    // The stale row is idle and never-unread (projection-invisible, the
-    // canonical ages-out shape): a row holding an unviewed result must
-    // survive the prune instead (covered by the Paseo-tree test below).
-    apply([
-      {
-        kind: "SessionStart",
-        provider: "claude",
-        sessionId: "stale",
-        title: null,
-        project: null,
-        ghosttyTerminalId: null,
-        transcriptPath: null,
-        model: null,
-        observedAt: "2026-08-01T00:00:00.000Z",
-      },
-    ]);
-    startSession("fresh", NOW);
+    // Active rows carry no ledgers, so only the TTL decides.
+    const activeSession = (sessionId: string, observedAt: string): void => {
+      apply([
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId,
+          title: `Title for ${sessionId}`,
+          project: null,
+          ghosttyTerminalId: null,
+          transcriptPath: null,
+          model: null,
+          observedAt,
+        },
+        { kind: "Activity", provider: "claude", sessionId, observedAt },
+      ]);
+    };
+    activeSession("stale", "2026-08-01T00:00:00.000Z");
+    activeSession("fresh", NOW);
     const harness = makeHarness();
     harness.daemon.start();
     try {
-      // The first poll's prune pass removed the five-day-old row even though
-      // the deletion happened on the daemon's own connection.
       expect(readSnapshotFile().sessions.map((session) => session.sessionId)).toEqual(["fresh"]);
       const rows = (() => {
         const db = openRegistryDatabase(paths.database, "readonly");
@@ -482,6 +483,65 @@ describe("ProjectionDaemon maintenance", () => {
       expect(rows).toEqual([{ session_id: "fresh" }]);
     } finally {
       harness.daemon.stop();
+    }
+  });
+
+  test("sweeps a done card 24h after its view — across a daemon restart, wall-clock — and republishes", () => {
+    startSession("viewed");
+    const viewedAt = "2026-08-06T01:00:00.000Z";
+    const view = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      viewSession(view, "claude", "viewed", viewedAt);
+    } finally {
+      view.close();
+    }
+    startSession("unviewed", "2026-08-01T00:00:00.000Z"); // five days old, never viewed
+
+    // The first daemon runs at view time: inside the window, both cards.
+    const clock = fakeClock(Date.parse(viewedAt));
+    const first = makeHarness({ nowMs: clock.nowMs });
+    first.daemon.start();
+    expect(
+      readSnapshotFile()
+        .sessions.map((session) => session.sessionId)
+        .sort(),
+    ).toEqual(["unviewed", "viewed"]);
+    first.daemon.stop();
+
+    // The machine sleeps / the daemon is down past the 24h mark. A FRESH
+    // daemon instance reopens the database; its first maintenance pass
+    // sweeps the viewed card (wall-clock expiry needs no running daemon)
+    // while the unviewed one survives at any age.
+    const laterMs = Date.parse(viewedAt) + VIEWED_EXPIRY_TTL_MS + 60_000;
+    const laterIso = new Date(laterMs).toISOString();
+    const second = makeHarness({ nowMs: () => laterMs, now: () => laterIso });
+    second.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions.map((session) => session.sessionId)).toEqual(["unviewed"]);
+    } finally {
+      second.daemon.stop();
+    }
+  });
+
+  test("daemon restart with unviewed results: everything is still present", () => {
+    startSession("kept", "2026-08-01T00:00:00.000Z"); // old AND unviewed
+    const first = makeHarness();
+    first.daemon.start();
+    first.daemon.stop();
+
+    // A fresh daemon instance reopens the database from disk.
+    const second = makeHarness();
+    second.daemon.start();
+    try {
+      expect(readSnapshotFile().sessions.map((session) => session.sessionId)).toEqual(["kept"]);
+      const db = openRegistryDatabase(paths.database, "readonly");
+      try {
+        expect(db.query("SELECT COUNT(*) AS n FROM active_sessions").get()).toEqual({ n: 1 });
+      } finally {
+        db.close();
+      }
+    } finally {
+      second.daemon.stop();
     }
   });
 

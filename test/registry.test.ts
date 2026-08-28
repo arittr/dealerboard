@@ -11,6 +11,7 @@ import {
   clearSession,
   listSessions,
   pruneStaleSessions,
+  sweepExpiredResults,
   syncPaseoStates,
   updateSessionActivityLines,
   updateSessionModels,
@@ -2763,5 +2764,114 @@ describe("SessionEnd retention (ended cards)", () => {
       viewed_since: null,
       ended_at: at(9), // the row itself remains until prune
     });
+  });
+});
+
+describe("sweepExpiredResults", () => {
+  const VIEWED = "2026-08-01T00:00:00.000Z";
+  const CUTOFF = "2026-08-02T00:00:00.000Z"; // viewed + 24h
+  const SWEPT_AT = "2026-08-02T06:00:00.000Z"; // the sweep's own instant
+
+  const seedDoneViewed = (sessionId: string): void => {
+    applyRegistryEvents(db, [start(sessionId), simple("Stop", sessionId, { at: at(5) })]);
+    viewSession(db, "claude", sessionId, VIEWED);
+  };
+
+  test("auto-dismisses a done row viewed older than the cutoff", () => {
+    seedDoneViewed("s1");
+    expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(1);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: null,
+      done_since: null,
+      viewed_since: null,
+    });
+  });
+
+  test("retires an error row viewed older than the cutoff, stamping status_since at the sweep instant", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", VIEWED);
+    expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(1);
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      background_outstanding: 0,
+      viewed_since: null,
+      status_since: SWEPT_AT, // the retirement time — not the cutoff
+    });
+  });
+
+  test("an unviewed done row of any age is never swept", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(sweepExpiredResults(db, "2027-01-01T00:00:00.000Z", SWEPT_AT)).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(5), done_since: at(5) });
+  });
+
+  test("a row viewed exactly at the cutoff is swept (inclusive)", () => {
+    seedDoneViewed("s1");
+    expect(sweepExpiredResults(db, VIEWED, SWEPT_AT)).toBe(1);
+  });
+
+  test("a viewed row inside the 24h window is kept", () => {
+    seedDoneViewed("s1");
+    // The cutoff is now − 24h; twelve hours after the view it is still
+    // twelve hours before it — the row lives inside its window.
+    expect(sweepExpiredResults(db, "2026-07-31T12:00:00.000Z", SWEPT_AT)).toBe(0);
+    expect(getRow("s1")?.done_since).toBe(at(5));
+  });
+
+  test("a working row with a stale viewed done ledger is never swept", () => {
+    // Done lands, the session is viewed, then work resumes — Activity leaves
+    // the done ledger in place (status transitions don't clear it), so the
+    // row carries an expired view clock AND a done stamp while working.
+    applyRegistryEvents(db, [start("busy"), simple("Stop", "busy", { at: at(4) })]);
+    viewSession(db, "claude", "busy", VIEWED);
+    applyRegistryEvents(db, [simple("Activity", "busy", { at: at(6) })]);
+    expect(getRow("busy")).toMatchObject({ status: "working", done_since: at(4), viewed_since: VIEWED });
+    expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(0);
+    expect(getRow("busy")).toMatchObject({ status: "working", done_since: at(4), viewed_since: VIEWED });
+  });
+
+  test("a waiting row with a stale viewed done ledger is never swept", () => {
+    applyRegistryEvents(db, [start("blocked"), simple("Stop", "blocked", { at: at(4) })]);
+    viewSession(db, "claude", "blocked", VIEWED);
+    applyRegistryEvents(db, [simple("Attention", "blocked", { at: at(6) })]);
+    expect(getRow("blocked")).toMatchObject({ status: "waiting", done_since: at(4), viewed_since: VIEWED });
+    expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(0);
+    expect(getRow("blocked")).toMatchObject({ status: "waiting", done_since: at(4), viewed_since: VIEWED });
+  });
+
+  test("a new result after the view cancels the sweep (the card is unviewed again)", () => {
+    seedDoneViewed("s1");
+    applyRegistryEvents(db, [simple("Activity", "s1", { at: at(8) }), simple("Stop", "s1", { at: at(9) })]);
+    expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(9), viewed_since: null });
+  });
+
+  test("a row holding unread news is never swept, even with an expired view clock (defensive)", () => {
+    // Every fresh-result path clears viewed_since (Stop/StopFailure in Task
+    // 2, the Paseo flag and repair in Task 5) — but if an inconsistent state
+    // ever exists, unread means unviewed, and unviewed never expires.
+    seedDoneViewed("s1");
+    db.run("UPDATE active_sessions SET unread_since = ? WHERE session_id = 's1'", [at(9)]);
+    expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(5) });
+  });
+
+  test("an ended error card lives out its post-view window, then the sweep dismisses it", () => {
+    // The full R10 chain: failure → end (retained with a done hold) → view
+    // (clock starts, card stays) → expiry (dismissed after the window).
+    const viewedAt = "2026-08-06T01:00:00.000Z";
+    const cutoff = "2026-08-07T01:00:00.000Z"; // viewedAt + 24h
+    const sweptAt = "2026-08-07T02:00:00.000Z";
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
+    expect(viewSession(db, "claude", "s1", viewedAt)).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ ended_at: at(9), done_since: at(9), viewed_since: viewedAt });
+    // Inside the window the card stays.
+    expect(sweepExpiredResults(db, "2026-08-05T12:00:00.000Z", sweptAt)).toBe(0);
+    expect(getRow("s1")?.done_since).toBe(at(9));
+    // Past it, the sweep dismisses; the row remains for prune at its TTL.
+    expect(sweepExpiredResults(db, cutoff, sweptAt)).toBe(1);
+    expect(getRow("s1")).toMatchObject({ status: "idle", done_since: null, viewed_since: null, ended_at: at(9) });
   });
 });

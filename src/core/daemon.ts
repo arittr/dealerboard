@@ -12,14 +12,17 @@
  * it rewrites the current snapshot every heartbeat interval so the file's
  * mtime doubles as the daemon-liveness signal the plugin watches.
  *
- * Maintenance runs inside the same poll loop, as three passes: a
+ * Maintenance runs inside the same poll loop, as four passes: a
  * session-facts pass (resolve session titles, models, and activity lines
  * from provider files, update rows that changed) every two seconds, a Paseo
  * overlay pass (mirror Paseo's per-agent attention and origin state onto
- * matching rows) on the same cadence, and a prune pass (delete sessions
+ * matching rows) on the same cadence, a viewed-expiry sweep (auto-dismiss
+ * done/errored rows viewed more than 24 hours ago — unviewed rows never
+ * expire), and a prune pass (delete sessions
  * whose whole tree is stale — the last hook of every descendant older than
  * the stale TTL, one hour for zcode, which has no SessionEnd hook, a day for
- * everyone else — so a live subagent always keeps its thread) every minute. A poll gap
+ * everyone else, skipping any tree that still holds an unviewed result —
+ * so a live subagent always keeps its thread) every minute. A poll gap
  * beyond the clock-jump threshold — the sleep signature of the host machine
  * — records a diagnostic. Maintenance failures record their own diagnostic
  * and never affect publication health.
@@ -38,6 +41,7 @@ import { readProjection } from "./projection";
 import {
   listTitleTargets,
   pruneStaleSessions,
+  sweepExpiredResults,
   updateSessionActivityLines,
   updateSessionModels,
   updateSessionTitles,
@@ -59,6 +63,8 @@ export const DAEMON_PRUNE_INTERVAL_MS = 60_000;
 export const STALE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 /** A zcode session with no hook event for this long is presumed dead (zcode has no SessionEnd hook). */
 export const ZCODE_STALE_SESSION_TTL_MS = 60 * 60 * 1000;
+/** A done or errored row viewed this long ago auto-dismisses; unviewed rows never expire. */
+export const VIEWED_EXPIRY_TTL_MS = 24 * 60 * 60 * 1000;
 /** A poll gap this large means the host slept or the clock jumped. */
 export const CLOCK_JUMP_MS = 30_000;
 /**
@@ -278,6 +284,11 @@ export class ProjectionDaemon {
       }
       if (this.state.lastPrunePassAtMs === null || nowMs - this.state.lastPrunePassAtMs >= DAEMON_PRUNE_INTERVAL_MS) {
         this.state.lastPrunePassAtMs = nowMs;
+        const nowIso = new Date(nowMs).toISOString();
+        const expiryCutoff = new Date(nowMs - VIEWED_EXPIRY_TTL_MS).toISOString();
+        if (sweepExpiredResults(this.connection, expiryCutoff, nowIso) > 0) {
+          changed = true;
+        }
         const cutoff = new Date(nowMs - STALE_SESSION_TTL_MS).toISOString();
         const zcodeCutoff = new Date(nowMs - ZCODE_STALE_SESSION_TTL_MS).toISOString();
         if (pruneStaleSessions(this.connection, cutoff, zcodeCutoff) > 0) {
