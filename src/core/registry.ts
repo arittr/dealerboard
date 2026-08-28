@@ -9,25 +9,38 @@
  * partial unique index remain the final backstop for genuinely unexpected
  * writes.
  *
- * The database holds active state only: SessionEnd and SubagentStop delete
- * rows, as do the daemon's age-based prune and the manual
- * `clearSession`/`clearAllSessions`/`pruneStaleSessions` repairs; a Stop or
- * StopFailure retains the row — it stamps `unread_since` instead — so a
- * missed end event leaves a stale row until one of those repairs it.
- * Slots are never compacted; a new top-level row receives the
+ * The database holds active state only: SubagentStop deletes child rows,
+ * and the daemon's age-based prune plus the manual
+ * `clearSession`/`clearAllSessions`/`pruneStaleSessions` repairs delete
+ * trees — prune skipping any tree that still holds an unviewed result. A
+ * Stop or StopFailure always retains its row. SessionEnd deletes a row
+ * only when nothing is unviewed; otherwise it
+ * retains the row as a terminal "ended" card (idle, `ended_at` stamped)
+ * under the normal contract, and a reused SessionStart revives it in
+ * place. Slots are never compacted; a new top-level row receives the
  * lowest free positive slot found from the sorted non-null slot list.
  *
  * The unread ledger records results the user has not viewed: a turn ending
- * (Stop settling to idle, or StopFailure) stamps `unread_since`, and only an
- * explicit view clears it — `viewSession`, `acknowledgeSession`, or a reused
- * SessionStart. Prompts and status events never mark a session read.
+ * (Stop settling to idle, StopFailure, or the Paseo missed-completion
+ * repair) stamps `unread_since`, and the complete clearing list is: a
+ * dealerboard view (`viewSession`), a dismissal (`acknowledgeSession`), a
+ * Paseo archive, a reused SessionStart, the viewed-expiry sweep, and
+ * manual clear (`clearSession`/`clearAllSessions`, which delete the row).
+ * A passive Paseo view never touches it. Prompts and status events never
+ * mark a session read; unread is purely cosmetic (badge/styling) and never
+ * gates removal.
  *
  * The done ledger records finished results still owed a board slot: a Stop
  * settling to idle stamps `done_since`, and only an explicit dismissal
- * (`acknowledgeSession`), a Paseo archive, or a reused SessionStart clears
- * it. A passive view — Paseo's cleared attention record — clears unread but
- * never done: the finished card stays until the user dismisses it or the
- * session moves on.
+ * (`acknowledgeSession`), a Paseo archive, a reused SessionStart, or the
+ * viewed-expiry sweep clears it. `done_since` (or an `error` status) is
+ * what holds a finished card.
+ *
+ * The viewed ledger starts the expiry clock: only a dealerboard view
+ * gesture (`viewSession`) stamps `viewed_since`, and every view restamps
+ * it. Any event stamping a fresh result clears it — the card is unviewed
+ * again. Done/errored rows auto-dismiss 24h after the most recent view;
+ * unviewed rows never expire.
  *
  * `status_since` records the row's own last status change: status events
  * restamp it only when the status value changes, BackgroundWork events never
