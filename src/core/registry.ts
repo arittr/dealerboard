@@ -35,7 +35,8 @@
  * stale prune.
  *
  * The done ledger records finished results still owed a board slot: a Stop
- * settling to idle stamps `done_since`, and only an explicit dismissal
+ * settling to idle stamps `done_since` (so do the Paseo missed-completion
+ * repair and a landing Paseo attention flag), and only an explicit dismissal
  * (`acknowledgeSession`), a Paseo archive, a reused SessionStart, or the
  * viewed-expiry sweep clears it. `done_since` (or an `error` status) is
  * what holds a finished card.
@@ -966,7 +967,10 @@ export type PaseoSyncState = {
  *   null `unread_since` adopts it and a non-null one is always kept: local
  *   news at least as new as the flag is never regressed or churned. A flag
  *   raised at or before the row's `acked_at` is stale news — the user
- *   already viewed a newer state — and never resurrects unread.
+ *   already viewed a newer state — and never resurrects unread. A flag
+ *   that lands is a result the user must process: the row also takes a
+ *   done hold at the flag time (`COALESCE(done_since, flagTime)`) so the
+ *   card outlives its own badge until dismissed or expired.
  * - A cleared or absent-flag record is a passive view and is inert: it
  *   stamps origin but never touches board ledgers — only dealerboard
  *   gestures, archive, session restart, or expiry clear them. An archived
@@ -1050,7 +1054,13 @@ export const syncPaseoStates = (
       if (state.requiresAttention && state.archivedAt === null) {
         // Flagged: set unread only when currently null, to the flag time —
         // and only when the flag postdates the last ack, so a stale flag can
-        // never resurrect a session the user already marked read.
+        // never resurrect a session the user already marked read. A flag
+        // that actually lands (the same condition that cancels the view
+        // clock) is a result the user must process: it also takes a done
+        // hold at the flag time (an existing hold is kept), so the card
+        // stays on the board after its badge is viewed away, until it is
+        // dismissed or expires — an idle row whose only hold was the flag
+        // would otherwise vanish the moment it was viewed.
         const flagTime = state.attentionTimestamp ?? state.updatedAt;
         const result = db.run(
           `UPDATE active_sessions
@@ -1058,6 +1068,11 @@ export const syncPaseoStates = (
                unread_since = CASE
                  WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) THEN COALESCE(unread_since, ?)
                  ELSE unread_since
+               END,
+               done_since = CASE
+                 WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) AND unread_since IS NULL
+                 THEN COALESCE(done_since, ?)
+                 ELSE done_since
                END,
                viewed_since = CASE
                  WHEN ? IS NOT NULL AND (acked_at IS NULL OR ? > acked_at) AND unread_since IS NULL THEN NULL
@@ -1072,19 +1087,22 @@ export const syncPaseoStates = (
           [
             state.agentId,
             state.isSubagent ? 1 : 0,
-            state.parentAgentId,
+            state.parentAgentId, // origin stamp
             flagTime,
             flagTime,
+            flagTime, // unread CASE (guard ×2 + value)
             flagTime,
             flagTime,
+            flagTime, // done CASE (guard ×2 + value): the same landing condition as the view-clock cancel
             flagTime,
+            flagTime, // viewed CASE (guard ×2)
             state.provider,
-            state.sessionId,
+            state.sessionId, // identity
             state.agentId,
             state.isSubagent ? 1 : 0,
-            state.parentAgentId,
+            state.parentAgentId, // origin difference-guard
             flagTime,
-            flagTime,
+            flagTime, // landing difference-guard
           ],
         );
         changed += result.changes;

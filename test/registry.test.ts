@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
+import { readProjection } from "../src/core/projection";
 import {
   acknowledgeSession,
   applyRegistryEvents,
@@ -1731,6 +1732,51 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")).toMatchObject({ unread_since: at(9), viewed_since: null });
   });
 
+  test("a flag that lands an unread stamp also holds the card: done_since adopts the flag time", () => {
+    // An idle row with no result of its own: the flag is the result the
+    // user must process, so it holds the card until dismissed or expired —
+    // not just until the badge is cleared.
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: FLAG_AT })])).toBe(1);
+    expect(getRow("s1")).toMatchObject({ unread_since: FLAG_AT, done_since: FLAG_AT });
+  });
+
+  test("a flag-held card survives its view and is released by the expiry sweep", () => {
+    applyRegistryEvents(db, [{ ...start("s1"), origin: { kind: "paseo", ref: "a1" } }]);
+    syncPaseoStates(db, [paseoState({ attentionTimestamp: FLAG_AT })]);
+    const viewedAt = "2026-08-06T01:00:00.000Z";
+    expect(viewSession(db, "claude", "s1", viewedAt)).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: FLAG_AT, viewed_since: viewedAt });
+    // The projection still publishes the card: the done hold keeps it.
+    expect(readProjection(db).sessions.map((session) => session.sessionId)).toEqual(["s1"]);
+    // 24h after the view the sweep dismisses it, and the card leaves.
+    expect(sweepExpiredResults(db, "2026-08-07T01:00:00.000Z", "2026-08-07T01:00:30.000Z")).toBe(1);
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null, viewed_since: null });
+    expect(readProjection(db).sessions).toEqual([]);
+  });
+
+  test("a flag on a row already holding done keeps the earlier done stamp", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    viewSession(db, "claude", "s1", at(8));
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: at(9) })])).toBe(1);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(5), viewed_since: null });
+  });
+
+  test("a flag that lands no unread stamp stamps no done hold either", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    expect(acknowledgeSession(db, "claude", "s1", at(8))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null });
+    // Stale flag (predates the ack): suppressed — no unread, no done.
+    expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: at(2) })])).toBe(0);
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null });
+  });
+
   test("the settled-record repair never resurrects a result dismissed after the record", () => {
     applyRegistryEvents(db, [
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
@@ -1797,9 +1843,10 @@ describe("syncPaseoStates", () => {
       { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
       simple("Activity", "s1", { at: at(2) }),
     ]);
-    // A flag raises unread at at(9) — news newer than the row's last hook.
+    // A flag raises unread at at(9) — news newer than the row's last hook —
+    // and holds the card with a done stamp at the same instant.
     expect(syncPaseoStates(db, [paseoState({ attentionTimestamp: at(9) })])).toBe(1);
-    expect(getRow("s1")?.unread_since).toBe(at(9));
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(9) });
 
     // The settled record at at(5) postdates the row's last hook (so the
     // retirement applies) but predates the unread stamp: the settle is
@@ -1812,7 +1859,7 @@ describe("syncPaseoStates", () => {
       status: "idle",
       status_since: at(5),
       unread_since: at(9),
-      done_since: null,
+      done_since: at(9),
       viewed_since: null,
     });
   });
