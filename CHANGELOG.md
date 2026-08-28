@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- roborev-spawned reviewer sessions identify themselves: a bundled
+  `claude_code_cmd` shim plants the `ROBOREV_SPAWN` marker, the origin
+  vocabulary gains a `roborev` kind (schema v16), and identified cards wear
+  the containment ring — and the tile its origin pip — in cyan.
+
 - Flick a slat vertically to dismiss it: a slat an ack would remove (an
   errored session or a viewed idle result) slides out and acks; live slats
   flash instead.
