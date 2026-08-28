@@ -89,7 +89,7 @@ const STATUS_PRIORITY: Record<SessionStatus, number> = {
 
 const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 const SESSION_STATUSES: ReadonlySet<string> = new Set(["idle", "working", "waiting", "error"]);
-const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal"]);
+const ORIGIN_KINDS: ReadonlySet<string> = new Set(["paseo", "terminal", "roborev"]);
 
 const identityKey = (provider: Provider, sessionId: string): string => `${provider}\u0000${sessionId}`;
 
