@@ -1,10 +1,13 @@
 /**
- * Locally-dismissed slats: a flick fires an ack whose settlement travels
+ * Locally-dismissed slats: a flick fires a dismiss whose settlement travels
  * registry → daemon snapshot → push before the row actually leaves the data.
  * Hiding the flicked identity locally bridges that round-trip so the card
  * never pops back for a beat between the animation and the ingest. An entry
  * expires after DISMISS_TTL_MS, so a row the registry refused to settle
  * honestly returns on a later ingest instead of staying silently hidden.
+ * flickRemoves is the dismiss-eligibility predicate the whole app shares
+ * (flick and action sheet alike): error, or idle holding done/unread
+ * — active working/waiting cards can never be dismissed.
  */
 
 import type { Provider, SessionSnapshotV2 } from "../../src/protocol";

@@ -43,9 +43,17 @@ import {
   readTokenUsageSnapshot,
   revealTranscript,
   type SnapshotPayload,
+  viewSession,
 } from "./bridge";
 import { ageLineText, boardRenderSignature, cardKey, renderBoard, sessionLastEventAt } from "./cards";
 import { createDismissals, flickRemoves } from "./dismissals";
+/**
+ * A pending press is bound to the pressed session's identity, never to a
+ * dense tile index: a pushed snapshot can re-render the grid during the
+ * stroke, and an index captured at press time may already point at a
+ * different session when the long-press sheet opens or the flick lands.
+ */
+import { capturePendingPress, type PendingPress } from "./gesture-target";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -60,7 +68,7 @@ import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
-import { identityOf, interactiveBoardCard, resolveInteractiveBoardCard, type SessionIdentity } from "./tile-identity";
+import { interactiveBoardCard, resolveInteractiveBoardCard } from "./tile-identity";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
 import { startStripWindowManager } from "./window";
 
@@ -81,14 +89,6 @@ let currentPageCount = 1;
 let currentPages: readonly BoardPage[] = [];
 let currentCards: readonly PlacedCard[] = [];
 const ingestGate = createIngestGate();
-
-/**
- * A pending press is bound to the pressed session's identity, never to a
- * dense tile index: a pushed snapshot can re-render the grid during the
- * stroke, and an index captured at press time may already point at a
- * different session when the long-press sheet opens or the flick lands.
- */
-type PendingPress = { identity: SessionIdentity; point: GesturePoint };
 
 const gestures = createGestureRecognizer();
 const clickSuppression = createClickSuppression();
@@ -424,7 +424,7 @@ const onBoardClick = (event: MouseEvent): void => {
     return;
   }
   void pressBoardCard(currentCard, {
-    ack: ackSession,
+    view: viewSession,
     openUrl,
     focusGhostty,
     readPaseoServerId,
@@ -441,11 +441,7 @@ const cardFromPointerEvent = (event: MouseEvent): PendingPress | null => {
     return null;
   }
   const index = Number(card.dataset["cardIndex"]);
-  const currentCard = interactiveBoardCard(currentCards[index]);
-  if (currentCard === null) {
-    return null;
-  }
-  return { identity: identityOf(currentCard.session), point: { x: event.clientX, y: event.clientY } };
+  return capturePendingPress(currentCards, index, { x: event.clientX, y: event.clientY });
 };
 
 const removeSheetOverlay = (): void => {
@@ -548,7 +544,7 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
       // flash; the sheet's job is done either way.
       dismissActionSheet();
       void pressSessionTile(session, {
-        ack: ackSession,
+        view: viewSession,
         openUrl,
         focusGhostty,
         readPaseoServerId,
@@ -556,7 +552,12 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
       });
       return;
     case "ack":
-      return trackSheetAction(ackSession(session.provider, session.sessionId, null), context, generation, "Ack failed");
+      return trackSheetAction(
+        ackSession(session.provider, session.sessionId, { unreadSince: session.unreadSince }),
+        context,
+        generation,
+        "Dismiss failed",
+      );
     case "reveal": {
       const path = transcriptPathOf(session);
       if (path === null) {
@@ -579,11 +580,12 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
 const FLICK_OUT_MS = 200;
 
 /**
- * Flick-to-dismiss: the vertical counterpart of tap-ack, minus the routing.
+ * Flick-to-dismiss: the tap views; the flick is the explicit dismissal,
+ * minus the routing.
  * Only a slat an ack would actually take off the board (a retired error, a
  * viewed idle result) slides out; a live slat flashes like a routeless tap,
  * so the animation never promises a dismissal the registry will refuse. The
- * ack itself is fire-and-forget exactly like pressSessionTile's: if it is
+ * ack itself is fire-and-forget exactly like the tap's view: if it is
  * lost, the local dismissal expires and the slat honestly returns.
  */
 const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
@@ -600,7 +602,7 @@ const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
     return;
   }
   const { provider, sessionId } = ref.card.session;
-  void ackSession(provider, sessionId, null).catch(() => {});
+  void ackSession(provider, sessionId, pending.watermark).catch(() => {});
   const slide = tile.animate(
     [
       { transform: "translateY(0)", opacity: 1 },

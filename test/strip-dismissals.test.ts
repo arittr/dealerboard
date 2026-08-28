@@ -84,6 +84,31 @@ describe("flickRemoves", () => {
     expect(flickRemoves(session("s1", { status: "working", unreadSince: "2026-08-26T05:00:00.000Z" }))).toBe(false);
     expect(flickRemoves(session("s1", { status: "waiting" }))).toBe(false);
   });
+
+  test("an active card with a stale unread badge is still not flickable (regression pin)", () => {
+    expect(flickRemoves(session("s1", { status: "working", unreadSince: "2026-08-26T05:00:00.000Z" }))).toBe(false);
+    expect(flickRemoves(session("s1", { status: "waiting", doneSince: "2026-08-26T05:00:00.000Z" }))).toBe(false);
+  });
+
+  test("an ended card holding a result is flickable (regression pin)", () => {
+    expect(
+      flickRemoves(
+        session("s1", {
+          status: "idle",
+          doneSince: "2026-08-26T05:00:00.000Z",
+          endedAt: "2026-08-26T06:00:00.000Z",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("a roll-up-held parent is flickable via its aggregated done stamp (regression pin)", () => {
+    // Task 9 publishes the descendant's done as the parent's doneSince; the
+    // app cannot and need not tell the difference.
+    expect(
+      flickRemoves(session("s1", { status: "idle", doneSince: "2026-08-26T05:00:00.000Z", pendingResults: 0 })),
+    ).toBe(true);
+  });
 });
 
 describe("createDismissals", () => {

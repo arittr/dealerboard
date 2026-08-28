@@ -70,7 +70,7 @@ describe("buildSheetModel", () => {
     expect(model.items.map((item) => item.id)).toEqual(["open", "ack", "reveal", "copy", "clear"]);
     expect(model.items.map((item) => item.label)).toEqual([
       "Open",
-      "Ack",
+      "Dismiss",
       "Reveal transcript",
       "Copy session ID",
       "Clear session",
@@ -207,5 +207,27 @@ describe("sheet error state", () => {
   test("normalizes an absent error to null", () => {
     const model = buildSheetModel(session(), { title: "t", clipboardAvailable: true, clearArmed: false });
     expect(model.error).toBeNull();
+  });
+});
+
+describe("dismiss gating (the gesture matrix)", () => {
+  const dismissEnabled = (overrides: Partial<ProjectedSession>): boolean =>
+    buildSheetModel(session(overrides), { title: "t", clipboardAvailable: true, clearArmed: false }).items.find(
+      (item) => item.id === "ack",
+    )?.enabled === true;
+
+  test("dismiss is disabled for active cards — working and waiting stay", () => {
+    expect(dismissEnabled({ status: "working" })).toBe(false);
+    expect(dismissEnabled({ status: "waiting" })).toBe(false);
+  });
+
+  test("dismiss is enabled for held results: idle-with-done, unread, and error", () => {
+    expect(dismissEnabled({ status: "idle", doneSince: "2026-08-26T05:00:00.000Z" })).toBe(true);
+    expect(dismissEnabled({ status: "idle", unreadSince: "2026-08-26T05:00:00.000Z" })).toBe(true);
+    expect(dismissEnabled({ status: "error" })).toBe(true);
+  });
+
+  test("dismiss is disabled for a bare idle card (nothing to settle)", () => {
+    expect(dismissEnabled({ status: "idle" })).toBe(false);
   });
 });

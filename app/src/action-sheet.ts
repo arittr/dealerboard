@@ -6,6 +6,7 @@
  */
 
 import type { BoardSession } from "./board";
+import { flickRemoves } from "./dismissals";
 
 export type SheetActionId = "open" | "ack" | "reveal" | "copy" | "clear";
 
@@ -52,7 +53,7 @@ export const buildSheetModel = (session: BoardSession, options: SheetOptions): S
     error: options.error ?? null,
     items: [
       { id: "open", label: "Open", enabled: !actionsLocked, confirming: false },
-      { id: "ack", label: "Ack", enabled: !actionsLocked, confirming: false },
+      { id: "ack", label: "Dismiss", enabled: !actionsLocked && flickRemoves(session), confirming: false },
       {
         id: "reveal",
         label: "Reveal transcript",
