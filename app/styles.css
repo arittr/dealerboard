@@ -421,6 +421,19 @@ body[data-fullscreen] #board {
     0 0 0 0.195vw #a78bfa; /* the gap stays card-colored on the sunk surface */
 }
 
+/* The same enclosure in the roborev hue: a reviewer the roborev daemon
+   dispatched — a different multiplexer, the same ring shape. */
+.chip.roborev {
+  box-shadow:
+    0 0 0 0.078vw #1c2430,
+    /* 2px native gap */ 0 0 0 0.195vw #22d3ee; /* 3px native ring */
+}
+.card.status-working.quiet .chip.roborev {
+  box-shadow:
+    0 0 0 0.078vw #171e28,
+    0 0 0 0.195vw #22d3ee; /* the gap stays card-colored on the sunk surface */
+}
+
 /* Subagent anatomy: smaller chip, muted title, tighter status and meta. */
 .card.sub .chip {
   width: 1.25vw; /* 32px native */

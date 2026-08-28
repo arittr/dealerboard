@@ -58,8 +58,9 @@ export type CardViewModel = {
    *  (the gap slot owns that position) and on sessions without an openedAt stamp. */
   age: string | null;
   ageSince: string | null;
-  /** True for a session a Paseo agent dispatched (parents only) — the head's "paseo" pill. */
-  paseoOrigin: boolean;
+  /** The spawner whose containment ring encloses the chip: a Paseo agent
+   *  (parents only) or the roborev review daemon; null renders no ring. */
+  originRing: "paseo" | "roborev" | null;
   subagent: boolean;
   indent: boolean;
   spine: SpineSegment;
@@ -101,7 +102,12 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     timer,
     age,
     ageSince: age === null ? null : openedAt,
-    paseoOrigin: session.originKind === "paseo" && !session.originSubagent,
+    originRing:
+      session.originKind === "paseo" && !session.originSubagent
+        ? "paseo"
+        : session.originKind === "roborev"
+          ? "roborev"
+          : null,
     subagent: card.subagent,
     indent: card.indent,
     spine: card.spine,
@@ -144,9 +150,10 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
 
   const head = document.createElement("div");
   head.className = "card-head";
-  // The containment ring: a Paseo-dispatched parent's chip is enclosed by
-  // the multiplexer's ring — the harness inside something.
-  const chip = appendText(head, model.paseoOrigin ? "chip paseo" : "chip", model.letter);
+  // The containment ring: a spawner-dispatched chip is enclosed by the
+  // multiplexer's ring — the harness inside something. Each spawner keeps
+  // its own hue; the shape is shared.
+  const chip = appendText(head, model.originRing === null ? "chip" : `chip ${model.originRing}`, model.letter);
   chip.dataset["provider"] = model.provider;
   if (model.unread) {
     // Corner badge: absolutely positioned on the chip, card-colored ring.

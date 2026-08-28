@@ -50,6 +50,8 @@ const COLOR_IDLE = "#4ADE80";
 const COLOR_NEUTRAL = "#94A3B8";
 // Orchestrator mark for Paseo-origin sessions (the bottom-right origin pip).
 const COLOR_ORIGIN_PASEO = "#A78BFA";
+// The same pip for roborev-dispatched reviewer sessions, in the roborev hue.
+const COLOR_ORIGIN_ROBOREV = "#22D3EE";
 const COLOR_BACKGROUND = "#10151C";
 const COLOR_TEXT = "#E8EEF7";
 
@@ -246,8 +248,12 @@ const DEGRADED_FLAG = `<text class="flag" x="128" y="27" text-anchor="end" font-
 const SESSION_DEGRADED_FLAG = `<text class="flag" x="16" y="128" text-anchor="start" font-size="16" fill="${COLOR_WAITING}">!</text>`;
 
 /** Orchestrator mark in the free bottom-right corner: filled disc for a Paseo
- *  parent, hollow ring for a Paseo subagent; terminal-origin sessions get none. */
+ *  parent or a roborev reviewer (each in its spawner's hue), hollow ring for
+ *  a Paseo subagent; terminal-origin sessions get none. */
 const originMark = (originKind: SessionOriginKind | null, originSubagent: boolean): string => {
+  if (originKind === "roborev") {
+    return `<circle class="originpip" cx="122" cy="122" r="9" fill="${COLOR_ORIGIN_ROBOREV}"/>`;
+  }
   if (originKind !== "paseo") {
     return "";
   }
