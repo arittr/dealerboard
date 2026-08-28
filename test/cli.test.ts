@@ -10,7 +10,7 @@ import type { EvenerCollector } from "../src/core/evener";
 import { type AppPaths, resolveAppPaths } from "../src/core/paths";
 import { readProjection } from "../src/core/projection";
 import type { QuotaCollector } from "../src/core/quota";
-import { applyRegistryEvents, listSessions } from "../src/core/registry";
+import { applyRegistryEvents, listSessions, sweepExpiredResults, viewSession } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { TokenUsageCollector } from "../src/core/token-usage";
 import type { RegistryEvent } from "../src/protocol";
@@ -1184,6 +1184,52 @@ describe("sessions commands", () => {
     expect(await runCli(["sessions", "prune", "0.5"], harness.deps)).toBe(0);
     expect(harness.stdout()).toBe("pruned 0 sessions\n");
     expect(listRows().map((row) => row.sessionId)).toEqual(["unviewed"]);
+  });
+
+  test("sessions prune keeps a row holding a live view clock until the sweep has dismissed it", async () => {
+    // The result is long past any lease but was viewed recently: the 24h
+    // post-view expiry owns its removal, and the operator prune must not
+    // shortcut it.
+    initRegistry();
+    const viewedAt = "2026-08-31T00:00:00.000Z";
+    const db = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(db, [
+        {
+          kind: "SessionStart",
+          provider: "claude",
+          sessionId: "viewed",
+          title: null,
+          project: null,
+          ghosttyTerminalId: null,
+          transcriptPath: null,
+          model: null,
+          observedAt: "2026-08-01T00:00:00.000Z",
+        },
+        { kind: "Stop", provider: "claude", sessionId: "viewed", observedAt: "2026-08-01T00:00:01.000Z" },
+      ]);
+      expect(viewSession(db, "claude", "viewed", viewedAt)).toBe("applied");
+    } finally {
+      db.close();
+    }
+    // 23:59 after the view, with a 12h TTL: stale by the lease, held by the clock.
+    const inWindow = makeHarness({ now: () => "2026-08-31T23:59:00.000Z" });
+    expect(await runCli(["sessions", "prune", "12"], inWindow.deps)).toBe(0);
+    expect(inWindow.stdout()).toBe("pruned 0 sessions\n");
+    expect(listRows().map((row) => row.sessionId)).toEqual(["viewed"]);
+
+    // Past view + 24h the daemon's sweep dismisses the result (clearing the
+    // clock); only then does the same operator prune remove the stale row.
+    const sweep = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      expect(sweepExpiredResults(sweep, "2026-09-01T00:01:00.000Z", "2026-09-01T00:01:00.000Z")).toBe(1);
+    } finally {
+      sweep.close();
+    }
+    const afterWindow = makeHarness({ now: () => "2026-09-01T00:01:00.000Z" });
+    expect(await runCli(["sessions", "prune", "12"], afterWindow.deps)).toBe(0);
+    expect(afterWindow.stdout()).toBe("pruned 1 session\n");
+    expect(listRows()).toEqual([]);
   });
 
   test("sessions clear removes Paseo-linked descendants with the orchestrator", async () => {
