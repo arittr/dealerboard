@@ -755,34 +755,66 @@ export const viewSession = (
   });
 
 /**
- * Dismiss one session's result: the user's explicit gesture on the card. The
- * ack time is recorded in `acked_at` so the Paseo overlay can never resurrect
- * unread from an attention flag raised before the view. The done ledger
- * clears with it — this gesture, not a passive view, is what takes a
- * finished card off the board. An error is itself a result
- * (applyStopFailure), so viewing settles it: an error row retires to idle —
- * with the background flag disarmed, like every other retirement — instead of
- * shouting until the stale prune. A source still in error re-raises it through
- * its own status events. Never touches updated_at.
+ * Dismiss one session's result: the user's explicit gesture that takes a
+ * card off the board. Clears `unread_since`, `done_since`, and any residual
+ * `viewed_since`; an error is itself a result, so dismissal retires it to
+ * idle — with the background flag disarmed, like every other retirement.
+ * Cascades the same semantics to every resolved Paseo-lineage descendant
+ * (clears their ledgers, retires their errors; rows are never deleted).
+ * `acked_at` advances to the exact stamp of the result(s) consumed — never
+ * the gesture time — so the Paseo flag mirror can neither resurrect an
+ * already-viewed flag nor swallow news that has not synced yet; a dismiss
+ * that consumes nothing leaves it alone.
+ *
+ * The causal watermark identifies the newest result the gesture's snapshot
+ * showed: a row is consumable iff its current `unread_since` is null or at
+ * or before the watermark. Consumption then clears the row's ledgers
+ * together — the auxiliary `done_since` hold follows the result and never
+ * gates it (an ended card's hold postdates its unread; a viewed done card
+ * has no unread at all). A fresh result re-stamps `unread_since` newer than
+ * the watermark and protects the whole row. No watermark is unconditional
+ * (operator CLI, deck press). The retirement's `status_since` is the
+ * gesture time. Never touches updated_at.
  */
 export const acknowledgeSession = (
   db: Database,
   provider: Provider,
   sessionId: string,
   ackedAt: string,
+  watermark: GestureWatermark | null = null,
 ): MutationResult =>
   inWriteTransaction(db, () => {
-    const result = db.run(
-      `UPDATE active_sessions
-       SET unread_since = NULL, done_since = NULL, acked_at = ?,
-           status = CASE WHEN status = 'error' THEN 'idle' ELSE status END,
-           status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
-           background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
-       WHERE provider = ? AND session_id = ?
-         AND (unread_since IS NOT NULL OR done_since IS NOT NULL OR status = 'error')`,
-      [ackedAt, ackedAt, provider, sessionId],
-    );
-    return result.changes > 0 ? "applied" : "ignored";
+    const causal = watermark === null ? 0 : 1;
+    const wm = watermark?.unreadSince ?? null;
+    let changed = 0;
+    for (const identity of paseoSubtreeIdentities(db, provider, sessionId)) {
+      const result = db.run(
+        `UPDATE active_sessions
+         SET unread_since = NULL,
+             done_since = NULL,
+             viewed_since = NULL,
+             acked_at = NULLIF(
+               max(COALESCE(acked_at, ''), COALESCE(unread_since, ''), COALESCE(done_since, '')),
+               ''
+             ),
+             status = CASE WHEN status = 'error' THEN 'idle' ELSE status END,
+             status_since = CASE WHEN status = 'error' THEN ? ELSE status_since END,
+             background_outstanding = CASE WHEN status = 'error' THEN 0 ELSE background_outstanding END
+         WHERE provider = ? AND session_id = ?
+           AND (unread_since IS NOT NULL OR done_since IS NOT NULL OR status = 'error')
+           AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))`,
+        [
+          ackedAt, // error retirement's status_since (gesture time)
+          identity.provider,
+          identity.sessionId,
+          causal,
+          wm,
+          wm, // causal guard on the result identity (unread_since)
+        ],
+      );
+      changed += result.changes;
+    }
+    return changed > 0 ? "applied" : "ignored";
   });
 
 /** Repair everything: remove all active registry state in one transaction. */

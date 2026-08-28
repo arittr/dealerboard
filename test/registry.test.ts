@@ -662,7 +662,7 @@ describe("unread ledger", () => {
     expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
     const row = getRow("s1");
     expect(row?.unread_since).toBeNull();
-    expect(row?.acked_at).toBe(at(12));
+    expect(row?.acked_at).toBe(at(9));
     expect(row?.updated_at).toBe(before);
     expect(acknowledgeSession(db, "claude", "s1", at(13))).toBe("ignored"); // already read
   });
@@ -680,7 +680,7 @@ describe("unread ledger", () => {
     expect(row?.status_since).toBe(at(12));
     expect(row?.background_outstanding).toBe(0);
     expect(row?.unread_since).toBeNull();
-    expect(row?.acked_at).toBe(at(12));
+    expect(row?.acked_at).toBe(at(9));
     expect(row?.updated_at).toBe(before);
   });
 
@@ -1301,7 +1301,9 @@ describe("syncPaseoStates", () => {
     expect(getRow("s1")).toMatchObject({ status: "error", unread_since: null });
 
     expect(acknowledgeSession(db, "claude", "s1", at(30))).toBe("applied");
-    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(30), acked_at: at(30) });
+    // The passive Paseo view already consumed the unread stamp, so the
+    // dismiss retires the error but has no stamp left to advance to.
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(30), acked_at: null });
   });
 
   test("is a no-op when nothing differs (the reprojection fast-path stays quiet)", () => {
@@ -2185,5 +2187,135 @@ describe("viewSession", () => {
     viewSession(db, "claude", "s1", at(8));
     applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(12) })]);
     expect(getRow("s1")).toMatchObject({ status: "error", unread_since: at(12), viewed_since: null });
+  });
+});
+
+describe("acknowledgeSession as dismiss", () => {
+  const paseoFamily = (): void => {
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("child-a"), origin: { kind: "paseo", ref: "agent-a" } },
+      { ...start("child-b"), origin: { kind: "paseo", ref: "agent-b" } },
+    ]);
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id IN ('child-a', 'child-b')",
+    );
+    applyRegistryEvents(db, [simple("Stop", "child-a", { at: at(5) }), simple("Stop", "child-b", { at: at(6) })]);
+  };
+
+  test("dismissing the parent cascades: whole subtree drops its ledgers, rows remain", () => {
+    paseoFamily();
+    const rowsBefore = countRows();
+    expect(acknowledgeSession(db, "claude", "parent", at(9))).toBe("applied");
+    for (const id of ["parent", "child-a", "child-b"]) {
+      expect(getRow(id)).toMatchObject({ unread_since: null, done_since: null });
+    }
+    expect(countRows()).toBe(rowsBefore); // dismiss never deletes
+  });
+
+  test("the cascade retires an error descendant with the parent", () => {
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("child"), origin: { kind: "paseo", ref: "agent-c" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'child'");
+    applyRegistryEvents(db, [simple("StopFailure", "child", { at: at(5) })]);
+
+    expect(acknowledgeSession(db, "claude", "parent", at(9))).toBe("applied");
+    expect(getRow("child")).toMatchObject({ status: "idle", unread_since: null, background_outstanding: 0 });
+  });
+
+  test("dismiss clears viewed_since alongside the ledgers", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null, viewed_since: null });
+  });
+
+  test("a causal watermark consumes the seen result and protects a newer one", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    applyRegistryEvents(db, [simple("Activity", "s1", { at: at(7) }), simple("Stop", "s1", { at: at(9) })]);
+    // The gesture was issued from a snapshot showing the at(5) stamp.
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: at(5) })).toBe("ignored");
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(9) });
+  });
+
+  test("a causal-null dismiss consumes nothing and protects a result that lands in transit", () => {
+    // The snapshot showed no unread; a result lands before the dismiss runs.
+    applyRegistryEvents(db, [start("s1")]);
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(9) })]); // in transit
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: null })).toBe("ignored");
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(9) }); // survives
+  });
+
+  test("a watermark at the stamp consumes it (inclusive)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: at(5) })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null });
+  });
+
+  test("a watermark only retires an error the user actually saw", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: at(3) })).toBe("ignored");
+    expect(getRow("s1")?.status).toBe("error");
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: at(5) })).toBe("applied");
+    expect(getRow("s1")?.status).toBe("idle");
+  });
+
+  test("a causal-null dismiss retires a viewed error the snapshot showed", () => {
+    // The error was viewed (badge cleared) — the snapshot showed an error
+    // card with no unread — so the dismiss still settles it.
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: null })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ status: "idle", status_since: at(12) });
+  });
+
+  test("cascade with a watermark: the seen child clears, the newer child holds the board", () => {
+    paseoFamily();
+    applyRegistryEvents(db, [simple("Activity", "child-b", { at: at(7) }), simple("Stop", "child-b", { at: at(9) })]);
+    expect(acknowledgeSession(db, "claude", "parent", at(12), { unreadSince: at(6) })).toBe("applied");
+    expect(getRow("child-a")).toMatchObject({ unread_since: null, done_since: null });
+    expect(getRow("child-b")).toMatchObject({ unread_since: at(9), done_since: at(9) });
+  });
+
+  test("a causal-null dismiss consumes a viewed done card the snapshot showed", () => {
+    // The done card was viewed (badge cleared, clock running) — the snapshot
+    // showed it with no unread. The null-stamp watermark must still consume
+    // the done hold: consumption keys on the result identity (unread), and
+    // the done hold follows the result.
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: null })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ unread_since: null, done_since: null, viewed_since: null });
+  });
+
+  test("dismiss advances acked_at to the consumed stamp, so a same-stamp flag synced late stays suppressed", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    expect(acknowledgeSession(db, "claude", "s1", at(12))).toBe("applied");
+    expect(getRow("s1")?.acked_at).toBe(at(5)); // the consumed stamp, not at(12)
+
+    const flag = (attentionTimestamp: string) => ({
+      provider: "claude" as const,
+      sessionId: "s1",
+      agentId: "a1",
+      requiresAttention: true,
+      isSubagent: false,
+      parentAgentId: null,
+      attentionTimestamp,
+      updatedAt: null,
+      archivedAt: null,
+      lastStatus: null,
+      title: null,
+    });
+    // The delayed sync of the very flag the user dismissed: no resurrection.
+    expect(syncPaseoStates(db, [flag(at(5))])).toBe(0);
+    expect(getRow("s1")?.unread_since).toBeNull();
+    // A flag raised after the consumed result is fresh news and re-badges.
+    expect(syncPaseoStates(db, [flag(at(15))])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(at(15));
   });
 });
