@@ -1,0 +1,9 @@
+#!/bin/sh
+# roborev claude_code_cmd shim: marks roborev-spawned Claude sessions for
+# dealerboard's origin detection (ROBOREV_SPAWN — src/core/origin.ts), and
+# scrubs spawn markers the roborev daemon inherited from whichever shell
+# started it, so a stale Paseo or terminal identity never wins.
+# Wire up via ~/.roborev/config.toml:
+#   claude_code_cmd = "<repo>/scripts/roborev-claude-shim"
+unset PASEO_AGENT_ID TERM_PROGRAM
+ROBOREV_SPAWN=shim exec claude "$@"
