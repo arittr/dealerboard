@@ -19,8 +19,8 @@
  *
  * The unread ledger records results the user has not viewed: a turn ending
  * (Stop settling to idle, or StopFailure) stamps `unread_since`, and only an
- * explicit view clears it — `acknowledgeSession` or a reused SessionStart.
- * Prompts and status events never mark a session read.
+ * explicit view clears it — `viewSession`, `acknowledgeSession`, or a reused
+ * SessionStart. Prompts and status events never mark a session read.
  *
  * The done ledger records finished results still owed a board slot: a Stop
  * settling to idle stamps `done_since`, and only an explicit dismissal
@@ -37,6 +37,7 @@
 import type { Database } from "bun:sqlite";
 import type { Provider, RegistryEvent, SessionOriginKind, SessionStatus } from "../protocol";
 import type { PaseoAgentStatus } from "./paseo";
+import { resolvePaseoParentLinks } from "./projection";
 
 export type MutationResult = "applied" | "ignored";
 
@@ -453,7 +454,8 @@ const applyStatusUpdate = (db: Database, event: StatusEvent, status: SessionStat
  * turn. Only a Stop with no background work outstanding returns to idle —
  * and only that transition lands a result, so it alone stamps `unread_since`
  * (the user has not viewed it) and `done_since` (the board still owes it a
- * card).
+ * card). The landed result is unviewed news: it also cancels `viewed_since`,
+ * putting a viewed card back in the unviewed state.
  */
 const applyStop = (db: Database, event: StatusEvent): MutationResult => {
   const result = db.run(
@@ -461,6 +463,7 @@ const applyStop = (db: Database, event: StatusEvent): MutationResult => {
      SET status = CASE WHEN background_outstanding = 1 THEN 'working' ELSE 'idle' END,
          unread_since = CASE WHEN background_outstanding = 1 THEN unread_since ELSE ? END,
          done_since = CASE WHEN background_outstanding = 1 THEN done_since ELSE ? END,
+         viewed_since = CASE WHEN background_outstanding = 1 THEN viewed_since ELSE NULL END,
          status_since = CASE
            WHEN (background_outstanding = 1 AND status IS NOT 'working')
              OR (background_outstanding = 0 AND status IS NOT 'idle')
@@ -472,11 +475,11 @@ const applyStop = (db: Database, event: StatusEvent): MutationResult => {
   return result.changes > 0 ? "applied" : "ignored";
 };
 
-/** A turn ended in failure: the error is itself an unread result. */
+/** A turn ended in failure: the error is itself an unread result, and it cancels the view clock with it. */
 const applyStopFailure = (db: Database, event: StatusEvent): MutationResult => {
   const result = db.run(
     `UPDATE active_sessions
-     SET status = 'error', unread_since = ?,
+     SET status = 'error', unread_since = ?, viewed_since = NULL,
          status_since = CASE WHEN status IS NOT 'error' THEN ? ELSE status_since END,
          updated_at = ?
      WHERE provider = ? AND session_id = ?`,
@@ -619,6 +622,136 @@ export const clearSession = (db: Database, provider: Provider, sessionId: string
     }
     db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [provider, sessionId]);
     return "applied";
+  });
+
+/**
+ * The causal content of a view/dismiss gesture: the unread stamp visible in
+ * the snapshot the gesture was issued from. `null` (no watermark) is an
+ * unconditional operator/deck gesture; `{ unreadSince: null }` is a causal
+ * gesture issued from a snapshot with no unread — it consumes nothing and
+ * protects anything that lands in transit.
+ */
+export type GestureWatermark = { unreadSince: string | null };
+
+/**
+ * The Paseo-lineage subtree seeded at one identity, walked with the exact
+ * resolution the projection publishes (unique refs only, cycle members
+ * excluded — see resolvePaseoParentLinks): a row the projection fail-safes
+ * into its own root card is never mutated through an alleged parent. The
+ * seed itself is always included (even when unknown or non-Paseo — the
+ * caller's UPDATE then simply matches nothing). Native children are never
+ * members (they publish null ledgers).
+ */
+const paseoSubtreeIdentities = (
+  db: Database,
+  provider: Provider,
+  sessionId: string,
+): Array<{ provider: Provider; sessionId: string }> => {
+  const rows = db
+    .query(
+      `SELECT provider, session_id, origin_ref, origin_subagent, origin_parent_ref
+         FROM active_sessions
+        WHERE origin_kind = 'paseo' AND parent_session_id IS NULL`,
+    )
+    .all() as Array<{
+    provider: Provider;
+    session_id: string;
+    origin_ref: string | null;
+    origin_subagent: number;
+    origin_parent_ref: string | null;
+  }>;
+  const links = resolvePaseoParentLinks(
+    rows.map((row) => ({
+      provider: row.provider,
+      sessionId: row.session_id,
+      originRef: row.origin_ref,
+      originSubagent: row.origin_subagent,
+      originParentRef: row.origin_parent_ref,
+    })),
+  );
+  const childrenOf = new Map<string, string[]>();
+  for (const [childKey, parentKey] of links) {
+    const siblings = childrenOf.get(parentKey);
+    if (siblings === undefined) {
+      childrenOf.set(parentKey, [childKey]);
+    } else {
+      siblings.push(childKey);
+    }
+  }
+  const identityOf = (key: string): { provider: Provider; sessionId: string } => {
+    const separator = key.indexOf("\u0000");
+    return { provider: key.slice(0, separator) as Provider, sessionId: key.slice(separator + 1) };
+  };
+  const seedKey = `${provider}\u0000${sessionId}`;
+  const identities: Array<{ provider: Provider; sessionId: string }> = [];
+  const visited = new Set<string>([seedKey]);
+  const stack = [seedKey];
+  for (let key = stack.pop(); key !== undefined; key = stack.pop()) {
+    identities.push(identityOf(key));
+    for (const childKey of childrenOf.get(key) ?? []) {
+      if (!visited.has(childKey)) {
+        visited.add(childKey);
+        stack.push(childKey);
+      }
+    }
+  }
+  return identities;
+};
+
+/**
+ * View one session's result: the user's read gesture. Clears `unread_since`
+ * (the badge) and stamps `viewed_since` (the expiry clock's only input);
+ * `done_since` and status stay put, so the card remains on the board. Every
+ * view restamps — repeated views restart the clock. Cascades to every
+ * resolved Paseo-lineage descendant holding a ledger, all stamped at the
+ * same instant so the subtree's clocks run together. A causal watermark
+ * protects any result newer than the stamp the gesture's snapshot showed;
+ * a null-stamp watermark (the snapshot showed no unread) consumes nothing.
+ * Viewing advances `acked_at` to the exact consumed stamp — never the
+ * gesture time — so the Paseo flag mirror can neither resurrect an
+ * already-viewed flag nor swallow news that has not synced yet. Never
+ * touches `updated_at`.
+ */
+export const viewSession = (
+  db: Database,
+  provider: Provider,
+  sessionId: string,
+  viewedAt: string,
+  watermark: GestureWatermark | null = null,
+): MutationResult =>
+  inWriteTransaction(db, () => {
+    const causal = watermark === null ? 0 : 1;
+    const wm = watermark?.unreadSince ?? null;
+    let changed = 0;
+    for (const identity of paseoSubtreeIdentities(db, provider, sessionId)) {
+      const isTarget = identity.provider === provider && identity.sessionId === sessionId;
+      // A row is consumable when the gesture is unconditional, when it has
+      // no unread (it matches the snapshot the user saw), or when its unread
+      // stamp is at or before the watermark. A causal null-stamp watermark
+      // therefore consumes nothing: only unread-free rows match it.
+      const result = isTarget
+        ? db.run(
+            `UPDATE active_sessions
+             SET unread_since = NULL,
+                 viewed_since = ?,
+                 acked_at = NULLIF(max(COALESCE(acked_at, ''), COALESCE(unread_since, '')), '')
+             WHERE provider = ? AND session_id = ?
+               AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))`,
+            [viewedAt, identity.provider, identity.sessionId, causal, wm, wm],
+          )
+        : db.run(
+            `UPDATE active_sessions
+             SET unread_since = NULL,
+                 viewed_since = ?,
+                 acked_at = NULLIF(max(COALESCE(acked_at, ''), COALESCE(unread_since, '')), '')
+             WHERE provider = ? AND session_id = ?
+               AND (done_since IS NOT NULL OR unread_since IS NOT NULL)
+               AND (? = 0 OR unread_since IS NULL OR (? IS NOT NULL AND unread_since <= ?))`,
+            [viewedAt, identity.provider, identity.sessionId, causal, wm, wm],
+          );
+      changed += result.changes;
+    }
+    return changed > 0 ? "applied" : "ignored";
   });
 
 /**

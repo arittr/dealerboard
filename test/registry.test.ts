@@ -15,6 +15,7 @@ import {
   updateSessionActivityLines,
   updateSessionModels,
   updateSessionTitles,
+  viewSession,
 } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import type { Provider, RegistryEvent, SessionOrigin } from "../src/protocol";
@@ -1986,5 +1987,203 @@ describe("status_since", () => {
 
     applyRegistryEvents(db, [simple("Activity", "c", { at: at(3) }), subStart("c", "p", { at: at(4) })]);
     expect(getRow("c")).toMatchObject({ status: "idle", status_since: at(4) });
+  });
+});
+
+describe("viewSession", () => {
+  test("clears the unread badge, stamps viewed_since, and leaves done_since and status untouched", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    expect(viewSession(db, "claude", "s1", at(8))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({
+      status: "idle",
+      unread_since: null,
+      done_since: at(5),
+      viewed_since: at(8),
+      updated_at: at(5), // view is a maintenance write: the prune lease stays put
+    });
+  });
+
+  test("the card stays held by done_since after viewing (view is not a dismissal)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    const row = getRow("s1");
+    expect(row?.done_since).toBe(at(5));
+    expect(row).not.toBeNull(); // nothing deletes on view
+  });
+
+  test("re-viewing restamps viewed_since (the 24h clock restarts)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    expect(viewSession(db, "claude", "s1", at(30))).toBe("applied");
+    expect(getRow("s1")?.viewed_since).toBe(at(30));
+  });
+
+  test("viewing an error card clears the badge but keeps the error status", () => {
+    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
+    expect(viewSession(db, "claude", "s1", at(8))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ status: "error", unread_since: null, viewed_since: at(8) });
+  });
+
+  test("viewing an active card is harmless: badge clears, viewed stamps, status stays", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Activity", "s1", { at: at(5) })]);
+    expect(viewSession(db, "claude", "s1", at(8))).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ status: "working", viewed_since: at(8) });
+  });
+
+  test("viewing an unknown session is ignored", () => {
+    expect(viewSession(db, "claude", "missing", at(8))).toBe("ignored");
+  });
+
+  test("cascades to done/unread descendants along Paseo lineage at the same instant", () => {
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("child-a"), origin: { kind: "paseo", ref: "agent-a" } },
+      { ...start("child-b"), origin: { kind: "paseo", ref: "agent-b" } },
+    ]);
+    // Overlay-style parent links: children carry the parent's ref.
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id IN ('child-a', 'child-b')",
+    );
+    applyRegistryEvents(db, [simple("Stop", "child-a", { at: at(5) }), simple("Stop", "child-b", { at: at(6) })]);
+
+    expect(viewSession(db, "claude", "parent", at(9))).toBe("applied");
+    expect(getRow("child-a")).toMatchObject({ unread_since: null, viewed_since: at(9), done_since: at(5) });
+    expect(getRow("child-b")).toMatchObject({ unread_since: null, viewed_since: at(9), done_since: at(6) });
+  });
+
+  test("the cascade skips descendants holding no ledger", () => {
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("child"), origin: { kind: "paseo", ref: "agent-c" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'child'");
+    viewSession(db, "claude", "parent", at(9));
+    expect(getRow("child")?.viewed_since).toBeNull(); // active child: no ledger, no stamp
+  });
+
+  test("a causal watermark consumes the seen result and protects a newer one", () => {
+    applyRegistryEvents(db, [
+      { ...start("parent"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("old"), origin: { kind: "paseo", ref: "agent-old" } },
+      { ...start("new"), origin: { kind: "paseo", ref: "agent-new" } },
+    ]);
+    db.run(
+      "UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id IN ('old', 'new')",
+    );
+    applyRegistryEvents(db, [simple("Stop", "old", { at: at(5) }), simple("Stop", "new", { at: at(9) })]);
+
+    // The gesture was issued from a snapshot whose unread stamp was at(5).
+    expect(viewSession(db, "claude", "parent", at(12), { unreadSince: at(5) })).toBe("applied");
+    expect(getRow("old")).toMatchObject({ unread_since: null, viewed_since: at(12) });
+    // The newer result landed after the snapshot: it survives, unviewed.
+    expect(getRow("new")).toMatchObject({ unread_since: at(9), viewed_since: null, done_since: at(9) });
+  });
+
+  test("a causal watermark protecting the target leaves it untouched and ignored", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(9) })]);
+    expect(viewSession(db, "claude", "s1", at(12), { unreadSince: at(5) })).toBe("ignored");
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), viewed_since: null });
+  });
+
+  test("a causal view from a null-unread snapshot protects a result that lands in transit", () => {
+    // The gesture's snapshot showed no unread — then a result arrives before
+    // the view executes. The null-stamp watermark must not consume it.
+    applyRegistryEvents(db, [start("s1")]);
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(9) })]); // lands in transit
+    expect(viewSession(db, "claude", "s1", at(12), { unreadSince: null })).toBe("ignored");
+    expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(9), viewed_since: null });
+  });
+
+  test("a causal-null view on a genuinely read row still stamps the clock", () => {
+    // No unread at snapshot time and none in transit: the view matches what
+    // the user saw, so the expiry clock starts.
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    expect(viewSession(db, "claude", "s1", at(12), { unreadSince: null })).toBe("applied");
+    expect(getRow("s1")).toMatchObject({ viewed_since: at(12), done_since: at(5) });
+  });
+
+  test("viewing advances acked_at to the exact consumed stamp, not the gesture time", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    expect(viewSession(db, "claude", "s1", at(12))).toBe("applied");
+    expect(getRow("s1")?.acked_at).toBe(at(5)); // the consumed result's stamp
+
+    // A same-stamp flag synced late cannot resurrect the badge (the Paseo
+    // mirror's guard is strictly newer-than), but genuinely newer news can.
+    const flag = (attentionTimestamp: string) => ({
+      provider: "claude" as const,
+      sessionId: "s1",
+      agentId: "a1",
+      requiresAttention: true,
+      isSubagent: false,
+      parentAgentId: null,
+      attentionTimestamp,
+      updatedAt: null,
+      archivedAt: null,
+      lastStatus: null,
+      title: null,
+    });
+    expect(syncPaseoStates(db, [flag(at(5))])).toBe(0);
+    expect(getRow("s1")?.unread_since).toBeNull();
+    expect(syncPaseoStates(db, [flag(at(15))])).toBe(1);
+    expect(getRow("s1")?.unread_since).toBe(at(15));
+  });
+
+  test("a view that consumes nothing leaves acked_at alone", () => {
+    applyRegistryEvents(db, [
+      { ...start("s1"), origin: { kind: "paseo", ref: "a1" } },
+      simple("Stop", "s1", { at: at(5) }),
+    ]);
+    viewSession(db, "claude", "s1", at(8));
+    const ackedAfterFirstView = getRow("s1")?.acked_at;
+    expect(viewSession(db, "claude", "s1", at(20))).toBe("applied"); // restamps the clock
+    expect(getRow("s1")?.acked_at).toBe(ackedAfterFirstView); // nothing consumed → no advance
+  });
+
+  test("an ambiguous origin ref never links: the alleged child is not mutated through the parent", () => {
+    // Projection refuses ambiguous refs (two roots share agent-0), so the
+    // destructive walk must refuse them too — the child is its own root (R7).
+    applyRegistryEvents(db, [
+      { ...start("dup-a"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("dup-b"), origin: { kind: "paseo", ref: "agent-0" } },
+      { ...start("child"), origin: { kind: "paseo", ref: "agent-c" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-0' WHERE session_id = 'child'");
+    applyRegistryEvents(db, [simple("Stop", "child", { at: at(5) })]);
+
+    expect(viewSession(db, "claude", "dup-a", at(9))).toBe("applied");
+    expect(getRow("child")).toMatchObject({ unread_since: at(5), viewed_since: null }); // untouched
+  });
+
+  test("a cyclic lineage is not walked: cycle members keep their own results", () => {
+    applyRegistryEvents(db, [
+      { ...start("loop-a"), origin: { kind: "paseo", ref: "agent-x" } },
+      { ...start("loop-b"), origin: { kind: "paseo", ref: "agent-y" } },
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-y' WHERE session_id = 'loop-a'");
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'agent-x' WHERE session_id = 'loop-b'");
+    applyRegistryEvents(db, [simple("Stop", "loop-b", { at: at(5) })]);
+
+    // Projection strips cycle members' parent edges, so loop-b is not a
+    // descendant of loop-a for mutation purposes either.
+    expect(viewSession(db, "claude", "loop-a", at(9))).toBe("applied");
+    expect(getRow("loop-b")).toMatchObject({ unread_since: at(5), viewed_since: null });
+  });
+
+  test("a fresh Stop cancels the view clock (the card is unviewed again)", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    applyRegistryEvents(db, [simple("Stop", "s1", { at: at(12) })]);
+    expect(getRow("s1")).toMatchObject({ unread_since: at(12), done_since: at(12), viewed_since: null });
+  });
+
+  test("a fresh StopFailure cancels the view clock", () => {
+    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
+    viewSession(db, "claude", "s1", at(8));
+    applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(12) })]);
+    expect(getRow("s1")).toMatchObject({ status: "error", unread_since: at(12), viewed_since: null });
   });
 });

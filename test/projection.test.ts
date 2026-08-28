@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAppPaths } from "../src/core/paths";
 import {
+  type PaseoLineageRow,
   ProjectionError,
   type ProjectionRow,
   projectRows,
   projectSnapshotRows,
   readProjection,
+  resolvePaseoParentLinks,
 } from "../src/core/projection";
 import { applyRegistryEvents } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
@@ -1583,5 +1585,41 @@ describe("writeSnapshotAtomically", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolvePaseoParentLinks", () => {
+  const row = (
+    sessionId: string,
+    originRef: string | null,
+    originParentRef: string | null,
+    originSubagent = 1,
+    provider: Provider = "claude",
+  ): PaseoLineageRow => ({ provider, sessionId, originRef, originSubagent, originParentRef });
+
+  test("links a subagent to the unique carrier of its parent ref", () => {
+    const links = resolvePaseoParentLinks([row("p", "agent-0", null, 0), row("s", "agent-1", "agent-0")]);
+    expect(links.get("claude\u0000s")).toBe("claude\u0000p");
+  });
+
+  test("an ambiguous ref never links", () => {
+    const links = resolvePaseoParentLinks([
+      row("dup-a", "agent-0", null, 0),
+      row("dup-b", "agent-0", null, 0),
+      row("s", "agent-1", "agent-0"),
+    ]);
+    expect(links.size).toBe(0);
+  });
+
+  test("cycle members lose their parent edge", () => {
+    const links = resolvePaseoParentLinks([
+      row("a", "agent-x", "agent-y"),
+      row("b", "agent-y", "agent-x"),
+      row("p", "agent-0", null, 0),
+      row("s", "agent-1", "agent-0"),
+    ]);
+    expect(links.has("claude\u0000a")).toBe(false);
+    expect(links.has("claude\u0000b")).toBe(false);
+    expect(links.get("claude\u0000s")).toBe("claude\u0000p");
   });
 });

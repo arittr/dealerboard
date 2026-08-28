@@ -114,6 +114,81 @@ const compareAgents = (a: ProjectedAgentNode, b: ProjectedAgentNode): number => 
   return a.sessionId < b.sessionId ? -1 : 1;
 };
 
+/** One top-level row's Paseo routing facts, the minimal input for link resolution. */
+export type PaseoLineageRow = {
+  provider: Provider;
+  sessionId: string;
+  originRef: string | null;
+  originSubagent: number;
+  originParentRef: string | null;
+};
+
+/**
+ * Resolve Paseo parent links with the exact rules the projection publishes:
+ * a ref carried by more than one root never links (ambiguous), only rows
+ * marked as Paseo subagents are children, and members of a lineage cycle
+ * lose their parent edge (they surface as their own roots). Destructive
+ * registry operations MUST walk this same resolution — a row the projection
+ * fail-safes into its own card may never be mutated through an alleged
+ * parent. Keys are `provider NUL sessionId` composites; values are the
+ * parent's key.
+ */
+export const resolvePaseoParentLinks = (rows: readonly PaseoLineageRow[]): Map<string, string> => {
+  const keyOf = (row: { provider: Provider; sessionId: string }): string => `${row.provider}\u0000${row.sessionId}`;
+  const rootByOriginRef = new Map<string, string>();
+  const ambiguousOriginRefs = new Set<string>();
+  for (const row of rows) {
+    if (row.originRef === null) {
+      continue;
+    }
+    if (ambiguousOriginRefs.has(row.originRef)) {
+      continue;
+    }
+    if (rootByOriginRef.has(row.originRef)) {
+      rootByOriginRef.delete(row.originRef);
+      ambiguousOriginRefs.add(row.originRef);
+    } else {
+      rootByOriginRef.set(row.originRef, keyOf(row));
+    }
+  }
+  const paseoParent = new Map<string, string>();
+  for (const row of rows) {
+    if (row.originSubagent !== 1 || row.originParentRef === null) {
+      continue;
+    }
+    const parentKey = rootByOriginRef.get(row.originParentRef);
+    if (parentKey !== undefined) {
+      paseoParent.set(keyOf(row), parentKey);
+    }
+  }
+  const done = new Set<string>();
+  const cycleMembers = new Set<string>();
+  for (const start of paseoParent.keys()) {
+    const path: string[] = [];
+    const indexInPath = new Map<string, number>();
+    let current: string | undefined = start;
+    while (current !== undefined && !done.has(current)) {
+      const cycleStart = indexInPath.get(current);
+      if (cycleStart !== undefined) {
+        for (const member of path.slice(cycleStart)) {
+          cycleMembers.add(member);
+        }
+        break;
+      }
+      indexInPath.set(current, path.length);
+      path.push(current);
+      current = paseoParent.get(current);
+    }
+    for (const member of path) {
+      done.add(member);
+    }
+  }
+  for (const member of cycleMembers) {
+    paseoParent.delete(member);
+  }
+  return paseoParent;
+};
+
 /**
  * Project validated registry rows to both the legacy top-level session list and
  * a unified native/Paseo hierarchy. Pure; throws `ProjectionError` on invalid
@@ -224,60 +299,15 @@ export const projectSnapshotRows = (rows: readonly ProjectionRow[]): ProjectedRo
     rootResultsByIdentity.set(key, rootResult);
   }
 
-  const rootByOriginRef = new Map<string, string>();
-  const ambiguousOriginRefs = new Set<string>();
-  for (const root of rootResults) {
-    if (root.row.originKind !== "paseo" || root.row.originRef === null) {
-      continue;
-    }
-    const ref = root.row.originRef;
-    if (ambiguousOriginRefs.has(ref)) {
-      continue;
-    }
-    if (rootByOriginRef.has(ref)) {
-      rootByOriginRef.delete(ref);
-      ambiguousOriginRefs.add(ref);
-    } else {
-      rootByOriginRef.set(ref, identityKey(root.row.provider, root.row.sessionId));
-    }
-  }
-
-  const paseoParent = new Map<string, string>();
-  for (const root of rootResults) {
-    if (!isPaseoSubagent(root.row) || root.row.originParentRef === null) {
-      continue;
-    }
-    const parentKey = rootByOriginRef.get(root.row.originParentRef);
-    if (parentKey !== undefined) {
-      paseoParent.set(identityKey(root.row.provider, root.row.sessionId), parentKey);
-    }
-  }
-
-  const done = new Set<string>();
-  const cycleMembers = new Set<string>();
-  for (const start of paseoParent.keys()) {
-    const path: string[] = [];
-    const indexInPath = new Map<string, number>();
-    let current: string | undefined = start;
-    while (current !== undefined && !done.has(current)) {
-      const cycleStart = indexInPath.get(current);
-      if (cycleStart !== undefined) {
-        for (const member of path.slice(cycleStart)) {
-          cycleMembers.add(member);
-        }
-        break;
-      }
-      indexInPath.set(current, path.length);
-      path.push(current);
-      current = paseoParent.get(current);
-    }
-    for (const member of path) {
-      done.add(member);
-    }
-  }
-  for (const member of cycleMembers) {
-    paseoParent.delete(member);
-  }
+  const paseoParent = resolvePaseoParentLinks(
+    rootRows.map(({ row }) => ({
+      provider: row.provider,
+      sessionId: row.sessionId,
+      originRef: row.originKind === "paseo" ? row.originRef : null,
+      originSubagent: row.originKind === "paseo" ? row.originSubagent : 0,
+      originParentRef: row.originKind === "paseo" ? row.originParentRef : null,
+    })),
+  );
 
   for (const result of rootResults) {
     let carried = result.effectiveStatus;
