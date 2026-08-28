@@ -55,6 +55,7 @@ const placedCard = (session: ProjectedSession): PlacedCard => ({
   parentProject: null,
   displayOnly: false,
   descendantBadge: session.descendantCount,
+  pendingResults: session.pendingResults,
   degraded: false,
   indent: false,
   spine: "none",

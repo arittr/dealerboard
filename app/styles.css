@@ -175,6 +175,17 @@ body[data-fullscreen] #board {
   display: none;
 }
 
+/* Ended: the session itself is gone, but an unviewed result holds the card.
+   Slate takes the edge and dot — a terminal fact, not a live status. The
+   corner word spells "ended" (cardViewModel). */
+.card.ended {
+  --st: #94a3b8;
+  border-left-color: rgb(148 163 184 / 0.9);
+}
+.card.sub.status-idle.ended {
+  border-left-color: rgb(148 163 184 / 0.5);
+}
+
 /* Group attachment (indented subs only): the 2px violet spine rises through
    the row gap to the parent's bottom edge and elbows into the card's left
    edge at its vertical center. Mid cards pass the spine through to the next

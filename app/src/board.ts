@@ -23,6 +23,8 @@ export type BoardCardSeed = {
   parentProject: string | null;
   displayOnly: boolean;
   descendantBadge: number | null;
+  /** Rolled-up unviewed results held by finished Paseo descendants; 0 shows none. */
+  pendingResults: number;
 };
 
 export type BoardGroup = { cards: BoardCardSeed[]; orphanTail: boolean };
@@ -81,6 +83,7 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
         parentProject: null,
         displayOnly: false,
         descendantBadge: primary.descendantCount,
+        pendingResults: primary.pendingResults,
       },
     ];
     const walk = (ref: string | null): void => {
@@ -95,6 +98,7 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
           parentProject: primary.project,
           displayOnly: false,
           descendantBadge: child.descendantCount,
+          pendingResults: child.pendingResults,
         });
         walk(child.originRef);
       }
@@ -112,6 +116,7 @@ export const groupedOrder = (sessions: readonly ProjectedSession[]): BoardGroup[
         parentProject: null,
         displayOnly: false,
         descendantBadge: entry.descendantCount,
+        pendingResults: entry.pendingResults,
       })),
       orphanTail: true,
     });
@@ -155,6 +160,7 @@ export const groupedAgentOrder = (agents: readonly ProjectedAgentNode[]): BoardG
     parentProject,
     displayOnly: node.lineage === "native",
     descendantBadge: null,
+    pendingResults: node.pendingResults,
   });
 
   const appendChildren = (cards: BoardCardSeed[], parent: ProjectedAgentNode, parentProject: string | null): void => {

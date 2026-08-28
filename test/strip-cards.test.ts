@@ -59,6 +59,7 @@ const placed = (
     parentProject: null,
     displayOnly: false,
     descendantBadge: projected.descendantCount,
+    pendingResults: projected.pendingResults,
     degraded: false,
     indent: false,
     spine: "none",
@@ -247,6 +248,34 @@ describe("cardViewModel", () => {
 
   test("fallback cards retain the legacy descendant badge", () => {
     expect(cardViewModel(placed({ descendantBadge: 3 }), NOW_MS).badge).toBe(3);
+  });
+
+  test("an ended card reads ended in the corner word and carries the ended class", () => {
+    const model = cardViewModel(
+      placed({}, { status: "idle", endedAt: "2026-08-25T00:01:00.000Z", statusSince: "2026-08-25T00:00:00.000Z" }),
+      NOW_MS,
+    );
+    expect(model.ended).toBe(true);
+    expect(model.word).toBe("ended");
+    expect(cardClassName(model).split(" ")).toContain("ended");
+  });
+
+  test("a live card is not ended and keeps its status word", () => {
+    const model = cardViewModel(placed({}, { status: "idle" }), NOW_MS);
+    expect(model.ended).toBe(false);
+    expect(model.word).toBe("idle");
+  });
+
+  test("the badge shows pending results over the descendant count", () => {
+    const pending = cardViewModel(
+      placed({ pendingResults: 2, descendantBadge: 3 }, { originKind: "paseo", originRef: "agent-0" }),
+      NOW_MS,
+    );
+    expect(pending.badge).toBe(2);
+    const none = cardViewModel(placed({ pendingResults: 0, descendantBadge: 3 }), NOW_MS);
+    expect(none.badge).toBe(3);
+    const displayOnly = cardViewModel(placed({ pendingResults: 2, displayOnly: true }), NOW_MS);
+    expect(displayOnly.badge).toBeNull();
   });
 });
 

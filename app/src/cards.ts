@@ -51,6 +51,8 @@ export type CardViewModel = {
   status: SessionStatus;
   /** The corner word beside the bright number: "open" on working cards, the status elsewhere. */
   word: string;
+  /** True when the session ended holding an unviewed result — the card outlives its session. */
+  ended: boolean;
   /** The bright number's anchor: openedAt on working cards, statusSince elsewhere; null shows no number. */
   timerSince: string | null;
   timer: string | null;
@@ -97,7 +99,8 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
       card.subagent && card.parentProject !== null && card.parentProject === session.project ? null : session.project,
     activity: safeActivityLabel(session.activityLine),
     status: session.status,
-    word: statusWord(session.status),
+    ended: session.endedAt !== null,
+    word: session.endedAt !== null ? "ended" : statusWord(session.status),
     timerSince: timer === null ? null : timerSince,
     timer,
     age,
@@ -112,7 +115,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     indent: card.indent,
     spine: card.spine,
     displayOnly: card.displayOnly,
-    badge: card.displayOnly ? null : card.descendantBadge,
+    badge: card.displayOnly ? null : card.pendingResults > 0 ? card.pendingResults : card.descendantBadge,
     degraded: card.degraded,
   };
 };
@@ -133,6 +136,7 @@ export const cardClassName = (model: CardViewModel): string =>
     model.indent ? "indented" : "",
     model.spine !== "none" ? `spine-${model.spine}` : "",
     model.displayOnly ? "display-only" : "",
+    model.ended ? "ended" : "",
   ]
     .filter((part) => part !== "")
     .join(" ");

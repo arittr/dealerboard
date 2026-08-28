@@ -124,6 +124,11 @@ describe("groupedOrder", () => {
     const after = groupedOrder([parent(1, "a"), sub(2, "b", "a")]);
     expect(after.map(ids)).toEqual([["s1", "s2"]]);
   });
+
+  test("seeds carry the session's pendingResults", () => {
+    const card = groupedOrder([session(1, { pendingResults: 2 })])[0]?.cards[0];
+    expect(card?.pendingResults).toBe(2);
+  });
 });
 
 describe("groupedAgentOrder", () => {
@@ -224,6 +229,12 @@ describe("groupedAgentOrder", () => {
     const placed = packBoard(groups, false)[0]?.cards ?? [];
     expect(placed.every((card) => !card.indent && card.spine === "none")).toBe(true);
   });
+
+  test("agent seeds carry the node's pendingResults", () => {
+    const root = node("root", { role: "primary", logicalSlot: 1, pendingResults: 3 });
+    const card = groupedAgentOrder([root])[0]?.cards[0];
+    expect(card?.pendingResults).toBe(3);
+  });
 });
 
 const groupOf = (start: number, size: number, orphanTail = false): BoardGroup => ({
@@ -234,6 +245,7 @@ const groupOf = (start: number, size: number, orphanTail = false): BoardGroup =>
     parentProject: null,
     displayOnly: false,
     descendantBadge: 0,
+    pendingResults: 0,
   })),
   orphanTail,
 });

@@ -35,6 +35,7 @@ const card = (overrides: Partial<ProjectedSession> = {}, placed: Partial<PlacedC
   parentProject: null,
   displayOnly: false,
   descendantBadge: 0,
+  pendingResults: 0,
   degraded: false,
   indent: false,
   spine: "none",
