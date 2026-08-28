@@ -27,10 +27,11 @@
  * Paseo archive, a reused SessionStart, the viewed-expiry sweep, and
  * manual clear (`clearSession`/`clearAllSessions`, which delete the row).
  * A passive Paseo view never touches it. Prompts and status events never
- * mark a session read; unread is the badge/styling channel — nothing ever
- * removes a card for being unread or read. Protection runs the other way:
- * an unviewed result (`unread_since` non-null) is exempt from both
- * SessionEnd deletion and the stale prune.
+ * mark a session read. Unread drives the badge/styling channel: reading a
+ * result never removes the card at view time, but the view starts the
+ * expiry clock — a viewed done/errored card auto-dismisses 24h later —
+ * while an unviewed result is exempt from SessionEnd deletion and the
+ * stale prune.
  *
  * The done ledger records finished results still owed a board slot: a Stop
  * settling to idle stamps `done_since`, and only an explicit dismissal

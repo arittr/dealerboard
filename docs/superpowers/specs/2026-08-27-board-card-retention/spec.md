@@ -88,10 +88,10 @@ Explicitly **not** removal paths any more:
 - A session settling to idle, finishing, or being a finished subagent.
 - A native session ending while holding an unviewed result.
 
-Unread is the badge/styling channel — nothing ever removes a card for
-being unread or read. Protection runs the other way: an unviewed result
-(`unread_since` non-null) is exempt from both SessionEnd deletion and the
-stale prune.
+Unread drives the badge/styling channel: reading a result never removes
+the card at view time, but the view starts the expiry clock — a viewed
+done/errored card auto-dismisses 24h later — while an unviewed result is
+exempt from SessionEnd deletion and the stale prune.
 `done_since` (or `error` status) is what holds a finished card.
 
 ## State model changes
