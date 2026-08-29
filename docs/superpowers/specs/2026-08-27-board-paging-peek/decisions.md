@@ -231,3 +231,23 @@ back to ready and re-run the ratify gate.
   legible. Drew approved the 24px recommendation verbatim: "sure". A fresh
   install and on-glass re-check remain required before this item closes.
 - **Deciders:** Drew + steering seat
+
+## 2026-08-29 00:24 — Return cue grows to 32px and uses card surfaces
+- **Supersedes:** The 2026-08-28 23:54 decision's 24px width and unchanged
+  surface treatment. The 9px pip-mini decision remains unchanged.
+- **Decided:** Grow the steady return cue and transient previous-page edge
+  together from 24px to 32px inside the existing 40px gutter, leaving an 8px
+  separation from the current board. Give primary return slivers the normal
+  card surface (`#1c2430`) and sub slivers the existing quieter card surface
+  (`#171e28`). Keep the 8px status edge and its hue/opacity, row alignment,
+  pips, 9px mini-dots, card positions, and 638px rail unchanged. Peek-side
+  slivers retain their current treatment.
+- **Because:** The freshly installed 24px build was geometrically correct but
+  still read mainly as detached status ticks on the physical strip. Added
+  width alone did not make the dim surface legible. The chosen surfaces reuse
+  existing card vocabulary rather than inventing a new color, while 32px
+  shows 24px of surface and preserves 8px of gutter separation.
+- **Evidence:** Drew's on-glass verdict: "we should show more ya its v faint";
+  Drew approved the bounded 32px/brighter-surface design with "yes". A fresh
+  review, install, and arm's-length re-check remain required.
+- **Deciders:** Drew + steering seat
