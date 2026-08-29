@@ -4,6 +4,14 @@
 * {
   box-sizing: border-box;
 }
+/* The viewport root is the second gesture owner on the strip: WKWebView keeps
+   macOS scroll elasticity even on a page too small to scroll, so a horizontal
+   pull rubber-bands the whole document under the board drag. `none` makes the
+   viewport ineligible for that overscroll; #pager's touch-action boundary and
+   its pointer recognizer are untouched. */
+html {
+  overscroll-behavior: none;
+}
 body {
   margin: 0;
   background: #10151c;
