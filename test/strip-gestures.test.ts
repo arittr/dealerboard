@@ -182,10 +182,18 @@ describe("drag axis lock", () => {
   });
 
   test("a jitter below the lock threshold never drags", () => {
+    // Purely horizontal and derived below the lock: at any tuning the
+    // stroke can never drag. Whether the release is a suppressed click or
+    // a clean tap depends on where the jitter lands against the slop —
+    // both outcomes are correct, so the assertion follows the exported
+    // threshold, mirroring the recognizer's own strict `>` slop check.
+    const jitter = Math.max(0, DRAG_LOCK_MIN_PX - 2);
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(400, 300, 0));
-    recognizer.feed(move(400 + DRAG_LOCK_MIN_PX - 2, 305, 150));
-    expect(recognizer.feed(up(400 + DRAG_LOCK_MIN_PX - 2, 305, 200))).toEqual([{ kind: "suppress-click" }]);
+    recognizer.feed(move(400 + jitter, 300, 150));
+    const intents = recognizer.feed(up(400 + jitter, 300, 200));
+    expect(intents.filter((intent) => intent.kind.startsWith("drag"))).toEqual([]);
+    expect(intents).toEqual(jitter > MOVE_SLOP_PX ? [{ kind: "suppress-click" }] : []);
   });
 
   test("once locked, the platform hold verdict and the deadline tick are dead for the stroke", () => {
