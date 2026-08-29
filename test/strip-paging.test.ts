@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { createGestureRecognizer, VELOCITY_WINDOW_MS } from "../app/src/gestures";
 import {
   COMMIT_FRACTION,
   COMMIT_VELOCITY_PX_PER_MS,
   createDeferredLatest,
   createPagingSession,
   type DragBounds,
+  type DragSettle,
   dragOffset,
   RUBBER_BAND_FACTOR,
   settleDrag,
@@ -206,5 +208,48 @@ describe("createDeferredLatest", () => {
     deferral.submit(7);
     deferral.resubmitLatest(); // idle: the local re-reduction applies now
     expect(applied).toEqual([7, 7]);
+  });
+});
+
+describe("recognizer to session", () => {
+  // A tiny mirror of the driver's intent loop: start feeds bounds, moves
+  // become track offsets, the end asks for the verdict. Displacements derive
+  // from COMMIT_FRACTION (symbolic-constant contract).
+  const runStroke = (releaseDx: number): { offsets: number[]; settle: DragSettle | null } => {
+    const recognizer = createGestureRecognizer();
+    const session = createPagingSession();
+    const offsets: number[] = [];
+    let settle: DragSettle | null = null;
+    recognizer.feed({ kind: "down", point: { x: 400, y: 300 }, now: 0 });
+    for (const intent of recognizer.feed({
+      kind: "up",
+      point: { x: 400 + releaseDx, y: 300 },
+      now: VELOCITY_WINDOW_MS * 2,
+    })) {
+      if (intent.kind === "drag-start") {
+        session.start({ page: 0, pageCount: 2, boardWidth: BOARD_WIDTH });
+      }
+      if (intent.kind === "drag-move") {
+        const offset = session.move(intent.dx);
+        if (offset !== null) {
+          offsets.push(offset);
+        }
+      }
+      if (intent.kind === "drag-end") {
+        settle = session.release(intent.dx, intent.velocity);
+      }
+    }
+    return { offsets, settle };
+  };
+
+  test("a sample-free horizontal release still pages: drag-start precedes drag-end", () => {
+    const { settle } = runStroke(-PAST);
+    expect(settle).toEqual({ kind: "commit", direction: "next", from: 0, target: 1 });
+  });
+
+  test("a sample-free below-commit release is a visible failed swipe: nonzero offset, then snap-back", () => {
+    const { offsets, settle } = runStroke(-BELOW);
+    expect(offsets).toEqual([-BELOW]); // the track moved before the settle returned
+    expect(settle).toEqual({ kind: "snap-back" });
   });
 });

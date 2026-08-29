@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   createClickSuppression,
   createGestureRecognizer,
+  DRAG_LOCK_MIN_PX,
   FLICK_MIN_VERTICAL_PX,
   type GestureInput,
   LONG_PRESS_MS,
   MOVE_SLOP_PX,
-  SWIPE_MIN_HORIZONTAL_PX,
   swallowSuppressedClick,
+  VELOCITY_WINDOW_MS,
 } from "../app/src/gestures";
 
 const down = (x: number, y: number, now: number): GestureInput => ({ kind: "down", point: { x, y }, now });
@@ -47,10 +48,10 @@ describe("createGestureRecognizer", () => {
   test("moving past the slop kills the long-press and the release suppresses the click", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
-    recognizer.feed(move(100 + MOVE_SLOP_PX + 10, 100, 200));
+    recognizer.feed(move(100, 100 + MOVE_SLOP_PX + 10, 200));
     expect(recognizer.longPressDueAt()).toBeNull();
     expect(recognizer.feed(tick(LONG_PRESS_MS + 50))).toEqual([]);
-    expect(recognizer.feed(up(140, 100, 300))).toEqual([{ kind: "suppress-click" }]);
+    expect(recognizer.feed(up(100, 122, 300))).toEqual([{ kind: "suppress-click" }]);
   });
 
   test("longPressDueAt tracks the stroke lifecycle", () => {
@@ -91,58 +92,128 @@ describe("createGestureRecognizer", () => {
     // slop is never treated as a clean tap.
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
-    expect(recognizer.feed(up(100 + MOVE_SLOP_PX + 10, 100, 300))).toEqual([{ kind: "suppress-click" }]);
+    expect(recognizer.feed(up(100, 100 + MOVE_SLOP_PX + 10, 300))).toEqual([{ kind: "suppress-click" }]);
   });
 
   test("a moved stroke's suppression does not bleed into the next clean tap", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
-    recognizer.feed(move(140, 100, 200));
-    expect(recognizer.feed(up(140, 100, 300))).toEqual([{ kind: "suppress-click" }]);
+    recognizer.feed(move(100, 140, 200));
+    expect(recognizer.feed(up(100, 140, 300))).toEqual([{ kind: "suppress-click" }]);
     recognizer.feed(down(200, 200, 1000));
     expect(recognizer.feed(up(200, 200, 1080))).toEqual([]);
   });
 });
 
-describe("swipe classification", () => {
-  test("a leftward fling pages next and suppresses the click", () => {
+describe("drag axis lock", () => {
+  // A locked drag for tests that need one: displacement derived from the
+  // exported constant, so Task 9 tuning can never un-lock it.
+  const lockX = 400 - DRAG_LOCK_MIN_PX - 24;
+
+  test("horizontal dominance past the lock threshold starts a drag and streams dx", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(400, 300, 0));
-    recognizer.feed(move(400 - SWIPE_MIN_HORIZONTAL_PX - 40, 320, 120));
-    expect(recognizer.feed(up(280, 320, 200))).toEqual([
-      { kind: "swipe", direction: "next" },
+    expect(recognizer.feed(move(400 - DRAG_LOCK_MIN_PX - 4, 302, 40))).toEqual([
+      { kind: "drag-start" },
+      { kind: "drag-move", dx: -(DRAG_LOCK_MIN_PX + 4) },
+    ]);
+    expect(recognizer.feed(move(300, 305, 80))).toEqual([{ kind: "drag-move", dx: -100 }]);
+  });
+
+  test("a locked drag's release is a drag-end with a trailing-window velocity, click suppressed", () => {
+    // Sample geometry derives from VELOCITY_WINDOW_MS: one sample lands just
+    // outside the window (never the anchor), one at half a window before the
+    // release (always the anchor) — the expectation holds for any tuning.
+    const recognizer = createGestureRecognizer();
+    const release = VELOCITY_WINDOW_MS * 10;
+    const outside = release - VELOCITY_WINDOW_MS - 10;
+    const inside = release - VELOCITY_WINDOW_MS / 2;
+    const anchorX = lockX - 60;
+    const releaseX = anchorX - 100;
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(lockX, 300, outside));
+    recognizer.feed(move(anchorX, 300, inside));
+    expect(recognizer.feed(up(releaseX, 300, release))).toEqual([
+      { kind: "drag-end", dx: releaseX - 400, velocity: (releaseX - anchorX) / (release - inside) },
       { kind: "suppress-click" },
     ]);
   });
 
-  test("a rightward fling pages previous", () => {
+  test("release-position fallback: a sample-free horizontal release is a full drag batch", () => {
+    // Pointermove delivery is not guaranteed (coalesced or dropped): the
+    // final position alone must still produce a drag — drag-start FIRST (so
+    // the driver's session has bounds), then drag-move carrying the release
+    // displacement (so even this path paints a visible offset before the
+    // settle returns — a failed swipe is never a silent no-op), then the
+    // distance-decided end (no samples inside the window means velocity 0;
+    // the release instant sits beyond any tuned window).
     const recognizer = createGestureRecognizer();
-    recognizer.feed(down(100, 300, 0));
-    recognizer.feed(move(100 + SWIPE_MIN_HORIZONTAL_PX + 40, 310, 150));
-    expect(recognizer.feed(up(220, 310, 250))).toEqual([
-      { kind: "swipe", direction: "previous" },
+    recognizer.feed(down(400, 300, 0));
+    expect(recognizer.feed(up(400 - DRAG_LOCK_MIN_PX - 10, 302, VELOCITY_WINDOW_MS * 2))).toEqual([
+      { kind: "drag-start" },
+      { kind: "drag-move", dx: -(DRAG_LOCK_MIN_PX + 10) },
+      { kind: "drag-end", dx: -(DRAG_LOCK_MIN_PX + 10), velocity: 0 },
       { kind: "suppress-click" },
     ]);
   });
 
-  test("a vertical-dominant drag is a flick, not a swipe", () => {
+  test("vertical wins the axis race and blocks a later horizontal lock; the release still flicks", () => {
     const recognizer = createGestureRecognizer();
-    recognizer.feed(down(400, 100, 0));
-    recognizer.feed(move(430, 400, 200));
-    expect(recognizer.feed(up(430, 400, 250))).toEqual([
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(402, 300 + DRAG_LOCK_MIN_PX + 4, 40));
+    expect(recognizer.feed(move(430, 370, 100))).toEqual([]);
+    expect(recognizer.feed(up(430, 370, 160))).toEqual([
       { kind: "flick", direction: "down" },
       { kind: "suppress-click" },
     ]);
   });
 
-  test("a short horizontal drag below the threshold is not a swipe", () => {
+  test("a diagonal tie locks vertical: paging never steals the dismiss axis", () => {
     const recognizer = createGestureRecognizer();
+    const tie = DRAG_LOCK_MIN_PX + 4;
     recognizer.feed(down(400, 300, 0));
-    recognizer.feed(move(400 + SWIPE_MIN_HORIZONTAL_PX - 20, 305, 150));
-    expect(recognizer.feed(up(400 + SWIPE_MIN_HORIZONTAL_PX - 20, 305, 200))).toEqual([{ kind: "suppress-click" }]);
+    recognizer.feed(move(400 + tie, 300 + tie, 40));
+    expect(recognizer.feed(move(300, 300 + tie, 80))).toEqual([]);
+    expect(recognizer.feed(up(280, 300 + tie, 120))).toEqual([{ kind: "suppress-click" }]);
   });
 
-  test("a stroke that long-pressed never becomes a swipe", () => {
+  test("a jitter below the lock threshold never drags", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(400 + DRAG_LOCK_MIN_PX - 2, 305, 150));
+    expect(recognizer.feed(up(400 + DRAG_LOCK_MIN_PX - 2, 305, 200))).toEqual([{ kind: "suppress-click" }]);
+  });
+
+  test("once locked, the platform hold verdict and the deadline tick are dead for the stroke", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(lockX, 300, 40));
+    expect(recognizer.feed(context(lockX, 300, 50))).toEqual([]);
+    expect(recognizer.feed(tick(LONG_PRESS_MS))).toEqual([]);
+    expect(recognizer.feed(up(lockX, 300, LONG_PRESS_MS + 40))[0]?.kind).toBe("drag-end");
+  });
+
+  test("cancel mid-drag emits drag-cancel; cancel without a lock stays silent", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(lockX, 300, 40));
+    expect(recognizer.feed({ kind: "cancel", now: 80 })).toEqual([{ kind: "drag-cancel" }]);
+    recognizer.feed(down(400, 300, 200));
+    expect(recognizer.feed({ kind: "cancel", now: 240 })).toEqual([]);
+  });
+
+  test("a drag returning to its origin still ends as a drag — visible snap-back, not a tap", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(lockX, 300, 40));
+    recognizer.feed(move(398, 300, 90));
+    const intents = recognizer.feed(up(400, 300, 130));
+    expect(intents[0]).toMatchObject({ kind: "drag-end", dx: 0 });
+    expect(intents[1]).toEqual({ kind: "suppress-click" });
+    expect(intents).toHaveLength(2);
+  });
+
+  test("a stroke that long-pressed never becomes a drag", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(400, 300, 0));
     recognizer.feed(tick(LONG_PRESS_MS));
@@ -215,7 +286,7 @@ describe("context press", () => {
   test("a context signal overrides the slop: a wiggled stroke still long-presses", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
-    recognizer.feed(move(100 + MOVE_SLOP_PX + 10, 100, 50));
+    recognizer.feed(move(100, 100 + MOVE_SLOP_PX + 10, 50));
     expect(recognizer.feed(context(100, 100, 60))).toEqual([{ kind: "longpress", point: { x: 100, y: 100 } }]);
   });
 

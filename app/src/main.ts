@@ -67,6 +67,7 @@ import {
 } from "./gestures";
 import { createIngestGate } from "./ingest-gate";
 import { elapsedLabel, livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses } from "./liveness";
+import { createDeferredLatest, createPagingSession } from "./paging";
 import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
@@ -93,6 +94,14 @@ let currentCards: readonly PlacedCard[] = [];
 const ingestGate = createIngestGate();
 
 const gestures = createGestureRecognizer();
+const pagingSession = createPagingSession();
+// Every snapshot ingest routes through this latch: mid-gesture payloads
+// stash (latest wins) and apply once at settle. ingestNow is defined below;
+// the closure only runs at call time.
+const snapshotDeferral = createDeferredLatest<SnapshotPayload | null>(
+  () => pagingSession.defersSnapshots(),
+  (payload) => ingestNow(payload),
+);
 const clickSuppression = createClickSuppression();
 const dismissals = createDismissals();
 let gestureTimer: number | null = null;
@@ -139,7 +148,7 @@ const persistSettings = (settings: unknown): void => {
 };
 
 const jumpToPage = (page: number): void => {
-  if (currentView === null) {
+  if (currentView === null || !pagingSession.allowsNavigation()) {
     return;
   }
   const from = currentPage;
@@ -328,7 +337,14 @@ const scheduleExpiryCheck = (payload: SnapshotPayload): void => {
   }, delay);
 };
 
+/** All snapshot application goes through the deferral latch: nothing
+ *  repacks or re-renders the board, peek, or pips mid-gesture; the newest
+ *  payload applies at settle. */
 const ingest = (payload: SnapshotPayload | null): void => {
+  snapshotDeferral.submit(payload);
+};
+
+const ingestNow = (payload: SnapshotPayload | null): void => {
   lastPayload = payload;
   const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
   lastGood = reduction.lastGood;
@@ -649,7 +665,9 @@ const flickAway = (pending: PendingPress, direction: "up" | "down"): void => {
   // back itself.
   const settle = (): void => {
     dismissals.dismiss(provider, sessionId, Date.now(), settled.watermark);
-    ingest(lastPayload);
+    // Local re-reduction through the latch's own latest — never a driver-held
+    // copy, which can be older than a deferred payload.
+    snapshotDeferral.resubmitLatest();
     if (resolvePendingPress(currentCards, pending) !== null) {
       slide.cancel();
     }
@@ -681,10 +699,9 @@ const openActionSheetFor = (pending: PendingPress): void => {
 };
 
 /**
- * Installing the overlay steals this stroke's release: a mouse pointer
- * carries no implicit capture, so the physical up retargets to the sheet
- * and never reaches #strip — leaving the recognizer holding a live stroke
- * whose stale up would eat the next tap. Close the stroke here,
+ * Installing the overlay steals this stroke's release: the physical up may
+ * retarget to the sheet or arrive with the capture gone, and a live stroke
+ * left open would let its stale up eat the next tap. Close the stroke
  * deterministically; its emitted suppress-click keeps this stroke's
  * trailing click swallowed (Task 3's stroke-scoped contract).
  */
@@ -692,20 +709,46 @@ const settleLongPressStroke = (point: GesturePoint): void => {
   handleGestureIntents(gestures.feed({ kind: "up", point, now: Date.now() }));
 };
 
-const onSwipe = (direction: "previous" | "next"): void => {
-  if (currentView === null || currentPageCount <= 1) {
-    return;
-  }
-  const delta = direction === "next" ? 1 : -1;
-  jumpToPage(Math.min(Math.max(currentPage + delta, 0), currentPageCount - 1));
-};
+/** The commit fraction's base. Task 7 retargets this to #board-viewport. */
+const boardRegionWidth = (): number => document.querySelector<HTMLElement>("#board")?.clientWidth ?? 0;
 
 const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
   for (const intent of intents) {
     switch (intent.kind) {
-      case "swipe":
-        onSwipe(intent.direction);
+      case "drag-start":
+        pagingSession.start({
+          page: currentPage,
+          pageCount: currentPageCount,
+          boardWidth: boardRegionWidth(),
+        });
         break;
+      case "drag-move":
+        pagingSession.move(intent.dx); // the offset drives the track from Task 8
+        break;
+      case "drag-end": {
+        const settle = pagingSession.release(intent.dx, intent.velocity);
+        if (settle === null) {
+          break; // no live drag (refused start): nothing to settle
+        }
+        // Interim until the drag-follow track lands (Task 8): a commit jumps
+        // immediately to the settle's own captured target, a snap-back is a
+        // no-op — the drag pipeline already replaces release-time swipe
+        // classification end to end.
+        pagingSession.settled();
+        if (settle.kind === "commit") {
+          jumpToPage(settle.target);
+        }
+        snapshotDeferral.flush();
+        break;
+      }
+      case "drag-cancel": {
+        if (pagingSession.cancel() === null) {
+          break;
+        }
+        pagingSession.settled();
+        snapshotDeferral.flush();
+        break;
+      }
       case "longpress": {
         const pending = pendingPress;
         if (pending !== null) {
@@ -759,22 +802,43 @@ const feedPointer = (input: GestureInput): void => {
   scheduleLongPressTimer();
 };
 
-const onStripPointerDown = (event: PointerEvent): void => {
+const onSurfacePointerDown = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
   diagnostic?.recordPointer("down", 1);
-  // Suppression belongs to one stroke, and a touch drag fires no trailing
-  // click at all — so any still-unconsumed suppression from the last stroke
-  // dies here rather than eating this stroke's taps; the same goes for a
-  // press whose click never came.
-  clickSuppression.beginStroke();
-  pressAwaitingClick = null;
   pendingPress = cardFromPointerEvent(event);
+  // Capture the pointer: the stroke's continuation belongs to this surface
+  // even when the finger crosses the rail — which itself hosts no handlers.
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
   feedPointer({ kind: "down", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
 
-const onStripPointerMove = (event: PointerEvent): void => {
+/**
+ * Stroke bookkeeping on the pager+pips wrapper: suppression belongs to one
+ * stroke, and a touch drag fires no trailing click at all — any unconsumed
+ * suppression from the last stroke dies at the next stroke's birth, wherever
+ * it lands inside the paging region (a pip tap must never be eaten by a stale
+ * arm). A card press whose trailing click never arrived dies there too. This
+ * listener feeds no recognizer, and the wrapper excludes the rail.
+ */
+const onGestureRegionStrokeBookkeeping = (event: PointerEvent): void => {
+  if (!event.isPrimary) {
+    return;
+  }
+  clickSuppression.beginStroke();
+  pressAwaitingClick = null;
+};
+
+/** Leaving the window mid-gesture snaps back; with no live stroke the feed is a no-op. */
+const onWindowBlur = (): void => {
+  feedPointer({ kind: "cancel", now: Date.now() });
+  pendingPress = null;
+};
+
+const onSurfacePointerMove = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
@@ -782,7 +846,7 @@ const onStripPointerMove = (event: PointerEvent): void => {
   feedPointer({ kind: "move", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
 
-const onStripPointerUp = (event: PointerEvent): void => {
+const onSurfacePointerUp = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
@@ -795,7 +859,7 @@ const onStripPointerUp = (event: PointerEvent): void => {
   pendingPress = null;
 };
 
-const onStripPointerCancel = (event: PointerEvent): void => {
+const onSurfacePointerCancel = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
@@ -806,13 +870,13 @@ const onStripPointerCancel = (event: PointerEvent): void => {
 };
 
 /**
- * Consume suppression in the capture phase on #strip — before the click
- * reaches any target: a moved stroke released on a page dot would
+ * Consume suppression in the capture phase on the paging region — before
+ * the click reaches any target: a moved stroke released on a page dot would
  * otherwise page-jump, because the dot's own listener fires in the target
  * phase, ahead of any bubble-phase consumer on an ancestor. A suppressed
  * click is prevented and stopped outright; clean clicks pass untouched.
  */
-const onStripClickCapture = (event: MouseEvent): void => {
+const onGestureRegionClickCapture = (event: MouseEvent): void => {
   swallowSuppressedClick(clickSuppression, event);
 };
 
@@ -837,7 +901,7 @@ const onContextMenu = (event: MouseEvent): void => {
  * same action sheet as a mouse hold, and a mouse right-click rides along.
  * The native menu stays cancelled at the document root regardless.
  */
-const onStripContextMenu = (event: MouseEvent): void => {
+const onSurfaceContextMenu = (event: MouseEvent): void => {
   diagnostic?.recordPointer("context", 1);
   const pending = cardFromPointerEvent(event);
   if (pending !== null) {
@@ -848,13 +912,22 @@ const onStripContextMenu = (event: MouseEvent): void => {
 
 const wireInteraction = (): void => {
   document.querySelector<HTMLElement>("#board")?.addEventListener("click", onBoardClick);
-  const strip = document.querySelector<HTMLElement>("#strip");
-  strip?.addEventListener("pointerdown", onStripPointerDown);
-  strip?.addEventListener("pointermove", onStripPointerMove);
-  strip?.addEventListener("pointerup", onStripPointerUp);
-  strip?.addEventListener("pointercancel", onStripPointerCancel);
-  strip?.addEventListener("click", onStripClickCapture, true);
-  strip?.addEventListener("contextmenu", onStripContextMenu);
+  // Before Task 7's shell exists, #board is both surfaces. It is already a
+  // sibling of #rail, so the rail never traverses either listener.
+  const region = document.querySelector<HTMLElement>("#board");
+  region?.addEventListener("pointerdown", onGestureRegionStrokeBookkeeping, true);
+  region?.addEventListener("click", onGestureRegionClickCapture, true);
+  // The paging surface owns every recognizer-feeding handler; Task 7 retargets
+  // this selector to #pager while keeping the rail outside the boundary.
+  const surface = region;
+  surface?.addEventListener("pointerdown", onSurfacePointerDown);
+  surface?.addEventListener("pointermove", onSurfacePointerMove);
+  surface?.addEventListener("pointerup", onSurfacePointerUp);
+  surface?.addEventListener("pointercancel", onSurfacePointerCancel);
+  // Losing the capture (element teardown, capture theft) cancels the stroke.
+  surface?.addEventListener("lostpointercapture", onSurfacePointerCancel);
+  surface?.addEventListener("contextmenu", onSurfaceContextMenu);
+  window.addEventListener("blur", onWindowBlur);
   document.addEventListener("contextmenu", onContextMenu);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {

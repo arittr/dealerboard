@@ -16,8 +16,6 @@ body {
   display: grid;
   grid-template-columns: 1fr 29.6875%; /* 760px native rail */
   height: 100vh;
-  touch-action: none;
-  -webkit-touch-callout: none;
 }
 
 /* Board: fixed geometry — two 886px columns of six 102px rows, 12px gaps,
@@ -35,6 +33,8 @@ body {
   gap: 1.667vh 0.469vw; /* 12px native */
   padding: 6.111vh 0 0 0.625vw; /* 44px top clears the menu bar overlay, 16px left */
   min-width: 0;
+  touch-action: none;
+  -webkit-touch-callout: none;
 }
 /* Native fullscreen (window.ts mirrors it as body[data-fullscreen]) draws no
    menu-bar overlay: the 44px dodge gives way to centering — six 102px rows

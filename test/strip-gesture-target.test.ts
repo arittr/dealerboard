@@ -39,6 +39,7 @@ const card = (overrides: Partial<ProjectedSession> = {}, placed: Partial<PlacedC
   degraded: false,
   indent: false,
   spine: "none",
+  continuation: false,
   column: 0,
   row: 0,
   ...placed,

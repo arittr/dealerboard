@@ -8,16 +8,17 @@ describe("createPointerDiagnostic", () => {
     diag.recordPointer("down", 1);
     diag.recordPointer("move", 3);
     diag.recordPointer("up", 1);
-    diag.recordIntents([{ kind: "swipe", direction: "next" }, { kind: "suppress-click" }]);
+    diag.recordIntents([{ kind: "drag-end", dx: -200, velocity: 0 }, { kind: "suppress-click" }]);
     diag.recordNavigation(0, 1);
     diag.recordRender();
     const lines = diag.summary();
     expect(lines).toHaveLength(4);
     expect(lines[0]).toContain("d1 m1 u1");
     expect(lines[0]).toContain("x3");
-    // The WHOLE batch is visible: today's swipe emits swipe + suppress-click
-    // in one feed, and showing only the tail would misreport recognition.
-    expect(lines[1]).toContain('"swipe"');
+    // The WHOLE batch is visible: today's drag-end emits drag-end +
+    // suppress-click in one feed, and showing only the tail would
+    // misreport recognition.
+    expect(lines[1]).toContain('"drag-end"');
     expect(lines[1]).toContain('"suppress-click"');
     expect(lines[2]).toContain("0→1");
     expect(lines[3]).toContain("1");
@@ -25,9 +26,9 @@ describe("createPointerDiagnostic", () => {
 
   test("an empty feed is not a recognition event: the last real batch stays visible", () => {
     const diag = createPointerDiagnostic(() => 0);
-    diag.recordIntents([{ kind: "swipe", direction: "next" }, { kind: "suppress-click" }]);
+    diag.recordIntents([{ kind: "drag-end", dx: -200, velocity: 0 }, { kind: "suppress-click" }]);
     diag.recordIntents([]);
-    expect(diag.summary()[1]).toContain('"swipe"');
+    expect(diag.summary()[1]).toContain('"drag-end"');
   });
 
   test("the move rate window forgets samples older than a second", () => {
