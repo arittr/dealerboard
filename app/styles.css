@@ -52,7 +52,7 @@ body {
    the grid itself (max-content) so each side is placed from its own visual
    edge: the next page's gutter sits under the peek band, so its first column
    rises exactly beneath the peek slivers; the previous page's last column
-   ends under the return sliver's 24px visual edge, so that sliver grows into
+   ends under the return sliver's 32px visual edge, so that sliver grows into
    the real card. Never a pointer or accessibility target (the driver also
    sets inert): their card indexes belong to the neighbor page. */
 .board-adjacent {
@@ -66,7 +66,7 @@ body {
   left: calc(100% - 1.5625vw); /* the 40px gutter */
 }
 .board-adjacent.previous {
-  right: calc(100% - 0.9375vw); /* the 24px return sliver (#return-band .sliver) */
+  right: calc(100% - 1.25vw); /* the 32px return sliver (#return-band .sliver) */
 }
 
 /* Board: fixed geometry — two 886px columns of six 102px rows, 12px gaps,
@@ -128,7 +128,7 @@ body[data-fullscreen] #return-band {
 #pips[data-present="false"] {
   visibility: hidden; /* the track stays reserved: constant geometry */
 }
-/* The return band owns the whole 40px gutter as its tap target (a 24px
+/* The return band owns the whole 40px gutter as its tap target (a 32px
    sliver alone is below touch size); it sits above the track so the sliver
    stays put while pages slide beneath it. */
 #return-band {
@@ -153,7 +153,11 @@ body[data-fullscreen] #return-band {
   background: rgb(17 21 29 / 0.7);
 }
 #return-band .sliver {
-  width: 0.9375vw; /* 24px visual inside the 40px target */
+  width: 1.25vw; /* 32px visual inside the 40px target */
+  background: #1c2430; /* the return side reuses the normal card surface, not the peek dim */
+}
+#return-band .sliver.sub {
+  background: #171e28; /* the quieter card surface, matching the peek sub's contrast pairing */
 }
 #peek-band .sliver {
   border-radius: 0.469vw 0 0 0.469vw; /* the card's left corners */
