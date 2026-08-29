@@ -38,6 +38,21 @@ body {
 }
 #board-track {
   height: 100%;
+  will-change: transform;
+}
+/* Transient neighbor pages, mounted only for a drag's lifetime, one
+   board-width-minus-gutter away so adjacent pages tile gutter-under-sliver. */
+.board-adjacent {
+  position: absolute;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+.board-adjacent.next {
+  left: calc(100% - 1.5625vw);
+}
+.board-adjacent.previous {
+  left: calc(-100% + 1.5625vw);
 }
 
 /* Board: fixed geometry — two 886px columns of six 102px rows, 12px gaps,

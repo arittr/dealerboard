@@ -76,7 +76,7 @@ import {
 } from "./indicators";
 import { createIngestGate } from "./ingest-gate";
 import { elapsedLabel, livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses } from "./liveness";
-import { createDeferredLatest, createPagingSession } from "./paging";
+import { createDeferredLatest, createPagingSession, type DragSettle } from "./paging";
 import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
@@ -741,41 +741,123 @@ const settleLongPressStroke = (point: GesturePoint): void => {
 /** The commit fraction's base. */
 const boardRegionWidth = (): number => document.querySelector<HTMLElement>("#board-viewport")?.clientWidth ?? 0;
 
+const SETTLE_MS = 160;
+/** Mirrors .board-grid's 1.5625vw gutter (styles.css): adjacent pages sit one
+ *  board-width-minus-gutter apart, so the incoming first column starts exactly
+ *  under the peek slivers and the sliver grows into the real card. */
+const BOARD_GUTTER_NATIVE_PX = 40;
+const NATIVE_STRIP_WIDTH_PX = 2560;
+const gutterPx = (): number => (window.innerWidth * BOARD_GUTTER_NATIVE_PX) / NATIVE_STRIP_WIDTH_PX;
+
+const boardTrack = (): HTMLElement | null => document.querySelector<HTMLElement>("#board-track");
+let adjacentPages: HTMLElement[] = [];
+let settleFallback: ReturnType<typeof setTimeout> | null = null;
+
+const setTrackOffset = (offset: number, animate: boolean): void => {
+  const track = boardTrack();
+  if (track === null) {
+    return;
+  }
+  track.style.transition = animate ? `transform ${SETTLE_MS}ms ease-out` : "none";
+  track.style.transform = `translateX(${offset}px)`;
+};
+
+const mountAdjacentPages = (): void => {
+  const track = boardTrack();
+  const degraded = currentView?.degraded ?? false;
+  if (track === null) {
+    return;
+  }
+  const mount = (page: BoardPage | undefined, side: "previous" | "next"): void => {
+    if (page === undefined || page.cards.length === 0) {
+      return;
+    }
+    const grid = document.createElement("div");
+    grid.className = `board-grid board-adjacent ${side}`;
+    renderBoard(grid, page, degraded);
+    track.append(grid);
+    adjacentPages.push(grid);
+  };
+  mount(currentPages[currentPage - 1], "previous");
+  mount(currentPages[currentPage + 1], "next");
+};
+
+const unmountAdjacentPages = (): void => {
+  for (const grid of adjacentPages) {
+    grid.remove();
+  }
+  adjacentPages = [];
+};
+
+/**
+ * Animate to the settle target, then commit-and-reset in one synchronous
+ * handler so the swap never flashes: the page jump re-renders #board while
+ * the track snaps back to rest and the transient neighbors unmount. The
+ * commit navigates to the settle's own captured target — never to whatever
+ * currentPage mutated to during the animation. Single-flight is the
+ * session's guarantee: finishSettle only ever runs on a non-null verdict,
+ * and no second verdict can exist until settled() runs here. The fallback
+ * timer covers a transitionend that never fires (an already-at-rest
+ * snap-back transitions nothing).
+ */
+const finishSettle = (settle: DragSettle): void => {
+  const track = boardTrack();
+  const done = (): void => {
+    track?.removeEventListener("transitionend", done);
+    if (settleFallback !== null) {
+      clearTimeout(settleFallback);
+      settleFallback = null;
+    }
+    pagingSession.settled(); // before the jump: the navigation gate opens here
+    if (settle.kind === "commit") {
+      jumpToPage(settle.target);
+    }
+    setTrackOffset(0, false);
+    unmountAdjacentPages();
+    snapshotDeferral.flush();
+  };
+  const target =
+    settle.kind === "commit" ? (settle.direction === "next" ? -1 : 1) * (boardRegionWidth() - gutterPx()) : 0;
+  track?.addEventListener("transitionend", done);
+  settleFallback = setTimeout(done, SETTLE_MS + 80);
+  setTrackOffset(target, true);
+};
+
 const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
   for (const intent of intents) {
     switch (intent.kind) {
-      case "drag-start":
-        pagingSession.start({
+      case "drag-start": {
+        const accepted = pagingSession.start({
           page: currentPage,
           pageCount: currentPageCount,
           boardWidth: boardRegionWidth(),
         });
+        if (!accepted) {
+          break; // a settling board is not grabbable; this stroke owns nothing
+        }
+        mountAdjacentPages();
+        setTrackOffset(0, false);
         break;
-      case "drag-move":
-        pagingSession.move(intent.dx); // the offset drives the track from Task 8
+      }
+      case "drag-move": {
+        const offset = pagingSession.move(intent.dx);
+        if (offset !== null) {
+          setTrackOffset(offset, false); // a refused stroke never touches the track
+        }
         break;
+      }
       case "drag-end": {
         const settle = pagingSession.release(intent.dx, intent.velocity);
-        if (settle === null) {
-          break; // no live drag (refused start): nothing to settle
+        if (settle !== null) {
+          finishSettle(settle);
         }
-        // Interim until the drag-follow track lands (Task 8): a commit jumps
-        // immediately to the settle's own captured target, a snap-back is a
-        // no-op — the drag pipeline already replaces release-time swipe
-        // classification end to end.
-        pagingSession.settled();
-        if (settle.kind === "commit") {
-          jumpToPage(settle.target);
-        }
-        snapshotDeferral.flush();
         break;
       }
       case "drag-cancel": {
-        if (pagingSession.cancel() === null) {
-          break;
+        const settle = pagingSession.cancel();
+        if (settle !== null) {
+          finishSettle(settle);
         }
-        pagingSession.settled();
-        snapshotDeferral.flush();
         break;
       }
       case "longpress": {
