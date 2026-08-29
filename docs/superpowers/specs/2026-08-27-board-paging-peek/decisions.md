@@ -251,3 +251,17 @@ back to ready and re-run the ratify gate.
   Drew approved the bounded 32px/brighter-surface design with "yes". A fresh
   review, install, and arm's-length re-check remain required.
 - **Deciders:** Drew + steering seat
+
+## 2026-08-29 00:41 — 32px return cue accepted on glass
+- **Decided:** Accept the installed 32px return cue with normal/quiet card
+  surfaces as the final legibility treatment. The return-cue user-decision is
+  closed; no further width, surface, status-edge, pip, card-position, or rail
+  change is authorized by this receipt.
+- **Evidence:** Task 9c's one-file CSS change passed its Sol review, fresh
+  repository checks, rebuild, reinstall, and an arm's-length inspection of
+  the newly installed app on page 2. Drew's physical acceptance and shipment
+  instruction was: "great ship it".
+- **Boundary:** This receipt accepts the return cue and current installed
+  geometry. It does not substitute for Task 10's condensed final-artifact
+  smoke after the temporary diagnostic wiring is removed.
+- **Deciders:** Drew
