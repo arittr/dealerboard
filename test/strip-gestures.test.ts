@@ -190,8 +190,9 @@ describe("drag axis lock", () => {
     const jitter = Math.max(0, DRAG_LOCK_MIN_PX - 2);
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(400, 300, 0));
-    recognizer.feed(move(400 + jitter, 300, 150));
-    const intents = recognizer.feed(up(400 + jitter, 300, 200));
+    // Both batches, not just the release: a regression that streams a drag
+    // intent on the move while releasing clean must fail here too.
+    const intents = [...recognizer.feed(move(400 + jitter, 300, 150)), ...recognizer.feed(up(400 + jitter, 300, 200))];
     expect(intents.filter((intent) => intent.kind.startsWith("drag"))).toEqual([]);
     expect(intents).toEqual(jitter > MOVE_SLOP_PX ? [{ kind: "suppress-click" }] : []);
   });
