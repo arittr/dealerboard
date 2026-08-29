@@ -83,6 +83,11 @@ const safeActivityLabel = (activityLine: string | null): string | null => {
   return SAFE_ACTIVITY_LABELS.has(activityLine) ? activityLine : "Activity";
 };
 
+/** The unread bit the card itself renders — display-only cards contribute none.
+ *  Single source for the card corner dot, the peek sliver dots, and pip aggregates. */
+export const cardShowsUnread = (card: Pick<PlacedCard, "displayOnly" | "session">): boolean =>
+  !card.displayOnly && card.session.unreadSince !== null;
+
 export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel => {
   const { session } = card;
   // Only agent-graph sessions carry openedAt; a legacy snapshot renders no open facts.
@@ -93,7 +98,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
   return {
     provider: session.provider,
     letter: PROVIDER_LETTERS[session.provider],
-    unread: !card.displayOnly && session.unreadSince !== null,
+    unread: cardShowsUnread(card),
     title: card.label,
     fallbackTitle: !(session.title !== null && session.title.length > 0),
     modelLabel: session.model === null ? null : modelLabel(session.model, CARD_MODEL_LABEL_MAX_CODE_POINTS),
