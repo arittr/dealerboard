@@ -92,6 +92,17 @@ describe("peekModel", () => {
     ]);
     expect(peekModel(pages, 1)).toEqual([]);
   });
+
+  test("a sparse next page with no column-0 cards peeks its leftmost occupied column", () => {
+    const pages = [
+      page(card(0, 0)),
+      page(card(1, 3), card(1, 0, { subagent: true }, { unreadSince: UNREAD, status: "waiting" })),
+    ];
+    expect(peekModel(pages, 0)).toEqual([
+      { row: 0, status: "waiting", sub: true, unread: true },
+      { row: 3, status: "working", sub: false, unread: false },
+    ]);
+  });
 });
 
 describe("pipColumnModel", () => {
@@ -163,6 +174,8 @@ describe("band renderers", () => {
         (pip) => descendants(pip).find((node) => hasClass(node, "pip-mini"))?.dataset["kind"] ?? null,
       );
       expect(minis).toEqual(["unread", null, "working"]);
+      expect(root.children.map((pip) => pip.attributes["aria-label"])).toEqual(["Page 1", "Page 2", "Page 3"]);
+      expect(root.children.map((pip) => pip.attributes["aria-current"])).toEqual([undefined, "page", undefined]);
       for (const pip of root.children) {
         for (const listener of pip.listeners["click"] ?? []) {
           listener();
@@ -193,5 +206,6 @@ describe("indicatorsRenderSignature", () => {
       ),
     ).not.toBe(base);
     expect(indicatorsRenderSignature([], [{ row: 0, status: "idle", sub: false, unread: false }], pips)).not.toBe(base);
+    expect(indicatorsRenderSignature([{ row: 0, status: "idle", sub: false, unread: false }], [], pips)).not.toBe(base);
   });
 });

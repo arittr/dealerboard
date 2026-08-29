@@ -35,13 +35,13 @@ export const returnSliverModel = (pages: readonly BoardPage[], currentPage: numb
   return sliverColumn(behind, Math.max(...behind.cards.map((card) => card.column)));
 };
 
-/** The next page's leftmost column; [] on the last page. */
+/** The next page's leftmost occupied column; [] on the last page. */
 export const peekModel = (pages: readonly BoardPage[], currentPage: number): SliverModel[] => {
   const ahead = pages[currentPage + 1];
   if (ahead === undefined || ahead.cards.length === 0) {
     return [];
   }
-  return sliverColumn(ahead, 0);
+  return sliverColumn(ahead, Math.min(...ahead.cards.map((card) => card.column)));
 };
 
 export type PipModel = {
@@ -102,6 +102,10 @@ export const renderPips = (root: HTMLElement, model: readonly PipModel[], action
       const button = document.createElement("button");
       button.type = "button";
       button.className = pip.current ? "pip current" : "pip";
+      button.setAttribute("aria-label", `Page ${index + 1}`);
+      if (pip.current) {
+        button.setAttribute("aria-current", "page");
+      }
       const dot = document.createElement("span");
       dot.className = "pip-dot";
       if (pip.dot !== null) {
