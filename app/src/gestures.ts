@@ -78,8 +78,12 @@ export type GestureRecognizer = {
 export const createGestureRecognizer = (): GestureRecognizer => {
   let stroke: Stroke | null = null;
 
+  // Mirrors the tick case's guard: a stroke the tick cannot long-press
+  // (moved, long-pressed, or locked into a drag) must not advertise a
+  // deadline either — the driver reschedules from this after every feed,
+  // and a stale expired deadline would re-arm zero-delay ticks forever.
   const longPressDueAt = (): number | null =>
-    stroke !== null && !stroke.moved && !stroke.longPressed ? stroke.deadline : null;
+    stroke !== null && !stroke.moved && !stroke.longPressed && !stroke.dragging ? stroke.deadline : null;
 
   const feed = (input: GestureInput): GestureIntent[] => {
     switch (input.kind) {

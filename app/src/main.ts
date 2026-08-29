@@ -870,6 +870,21 @@ const onSurfacePointerCancel = (event: PointerEvent): void => {
 };
 
 /**
+ * Capture loss ends the stroke like a cancel, but is not one: it also
+ * follows every ordinary pointerup (capture releases with the stroke), and
+ * the diagnostic's cancel count must stay a count of real cancel events —
+ * the on-glass delivery receipt reads it. Same cleanup, no synthetic
+ * delivery record.
+ */
+const onSurfaceLostPointerCapture = (event: PointerEvent): void => {
+  if (!event.isPrimary) {
+    return;
+  }
+  feedPointer({ kind: "cancel", now: Date.now() });
+  pendingPress = null;
+};
+
+/**
  * Consume suppression in the capture phase on the paging region — before
  * the click reaches any target: a moved stroke released on a page dot would
  * otherwise page-jump, because the dot's own listener fires in the target
@@ -925,7 +940,7 @@ const wireInteraction = (): void => {
   surface?.addEventListener("pointerup", onSurfacePointerUp);
   surface?.addEventListener("pointercancel", onSurfacePointerCancel);
   // Losing the capture (element teardown, capture theft) cancels the stroke.
-  surface?.addEventListener("lostpointercapture", onSurfacePointerCancel);
+  surface?.addEventListener("lostpointercapture", onSurfaceLostPointerCapture);
   surface?.addEventListener("contextmenu", onSurfaceContextMenu);
   window.addEventListener("blur", onWindowBlur);
   document.addEventListener("contextmenu", onContextMenu);

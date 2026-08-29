@@ -41,7 +41,11 @@ describe("createGestureRecognizer", () => {
   test("jitter within the slop radius keeps the long-press alive", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
-    recognizer.feed(move(100 + MOVE_SLOP_PX - 2, 100, 200));
+    // Jitter below BOTH thresholds: sub-slop (the long-press contract under
+    // test) and sub-lock (so no relative tuning of DRAG_LOCK_MIN_PX against
+    // MOVE_SLOP_PX can turn this hold into a paging drag).
+    const jitter = Math.max(0, Math.min(MOVE_SLOP_PX, DRAG_LOCK_MIN_PX) - 2);
+    recognizer.feed(move(100 + jitter, 100, 200));
     expect(recognizer.feed(tick(LONG_PRESS_MS))).toEqual([{ kind: "longpress", point: { x: 100, y: 100 } }]);
   });
 
@@ -191,6 +195,21 @@ describe("drag axis lock", () => {
     expect(recognizer.feed(context(lockX, 300, 50))).toEqual([]);
     expect(recognizer.feed(tick(LONG_PRESS_MS))).toEqual([]);
     expect(recognizer.feed(up(lockX, 300, LONG_PRESS_MS + 40))[0]?.kind).toBe("drag-end");
+  });
+
+  test("a locked drag never advertises a long-press deadline at any tuning", () => {
+    // The driver reschedules its tick from longPressDueAt after every feed;
+    // a drag that locks below the slop (reachable whenever DRAG_LOCK_MIN_PX
+    // is tuned at or below MOVE_SLOP_PX) leaves `moved` false, so a stale
+    // deadline here would re-arm zero-delay ticks forever. The lock
+    // displacement derives from the constant so it stays sub-slop in that
+    // regime — red proven under a tuned DRAG_LOCK_MIN_PX (see the task
+    // report); at today's constants the lock implies `moved`, which already
+    // nulls the deadline.
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(400 - DRAG_LOCK_MIN_PX - 4, 300, 40));
+    expect(recognizer.longPressDueAt()).toBeNull();
   });
 
   test("cancel mid-drag emits drag-cancel; cancel without a lock stays silent", () => {
