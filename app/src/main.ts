@@ -47,7 +47,6 @@ import {
   viewSession,
 } from "./bridge";
 import { ageLineText, boardRenderSignature, cardKey, renderBoard, sessionLastEventAt } from "./cards";
-import { createPointerDiagnostic, mountPointerDiagnostic, POINTER_DIAGNOSTIC_ENABLED } from "./diagnostic";
 import { createDismissals, flickRemoves } from "./dismissals";
 /**
  * A pending press is bound to the pressed session's identity, never to a
@@ -125,8 +124,6 @@ let pendingPress: PendingPress | null = null;
  * never settle under a later tap.
  */
 let pressAwaitingClick: PendingPress | null = null;
-// Bring-up pointer diagnostic (removed with app/src/diagnostic.ts).
-const diagnostic = POINTER_DIAGNOSTIC_ENABLED ? createPointerDiagnostic(Date.now) : null;
 
 type SheetContext = {
   point: GesturePoint;
@@ -161,11 +158,9 @@ const jumpToPage = (page: number): void => {
   if (currentView === null || !pagingSession.allowsNavigation()) {
     return;
   }
-  const from = currentPage;
   // jumpBoard reports a page change as dirty, so applyBoard persists it and
   // later ingests (which reduce from the persisted settings) keep the page.
   applyBoard(jumpBoard(currentView, loadStoredSettings(), page));
-  diagnostic?.recordNavigation(from, currentPage);
 };
 
 const renderRailNow = (): void => {
@@ -299,7 +294,6 @@ const applyBoard = (result: BoardResult): void => {
   const signature = boardRenderSignature(page, degraded);
   const root = document.querySelector<HTMLElement>("#board");
   if (root !== null && signature !== renderedSignature) {
-    diagnostic?.recordRender();
     renderedSignature = signature;
     renderBoard(root, page, degraded);
     // Pulse on stamp advance (working cards only — planPulses gates on the
@@ -445,9 +439,6 @@ const start = async (): Promise<void> => {
   void startStripWindowManager();
   void ensureAutostart();
   wireInteraction();
-  if (diagnostic !== null) {
-    mountPointerDiagnostic(document.body, diagnostic);
-  }
   // Arm the push subscription before the first read so no publication can
   // land in the gap between the two; both sources order through the gate.
   try {
@@ -918,11 +909,12 @@ const scheduleLongPressTimer = (): void => {
     gestureTimer = setTimeout(
       () => {
         gestureTimer = null;
-        // The tick rides the same seam as pointer input so the diagnostic
-        // records its intents too. feedPointer is declared below — referenced
-        // here at fire time. After a tick no long-press is due anymore (the
-        // stroke fired, moved, or ended), so the reschedule in feedPointer
-        // terminates; only a clamped-early tick re-arms, at zero delay.
+        // The tick rides the same seam as pointer input so its intents take
+        // the same path as pointer-derived ones. feedPointer is declared
+        // below — referenced here at fire time. After a tick no long-press is
+        // due anymore (the stroke fired, moved, or ended), so the reschedule
+        // in feedPointer terminates; only a clamped-early tick re-arms, at
+        // zero delay.
         feedPointer({ kind: "tick", now: Date.now() });
       },
       Math.max(0, dueAt - Date.now()),
@@ -932,7 +924,6 @@ const scheduleLongPressTimer = (): void => {
 
 const feedPointer = (input: GestureInput): void => {
   const intents = gestures.feed(input);
-  diagnostic?.recordIntents(intents);
   handleGestureIntents(intents);
   scheduleLongPressTimer();
 };
@@ -941,7 +932,6 @@ const onSurfacePointerDown = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
-  diagnostic?.recordPointer("down", 1);
   pendingPress = cardFromPointerEvent(event);
   // Capture the pointer: the stroke's continuation belongs to this surface
   // even when the finger crosses the rail — which itself hosts no handlers.
@@ -977,7 +967,6 @@ const onSurfacePointerMove = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
-  diagnostic?.recordPointer("move", event.getCoalescedEvents?.().length ?? 0);
   feedPointer({ kind: "move", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
 };
 
@@ -985,7 +974,6 @@ const onSurfacePointerUp = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
-  diagnostic?.recordPointer("up", 1);
   feedPointer({ kind: "up", point: { x: event.clientX, y: event.clientY }, now: Date.now() });
   // A press the stroke did not consume (no long-press, no flick) belongs to
   // the trailing click now: a clean tap settles it; a suppressed click
@@ -998,7 +986,6 @@ const onSurfacePointerCancel = (event: PointerEvent): void => {
   if (!event.isPrimary) {
     return;
   }
-  diagnostic?.recordPointer("cancel", 1);
   feedPointer({ kind: "cancel", now: Date.now() });
   pendingPress = null;
   pressAwaitingClick = null;
@@ -1006,10 +993,8 @@ const onSurfacePointerCancel = (event: PointerEvent): void => {
 
 /**
  * Capture loss ends the stroke like a cancel, but is not one: it also
- * follows every ordinary pointerup (capture releases with the stroke), and
- * the diagnostic's cancel count must stay a count of real cancel events —
- * the on-glass delivery receipt reads it. Same cleanup, no synthetic
- * delivery record.
+ * follows every ordinary pointerup (capture releases with the stroke). Same
+ * cleanup either way.
  */
 const onSurfaceLostPointerCapture = (event: PointerEvent): void => {
   if (!event.isPrimary) {
@@ -1052,7 +1037,6 @@ const onContextMenu = (event: MouseEvent): void => {
  * The native menu stays cancelled at the document root regardless.
  */
 const onSurfaceContextMenu = (event: MouseEvent): void => {
-  diagnostic?.recordPointer("context", 1);
   const pending = cardFromPointerEvent(event);
   if (pending !== null) {
     pendingPress = pending;
