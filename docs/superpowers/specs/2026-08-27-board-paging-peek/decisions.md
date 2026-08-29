@@ -213,3 +213,21 @@ back to ready and re-run the ratify gate.
   contract, and final-artifact receipt explicit.
 - **Deciders:** Drew — "try again, we ran out of fable credits"; steering
   seat disposition under the two-bounce rule.
+
+## 2026-08-28 23:54 — Return sliver grows to 24px on glass
+- **Decided:** Grow the page-return sliver from 14px to 24px within the
+  existing 40px left gutter. The transient previous-page placement follows
+  the same 24px edge so drag-follow remains continuous. Keep the pip column
+  and its 9px amber/blue mini-dots unchanged. Keep the existing status-edge
+  alpha for this pass; the observed problem was insufficient card surface,
+  not insufficient status-color contrast.
+- **Because:** On the live two-page strip, the 14px cue read as detached
+  status ticks rather than the edge of a card: its 8px status edge left only
+  6px of card surface. At 24px the same status edge leaves 16px of card
+  surface while consuming no additional layout space and shifting neither
+  the board nor the 638px rail.
+- **Evidence:** Live two-page inspection after the native-overscroll fix;
+  paging worked in both directions, the rail fit, and the pip dots remained
+  legible. Drew approved the 24px recommendation verbatim: "sure". A fresh
+  install and on-glass re-check remain required before this item closes.
+- **Deciders:** Drew + steering seat
