@@ -40,19 +40,25 @@ body {
   height: 100%;
   will-change: transform;
 }
-/* Transient neighbor pages, mounted only for a drag's lifetime, one
-   board-width-minus-gutter away so adjacent pages tile gutter-under-sliver. */
+/* Transient neighbor pages, mounted only for a drag's lifetime and sized to
+   the grid itself (max-content) so each side is placed from its own visual
+   edge: the next page's gutter sits under the peek band, so its first column
+   rises exactly beneath the peek slivers; the previous page's last column
+   ends under the return sliver's 14px visual edge, so that sliver grows into
+   the real card. Never a pointer or accessibility target (the driver also
+   sets inert): their card indexes belong to the neighbor page. */
 .board-adjacent {
   position: absolute;
   top: 0;
-  width: 100%;
+  width: max-content;
   height: 100%;
+  pointer-events: none;
 }
 .board-adjacent.next {
-  left: calc(100% - 1.5625vw);
+  left: calc(100% - 1.5625vw); /* the 40px gutter */
 }
 .board-adjacent.previous {
-  left: calc(-100% + 1.5625vw);
+  right: calc(100% - 0.547vw); /* the 14px return sliver (#return-band .sliver) */
 }
 
 /* Board: fixed geometry — two 886px columns of six 102px rows, 12px gaps,

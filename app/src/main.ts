@@ -76,7 +76,7 @@ import {
 } from "./indicators";
 import { createIngestGate } from "./ingest-gate";
 import { elapsedLabel, livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses } from "./liveness";
-import { createDeferredLatest, createPagingSession, type DragSettle } from "./paging";
+import { createDeferredLatest, createPagingSession, type DragSettle, type PageDirection } from "./paging";
 import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
@@ -742,21 +742,25 @@ const settleLongPressStroke = (point: GesturePoint): void => {
 const boardRegionWidth = (): number => document.querySelector<HTMLElement>("#board-viewport")?.clientWidth ?? 0;
 
 const SETTLE_MS = 160;
-/** Mirrors .board-grid's 1.5625vw gutter (styles.css): adjacent pages sit one
- *  board-width-minus-gutter apart, so the incoming first column starts exactly
- *  under the peek slivers and the sliver grows into the real card. */
-const BOARD_GUTTER_NATIVE_PX = 40;
-const NATIVE_STRIP_WIDTH_PX = 2560;
-const gutterPx = (): number => (window.innerWidth * BOARD_GUTTER_NATIVE_PX) / NATIVE_STRIP_WIDTH_PX;
 
 const boardTrack = (): HTMLElement | null => document.querySelector<HTMLElement>("#board-track");
-let adjacentPages: HTMLElement[] = [];
+/** The transient neighbor grids by side, alive for one drag and its settle. */
+const adjacentPages = new Map<PageDirection, HTMLElement>();
 let settleFallback: ReturnType<typeof setTimeout> | null = null;
 
 const setTrackOffset = (offset: number, animate: boolean): void => {
   const track = boardTrack();
   if (track === null) {
     return;
+  }
+  if (animate) {
+    // Commit the track's current transform as the transition's starting
+    // point before enabling it: a sample-starved release writes the drag
+    // offset and the settle target in one task, and without this forced
+    // style flush the browser coalesces the two writes and transitions from
+    // the last painted frame — no visible move-and-return for a
+    // below-threshold snap-back. The layout read is the flush.
+    track.getBoundingClientRect();
   }
   track.style.transition = animate ? `transform ${SETTLE_MS}ms ease-out` : "none";
   track.style.transform = `translateX(${offset}px)`;
@@ -768,25 +772,46 @@ const mountAdjacentPages = (): void => {
   if (track === null) {
     return;
   }
-  const mount = (page: BoardPage | undefined, side: "previous" | "next"): void => {
+  const mount = (page: BoardPage | undefined, side: PageDirection): void => {
     if (page === undefined || page.cards.length === 0) {
       return;
     }
     const grid = document.createElement("div");
     grid.className = `board-grid board-adjacent ${side}`;
+    // A throwaway render, never a press, flick, sheet, or assistive target:
+    // its card indexes are the neighbor page's, and the pager's card lookups
+    // resolve indexes against currentCards. inert drops the subtree from hit
+    // testing and the accessibility tree; styles.css adds pointer-events:
+    // none for the same reason.
+    grid.inert = true;
     renderBoard(grid, page, degraded);
     track.append(grid);
-    adjacentPages.push(grid);
+    adjacentPages.set(side, grid);
   };
   mount(currentPages[currentPage - 1], "previous");
   mount(currentPages[currentPage + 1], "next");
 };
 
 const unmountAdjacentPages = (): void => {
-  for (const grid of adjacentPages) {
+  for (const grid of adjacentPages.values()) {
     grid.remove();
   }
-  adjacentPages = [];
+  adjacentPages.clear();
+};
+
+/**
+ * The track translation that lands a commit's neighbor exactly where #board
+ * sits: the negation of the neighbor's own layout offset, so the CSS
+ * placement is the single source of the travel on each side — one gutter
+ * short of a board width toward the next page, one return-sliver width
+ * short of a grid width toward the previous page. Both rects carry the
+ * track's live transform, so their difference is layout alone. A commit
+ * toward an unmounted neighbor (an empty page) has nowhere to travel and
+ * settles at rest before the jump.
+ */
+const commitTravel = (track: HTMLElement, direction: PageDirection): number => {
+  const neighbor = adjacentPages.get(direction);
+  return neighbor === undefined ? 0 : track.getBoundingClientRect().left - neighbor.getBoundingClientRect().left;
 };
 
 /**
@@ -816,8 +841,7 @@ const finishSettle = (settle: DragSettle): void => {
     unmountAdjacentPages();
     snapshotDeferral.flush();
   };
-  const target =
-    settle.kind === "commit" ? (settle.direction === "next" ? -1 : 1) * (boardRegionWidth() - gutterPx()) : 0;
+  const target = settle.kind === "commit" && track !== null ? commitTravel(track, settle.direction) : 0;
   track?.addEventListener("transitionend", done);
   settleFallback = setTimeout(done, SETTLE_MS + 80);
   setTrackOffset(target, true);
