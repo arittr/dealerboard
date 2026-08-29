@@ -297,3 +297,10 @@ to ready and re-run the ratify gate. -->
   not see; the final whole-branch review was the net that caught them.
 - **Deciders:** steering-session under the two-bounce takeover; the one
   settled-decision reversal (acked_at) is the user's ruling above.
+
+## 2026-08-28 — Run closed: merged to main
+- **Decided:** Drew ordered the merge ("Merge to main locally"); the branch
+  fast-forwarded (1b40c01..5b95be8) and the merged result ran green (1217
+  tests, 0 fail; full gate + cargo). Spec status flips to completed. SDD
+  run row already in ~/.agents/run-ledger.md.
+- **Deciders:** user

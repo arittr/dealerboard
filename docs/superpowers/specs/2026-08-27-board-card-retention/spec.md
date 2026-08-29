@@ -1,6 +1,6 @@
 ---
 topic: 2026-08-27-board-card-retention
-status: ratified             # draft | ready | ratified | paused | abandoned | completed
+status: completed             # draft | ready | ratified | paused | abandoned | completed
 created: 2026-08-27
 author-pool: kimi-code/k3    # the ratify cold-read must come from a DIFFERENT model family
 ---
