@@ -245,19 +245,25 @@ export const createClickSuppression = (): ClickSuppression => {
 
 /** The minimal event surface a swallowed click needs. */
 export type SwallowableClick = {
+  /** 0 when no pointer is behind the click (keyboard or assistive activation). */
+  readonly detail: number;
   preventDefault: () => void;
   stopPropagation: () => void;
 };
 
 /**
  * Consume an armed suppression and stop the click outright. The driver
- * installs this in the capture phase: a moved stroke released on a page
- * dot would otherwise page-jump first — the dot's own listener fires in the
+ * installs this in the capture phase: a moved stroke released on a pip
+ * would otherwise page-jump first — the pip's own listener fires in the
  * target phase, before any bubble-phase consumer on an ancestor could
- * swallow the click.
+ * swallow the click. A detail-0 click carries no pointer (keyboard
+ * Enter/Space, assistive activation), so it cannot be a stroke's trailing
+ * click: it passes untouched, though it still consumes the arm — a stale
+ * one must not survive to swallow an innocent later pointer click.
  */
 export const swallowSuppressedClick = (suppression: ClickSuppression, event: SwallowableClick): boolean => {
-  if (!suppression.consumeClick()) {
+  const swallow = suppression.consumeClick();
+  if (!swallow || event.detail === 0) {
     return false;
   }
   event.preventDefault();

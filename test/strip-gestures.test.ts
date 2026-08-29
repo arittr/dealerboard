@@ -335,11 +335,12 @@ describe("context press", () => {
 });
 
 describe("swallowSuppressedClick", () => {
-  const recordingEvent = () => {
+  const recordingEvent = (detail = 1) => {
     const calls: string[] = [];
     return {
       calls,
       event: {
+        detail,
         preventDefault: () => calls.push("preventDefault"),
         stopPropagation: () => calls.push("stopPropagation"),
       },
@@ -369,6 +370,22 @@ describe("swallowSuppressedClick", () => {
     const { calls, event } = recordingEvent();
     expect(swallowSuppressedClick(suppression, event)).toBe(false);
     expect(calls).toEqual([]);
+  });
+
+  test("a keyboard activation passes through an armed suppression and drops the arm", () => {
+    const suppression = createClickSuppression();
+    // A touch drag arms suppression and fires no trailing click; keyboard
+    // Enter/Space (and assistive activation) click with detail 0 and no
+    // pointerdown, so no stroke ever clears the stale arm first.
+    suppression.arm();
+    const key = recordingEvent(0);
+    expect(swallowSuppressedClick(suppression, key.event)).toBe(false);
+    expect(key.calls).toEqual([]);
+    // The arm is consumed, not retained: a later pointer click must not be
+    // swallowed for the keyboard press's sake.
+    const pointer = recordingEvent(1);
+    expect(swallowSuppressedClick(suppression, pointer.event)).toBe(false);
+    expect(pointer.calls).toEqual([]);
   });
 });
 
