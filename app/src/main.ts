@@ -65,6 +65,15 @@ import {
   type GesturePoint,
   swallowSuppressedClick,
 } from "./gestures";
+import {
+  indicatorsRenderSignature,
+  peekModel,
+  pipColumnModel,
+  renderPeekBand,
+  renderPips,
+  renderReturnBand,
+  returnSliverModel,
+} from "./indicators";
 import { createIngestGate } from "./ingest-gate";
 import { elapsedLabel, livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses } from "./liveness";
 import { createDeferredLatest, createPagingSession } from "./paging";
@@ -81,6 +90,7 @@ const SETTINGS_KEY = "agent-strip.layout.v1";
 let lastGood: SessionSnapshotV2 | null = null;
 let renderedSignature = "";
 let railRenderedSignature = "";
+let indicatorsRenderedSignature = "";
 let pulseEntries: ReadonlyMap<string, PulseEntry> = new Map();
 let currentView: SnapshotView | null = null;
 let lastPayload: SnapshotPayload | null = null;
@@ -156,8 +166,6 @@ const jumpToPage = (page: number): void => {
   // later ingests (which reduce from the persisted settings) keep the page.
   applyBoard(jumpBoard(currentView, loadStoredSettings(), page));
   diagnostic?.recordNavigation(from, currentPage);
-  // renderRailNow is declared below; referenced here at click time.
-  renderRailNow();
 };
 
 const renderRailNow = (): void => {
@@ -170,19 +178,39 @@ const renderRailNow = (): void => {
     unreadCount: countUnreadSessions(currentView.snapshot),
     quota: currentQuota,
     tokens: currentTokenUsage,
-    page: currentPage + 1,
-    pageCount: currentPageCount,
     now: new Date(),
   };
   // Skip the rebuild while nothing rendered would change: the 1s cadence
   // exists only for countdown minute rollovers, and rebuilding every second
-  // would replace the page-dot buttons out from under an in-flight tap.
+  // would replace the quota layout out from under an in-flight tap.
   const signature = railRenderSignature(model);
   if (signature === railRenderedSignature) {
     return;
   }
   railRenderedSignature = signature;
-  renderRail(root, model, { onJumpToPage: jumpToPage });
+  renderRail(root, model);
+};
+
+/** The three indicator surfaces re-render together, signature-skipped so a
+ *  heartbeat ingest never detaches a pip mid-press. */
+const renderIndicatorsNow = (): void => {
+  const returnRoot = document.querySelector<HTMLElement>("#return-band");
+  const peekRoot = document.querySelector<HTMLElement>("#peek-band");
+  const pipsRoot = document.querySelector<HTMLElement>("#pips");
+  if (returnRoot === null || peekRoot === null || pipsRoot === null) {
+    return;
+  }
+  const returnBand = returnSliverModel(currentPages, currentPage);
+  const peek = peekModel(currentPages, currentPage);
+  const pips = pipColumnModel(currentPages, currentPage);
+  const signature = indicatorsRenderSignature(returnBand, peek, pips);
+  if (signature === indicatorsRenderedSignature) {
+    return;
+  }
+  indicatorsRenderedSignature = signature;
+  renderReturnBand(returnRoot, returnBand);
+  renderPeekBand(peekRoot, peek);
+  renderPips(pipsRoot, pips, { onJumpToPage: jumpToPage });
 };
 
 /**
@@ -304,6 +332,7 @@ const applyBoard = (result: BoardResult): void => {
     }
     tickLiveness(); // fresh nodes paint immediately instead of waiting out the 1s tick
   }
+  renderIndicatorsNow();
 };
 
 const clearExpiryCheck = (): void => {
@@ -709,8 +738,8 @@ const settleLongPressStroke = (point: GesturePoint): void => {
   handleGestureIntents(gestures.feed({ kind: "up", point, now: Date.now() }));
 };
 
-/** The commit fraction's base. Task 7 retargets this to #board-viewport. */
-const boardRegionWidth = (): number => document.querySelector<HTMLElement>("#board")?.clientWidth ?? 0;
+/** The commit fraction's base. */
+const boardRegionWidth = (): number => document.querySelector<HTMLElement>("#board-viewport")?.clientWidth ?? 0;
 
 const handleGestureIntents = (intents: readonly GestureIntent[]): void => {
   for (const intent of intents) {
@@ -886,8 +915,8 @@ const onSurfaceLostPointerCapture = (event: PointerEvent): void => {
 
 /**
  * Consume suppression in the capture phase on the paging region — before
- * the click reaches any target: a moved stroke released on a page dot would
- * otherwise page-jump, because the dot's own listener fires in the target
+ * the click reaches any target: a moved stroke released on a pip would
+ * otherwise page-jump, because the pip's own listener fires in the target
  * phase, ahead of any bubble-phase consumer on an ancestor. A suppressed
  * click is prevented and stopped outright; clean clicks pass untouched.
  */
@@ -927,14 +956,13 @@ const onSurfaceContextMenu = (event: MouseEvent): void => {
 
 const wireInteraction = (): void => {
   document.querySelector<HTMLElement>("#board")?.addEventListener("click", onBoardClick);
-  // Before Task 7's shell exists, #board is both surfaces. It is already a
-  // sibling of #rail, so the rail never traverses either listener.
-  const region = document.querySelector<HTMLElement>("#board");
+  // The paging region hosts the two capture-phase stroke/suppression
+  // listeners; the pager is the recognizer surface, so the rail and the
+  // pips never traverse a recognizer listener.
+  const region = document.querySelector<HTMLElement>("#paging-region");
   region?.addEventListener("pointerdown", onGestureRegionStrokeBookkeeping, true);
   region?.addEventListener("click", onGestureRegionClickCapture, true);
-  // The paging surface owns every recognizer-feeding handler; Task 7 retargets
-  // this selector to #pager while keeping the rail outside the boundary.
-  const surface = region;
+  const surface = document.querySelector<HTMLElement>("#pager");
   surface?.addEventListener("pointerdown", onSurfacePointerDown);
   surface?.addEventListener("pointermove", onSurfacePointerMove);
   surface?.addEventListener("pointerup", onSurfacePointerUp);
@@ -942,6 +970,10 @@ const wireInteraction = (): void => {
   // Losing the capture (element teardown, capture theft) cancels the stroke.
   surface?.addEventListener("lostpointercapture", onSurfaceLostPointerCapture);
   surface?.addEventListener("contextmenu", onSurfaceContextMenu);
+  // Page-level band taps: jumpBoard clamps, and a drag released here is
+  // already swallowed by the capture-phase suppression.
+  document.querySelector<HTMLElement>("#peek-band")?.addEventListener("click", () => jumpToPage(currentPage + 1));
+  document.querySelector<HTMLElement>("#return-band")?.addEventListener("click", () => jumpToPage(currentPage - 1));
   window.addEventListener("blur", onWindowBlur);
   document.addEventListener("contextmenu", onContextMenu);
   document.addEventListener("keydown", (event) => {

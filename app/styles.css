@@ -14,24 +14,46 @@ body {
 }
 #strip {
   display: grid;
-  grid-template-columns: 1fr 29.6875%; /* 760px native rail */
+  grid-template-columns: 1fr 24.9219%; /* paging-region | 638px rail */
   height: 100vh;
+}
+#paging-region {
+  display: grid;
+  grid-template-columns: 1fr 0.859vw; /* pager | 22px pip band */
+  min-width: 0;
+}
+#pager {
+  display: grid;
+  grid-template-columns: 1fr 2.109vw; /* viewport | 54px peek band */
+  min-width: 0;
+  /* The gesture boundary: native touch handling dies here, not on the rail
+     (the rail is outside the gesture system entirely). */
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+#board-viewport {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+#board-track {
+  height: 100%;
 }
 
 /* Board: fixed geometry — two 886px columns of six 102px rows, 12px gaps,
-   44px top / 16px left padding (native px converted at 2560x720:
+   44px top / 40px left padding (native px converted at 2560x720:
    px / 25.6 = vw, px / 7.2 = vh). macOS draws its menu bar as a ~30px
    overlay on the strip display (no visibleFrame reservation), so the top
    padding keeps row one — including the chip's corner unread dot at
    top -6px — clear of it. Cards are a fixed standard size and never
    flex-resize; the renderer sets each card's grid position inline from its
    placement. */
-#board {
+.board-grid {
   display: grid;
   grid-template-columns: repeat(2, 34.609vw); /* 886px native */
   grid-template-rows: repeat(6, 14.167vh); /* 102px native */
   gap: 1.667vh 0.469vw; /* 12px native */
-  padding: 6.111vh 0 0 0.625vw; /* 44px top clears the menu bar overlay, 16px left */
+  padding: 6.111vh 0 0 1.5625vw; /* 44px top clears the menu bar overlay; constant 40px gutter hosts the return sliver */
   min-width: 0;
   touch-action: none;
   -webkit-touch-callout: none;
@@ -39,7 +61,7 @@ body {
 /* Native fullscreen (window.ts mirrors it as body[data-fullscreen]) draws no
    menu-bar overlay: the 44px dodge gives way to centering — six 102px rows
    and five 12px gaps total 672px, leaving 24px above and below. */
-body[data-fullscreen] #board {
+body[data-fullscreen] .board-grid {
   padding-top: 3.333vh; /* 24px native */
 }
 .offline {
@@ -47,12 +69,153 @@ body[data-fullscreen] #board {
   font-size: 1.4vw;
   letter-spacing: 0.2em;
 }
-#board > .offline {
+.board-grid > .offline {
   grid-column: 1 / -1;
   grid-row: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Indicator bands: row-aligned with the board's six rows. */
+#peek-band,
+#return-band {
+  appearance: none;
+  margin: 0;
+  border: none;
+  background: none;
+  display: grid;
+  grid-template-rows: repeat(6, 14.167vh); /* 102px rows */
+  gap: 1.667vh 0; /* 12px */
+  padding: 6.111vh 0 0;
+  cursor: pointer;
+}
+body[data-fullscreen] #peek-band,
+body[data-fullscreen] #return-band {
+  padding-top: 3.333vh;
+}
+#peek-band[data-present="false"],
+#return-band[data-present="false"],
+#pips[data-present="false"] {
+  visibility: hidden; /* the track stays reserved: constant geometry */
+}
+/* The return band owns the whole 40px gutter as its tap target (a 14px
+   sliver alone is below touch size); it sits above the track so the sliver
+   stays put while pages slide beneath it. */
+#return-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  width: 1.5625vw;
+  justify-items: start;
+}
+
+/* Slivers: a card's edge poking in from the adjacent page — dimmed surface,
+   the board's status hues on the leading edge, sub vs primary distinguished. */
+.sliver {
+  position: relative;
+  min-width: 0;
+  background: rgb(28 36 48 / 0.55);
+  border-left: 0.3125vw solid transparent; /* the 8px status-edge slot, card anatomy */
+}
+.sliver.sub {
+  background: rgb(17 21 29 / 0.7);
+}
+#return-band .sliver {
+  width: 0.547vw; /* 14px visual inside the 40px target */
+}
+#peek-band .sliver {
+  border-radius: 0.469vw 0 0 0.469vw; /* the card's left corners */
+}
+#return-band .sliver {
+  border-radius: 0 0.469vw 0.469vw 0;
+}
+.sliver[data-status="working"] {
+  border-left-color: rgb(32 184 255 / 0.8);
+}
+.sliver[data-status="idle"] {
+  border-left-color: rgb(74 222 128 / 0.8);
+}
+.sliver[data-status="waiting"] {
+  border-left-color: rgb(255 176 32 / 0.8);
+}
+.sliver[data-status="error"] {
+  border-left-color: rgb(255 77 103 / 0.8);
+}
+/* The page behind whispers: same hues, fainter. */
+#return-band .sliver[data-status="working"] {
+  border-left-color: rgb(32 184 255 / 0.45);
+}
+#return-band .sliver[data-status="idle"] {
+  border-left-color: rgb(74 222 128 / 0.45);
+}
+#return-band .sliver[data-status="waiting"] {
+  border-left-color: rgb(255 176 32 / 0.45);
+}
+#return-band .sliver[data-status="error"] {
+  border-left-color: rgb(255 77 103 / 0.45);
+}
+.sliver-dot {
+  position: absolute;
+  top: 0.833vh; /* 6px */
+  right: 0.234vw; /* 6px */
+  width: 0.469vw; /* 12px unread corner dot; on-glass tunable */
+  height: 0.469vw;
+  border-radius: 50%;
+  background: #ffb020;
+}
+
+/* The pip column: one pip per page, top = page 1, vertically centered.
+   Pips are the secondary navigation — the swipe is primary. */
+#pips {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2.5vh; /* 18px */
+  min-width: 0;
+}
+.pip {
+  appearance: none;
+  border: none;
+  background: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.109vw; /* 54px hit: the 22px band plus invisible 16px slop each side */
+  height: 7.778vh; /* 56px vertical hit */
+  margin: 0 -0.625vw; /* the slop overflows the band track symmetrically */
+  padding: 0;
+  cursor: pointer;
+}
+.pip-dot {
+  position: relative;
+  width: 0.469vw; /* 12px */
+  height: 0.469vw;
+  border-radius: 50%;
+  background: #2a3342;
+}
+.pip.current .pip-dot {
+  width: 0.703vw; /* 18px: the current page's pip is enlarged and lit */
+  height: 0.703vw;
+  background: #e8eef7;
+}
+.pip-mini {
+  position: absolute;
+  top: -0.417vh; /* riding the pip's corner */
+  right: -0.117vw;
+  width: 0.352vw; /* 9px mini-dot; on-glass tunable (grow to 12-14px if illegible) */
+  height: 0.352vw;
+  border-radius: 50%;
+}
+.pip-mini[data-kind="unread"] {
+  background: #ffb020;
+}
+.pip-mini[data-kind="working"] {
+  background: #20b8ff;
 }
 
 /*
@@ -580,7 +743,7 @@ body[data-fullscreen] #board {
   color: #94a3b8;
   font-size: 1.3vw;
 }
-/* Fullscreen: match the board's centered top edge (see the #board note). */
+/* Fullscreen: match the board's centered top edge (see the .board-grid note). */
 body[data-fullscreen] #rail {
   padding-top: 3.333vh;
 }
@@ -681,23 +844,6 @@ body[data-fullscreen] #rail {
   flex-direction: column;
   justify-content: space-evenly;
   min-height: 0;
-}
-
-.rail-pager {
-  display: flex;
-  gap: 0.6vw;
-}
-.page-dot {
-  appearance: none;
-  border: none;
-  background: none;
-  padding: 0.2vw;
-  color: #2a3342;
-  font-size: 0.6vw;
-  cursor: pointer;
-}
-.page-dot.current {
-  color: #94a3b8;
 }
 
 /* Quota panels (strip-only; there is no keypad equivalent). */

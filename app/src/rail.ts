@@ -2,7 +2,7 @@
  * The strip's fixed right rail: the token block (total over
  * rates-beside-sparkline), the unread row carrying the daemon-health dot (red
  * plus OFFLINE when degraded), the quota zone (per-provider quota panels:
- * binding window, tag pill, bar), and page dots. Rebuilt
+ * binding window, tag pill, bar). Rebuilt
  * wholesale on each render — the rail is small and has no CSS animations to
  * disturb.
  */
@@ -35,15 +35,7 @@ export type RailModel = {
   unreadCount: number;
   quota: readonly QuotaPanelModel[];
   tokens: TokenUsageRailModel;
-  /** 1-based current page. */
-  page: number;
-  pageCount: number;
   now: Date;
-};
-
-export type RailActions = {
-  /** Jump to a 0-based page; the layout reducer validates and clamps it. */
-  onJumpToPage: (page: number) => void;
 };
 
 const PROVIDER_LABELS: Record<QuotaProviderKey, string> = {
@@ -166,21 +158,6 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
     flow.append(sparklineBlock(model.sparkline));
   }
   section.append(today, flow);
-  return section;
-};
-
-const pagerSection = (model: RailModel, actions: RailActions): HTMLElement => {
-  const section = document.createElement("section");
-  section.className = "rail-pager";
-  for (let page = 1; page <= model.pageCount; page += 1) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = page === model.page ? "page-dot current" : "page-dot";
-    button.textContent = "●";
-    const target = page - 1;
-    button.addEventListener("click", () => actions.onJumpToPage(target));
-    section.append(button);
-  }
   return section;
 };
 
@@ -316,7 +293,7 @@ const quotaSection = (panel: QuotaPanelModel, nowMs: number): HTMLElement => {
  * that actually display it (the reset countdown's minute label). The driver
  * renders on a 1s cadence for those minute rollovers; between them the
  * signature is stable and the rebuild is skipped — a wholesale rebuild every
- * second would detach the page-dot buttons mid-press and churn layout.
+ * second would churn layout under an in-flight tap.
  */
 export const railRenderSignature = (model: RailModel): string => {
   const nowMs = model.now.getTime();
@@ -331,8 +308,6 @@ export const railRenderSignature = (model: RailModel): string => {
   return JSON.stringify({
     degraded: model.degraded,
     unreadCount: model.unreadCount,
-    page: model.page,
-    pageCount: model.pageCount,
     tokens: model.tokens,
     quota: model.quota.map((panel) => [
       panel.provider,
@@ -342,7 +317,7 @@ export const railRenderSignature = (model: RailModel): string => {
   });
 };
 
-export const renderRail = (root: HTMLElement, model: RailModel, actions: RailActions): void => {
+export const renderRail = (root: HTMLElement, model: RailModel): void => {
   const tokens = tokensSection(model.tokens);
   const nowMs = model.now.getTime();
   const zone = document.createElement("div");
@@ -353,6 +328,6 @@ export const renderRail = (root: HTMLElement, model: RailModel, actions: RailAct
   if (tokens !== null) {
     sections.push(tokens);
   }
-  sections.push(unreadSection(model), zone, pagerSection(model, actions));
+  sections.push(unreadSection(model), zone);
   root.replaceChildren(...sections);
 };

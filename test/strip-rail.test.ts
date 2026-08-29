@@ -50,8 +50,6 @@ const model = (overrides: Partial<RailModel> = {}): RailModel => ({
   unreadCount: 3,
   quota: [quotaPanel()],
   tokens: { state: "hidden" },
-  page: 1,
-  pageCount: 2,
   now: new Date(NOW),
   ...overrides,
 });
@@ -66,10 +64,9 @@ describe("railRenderSignature", () => {
     expect(railRenderSignature(model())).not.toBe(railRenderSignature(model({ now: new Date(NOW + 45_000) })));
   });
 
-  test("changes on unread count, page, and degraded flips", () => {
+  test("changes on unread count and degraded flips", () => {
     const base = railRenderSignature(model());
     expect(railRenderSignature(model({ unreadCount: 4 }))).not.toBe(base);
-    expect(railRenderSignature(model({ page: 2 }))).not.toBe(base);
     expect(railRenderSignature(model({ degraded: true }))).not.toBe(base);
   });
 
@@ -120,13 +117,13 @@ test("maps grouped Claude to one provider and two stable account meters", () => 
 
 test("the grouped section carries the ambient panel state", () => {
   withFakeDocument((root) => {
-    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
+    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }));
     const group = descendants(root).find((node) => hasClass(node, "quota-group"));
     expect(group?.dataset["state"]).toBe("ok");
   });
   withFakeDocument((root) => {
     const stale = quotaPanel({ state: "stale", accounts: groupedClaude().accounts });
-    renderRail(root as unknown as HTMLElement, model({ quota: [stale] }), { onJumpToPage: () => {} });
+    renderRail(root as unknown as HTMLElement, model({ quota: [stale] }));
     const group = descendants(root).find((node) => hasClass(node, "quota-group"));
     expect(group?.dataset["state"]).toBe("stale");
     // The render-skip signature must see the group-level dim, or it would not rebuild.
@@ -138,7 +135,7 @@ test("the grouped section carries the ambient panel state", () => {
 
 test("renders one Claude header, two bars, one active marker, and per-account dimming", () => {
   withFakeDocument((root) => {
-    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
+    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }));
     const nodes = descendants(root);
     const headers = nodes.filter((node) => hasClass(node, "quota-provider-head"));
     const accountNodes = nodes.filter((node) => hasClass(node, "quota-account"));
@@ -162,7 +159,7 @@ test("renders one Claude header, two bars, one active marker, and per-account di
 
 test("an unavailable account keeps its dimmed percent while the binding reset is pending", () => {
   withFakeDocument((root) => {
-    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
+    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }));
     const nodes = descendants(root);
     expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%", "20%"]);
     expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
@@ -186,7 +183,7 @@ test("an unavailable account drops the percent once the binding reset has passed
     ],
   });
   withFakeDocument((root) => {
-    renderRail(root as unknown as HTMLElement, model({ quota: [spent] }), { onJumpToPage: () => {} });
+    renderRail(root as unknown as HTMLElement, model({ quota: [spent] }));
     const nodes = descendants(root);
     expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%"]);
     expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
@@ -198,7 +195,7 @@ test("an unavailable account drops the percent once the binding reset has passed
 
 test("groups Claude account meters in one stack after the shared provider header", () => {
   withFakeDocument((root) => {
-    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }), { onJumpToPage: () => {} });
+    renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }));
     const group = descendants(root).find((node) => hasClass(node, "quota-group"));
     expect(group?.children.map((node) => node.className)).toEqual(["quota-provider-head", "quota-account-stack"]);
     expect(group?.children[1]?.children.map((node) => node.dataset["account"])).toEqual([
@@ -233,12 +230,11 @@ const visibleTokens = (): Extract<TokenUsageRailModel, { state: "ok" | "stale" }
 describe("token block layout", () => {
   test("stacks the two rates in a column beside the sparkline, no separator", () => {
     withFakeDocument((root) => {
-      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }), { onJumpToPage: () => {} });
+      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
       expect(root.children.map((node) => node.className)).toEqual([
         "rail-tokens",
         "rail-unread active",
         "rail-quota-zone",
-        "rail-pager",
       ]);
       const tokens = descendants(root).find((node) => node.className === "rail-tokens");
       expect(tokens?.children.map((node) => node.className)).toEqual(["tokens-today", "tokens-flow"]);
@@ -254,9 +250,7 @@ describe("token block layout", () => {
 
   test("without day curves the row renders the rates column alone", () => {
     withFakeDocument((root) => {
-      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), sparkline: null } }), {
-        onJumpToPage: () => {},
-      });
+      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), sparkline: null } }));
       const flow = descendants(root).find((node) => node.className === "tokens-flow");
       expect(flow?.children.map((node) => node.className)).toEqual(["tokens-rate"]);
     });
@@ -264,7 +258,7 @@ describe("token block layout", () => {
 
   test("the yda label and viewBox carry the fixed 500x84 geometry", () => {
     withFakeDocument((root) => {
-      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }), { onJumpToPage: () => {} });
+      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
       const svg = descendants(root).find((node) => node.tagName === "svg");
       expect(svg?.attributes["viewBox"]).toBe("0 0 500 84");
       const label = descendants(root).find((node) => node.tagName === "text");
@@ -275,17 +269,22 @@ describe("token block layout", () => {
   });
 });
 
-test("quota sections sit inside one flex zone between unread and pager", () => {
+test("the rail carries no pager: tokens, unread, quota only", () => {
   withFakeDocument((root) => {
-    renderRail(root as unknown as HTMLElement, model({ quota: [quotaPanel(), quotaPanel({ provider: "codex" })] }), {
-      onJumpToPage: () => {},
-    });
-    const zone = descendants(root).find((node) => node.className === "rail-quota-zone");
-    expect(zone?.children.map((node) => node.className)).toEqual(["rail-quota", "rail-quota"]);
+    renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
     expect(root.children.map((node) => node.className.split(" ")[0])).toEqual([
+      "rail-tokens",
       "rail-unread",
       "rail-quota-zone",
-      "rail-pager",
     ]);
+  });
+});
+
+test("quota sections sit inside one flex zone after unread", () => {
+  withFakeDocument((root) => {
+    renderRail(root as unknown as HTMLElement, model({ quota: [quotaPanel(), quotaPanel({ provider: "codex" })] }));
+    const zone = descendants(root).find((node) => node.className === "rail-quota-zone");
+    expect(zone?.children.map((node) => node.className)).toEqual(["rail-quota", "rail-quota"]);
+    expect(root.children.map((node) => node.className.split(" ")[0])).toEqual(["rail-unread", "rail-quota-zone"]);
   });
 });

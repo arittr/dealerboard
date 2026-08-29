@@ -8,7 +8,18 @@
   </head>
   <body>
     <main id="strip">
-      <div id="board"></div>
+      <div id="paging-region">
+        <div id="pager">
+          <div id="board-viewport">
+            <div id="board-track">
+              <div id="board" class="board-grid"></div>
+            </div>
+            <button id="return-band" type="button" aria-label="Previous page" data-present="false"></button>
+          </div>
+          <button id="peek-band" type="button" aria-label="Next page" data-present="false"></button>
+        </div>
+        <nav id="pips" data-present="false"></nav>
+      </div>
       <aside id="rail"></aside>
     </main>
     <script type="module" src="./main.js"></script>

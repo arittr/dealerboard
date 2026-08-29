@@ -80,9 +80,10 @@ consumers treat it as offline after ten seconds.
 ## Strip layout
 
 The strip targets a 2560×720 physical display and scales proportionally in a
-1280×360 HiDPI mode. It uses a fixed 760px rail and a two-column board of six
-886×102 cards per page. The app remains a floating window when no matching
-display exists.
+1280×360 HiDPI mode. It uses a fixed 638px rail, a 22px page-pip column, a
+54px next-page peek band, and a two-column board of six 886×102 cards per
+page behind a constant 40px gutter that hosts the return sliver. The app
+remains a floating window when no matching display exists.
 
 Primary groups sort by logical slot. Immediate children sort by open time,
 provider, and identity, then render depth-first. Groups that fit a single
@@ -127,7 +128,6 @@ The rail contains:
 - Daily token total, rolling rates, and an optional LA-calendar-day sparkline.
 - Exact unread count plus daemon-health indicator.
 - Optional Claude, Codex, Kimi, GLM/zai, and Qwen quota meters.
-- Page dots.
 
 Each quota row binds to the lowest remaining window; ties prefer session,
 weekly, then extras. Other windows appear only as neutral ticks. With two or
@@ -151,8 +151,10 @@ flicked away); a long press opens Open, Dismiss (same eligibility), Reveal
 transcript, Copy session ID, and double-confirmed Clear actions. Both
 dismiss paths carry the causality watermark of the stamp the gesture was
 issued from, so a result landing after the render survives the gesture.
-Horizontal flings and rail dots change pages. Native child cards are
-excluded from every interaction path.
+A horizontal drag on the board follows the finger and commits or
+visibly snaps back; the peek band, return gutter, and page pips jump pages.
+The rail takes no gestures. Native child cards are excluded from every
+interaction path.
 
 ## Optional collectors
 
