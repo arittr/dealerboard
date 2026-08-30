@@ -1,11 +1,9 @@
 /**
- * Pointer-gesture classification for the strip: a pure state machine fed
- * pointer events (plus a long-press deadline tick) by main.ts, emitting
- * intents. Tap routing stays with the existing click handler; the recognizer
- * decides when a stroke locks into a paging drag (streaming drag intents),
- * when it was something else (long-press or flick), and when the trailing
- * click must be swallowed. No DOM, no
- * timers — the caller maps Date.now() and setTimeout onto tick/dueAt.
+ * Gesture classification for the strip: pure state machines fed pointer
+ * events (plus a long-press deadline tick) and macOS-translated scroll bursts
+ * by main.ts. Tap routing stays with the existing click handler; recognizers
+ * decide when input becomes paging, a long-press, or a dismiss flick. No DOM;
+ * the caller owns clocks and timers.
  */
 
 export type GesturePoint = { readonly x: number; readonly y: number };
@@ -27,6 +25,22 @@ export type GestureIntent =
   | { readonly kind: "flick"; readonly direction: "up" | "down" }
   | { readonly kind: "suppress-click" };
 
+export type ScrollGestureInput = {
+  readonly deltaX: number;
+  readonly deltaY: number;
+  readonly now: number;
+};
+
+export type ScrollGestureIntent =
+  | { readonly kind: "page"; readonly direction: "previous" | "next" }
+  | { readonly kind: "flick"; readonly direction: "up" | "down" };
+
+export type ScrollGestureFeed = {
+  /** True only for the first sample after an idle gap, when the caller captures the card target. */
+  readonly started: boolean;
+  readonly intents: ScrollGestureIntent[];
+};
+
 export const LONG_PRESS_MS = 500;
 export const MOVE_SLOP_PX = 12;
 /** Axis-lock threshold. Freely tunable: the lock itself kills the stroke's
@@ -37,6 +51,10 @@ export const DRAG_LOCK_MIN_PX = 16;
 export const VELOCITY_WINDOW_MS = 100;
 export const FLICK_MIN_VERTICAL_PX = 56;
 export const FLICK_MAX_HORIZONTAL_PX = 48;
+/** A translated scroll burst must travel as far as a pointer flick before it acts. */
+export const SCROLL_GESTURE_THRESHOLD_PX = FLICK_MIN_VERTICAL_PX;
+/** Samples separated by more than this begin a new physical gesture. */
+export const SCROLL_GESTURE_IDLE_MS = 150;
 
 type Sample = { readonly x: number; readonly now: number };
 
@@ -172,7 +190,10 @@ export const createGestureRecognizer = (): GestureRecognizer => {
         }
         // Vertical is the dismiss axis: horizontal is taken by paging, so a
         // vertical-dominant release flicks the pressed card away instead.
-        if (Math.abs(dy) >= FLICK_MIN_VERTICAL_PX && Math.abs(dx) <= FLICK_MAX_HORIZONTAL_PX) {
+        if (
+          Math.abs(dy) >= FLICK_MIN_VERTICAL_PX &&
+          (finished.verticalLocked || Math.abs(dx) <= FLICK_MAX_HORIZONTAL_PX)
+        ) {
           return [{ kind: "flick", direction: dy < 0 ? "up" : "down" }, { kind: "suppress-click" }];
         }
         return moved ? [{ kind: "suppress-click" }] : [];
@@ -202,6 +223,51 @@ export const createGestureRecognizer = (): GestureRecognizer => {
   };
 
   return { feed, longPressDueAt };
+};
+
+export type ScrollGestureRecognizer = {
+  feed: (input: ScrollGestureInput) => ScrollGestureFeed;
+};
+
+/**
+ * macOS exposes an immediate Xeneon swipe as a wheel burst when Dealerboard
+ * is not the active window. Accumulate that burst into the same page/flick
+ * axes as a pointer stroke, fire once at meaningful travel, and remain
+ * latched through the burst's momentum tail.
+ */
+export const createScrollGestureRecognizer = (): ScrollGestureRecognizer => {
+  let lastAt: number | null = null;
+  let totalX = 0;
+  let totalY = 0;
+  let fired = false;
+
+  return {
+    feed: (input) => {
+      const started = lastAt === null || input.now - lastAt > SCROLL_GESTURE_IDLE_MS;
+      if (started) {
+        totalX = 0;
+        totalY = 0;
+        fired = false;
+      }
+      lastAt = input.now;
+      totalX += input.deltaX;
+      totalY += input.deltaY;
+      if (fired || Math.max(Math.abs(totalX), Math.abs(totalY)) < SCROLL_GESTURE_THRESHOLD_PX) {
+        return { started, intents: [] };
+      }
+      fired = true;
+      if (Math.abs(totalX) > Math.abs(totalY)) {
+        return {
+          started,
+          intents: [{ kind: "page", direction: totalX > 0 ? "next" : "previous" }],
+        };
+      }
+      return {
+        started,
+        intents: [{ kind: "flick", direction: totalY < 0 ? "up" : "down" }],
+      };
+    },
+  };
 };
 
 /**

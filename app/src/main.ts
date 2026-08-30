@@ -59,6 +59,7 @@ import { capturePendingPress, type PendingPress, resolvePendingPress } from "./g
 import {
   createClickSuppression,
   createGestureRecognizer,
+  createScrollGestureRecognizer,
   type GestureInput,
   type GestureIntent,
   type GesturePoint,
@@ -103,6 +104,7 @@ let currentCards: readonly PlacedCard[] = [];
 const ingestGate = createIngestGate();
 
 const gestures = createGestureRecognizer();
+const scrollGestures = createScrollGestureRecognizer();
 const pagingSession = createPagingSession();
 // Every snapshot ingest routes through this latch: mid-gesture payloads
 // stash (latest wins) and apply once at settle. ingestNow is defined below;
@@ -124,6 +126,8 @@ let pendingPress: PendingPress | null = null;
  * never settle under a later tap.
  */
 let pressAwaitingClick: PendingPress | null = null;
+/** Card captured at the first sample of a macOS-translated scroll gesture. */
+let pendingScrollPress: PendingPress | null = null;
 
 type SheetContext = {
   point: GesturePoint;
@@ -991,6 +995,26 @@ const onSurfacePointerCancel = (event: PointerEvent): void => {
   pressAwaitingClick = null;
 };
 
+const onSurfaceWheel = (event: WheelEvent): void => {
+  event.preventDefault();
+  const result = scrollGestures.feed({ deltaX: event.deltaX, deltaY: event.deltaY, now: event.timeStamp });
+  if (result.started) {
+    pendingScrollPress = cardFromPointerEvent(event);
+  }
+  for (const intent of result.intents) {
+    if (intent.kind === "page") {
+      pendingScrollPress = null;
+      jumpToPage(currentPage + (intent.direction === "next" ? 1 : -1));
+      continue;
+    }
+    const pending = pendingScrollPress;
+    pendingScrollPress = null;
+    if (pending !== null) {
+      flickAway(pending, intent.direction);
+    }
+  }
+};
+
 /**
  * Capture loss ends the stroke like a cancel, but is not one: it also
  * follows every ordinary pointerup (capture releases with the stroke). Same
@@ -1057,6 +1081,7 @@ const wireInteraction = (): void => {
   surface?.addEventListener("pointermove", onSurfacePointerMove);
   surface?.addEventListener("pointerup", onSurfacePointerUp);
   surface?.addEventListener("pointercancel", onSurfacePointerCancel);
+  surface?.addEventListener("wheel", onSurfaceWheel, { passive: false });
   // Losing the capture (element teardown, capture theft) cancels the stroke.
   surface?.addEventListener("lostpointercapture", onSurfaceLostPointerCapture);
   surface?.addEventListener("contextmenu", onSurfaceContextMenu);
