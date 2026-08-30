@@ -185,14 +185,14 @@ export const createGestureRecognizer = (): GestureRecognizer => {
       // The platform's own hold verdict: macOS synthesizes a touchscreen
       // touch-and-hold as a secondary click, whose contextmenu event is the
       // only page-visible signal — the finger never produces the sustained
-      // primary-button down the tick path needs. It outranks the slop check
-      // (the classifying driver, not this recognizer, judged the hold), and
-      // a mouse right-click rides the same route.
+      // primary-button down the tick path needs. A mouse right-click rides the
+      // same route, but neither signal may steal a stroke whose movement has
+      // already classified it as a gesture.
       case "context": {
         if (stroke === null) {
           return [{ kind: "longpress", point: input.point }];
         }
-        if (stroke.longPressed || stroke.dragging) {
+        if (stroke.longPressed || stroke.dragging || stroke.moved) {
           return [];
         }
         stroke.longPressed = true;

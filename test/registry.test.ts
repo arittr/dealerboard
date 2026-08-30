@@ -2040,6 +2040,20 @@ describe("pruneStaleSessions", () => {
     expect(allRows().map((row) => row.session_id)).toEqual(["stale-unviewed"]);
   });
 
+  test("removes a retained Roborev session even while its result is fresh and unviewed", () => {
+    applyRegistryEvents(db, [
+      start("review", { at: "2026-08-06T00:00:00.000Z" }),
+      simple("Stop", "review", { at: "2026-08-06T00:00:01.000Z" }),
+      simple("SessionEnd", "review", { at: "2026-08-06T00:00:02.000Z" }),
+    ]);
+    // Seed the retained shape directly so this test isolates prune behavior
+    // from the separate SessionEnd policy.
+    db.run("UPDATE active_sessions SET origin_kind = 'roborev', origin_ref = 'shim' WHERE session_id = 'review'");
+
+    expect(pruneStaleSessions(db, "2026-08-01T00:00:00.000Z")).toBe(1);
+    expect(getRow("review")).toBeNull();
+  });
+
   test("an unviewed zcode row survives its 1h TTL", () => {
     applyRegistryEvents(db, [
       start("z1", { provider: "zcode", at: "2026-08-26T00:00:00.000Z" }),
@@ -2827,6 +2841,16 @@ describe("acknowledgeSession as dismiss", () => {
 });
 
 describe("SessionEnd retention (ended cards)", () => {
+  test("SessionEnd removes a Roborev session even when it holds an unviewed result", () => {
+    applyRegistryEvents(db, [
+      start("review", { origin: { kind: "roborev", ref: "shim" } }),
+      simple("Stop", "review", { at: at(5) }),
+    ]);
+
+    expect(applyRegistryEvents(db, [simple("SessionEnd", "review", { at: at(9) })])).toEqual(["applied"]);
+    expect(getRow("review")).toBeNull();
+  });
+
   test("SessionEnd with an unviewed result retains the row as an ended card", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
     expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })])).toEqual(["applied"]);

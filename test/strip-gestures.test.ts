@@ -311,11 +311,15 @@ describe("context press", () => {
     expect(recognizer.feed(context(100, 100, LONG_PRESS_MS + 10))).toEqual([]);
   });
 
-  test("a context signal overrides the slop: a wiggled stroke still long-presses", () => {
+  test("a context signal cannot steal a moved vertical stroke", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
-    recognizer.feed(move(100, 100 + MOVE_SLOP_PX + 10, 50));
-    expect(recognizer.feed(context(100, 100, 60))).toEqual([{ kind: "longpress", point: { x: 100, y: 100 } }]);
+    recognizer.feed(move(100, 100 + FLICK_MIN_VERTICAL_PX, 50));
+    expect(recognizer.feed(context(100, 100 + FLICK_MIN_VERTICAL_PX, 60))).toEqual([]);
+    expect(recognizer.feed(up(100, 100 + FLICK_MIN_VERTICAL_PX, 80))).toEqual([
+      { kind: "flick", direction: "down" },
+      { kind: "suppress-click" },
+    ]);
   });
 
   test("a stroke that context-pressed never becomes a flick", () => {
