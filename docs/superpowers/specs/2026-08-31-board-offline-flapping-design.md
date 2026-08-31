@@ -48,11 +48,13 @@ memory note `board-offline-heartbeat-stalls`.
 
 ## Goal
 
-OFFLINE on the board means the daemon has actually stopped publishing.
-Concretely: (1) any daemon stall long enough to blank the board leaves a
-log line; (2) waking the Mac no longer flashes OFFLINE; (3) a hang of the
-one foreign file read on the daemon's event loop can no longer stop the
-heartbeat.
+OFFLINE-by-staleness on the board means the daemon has actually stopped
+publishing. Concretely: (1) any daemon stall or silent publish failure
+long enough to blank the board leaves a log line; (2) waking the Mac no
+longer flashes OFFLINE; (3) a hang of the one foreign file read on the
+daemon's event loop can no longer stop the heartbeat. Fresh payloads that
+fail to read or parse, or that report unhealthy, keep today's meanings —
+only the staleness path changes.
 
 ## Non-goals
 
@@ -63,14 +65,20 @@ heartbeat.
 - Any new OFFLINE visual treatment; how the board renders a degraded view
   is unchanged — only *when* it degrades changes (R2).
 - Fixing quota probe failures (`quota_failed`, `quota_accounts_failed`).
+- Making the heartbeat immune to every synchronous filesystem touch:
+  local snapshot writes and the audited-bounded zcode/paseo reads stay
+  synchronous; only the foreign group-container read moves off-loop.
 
 ## Requirements
 
 ### R1 — `tick_stall` diagnostic (daemon)
 
 - New constant `TICK_STALL_MS = 10_000` in `src/core/daemon.ts`, matching
-  the app's `STALE_SNAPSHOT_AGE_MS`: every stall long enough to blank the
-  board is long enough to log.
+  the app's `STALE_SNAPSHOT_AGE_MS`. A stall ≥10s blanks the board at
+  every heartbeat phase and always logs. Because file age is the stall
+  length plus up to one 5s heartbeat interval, a ~5–10s stall can blank
+  the board at an unlucky phase yet log nothing — an accepted gap (see
+  Alternatives).
 - In `ProjectionDaemon.poll()`, for an inter-tick gap `g`:
   - `g ≥ CLOCK_JUMP_MS` (30s): report `clock_jump` (unchanged);
   - `TICK_STALL_MS ≤ g < CLOCK_JUMP_MS`: report new code `tick_stall`.
@@ -90,9 +98,12 @@ heartbeat.
   positives from occlusion throttling are harmless — they merely grant
   grace.
 - Detection opens a grace window of `WAKE_GRACE_MS` (6s). While it lasts,
-  a reduction that would newly flip the view to degraded — with a
+  a degradation caused by a stale mtime or a failed read — with a
   `lastGood` payload available — does not apply: the last healthy view
-  stays rendered and the app re-reads the snapshot at 1s cadence.
+  stays rendered and the app re-reads the snapshot at 1s cadence. A
+  fresh, parseable payload always applies: healthy exits grace; an
+  explicitly unhealthy payload renders degraded exactly as today. Grace
+  masks sleep-stale evidence, never fresh evidence.
 - Grace exits early on the first healthy ingest (fresh file or healthy
   push → healthy view; the expiry check re-arms as today). If grace
   expires with the file still stale, the degraded view applies exactly as
@@ -101,7 +112,8 @@ heartbeat.
   nothing.
 - Acceptance (fake timers): simulated suspend + stale re-reads inside
   grace hold the healthy view; still stale past grace → degraded; fresh
-  read inside grace → healthy, timers re-armed. Physical acceptance:
+  read inside grace → healthy, timers re-armed; a fresh unhealthy
+  payload inside grace → degraded, not held. Physical acceptance:
   sleep the Mac (lid close or equivalent), wake after ≥30s — the board
   must not flash OFFLINE (today it always does).
 
@@ -129,13 +141,33 @@ heartbeat.
   timeout is discarded; a prompt read behaves exactly as today; a second
   pass while a read is stuck does not spawn a second read.
 
+### R4 — `snapshot_publish_overdue` diagnostic (daemon)
+
+- Heartbeat write failures are silent today: `maybeHeartbeat` swallows
+  the I/O error and retries next poll (`src/core/daemon.ts`), so a
+  daemon whose writes keep failing blanks the board with no evidence.
+  (Cold-read finding, verified.)
+- New transition-only code `snapshot_publish_overdue`: reported once
+  when, at the end of a tick's publish attempt, the last successful
+  publish is ≥ `TICK_STALL_MS` old; the latch clears on the next
+  successful publish.
+- Evaluated after the tick's publish attempt so a loop stall alone never
+  trips it: the first post-stall tick publishes (writes healthy) before
+  the check, keeping the record a write-failure signal, not a stall
+  echo.
+- `DiagnosticCode` gains `"snapshot_publish_overdue"`.
+- Acceptance (unit, injected `writeSnapshot`): writes failing across
+  ≥10s of ticks → exactly one record; recovery, then a second failure
+  window → a second record; a 12s loop stall with healthy writes →
+  `tick_stall` only, no `snapshot_publish_overdue`.
+
 ## Constraints
 
 - Single process, shared event loop by design — collectors stay
   in-process; the fix is isolation of blocking I/O, not process split.
 - `diagnostics.ts` contract: records carry only timestamp / component /
   fixed code (/ provider / bounded sessionId) — no payloads. Codes are a
-  closed union; both new codes join it.
+  closed union; all three new codes join it.
 - WKWebView timers are throttled or suspended when the window is hidden
   or the system sleeps: resume detection must tolerate arbitrary gap
   sizes and false positives.
@@ -152,6 +184,11 @@ heartbeat.
 
 - Lowering `CLOCK_JUMP_MS` to 10s: conflates sleep with stall in one
   code; rejected.
+- A 5s `tick_stall` threshold: would also catch the ~5–10s stalls that
+  blank the board only at an unlucky heartbeat phase (independently
+  re-derived by the cold read). Settled at 10s — log exactly the stalls
+  that blank at every phase; revisit if triage shows the 5–10s band
+  matters.
 - Carrying the gap duration in the `tick_stall` record: extends the
   deliberately minimal record shape for severity data with no current
   consumer; rejected — the two bands give the coarse read; revisit if
@@ -184,9 +221,12 @@ heartbeat.
   preferable to a guaranteed OFFLINE blank flash.
 - A daemon that genuinely died before sleep shows OFFLINE ~6s later after
   wake than today — acceptable.
-- The Stream Deck plugin needs no wake grace: the deck powers off during
-  system sleep and the plugin already has its own wake path (`wake_up`
-  diagnostic in `src/plugin/session-grid-action.ts`).
+- The Stream Deck plugin needs no wake grace: the deck hardware powers
+  off during system sleep, and its wake path re-pushes images with an
+  immediate re-read (`src/plugin/controller.ts`) — which can render the
+  sleep-stale file as degraded until the first post-wake heartbeat.
+  Accepted: the strip is the product surface; deck grace stays out of
+  scope.
 
 ## Edge cases considered
 
@@ -199,6 +239,8 @@ heartbeat.
 - Widget read resolves after timeout with valid JSON: discarded; the next
   pass reads fresh.
 - Suspend during grace / repeated resumes: re-detection re-enters grace.
+- Fresh unhealthy payload during grace: renders degraded — grace holds
+  only stale-mtime and failed-read evidence.
 - Daemon restarted (new binary) while the app slept: fresh mtime at wake
   → healthy ingest exits grace early; no flash.
 - App cold start right after wake: no `lastGood` → unchanged behavior.
@@ -215,6 +257,9 @@ heartbeat.
   contention: separate known issue.
 - Snapshot `health.status` vocabulary changes: nothing here publishes new
   health states.
+- Future-dated snapshot mtimes (wall clock set back): today's staleness
+  math never expires such a file; pre-existing behavior, separate
+  concern.
 
 ## Golden-question checklist
 
@@ -225,8 +270,9 @@ heartbeat.
   missing-file path; R2 grace degrades to today's OFFLINE; R1 is
   log-only and best-effort by the diagnostics contract.
 - [x] Rollback path: revert the commits; nothing persisted to unwind.
-- [x] Observability / logging: R1 and R3 add observability (`tick_stall`,
-  `widget_read_timeout`); growth bounded by existing rotation.
+- [x] Observability / logging: R1, R3, and R4 add observability
+  (`tick_stall`, `widget_read_timeout`, `snapshot_publish_overdue`);
+  growth bounded by existing rotation.
 - [x] Physical-display legibility (project-specific): wake acceptance on
   the strip — sleep, wake, no OFFLINE flash — plus one observed natural
   stall window landing a `tick_stall` line in `daemon.log`.
