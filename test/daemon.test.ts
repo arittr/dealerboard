@@ -936,6 +936,47 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
+  test("writes failing from the very first attempt record one snapshot_publish_overdue", () => {
+    const clock = fakeClock(Date.parse(NOW));
+    let failWrites = true;
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      writeSnapshot: (path, snapshot) => {
+        if (failWrites) {
+          throw new Error("disk full");
+        }
+        writeSnapshotAtomically(path, snapshot);
+      },
+    });
+    harness.daemon.start();
+    try {
+      // The daemon has never published: the startup write threw before any
+      // timestamp or code report existed, so the only reference point is the
+      // daemon's own start.
+      expect(harness.writes).toEqual([]);
+      expect(harness.diagnostics).toEqual([]);
+      for (let elapsed = 0; elapsed < 15_000; elapsed += DAEMON_HEARTBEAT_MS) {
+        clock.advance(DAEMON_HEARTBEAT_MS);
+        harness.tick();
+      }
+      // 10s and 15s of never-published silence are one failure window.
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "snapshot_publish_overdue" }]);
+      // The first successful publish re-arms the latch.
+      failWrites = false;
+      clock.advance(DAEMON_HEARTBEAT_MS);
+      harness.tick();
+      expect(readSnapshotFile().health.status).toBe("ok");
+      failWrites = true;
+      for (let elapsed = 0; elapsed < 15_000; elapsed += DAEMON_HEARTBEAT_MS) {
+        clock.advance(DAEMON_HEARTBEAT_MS);
+        harness.tick();
+      }
+      expect(harness.diagnostics).toHaveLength(2);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
   test("a loop stall with healthy writes records tick_stall only, never snapshot_publish_overdue", () => {
     const clock = fakeClock(Date.parse(NOW));
     const harness = makeHarness({ nowMs: clock.nowMs });

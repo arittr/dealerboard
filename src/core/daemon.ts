@@ -90,6 +90,8 @@ export type DaemonState = {
   lastPublishedJson: string | null;
   lastSnapshot: SessionSnapshotV2 | null;
   lastPublishAtMs: number | null;
+  /** Daemon start — the publish-age reference until the first successful publish. */
+  startedAtMs: number | null;
   lastTitlePassAtMs: number | null;
   lastPaseoPassAtMs: number | null;
   lastPrunePassAtMs: number | null;
@@ -155,6 +157,7 @@ export class ProjectionDaemon {
     lastPublishedJson: null,
     lastSnapshot: null,
     lastPublishAtMs: null,
+    startedAtMs: null,
     lastTitlePassAtMs: null,
     lastPaseoPassAtMs: null,
     lastPrunePassAtMs: null,
@@ -181,6 +184,9 @@ export class ProjectionDaemon {
 
   /** Publish once, then arm the poll timer. */
   start(): void {
+    // The publish-age reference before any publish exists: a daemon whose
+    // writes fail from the very first attempt still has to age from something.
+    this.state.startedAtMs = this.deps.nowMs();
     this.tick();
     this.cancelSchedule = this.deps.schedule(this.tick, DAEMON_POLL_INTERVAL_MS);
   }
@@ -343,12 +349,16 @@ export class ProjectionDaemon {
    * error). One record per failure window; a successful publish re-arms
    * the latch. A loop stall alone never trips this — the first post-stall
    * tick's heartbeat write lands before this check runs.
+   * A daemon that has never published ages from its start instead: the
+   * failing write can precede any successful publish, and publishUnhealthy's
+   * write throws before its own code report.
    */
   private checkPublishOverdue(nowMs: number): void {
-    if (this.state.lastPublishAtMs === null) {
+    const sinceMs = this.state.lastPublishAtMs ?? this.state.startedAtMs;
+    if (sinceMs === null) {
       return;
     }
-    if (nowMs - this.state.lastPublishAtMs < TICK_STALL_MS) {
+    if (nowMs - sinceMs < TICK_STALL_MS) {
       this.state.publishOverdueReported = false;
       return;
     }

@@ -355,9 +355,10 @@ const clearGraceReread = (): void => {
  * a fixed cadence: a periodic check can straddle the staleness boundary and
  * hold a healthy verdict for a full extra period (OFFLINE up to twice the
  * threshold after death), while a check fired at mtime + threshold flips it
- * within one threshold. Exactly one timer exists — each healthy ingest
- * reschedules it, so a live daemon's 5s heartbeat keeps pushing it out and
- * it only ever fires after the daemon stops publishing.
+ * within one threshold. Exactly one expiry timer exists — each healthy
+ * ingest reschedules it, so a live daemon's 5s heartbeat keeps pushing it
+ * out and it only ever fires after the daemon stops publishing; a
+ * wake-grace hold disarms it in favor of the 1s grace re-read.
  */
 const scheduleExpiryCheck = (payload: SnapshotPayload): void => {
   clearExpiryCheck();
