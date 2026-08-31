@@ -1,10 +1,11 @@
 ---
 topic: 2026-08-31-evener-delegate-tracking
 status: ratified           # draft | ready | ratified | paused | abandoned | completed
+activation_amendment: ready # ready | ratified
 created: 2026-08-31
 ---
 
-# Evener delegate tracking: separate workspace routing, run identity, and stable lineage
+# Evener delegate tracking and exact-session activation
 
 ## Goal
 
@@ -20,8 +21,10 @@ Dealerboard will consume the current supported AppWire v3 identity model:
 
 Dealerboard's visible contract remains intentionally simple: the board shows
 active child runs. It does not show dormant stable delegates or delegate history.
-The repair changes the Evener collector and authoritative cleanup path, not the
-published snapshot or board UI.
+The tracking repair changes the Evener collector and authoritative cleanup path,
+not the published snapshot or board layout. The activation repair adds a
+provider-specific route for already-interactive Evener root cards without making
+native child cards interactive.
 
 ## Confirmed root cause
 
@@ -66,6 +69,11 @@ Evener also now publishes a stable delegate projection in
   root card itself to remain.
 - Dormant but resumable delegates do not get cards. Delegate history is not
   added to the snapshot.
+- Pressing an active Evener root card opens the Evener web frontend at that
+  exact session, even when another Evener session is already open.
+- If exact activation cannot be constructed or launched, the app flashes and
+  Stream Deck shows its activation alert. Neither surface falls back to opening
+  Evener at its root or current session.
 
 ## Non-goals
 
@@ -73,10 +81,14 @@ Evener also now publishes a stable delegate projection in
 - No card for an idle/resumable delegate without an active child run.
 - No job cards; Evener jobs and delegates remain distinct resources.
 - No snapshot-v2, registry-table, Stream Deck, or Xeneon layout redesign.
+- No change to native-child interaction: native Evener child cards remain
+  display-only, and the deprecated Stream Deck layout remains top-level only.
 - No direct reads of Evener's private state files. AppWire remains the only
   production integration.
 - No protocol-version bump: the required fields and notifications are part of
   the current AppWire v3 contract.
+- No invented AppWire activation mutation. The current supported external
+  activation contract is the Evener browser route.
 
 ## Identity model
 
@@ -93,6 +105,79 @@ subscribedSessionIds:    set<sessionId>
 `EvenerThreadState` keeps `sessionId` and `ref` as independent required fields.
 It may also carry a resolved `delegateId` and `parentSessionId`, but those are
 recomputed from each complete refresh rather than inferred from ref equality.
+
+## Exact-session activation
+
+The tracked application currently has no Evener activation binding. An app
+press reaches `routeForSession` and returns `flash`; a Stream Deck press reaches
+the controller's unbound-provider branch and shows an alert. No Evener ref is
+sent to AppWire, with or without `threadId`.
+
+Evener exposes no AppWire focus, open, or navigate mutation. Its supported
+external target is the canonical browser route:
+
+```text
+/s/{encodeURIComponent("local:" + sessionId)}
+```
+
+A live `evener/navigation/read` with `{resource: "location", ref}` confirmed
+that the current hub resolves both root `local:<root sessionId>` and child
+`local:<child sessionId>` refs. The shared `thread/list` workspace ref is not an
+activation identity for a child. Current native child cards are display-only,
+so this repair activates only the root card's `sessionId`; if child interaction
+is added later, it must use the child's canonical transcript ref rather than the
+shared list ref.
+
+### One activation boundary
+
+Both app and Stream Deck invoke one installed CLI contract:
+
+```text
+dealerboard sessions activate evener <session-id>
+```
+
+The core Evener endpoint resolver is split so address normalization is shared,
+while authentication remains collector-only:
+
+- one resolver normalizes the configured hub address into the loopback AppWire
+  endpoint and browser origin;
+- the collector adds the bearer token to its in-memory AppWire connection; and
+- activation reads no token and never puts one in a URL, argument, diagnostic,
+  or child-process environment.
+
+The activation command maps `ws` to `http` and `wss` to `https`, replaces the
+AppWire `/rpc` path with `/s/<encoded canonical ref>`, clears query and fragment,
+then launches `/usr/bin/open -u <url>` with fixed argv and no shell. It must not
+append `/s/...` to `/rpc`: that is the RPC endpoint, not the frontend base.
+Configured loopback hosts and ports follow the same normalization as the
+collector, including `0.0.0.0` to `127.0.0.1`.
+
+The app route table gains an Evener-specific route carrying `sessionId` rather
+than a prebuilt hard-coded URL. `pressSessionTile` keeps its existing causal
+`view_session` fire-and-forget call, then invokes a Tauri
+`activate_evener_session` command. Tauri runs the installed CLI with the fixed
+activation argv. The Stream Deck controller gains an Evener activation port,
+wired by the plugin to the same installed CLI command; its existing ack remains
+fire-and-forget before activation.
+
+### Upstream deep-link prerequisite
+
+Live reproduction found a separate Evener frontend race: a full-page load of a
+valid `/s/<ref>` remains on `Welcome` / `No session open`, while selecting that
+same ref from the loaded rail opens the session and produces the same URL.
+AppWire location lookup itself succeeds. On a production boot the AppShell can
+render while navigation mode is still `unknown`; its location effect returns,
+but it does not subscribe to the later `v1` mode transition, so the lookup is
+never retried. Existing deep-link tests preload navigation mode or location and
+do not exercise that sequence.
+
+The paired Evener repair makes AppShell observe navigation mode and performs the
+pending location lookup when mode becomes `v1`. Its regression test must start
+with unknown mode, complete the real initialize-capability transition, resolve
+the location read asynchronously, and assert that the requested session pane is
+opened. Dealerboard's live exact-activation acceptance is blocked until a hub
+containing that fix is running; opening a generic hub page is not an acceptable
+workaround.
 
 ### Parent resolution
 
@@ -220,6 +305,17 @@ the stable delegate as a separate card.
   cleanup.
 - **Unknown delegate notification:** schedule refresh. Do not synthesize a
   session from an incomplete notification.
+- **Unusable configured Evener address or malformed session identity:** activation
+  exits non-zero without launching a URL. The app flashes once and Stream Deck
+  alerts once; neither opens a generic hub URL.
+- **Browser launch failure:** propagate the non-zero activation result to the
+  calling surface's existing failure feedback. The earlier view/ack gesture is
+  not rolled back.
+- **Session closes after the snapshot:** still launch the exact canonical route.
+  Evener owns its unavailable-session presentation; Dealerboard must not guess a
+  replacement or activate the current session.
+- **Hub without reliable initial deep links:** fail live acceptance rather than
+  claim exact activation. There is no AppWire mutation fallback.
 - **Diagnostic sink or registry-update failure:** preserve existing containment;
   neither may unwind daemon startup. A failed transaction commits neither
   events nor cleanup.
@@ -238,6 +334,12 @@ the stable delegate as a separate card.
   through unique `parentRef` values.
 - Ambiguous nested linkage on an older/mixed hub is withheld and retried rather
   than flattened or attached incorrectly.
+- Existing Claude, Codex, Kimi, Paseo, and unbound-provider routes are unchanged.
+- Existing custom loopback Evener addresses and ports apply equally to
+  collection and activation; activation does not require or expose the bearer
+  token.
+- Evener root cards become exactly activatable on app and Stream Deck. Native
+  child cards remain display-only and snapshot fields remain unchanged.
 - Registry rows, projected agents, snapshot JSON, app parsing, Xeneon grouping,
   and the deprecated top-level Stream Deck layout retain their current schema
   and behavior.
@@ -271,6 +373,20 @@ the stable delegate as a separate card.
   - Acceptance: an unread retained root has no remaining child rows after close.
 - [ ] **Compatibility:** legacy unique-ref fixtures remain green and no
       published schema changes.
+- [ ] **Exact root activation:** an Evener root press launches the configured
+      frontend at `/s/<encoded local:sessionId>` through the shared CLI boundary.
+  - Acceptance: app and Stream Deck presses for session A activate A while
+    Evener is showing B; neither uses the shared list ref or opens the hub root.
+- [ ] **Contained activation failure:** unusable configured address, invalid
+      identity, process failure, and browser-launch failure use existing surface
+      feedback.
+  - Acceptance: app flashes once or Stream Deck alerts once, and no fallback URL
+    is launched.
+- [ ] **Cold deep-link reliability:** a fresh Evener frontend resolves a valid
+      exact route after navigation capability initialization.
+  - Acceptance: an upstream test begins in unknown navigation mode, resolves the
+    location asynchronously, and opens the requested pane; a live cold-load
+    smoke does the same.
 
 ## Test plan
 
@@ -311,6 +427,31 @@ board grouping tests remain the downstream contract. Add a focused end-to-end
 fixture only if the collector/registry tests cannot prove that A-to-B generation
 replacement produces the expected snapshot graph.
 
+Add activation coverage in Dealerboard:
+
+- `test/strip-routing.test.ts`: Evener returns the Evener-specific route with the
+  exact session ID; all existing provider routes remain unchanged.
+- `test/press.test.ts`: an Evener root views then activates; activation failure
+  flashes exactly once; native Evener children remain display-only.
+- `test/controller.test.ts`: an Evener key press acks then invokes its Evener
+  activation port with the exact session ID; failure alerts exactly once; the
+  old unbound-provider table no longer includes Evener.
+- `test/evener.test.ts`: address normalization produces separate AppWire and web
+  endpoints; canonical refs are encoded; `/rpc/s/...`, tokens, queries, and
+  fragments never enter the activation URL.
+- `test/cli.test.ts`: exact activation grammar, fixed `/usr/bin/open -u` argv,
+  custom loopback address, invalid input, and non-zero launch propagation.
+- Tauri unit tests: `activate_evener_session` constructs only the fixed installed
+  binary argv and reports a non-zero child result.
+
+Add the paired upstream Evener test in `frontend/src/shell/AppShell.test.tsx`:
+
+- start a full `/s/<ref>` load with navigation mode unknown;
+- let initialization advertise navigation v1;
+- assert one location read for the exact ref; and
+- resolve it and assert the requested root or nested pane replaces the welcome
+  fallback.
+
 ### Verification gates
 
 1. Run focused Evener collector, registry, CLI, projection, protocol, and board
@@ -320,6 +461,9 @@ replacement produces the expected snapshot graph.
    compare AppWire `sessionId`/delegate parentage with Dealerboard's published
    `snapshot-v2.json` after two refresh intervals. No raw prompts, tokens, or
    credentials may be captured.
+4. With Evener showing session B, press session A in the app and on Stream Deck;
+   verify the browser route and visible pane are A. Repeat from a fresh browser
+   load. Record no token-bearing URL or capture.
 
 ## Alternatives considered
 
@@ -341,12 +485,28 @@ replacement produces the expected snapshot graph.
   unread retained root promptly.
 - **Read Evener private state files.** Rejected because AppWire now exposes the
   required supported identity and lifecycle contract.
+- **Open the Evener hub root.** Rejected because it reproduces the reported bug:
+  the user sees whichever session Evener already has open, not the pressed one.
+- **Hard-code `127.0.0.1:9180` in both UI clients.** Rejected because it ignores
+  supported hub configuration and duplicates routing logic.
+- **Append the route to the AppWire URL.** Rejected because `/rpc` is the
+  WebSocket endpoint; `/rpc/s/...` is not a frontend route.
+- **Send the bearer token in the activation URL.** Rejected because browser auth
+  state owns web access and URLs leak through history, process inspection, and
+  logs.
+- **Add an unsupported AppWire focus method.** Rejected because no such current
+  contract exists; the canonical browser route is the supported boundary.
+- **Ship Dealerboard URL launching without repairing the cold-load race.**
+  Rejected because opening a syntactically exact URL that leaves `Welcome`
+  visible does not satisfy exact activation.
 
 ## Existing-data impact and rollback
 
 There is no schema migration. On the first complete successful refresh after
 deployment, stale Evener child rows may be removed; this is the intended repair.
-Evener root rows and unrelated providers are unchanged.
+Evener root rows and unrelated providers are unchanged. Activation adds a CLI
+verb and app/plugin wiring but persists no new data. The paired Evener frontend
+repair changes no URL or AppWire contract.
 
 Rollback is a code revert. Because no new persisted columns or snapshot fields
 exist, rollback requires no data migration. Rows already removed as stale active
@@ -357,25 +517,30 @@ children are recreated by the old collector only if it can observe them.
 Use the existing fixed `evener_collector_failed` diagnostic for bounded failure
 containment. Tests may inspect retry scheduling and state, but production logs
 must not add raw AppWire frames. If implementation needs additional diagnosis,
-add fixed reason codes (for example candidate identity invalid or ambiguous
-notification) without session content or credentials.
+add fixed reason codes (for example candidate identity invalid, ambiguous
+notification, or activation launch failed) without session content or
+credentials. Activation failures reach the app/Stream Deck through their
+existing flash/alert behavior; never log a token or token-bearing URL.
 
 ## Golden-question checklist
 
 - [x] Data migration / existing-data impact: no schema migration; first valid
       refresh removes stale Evener child rows only.
-- [x] Auth / permissions: unchanged AppWire bearer capability, held in memory.
+- [x] Auth / permissions: AppWire bearer capability remains collector-only and
+      held in memory; browser activation uses existing browser auth state.
 - [x] Failure / retry behavior: last-known-good state; no cleanup from partial
       refreshes; ambiguous notifications refresh instead of guessing.
-- [x] Rollback path: code revert; no stored schema or snapshot version change.
+- [x] Rollback path: code revert in Dealerboard and the paired Evener frontend;
+      no stored schema, AppWire, URL, or snapshot version change.
 - [x] Observability / logging: fixed sanitized diagnostics; no thread content or
       bearer token.
-- [x] Visual regression surface: none by design; existing active-child cards and
-      recursive grouping remain the contract.
+- [x] Visual regression surface: no layout change; existing active-child cards
+      and recursive grouping remain the contract. Activation is behavioral.
 - [x] Concurrency: notification-invalidated refresh generations prevent stale
       async read results from overwriting newer lifecycle state.
 - [x] Security: only supported authenticated AppWire data is consumed; private
-      state files and raw payload logging remain prohibited.
+      state files and raw payload logging remain prohibited; activation reads no
+      bearer token and launches fixed argv without a shell.
 
 ## Fixed implementation boundaries
 
@@ -384,3 +549,7 @@ notification) without session content or credentials.
   the published protocol.
 - A targeted read race discards and restarts the complete candidate refresh.
   Per-session retry must not produce a mixed-generation candidate.
+- Exact activation is rooted in `sessionId` and the canonical browser route. It
+  never uses a shared list ref, generic hub fallback, or invented AppWire method.
+- Dealerboard and Evener cold-load fixes are both required before exact-session
+  activation can be marked complete.
