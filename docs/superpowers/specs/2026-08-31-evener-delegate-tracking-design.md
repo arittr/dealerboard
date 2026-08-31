@@ -1,7 +1,7 @@
 ---
 topic: 2026-08-31-evener-delegate-tracking
 status: ratified           # draft | ready | ratified | paused | abandoned | completed
-activation_amendment: ready # ready | ratified
+activation_amendment: ratified # ready | ratified
 created: 2026-08-31
 ---
 
