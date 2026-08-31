@@ -533,6 +533,12 @@ const applySessionEnd = (db: Database, event: Extract<RegistryEvent, { kind: "Se
   if (existing.ended_at !== null) {
     return "ignored";
   }
+  // Roborev owns and presents the review result. Dealerboard only shows the
+  // reviewer while it is running, so the process card has no result to retain.
+  if (existing.origin_kind === "roborev") {
+    db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
+    return "applied";
+  }
   // Nothing unviewed: delete as today.
   if (existing.unread_since === null) {
     db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
@@ -1337,10 +1343,11 @@ export const updateSessionActivityLines = (db: Database, updates: readonly Sessi
  * alive, and so does any row holding an unviewed result (`unread_since`
  * non-null) or a live view clock (`viewed_since` non-null on a row still
  * holding a finished result — `done_since` or an `error` status) — the
- * native tree joined with the resolved Paseo tree: prune is liveness
- * cleanup, never a purge of results the user has not seen, and never a
- * shortcut past the 24h post-view expiry that owns a viewed result's
- * removal. The clock's age is not compared here: the daemon runs
+ * native tree joined with the resolved Paseo tree. Ended Roborev process
+ * indicators are the exception because Roborev, not Dealerboard, owns their
+ * results. Otherwise prune is liveness cleanup, never a purge of results the
+ * user has not seen, and never a shortcut past the 24h post-view expiry that
+ * owns a viewed result's removal. The clock's age is not compared here: the daemon runs
  * `sweepExpiredResults` before prune on the same tick, so an overdue clock
  * is already dismissed by the time prune looks; a standalone operator
  * `sessions prune` may therefore leave an overdue clocked row in place
@@ -1361,7 +1368,7 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
     const rows = db
       .query(
         `SELECT provider, session_id, parent_session_id, updated_at, unread_since,
-                done_since, viewed_since, status,
+                done_since, viewed_since, ended_at, status,
                 origin_kind, origin_ref, origin_subagent, origin_parent_ref
            FROM active_sessions`,
       )
@@ -1373,6 +1380,7 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
       unread_since: string | null;
       done_since: string | null;
       viewed_since: string | null;
+      ended_at: string | null;
       status: SessionStatus;
       origin_kind: string | null;
       origin_ref: string | null;
@@ -1441,10 +1449,13 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
         }
       }
     }
-    // Only top-level rows are deleted; their native children cascade.
+    // Only top-level rows are deleted; their native children cascade. Ended
+    // Roborev rows are process indicators, not results, so maintenance removes
+    // them even if their ledgers seeded `keep`.
     let count = 0;
     for (const row of rows) {
-      if (row.parent_session_id === null && !keep.has(keyOf(row.provider, row.session_id))) {
+      const endedRoborev = row.origin_kind === "roborev" && row.ended_at !== null;
+      if (row.parent_session_id === null && (endedRoborev || !keep.has(keyOf(row.provider, row.session_id)))) {
         db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [row.provider, row.session_id]);
         count += 1;
       }

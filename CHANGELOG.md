@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Daemon stall forensics: a 10–30s poll gap logs `tick_stall`, and heartbeat
+  writes failing past the staleness threshold latch one
+  `snapshot_publish_overdue` — every board-blanking daemon condition now
+  leaves a line in `daemon.log`. An abandoned CodexBar widget read logs
+  `widget_read_timeout`.
+
 - roborev-spawned reviewer sessions identify themselves: a bundled
   `claude_code_cmd` shim plants the `ROBOREV_SPAWN` marker, the origin
   vocabulary gains a `roborev` kind (schema v16), and identified cards wear
@@ -41,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   acknowledged.
 
 ### Fixed
+
+- Waking the Mac no longer flashes the board OFFLINE: sleep-stale snapshot
+  evidence is held for a ~6s wake grace while the daemon's first post-wake
+  heartbeat lands; fresh evidence — including an explicit unhealthy
+  publication — still applies immediately.
+- The quota collector's read of CodexBar's group-container widget snapshot
+  moved off the daemon's event loop behind a 2s timeout, so a
+  containermanagerd hang can no longer stall the heartbeat that keeps the
+  board alive.
 
 - Strip gestures work while the app is backgrounded — its usual state. The
   window now accepts first mouse, so a stroke's moves and release reach the

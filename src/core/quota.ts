@@ -25,7 +25,7 @@
  * numbers in the published snapshot.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -320,6 +320,11 @@ export const CODEXBAR_BINARY_CANDIDATES = [
   "/Applications/CodexBar.app/Contents/Helpers/CodexBarCLI",
 ] as const;
 
+/** A widget read outlasting this is abandoned for the pass (foreign file; its open() has hung before). */
+export const WIDGET_READ_TIMEOUT_MS = 2_000;
+
+const WIDGET_READ_TIMED_OUT = Symbol("widget-read-timed-out");
+
 const DIAGNOSTIC_COMPONENT = "quota";
 
 export type QuotaExecResult = { exitCode: number; stdout: string };
@@ -338,11 +343,13 @@ export type QuotaCollectorDependencies = {
   /** Injected claude-swap subprocess for tests; production resolves its binary separately. */
   claudeSwapExec?: QuotaExec;
   fileExists?: (path: string) => boolean;
-  readFile?: (path: string) => string | null;
+  readFile?: (path: string) => Promise<string | null>;
   now?: () => string;
   writeFile?: (path: string, payload: string) => void;
   schedule?: QuotaScheduler;
   diagnostics?: (record: DiagnosticRecord) => void;
+  /** Test seam for the widget-read race; production uses WIDGET_READ_TIMEOUT_MS. */
+  widgetReadTimeoutMs?: number;
 };
 
 export type QuotaCollector = {
@@ -379,9 +386,9 @@ const emptyQuota = (): ProviderQuota => ({
   accounts: [],
 });
 
-const defaultReadFile = (path: string): string | null => {
+const defaultReadFile = async (path: string): Promise<string | null> => {
   try {
-    return readFileSync(path, "utf8");
+    return await Bun.file(path).text();
   } catch {
     return null;
   }
@@ -439,6 +446,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
   const writeFile = dependencies.writeFile ?? writeFileAtomically;
   const schedule = dependencies.schedule ?? defaultSchedule;
   const diagnostics = dependencies.diagnostics ?? (() => {});
+  const widgetReadTimeoutMs = dependencies.widgetReadTimeoutMs ?? WIDGET_READ_TIMEOUT_MS;
 
   const states = new Map<QuotaProviderKey, ProviderState>();
   type ClaudeAccountState = {
@@ -459,29 +467,75 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     }
   };
 
-  // Seed last-good state from the previous publication so a daemon restart
-  // never blanks the panels.
-  try {
-    const existing = readFile(dependencies.quotaSnapshotPath);
-    if (existing !== null) {
-      const seeded = parseQuotaSnapshot(JSON.parse(existing));
-      claudeAccounts = {
-        accounts: seeded.providers["claude"]?.accounts ?? [],
-        failed: false,
-      };
-      for (const key of QUOTA_PROVIDER_KEYS) {
-        const quota = seeded.providers[key];
-        if (quota !== undefined) {
-          // A seeded unavailable row is already in the failed state — its
-          // continuation must not re-log, only a good→failed transition may.
-          states.set(key, { quota: { ...quota, accounts: [] }, failed: quota.unavailable });
-        }
-      }
-      lastWrittenJson = `${JSON.stringify(seeded)}\n`;
+  const reportWidgetTimeout = (): void => {
+    try {
+      diagnostics({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "widget_read_timeout" });
+    } catch {
+      // Diagnostics must never break the collector.
     }
-  } catch {
-    // An unreadable or unparseable file is simply rewritten on the first pass.
-  }
+  };
+
+  let widgetReadPending = false;
+
+  /**
+   * The widget file is foreign (CodexBar's group container) and has hung
+   * open() on this machine before. The read races a timeout so the pass —
+   * and the daemon heartbeat sharing this event loop — can never block on
+   * it. At most one underlying read exists: while one is stuck, later
+   * passes proceed widget-less immediately, and the stuck read's eventual
+   * value is discarded with it.
+   */
+  const readWidgetSnapshot = async (path: string): Promise<string | null> => {
+    if (widgetReadPending) {
+      return null;
+    }
+    widgetReadPending = true;
+    const read = readFile(path)
+      .catch(() => null)
+      .finally(() => {
+        widgetReadPending = false;
+      });
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<typeof WIDGET_READ_TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(WIDGET_READ_TIMED_OUT), widgetReadTimeoutMs);
+    });
+    const winner = await Promise.race([read, timeout]);
+    if (winner === WIDGET_READ_TIMED_OUT) {
+      reportWidgetTimeout();
+      return null;
+    }
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+    return winner;
+  };
+
+  // Seed last-good state from the previous publication so a daemon restart
+  // never blanks the panels. The read is async; the first pass awaits it
+  // before computing any state.
+  const seeded = (async (): Promise<void> => {
+    try {
+      const existing = await readFile(dependencies.quotaSnapshotPath);
+      if (existing !== null) {
+        const parsed = parseQuotaSnapshot(JSON.parse(existing));
+        claudeAccounts = {
+          accounts: parsed.providers["claude"]?.accounts ?? [],
+          failed: false,
+        };
+        for (const key of QUOTA_PROVIDER_KEYS) {
+          const quota = parsed.providers[key];
+          if (quota !== undefined) {
+            // A seeded unavailable row is already in the failed state — its
+            // continuation must not re-log, only a good→failed transition may.
+            states.set(key, { quota: { ...quota, accounts: [] }, failed: quota.unavailable });
+          }
+        }
+        lastWrittenJson = `${JSON.stringify(parsed)}\n`;
+      }
+    } catch {
+      // An unreadable or unparseable file is simply rewritten on the first pass.
+    }
+  })();
 
   // Resolved per pass so installing or removing CodexBar never needs a daemon
   // restart. An injected exec skips resolution entirely (tests never spawn).
@@ -618,9 +672,10 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     }
     polling = true;
     try {
+      await seeded;
       const exec = resolveExec();
       const widget = parseCodexbarWidgetSnapshot(
-        readFile(dependencies.widgetSnapshotPath ?? codexbarWidgetSnapshotPath()) ?? "",
+        (await readWidgetSnapshot(dependencies.widgetSnapshotPath ?? codexbarWidgetSnapshotPath())) ?? "",
         Date.parse(now()),
       );
       // Claude quota has one source per situation: the cswap read runs before

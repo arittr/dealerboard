@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 import {
   createClickSuppression,
   createGestureRecognizer,
+  createScrollGestureRecognizer,
   DRAG_LOCK_MIN_PX,
+  FLICK_MAX_HORIZONTAL_PX,
   FLICK_MIN_VERTICAL_PX,
   type GestureInput,
   LONG_PRESS_MS,
   MOVE_SLOP_PX,
+  SCROLL_GESTURE_IDLE_MS,
+  SCROLL_GESTURE_THRESHOLD_PX,
   swallowSuppressedClick,
   VELOCITY_WINDOW_MS,
 } from "../app/src/gestures";
@@ -276,6 +280,16 @@ describe("flick classification", () => {
     expect(recognizer.feed(up(400 + 60, 300 + FLICK_MIN_VERTICAL_PX + 20, 180))).toEqual([{ kind: "suppress-click" }]);
   });
 
+  test("a vertically locked stroke stays a flick despite later sideways drift", () => {
+    const recognizer = createGestureRecognizer();
+    recognizer.feed(down(400, 300, 0));
+    recognizer.feed(move(400, 300 - DRAG_LOCK_MIN_PX - 4, 20));
+    expect(recognizer.feed(up(400 + FLICK_MAX_HORIZONTAL_PX + 2, 300 - FLICK_MIN_VERTICAL_PX - 40, 80))).toEqual([
+      { kind: "flick", direction: "up" },
+      { kind: "suppress-click" },
+    ]);
+  });
+
   test("a short vertical drag below the threshold is not a flick", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(400, 300, 0));
@@ -311,11 +325,15 @@ describe("context press", () => {
     expect(recognizer.feed(context(100, 100, LONG_PRESS_MS + 10))).toEqual([]);
   });
 
-  test("a context signal overrides the slop: a wiggled stroke still long-presses", () => {
+  test("a context signal cannot steal a moved vertical stroke", () => {
     const recognizer = createGestureRecognizer();
     recognizer.feed(down(100, 100, 0));
-    recognizer.feed(move(100, 100 + MOVE_SLOP_PX + 10, 50));
-    expect(recognizer.feed(context(100, 100, 60))).toEqual([{ kind: "longpress", point: { x: 100, y: 100 } }]);
+    recognizer.feed(move(100, 100 + FLICK_MIN_VERTICAL_PX, 50));
+    expect(recognizer.feed(context(100, 100 + FLICK_MIN_VERTICAL_PX, 60))).toEqual([]);
+    expect(recognizer.feed(up(100, 100 + FLICK_MIN_VERTICAL_PX, 80))).toEqual([
+      { kind: "flick", direction: "down" },
+      { kind: "suppress-click" },
+    ]);
   });
 
   test("a stroke that context-pressed never becomes a flick", () => {
@@ -331,6 +349,60 @@ describe("context press", () => {
     recognizer.feed(down(100, 100, 0));
     recognizer.feed(context(100, 100, 2));
     expect(recognizer.longPressDueAt()).toBeNull();
+  });
+});
+
+describe("translated scroll gestures", () => {
+  test("a vertical burst emits one flick only after crossing the travel threshold", () => {
+    const recognizer = createScrollGestureRecognizer();
+    expect(recognizer.feed({ deltaX: 0, deltaY: -(SCROLL_GESTURE_THRESHOLD_PX - 1), now: 0 })).toEqual({
+      started: true,
+      intents: [],
+    });
+    expect(recognizer.feed({ deltaX: 0, deltaY: -1, now: 10 })).toEqual({
+      started: false,
+      intents: [{ kind: "flick", direction: "up" }],
+    });
+    expect(recognizer.feed({ deltaX: 0, deltaY: -100, now: 20 })).toEqual({ started: false, intents: [] });
+  });
+
+  test("horizontal bursts page in the natural-scroll direction", () => {
+    const recognizer = createScrollGestureRecognizer();
+    expect(recognizer.feed({ deltaX: SCROLL_GESTURE_THRESHOLD_PX, deltaY: 0, now: 0 })).toEqual({
+      started: true,
+      intents: [{ kind: "page", direction: "next" }],
+    });
+    expect(
+      recognizer.feed({
+        deltaX: -SCROLL_GESTURE_THRESHOLD_PX,
+        deltaY: 0,
+        now: SCROLL_GESTURE_IDLE_MS + 1,
+      }),
+    ).toEqual({ started: true, intents: [{ kind: "page", direction: "previous" }] });
+  });
+
+  test("a diagonal tie belongs to the card-dismiss axis", () => {
+    const recognizer = createScrollGestureRecognizer();
+    expect(
+      recognizer.feed({
+        deltaX: SCROLL_GESTURE_THRESHOLD_PX,
+        deltaY: SCROLL_GESTURE_THRESHOLD_PX,
+        now: 0,
+      }),
+    ).toEqual({ started: true, intents: [{ kind: "flick", direction: "down" }] });
+  });
+
+  test("a sub-threshold burst resets after the idle boundary", () => {
+    const recognizer = createScrollGestureRecognizer();
+    expect(recognizer.feed({ deltaX: 20, deltaY: 0, now: 0 })).toEqual({ started: true, intents: [] });
+    expect(recognizer.feed({ deltaX: 20, deltaY: 0, now: SCROLL_GESTURE_IDLE_MS })).toEqual({
+      started: false,
+      intents: [],
+    });
+    expect(recognizer.feed({ deltaX: 20, deltaY: 0, now: SCROLL_GESTURE_IDLE_MS * 2 + 1 })).toEqual({
+      started: true,
+      intents: [],
+    });
   });
 });
 

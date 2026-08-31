@@ -76,6 +76,12 @@ export const CLOCK_JUMP_MS = 30_000;
  * wakes a turn whose hooks re-raise working.
  */
 export const PASEO_BACKGROUND_SETTLE_GRACE_MS = 10 * 60 * 1000;
+/**
+ * A poll gap in [TICK_STALL_MS, CLOCK_JUMP_MS) is an awake event-loop stall
+ * long enough to blank the board (the app treats a 10s-old file as a dead
+ * daemon); at CLOCK_JUMP_MS and beyond the gap reads as sleep instead.
+ */
+export const TICK_STALL_MS = 10_000;
 
 const DIAGNOSTIC_COMPONENT = "daemon";
 
@@ -84,11 +90,14 @@ export type DaemonState = {
   lastPublishedJson: string | null;
   lastSnapshot: SessionSnapshotV2 | null;
   lastPublishAtMs: number | null;
+  /** Daemon start — the publish-age reference until the first successful publish. */
+  startedAtMs: number | null;
   lastTitlePassAtMs: number | null;
   lastPaseoPassAtMs: number | null;
   lastPrunePassAtMs: number | null;
   lastTickAtMs: number | null;
   healthy: boolean;
+  publishOverdueReported: boolean;
 };
 
 /** Arms the poll loop; the returned callback disarms it. */
@@ -148,11 +157,13 @@ export class ProjectionDaemon {
     lastPublishedJson: null,
     lastSnapshot: null,
     lastPublishAtMs: null,
+    startedAtMs: null,
     lastTitlePassAtMs: null,
     lastPaseoPassAtMs: null,
     lastPrunePassAtMs: null,
     lastTickAtMs: null,
     healthy: false,
+    publishOverdueReported: false,
   };
 
   constructor(paths: Pick<AppPaths, "database" | "snapshot">, dependencies: DaemonDependencies = {}) {
@@ -173,6 +184,9 @@ export class ProjectionDaemon {
 
   /** Publish once, then arm the poll timer. */
   start(): void {
+    // The publish-age reference before any publish exists: a daemon whose
+    // writes fail from the very first attempt still has to age from something.
+    this.state.startedAtMs = this.deps.nowMs();
     this.tick();
     this.cancelSchedule = this.deps.schedule(this.tick, DAEMON_POLL_INTERVAL_MS);
   }
@@ -196,14 +210,20 @@ export class ProjectionDaemon {
 
   private poll(): void {
     const nowMs = this.deps.nowMs();
-    if (this.state.lastTickAtMs !== null && nowMs - this.state.lastTickAtMs > CLOCK_JUMP_MS) {
-      this.report("clock_jump");
+    if (this.state.lastTickAtMs !== null) {
+      const gap = nowMs - this.state.lastTickAtMs;
+      if (gap >= CLOCK_JUMP_MS) {
+        this.report("clock_jump");
+      } else if (gap >= TICK_STALL_MS) {
+        this.report("tick_stall");
+      }
     }
     this.state.lastTickAtMs = nowMs;
     try {
       this.pollOnce(nowMs);
     } finally {
       this.maybeHeartbeat(nowMs);
+      this.checkPublishOverdue(nowMs);
     }
   }
 
@@ -322,7 +342,31 @@ export class ProjectionDaemon {
       // A heartbeat I/O failure retries on the next poll.
     }
   }
-
+  /**
+   * A publish-failure watchdog, evaluated after the tick's publish attempt:
+   * writes that keep failing let the file age past the board's staleness
+   * threshold with no other evidence (maybeHeartbeat swallows the I/O
+   * error). One record per failure window; a successful publish re-arms
+   * the latch. A loop stall alone never trips this — the first post-stall
+   * tick's heartbeat write lands before this check runs.
+   * A daemon that has never published ages from its start instead: the
+   * failing write can precede any successful publish, and publishUnhealthy's
+   * write throws before its own code report.
+   */
+  private checkPublishOverdue(nowMs: number): void {
+    const sinceMs = this.state.lastPublishAtMs ?? this.state.startedAtMs;
+    if (sinceMs === null) {
+      return;
+    }
+    if (nowMs - sinceMs < TICK_STALL_MS) {
+      this.state.publishOverdueReported = false;
+      return;
+    }
+    if (!this.state.publishOverdueReported) {
+      this.state.publishOverdueReported = true;
+      this.report("snapshot_publish_overdue");
+    }
+  }
   private publishHealthy(snapshot: SessionSnapshotV2, dataVersion: number, nowMs: number): void {
     const json = JSON.stringify(snapshot);
     if (json !== this.state.lastPublishedJson) {

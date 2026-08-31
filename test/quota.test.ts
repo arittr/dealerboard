@@ -139,7 +139,7 @@ describe("createQuotaCollector", () => {
       // without ever spawning.
       ...(binaryPresent ? { exec: execSpy } : {}),
       ...(claudeSwapBinaryPresent ? { claudeSwapExec } : {}),
-      readFile: (path) => options.files?.[path] ?? null,
+      readFile: (path) => Promise.resolve(options.files?.[path] ?? null),
       now: () => {
         if (abortAtNextStamp) {
           abortAtNextStamp = false;
@@ -632,7 +632,97 @@ describe("createQuotaCollector", () => {
     // The qwen fixture carries session 75 / weekly 50; the widget says weekly 45.
     expect(snapshot.providers["qwen"]).toMatchObject({ percentRemaining: 75, weeklyPercentRemaining: 50 });
   });
+  test("a hung widget read times out: the pass completes, probes run, one diagnostic", async () => {
+    const harness = makeHarness(
+      {},
+      {
+        widgetReadTimeoutMs: 10,
+        readFile: (path: string) =>
+          path.endsWith("widget-snapshot.json") ? new Promise<string | null>(() => {}) : Promise.resolve(null),
+      },
+    );
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    expect(harness.calls.length).toBeGreaterThan(0); // CLI probes still ran
+    expect(harness.diagnostics).toContainEqual({
+      timestamp: NOW,
+      component: "quota",
+      code: "widget_read_timeout",
+    });
+    // The reentrancy guard was released: a second pass runs and probes again.
+    const probesAfterFirst = harness.calls.length;
+    await collector.pollNow();
+    expect(harness.calls.length).toBeGreaterThan(probesAfterFirst);
+  });
 
+  test("a stuck read is never doubled, and its late value is discarded — a fresh read rescues", async () => {
+    let resolveWidget: ((value: string | null) => void) | null = null;
+    let widgetReads = 0;
+    let settleImmediately = false;
+    const harness = makeHarness(
+      {},
+      {
+        widgetReadTimeoutMs: 10,
+        readFile: (path: string) => {
+          if (!path.endsWith("widget-snapshot.json")) {
+            return Promise.resolve(null);
+          }
+          widgetReads += 1;
+          if (settleImmediately) {
+            return Promise.resolve(widgetSnapshot("2026-08-19T17:50:00.000Z"));
+          }
+          return new Promise<string | null>((resolve) => {
+            resolveWidget = resolve;
+          });
+        },
+      },
+    );
+    harness.fail("qwen"); // only the widget could rescue qwen
+    const collector = createQuotaCollector(harness.deps);
+
+    await collector.pollNow(); // times out; qwen stays failed
+    expect(widgetReads).toBe(1);
+    let snapshot = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
+    expect(snapshot.providers["qwen"]).toMatchObject({ unavailable: true });
+
+    await collector.pollNow(); // still stuck: no second read, no second diagnostic
+    expect(widgetReads).toBe(1);
+    expect(harness.diagnostics.filter((record) => record.code === "widget_read_timeout")).toHaveLength(1);
+
+    // The abandoned read finally lands — its value must go nowhere.
+    (resolveWidget as unknown as (value: string | null) => void)?.(widgetSnapshot("2026-08-19T17:50:00.000Z"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    settleImmediately = true;
+    await collector.pollNow(); // a NEW read starts and rescues qwen
+    expect(widgetReads).toBe(2);
+    snapshot = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
+    expect(snapshot.providers["qwen"]).toMatchObject({
+      weeklyPercentRemaining: 45,
+      unavailable: false,
+    });
+  });
+
+  test("a stuck widget read yields the event loop while the race runs", async () => {
+    const harness = makeHarness(
+      {},
+      {
+        widgetReadTimeoutMs: 20,
+        readFile: (path: string) =>
+          path.endsWith("widget-snapshot.json") ? new Promise<string | null>(() => {}) : Promise.resolve(null),
+      },
+    );
+    const collector = createQuotaCollector(harness.deps);
+    const pass = collector.pollNow();
+    let ticked = false;
+    await new Promise<void>((resolve) =>
+      setTimeout(() => {
+        ticked = true;
+        resolve();
+      }, 0),
+    );
+    expect(ticked).toBe(true); // the loop was free mid-pass
+    await pass;
+  });
   test("a weekly-only reading publishes null session fields and appends no history", async () => {
     const harness = makeHarness();
     harness.respondRaw("codex", {
