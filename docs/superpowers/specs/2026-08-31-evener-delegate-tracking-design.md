@@ -1,6 +1,6 @@
 ---
 topic: 2026-08-31-evener-delegate-tracking
-status: ready              # draft | ready | ratified | paused | abandoned | completed
+status: ratified           # draft | ready | ratified | paused | abandoned | completed
 created: 2026-08-31
 ---
 
@@ -168,9 +168,13 @@ replacement use the same transactional reconciliation path as reconnect.
 
 ## Authoritative registry reconciliation
 
-The collector update gains an optional authoritative Evener reconciliation
-payload containing the complete set of child session IDs that should currently
-exist. The CLI applies one update through a registry function that:
+The internal `EvenerCollectorUpdate` gains
+`activeChildSessionIds: readonly string[] | null`. A non-null value is the
+complete authoritative set from a valid refresh; `null` marks a live incremental
+update that must not perform omission-based cleanup. This field remains inside
+the daemon/registry integration and is not added to the shared snapshot
+protocol. The CLI applies one update through `applyEvenerCollectorUpdate`, a
+registry function that:
 
 1. applies the accompanying registry events;
 2. deletes Evener child rows absent from the authoritative active-child set;
@@ -373,10 +377,10 @@ notification) without session content or credentials.
 - [x] Security: only supported authenticated AppWire data is consumed; private
       state files and raw payload logging remain prohibited.
 
-## Open implementation details
+## Fixed implementation boundaries
 
-- Whether the authoritative active-child set is carried as a dedicated internal
-  collector update type or a provider-scoped registry event. It must remain an
-  internal daemon/registry contract and must be applied atomically with events.
-- Whether a targeted read race retries the one session or restarts the complete
-  candidate. The observable rule is fixed: no partial swap or cleanup.
+- Authoritative child reconciliation is carried only by the internal
+  `EvenerCollectorUpdate`; it is not a generic `RegistryEvent` and does not enter
+  the published protocol.
+- A targeted read race discards and restarts the complete candidate refresh.
+  Per-session retry must not produce a mixed-generation candidate.
