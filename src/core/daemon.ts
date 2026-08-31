@@ -76,6 +76,12 @@ export const CLOCK_JUMP_MS = 30_000;
  * wakes a turn whose hooks re-raise working.
  */
 export const PASEO_BACKGROUND_SETTLE_GRACE_MS = 10 * 60 * 1000;
+/**
+ * A poll gap in [TICK_STALL_MS, CLOCK_JUMP_MS) is an awake event-loop stall
+ * long enough to blank the board (the app treats a 10s-old file as a dead
+ * daemon); at CLOCK_JUMP_MS and beyond the gap reads as sleep instead.
+ */
+export const TICK_STALL_MS = 10_000;
 
 const DIAGNOSTIC_COMPONENT = "daemon";
 
@@ -196,8 +202,13 @@ export class ProjectionDaemon {
 
   private poll(): void {
     const nowMs = this.deps.nowMs();
-    if (this.state.lastTickAtMs !== null && nowMs - this.state.lastTickAtMs > CLOCK_JUMP_MS) {
-      this.report("clock_jump");
+    if (this.state.lastTickAtMs !== null) {
+      const gap = nowMs - this.state.lastTickAtMs;
+      if (gap >= CLOCK_JUMP_MS) {
+        this.report("clock_jump");
+      } else if (gap >= TICK_STALL_MS) {
+        this.report("tick_stall");
+      }
     }
     this.state.lastTickAtMs = nowMs;
     try {

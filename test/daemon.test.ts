@@ -8,6 +8,7 @@ import {
   DAEMON_POLL_INTERVAL_MS,
   type DaemonDependencies,
   ProjectionDaemon,
+  TICK_STALL_MS,
   VIEWED_EXPIRY_TTL_MS,
 } from "../src/core/daemon";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
@@ -850,6 +851,50 @@ describe("ProjectionDaemon maintenance", () => {
       expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "clock_jump" }]);
       // The wake itself is not an error: publication stays healthy.
       expect(harness.writes.at(-1)?.health.status).toBe("ok");
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("records tick_stall for a poll gap in the stall band, once per stall", () => {
+    const clock = fakeClock(Date.parse(NOW));
+    const harness = makeHarness({ nowMs: clock.nowMs });
+    harness.daemon.start();
+    try {
+      harness.tick();
+      expect(harness.diagnostics).toEqual([]);
+      clock.advance(12_000);
+      harness.tick();
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "tick_stall" }]);
+      // Only the first post-stall tick observes the gap: one stall, one record.
+      clock.advance(DAEMON_POLL_INTERVAL_MS);
+      harness.tick();
+      expect(harness.diagnostics).toHaveLength(1);
+      // A stall is evidence, not an error state: publication stays healthy.
+      expect(harness.writes.at(-1)?.health.status).toBe("ok");
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("the stall and clock-jump bands are exclusive, with a quiet floor", () => {
+    const clock = fakeClock(Date.parse(NOW));
+    const harness = makeHarness({ nowMs: clock.nowMs });
+    harness.daemon.start();
+    try {
+      harness.tick();
+      clock.advance(35_000);
+      harness.tick();
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "clock_jump" }]);
+      clock.advance(5_000);
+      harness.tick();
+      expect(harness.diagnostics).toHaveLength(1); // sub-band gaps log nothing
+      clock.advance(TICK_STALL_MS); // exactly 10s: the band is inclusive
+      harness.tick();
+      expect(harness.diagnostics).toEqual([
+        { timestamp: NOW, component: "daemon", code: "clock_jump" },
+        { timestamp: NOW, component: "daemon", code: "tick_stall" },
+      ]);
     } finally {
       harness.daemon.stop();
     }
