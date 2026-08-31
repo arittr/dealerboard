@@ -82,6 +82,7 @@ import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { railRenderSignature, renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
+import { createWakeGrace } from "./wake";
 import { startStripWindowManager } from "./window";
 
 const SLOW_PASS_MS = 10_000;
@@ -102,6 +103,8 @@ let currentPageCount = 1;
 let currentPages: readonly BoardPage[] = [];
 let currentCards: readonly PlacedCard[] = [];
 const ingestGate = createIngestGate();
+const wakeGrace = createWakeGrace();
+let graceRereadTimer: ReturnType<typeof setTimeout> | null = null;
 
 const gestures = createGestureRecognizer();
 const scrollGestures = createScrollGestureRecognizer();
@@ -340,6 +343,13 @@ const clearExpiryCheck = (): void => {
   }
 };
 
+const clearGraceReread = (): void => {
+  if (graceRereadTimer !== null) {
+    clearTimeout(graceRereadTimer);
+    graceRereadTimer = null;
+  }
+};
+
 /**
  * The OFFLINE flip, scheduled at the payload's actual expiry rather than on
  * a fixed cadence: a periodic check can straddle the staleness boundary and
@@ -373,14 +383,31 @@ const ingest = (payload: SnapshotPayload | null): void => {
 
 const ingestNow = (payload: SnapshotPayload | null): void => {
   lastPayload = payload;
-  const reduction = reduceSnapshotRead(payload, lastGood, Date.now());
+  const nowMs = Date.now();
+  const reduction = reduceSnapshotRead(payload, lastGood, nowMs);
+  // Wake grace: while the post-resume window is open, sleep-stale evidence
+  // (an old mtime or a failed read) does not newly degrade a board that
+  // has a lastGood view — the daemon's first post-wake heartbeat gets its
+  // chance to land. Fresh evidence (unparseable or explicitly unhealthy
+  // payloads) always applies. The held view re-reads at 1s until a fresh
+  // payload lands or the window closes and the degraded verdict applies.
+  if (reduction.view.degraded && lastGood !== null && wakeGrace.shouldHold(payload, nowMs)) {
+    clearExpiryCheck();
+    clearGraceReread();
+    graceRereadTimer = setTimeout(() => {
+      graceRereadTimer = null;
+      void readAndIngest();
+    }, 1_000);
+    return;
+  }
+  clearGraceReread();
   lastGood = reduction.lastGood;
   // The rendered view hides freshly-flicked slats while their ack's
   // settlement makes the registry → snapshot round-trip; lastGood stays
   // unfiltered so an expired dismissal honestly resurfaces.
   currentView = {
     ...reduction.view,
-    snapshot: dismissals.filterSnapshot(reduction.view.snapshot, Date.now()),
+    snapshot: dismissals.filterSnapshot(reduction.view.snapshot, nowMs),
   };
   applyBoard(reduceBoard(currentView, loadStoredSettings()));
   // A healthy view arms the one-shot expiry check; a degraded one disarms it
@@ -458,6 +485,7 @@ const start = async (): Promise<void> => {
     void slowPass();
   }, SLOW_PASS_MS);
   setInterval(() => {
+    wakeGrace.noteTick(Date.now());
     renderRailNow();
     tickStatusLines();
     tickLiveness();
