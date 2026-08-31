@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DAEMON_HEARTBEAT_MS,
   DAEMON_PASEO_INTERVAL_MS,
   DAEMON_POLL_INTERVAL_MS,
   type DaemonDependencies,
@@ -895,6 +896,57 @@ describe("ProjectionDaemon maintenance", () => {
         { timestamp: NOW, component: "daemon", code: "clock_jump" },
         { timestamp: NOW, component: "daemon", code: "tick_stall" },
       ]);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+  test("failing heartbeat writes past the staleness threshold record one snapshot_publish_overdue", () => {
+    const clock = fakeClock(Date.parse(NOW));
+    let failWrites = false;
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      writeSnapshot: (path, snapshot) => {
+        if (failWrites) {
+          throw new Error("disk full");
+        }
+        writeSnapshotAtomically(path, snapshot);
+      },
+    });
+    harness.daemon.start();
+    try {
+      failWrites = true;
+      for (let elapsed = 0; elapsed < 15_000; elapsed += DAEMON_HEARTBEAT_MS) {
+        clock.advance(DAEMON_HEARTBEAT_MS);
+        harness.tick();
+      }
+      // Latched: 10s and 15s of failed writes are one failure window.
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "snapshot_publish_overdue" }]);
+      // A successful publish re-arms the latch; a second window logs again.
+      failWrites = false;
+      clock.advance(DAEMON_HEARTBEAT_MS);
+      harness.tick();
+      failWrites = true;
+      for (let elapsed = 0; elapsed < 15_000; elapsed += DAEMON_HEARTBEAT_MS) {
+        clock.advance(DAEMON_HEARTBEAT_MS);
+        harness.tick();
+      }
+      expect(harness.diagnostics).toHaveLength(2);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("a loop stall with healthy writes records tick_stall only, never snapshot_publish_overdue", () => {
+    const clock = fakeClock(Date.parse(NOW));
+    const harness = makeHarness({ nowMs: clock.nowMs });
+    harness.daemon.start();
+    try {
+      harness.tick();
+      clock.advance(12_000);
+      // The post-stall tick heartbeats before the overdue check runs, so the
+      // 12s-old lastPublishAtMs is refreshed and only the gap band logs.
+      harness.tick();
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "tick_stall" }]);
     } finally {
       harness.daemon.stop();
     }

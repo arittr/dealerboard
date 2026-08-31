@@ -95,6 +95,7 @@ export type DaemonState = {
   lastPrunePassAtMs: number | null;
   lastTickAtMs: number | null;
   healthy: boolean;
+  publishOverdueReported: boolean;
 };
 
 /** Arms the poll loop; the returned callback disarms it. */
@@ -159,6 +160,7 @@ export class ProjectionDaemon {
     lastPrunePassAtMs: null,
     lastTickAtMs: null,
     healthy: false,
+    publishOverdueReported: false,
   };
 
   constructor(paths: Pick<AppPaths, "database" | "snapshot">, dependencies: DaemonDependencies = {}) {
@@ -215,6 +217,7 @@ export class ProjectionDaemon {
       this.pollOnce(nowMs);
     } finally {
       this.maybeHeartbeat(nowMs);
+      this.checkPublishOverdue(nowMs);
     }
   }
 
@@ -333,7 +336,27 @@ export class ProjectionDaemon {
       // A heartbeat I/O failure retries on the next poll.
     }
   }
-
+  /**
+   * A publish-failure watchdog, evaluated after the tick's publish attempt:
+   * writes that keep failing let the file age past the board's staleness
+   * threshold with no other evidence (maybeHeartbeat swallows the I/O
+   * error). One record per failure window; a successful publish re-arms
+   * the latch. A loop stall alone never trips this — the first post-stall
+   * tick's heartbeat write lands before this check runs.
+   */
+  private checkPublishOverdue(nowMs: number): void {
+    if (this.state.lastPublishAtMs === null) {
+      return;
+    }
+    if (nowMs - this.state.lastPublishAtMs < TICK_STALL_MS) {
+      this.state.publishOverdueReported = false;
+      return;
+    }
+    if (!this.state.publishOverdueReported) {
+      this.state.publishOverdueReported = true;
+      this.report("snapshot_publish_overdue");
+    }
+  }
   private publishHealthy(snapshot: SessionSnapshotV2, dataVersion: number, nowMs: number): void {
     const json = JSON.stringify(snapshot);
     if (json !== this.state.lastPublishedJson) {

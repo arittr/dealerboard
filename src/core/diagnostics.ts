@@ -26,6 +26,7 @@ export type DiagnosticCode =
   | "set_image_failed"
   | "clock_jump"
   | "tick_stall"
+  | "snapshot_publish_overdue"
   | "maintenance_failed"
   | "quota_failed"
   | "quota_accounts_failed"
