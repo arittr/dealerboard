@@ -759,7 +759,7 @@ describe("projectRows", () => {
     expect(projectionErrorCode([row("a", { slot: -2 })])).toBe("top-level-without-positive-slot");
   });
 
-  test("archived parent with active descendants: the children surface as orphan roots", () => {
+  test("archived parent with active descendants: the whole subtree leaves the projection", () => {
     const tempHome = mkdtempSync(join(tmpdir(), "dealerboard-projection-"));
     try {
       const paths = resolveAppPaths(tempHome);
@@ -832,12 +832,8 @@ describe("projectRows", () => {
       const reader = openRegistryDatabase(paths.database, "readonly");
       try {
         const snapshot = readProjection(reader);
-        // The archived parent is gone from the board; the active child is
-        // its own card (parentless in the graph), not a promotion of the
-        // archived parent.
-        expect(snapshot.sessions.map((session) => session.sessionId)).toEqual(["child"]);
-        expect(snapshot.sessions[0]).toMatchObject({ status: "working", originSubagent: true });
-        expect(snapshot.agents?.find((node) => node.sessionId === "child")?.parent).toBeNull();
+        expect(snapshot.sessions).toEqual([]);
+        expect(snapshot.agents).toEqual([]);
       } finally {
         reader.close();
       }

@@ -11,7 +11,7 @@
  *   `session_<uuid>`, claude UUID);
  * - `.requiresAttention`, defaulting to false when absent;
  * - `.archivedAt`, the optional archive stamp the registry sync treats as
- *   viewed-equivalent;
+ *   authoritative lifecycle termination;
  * - `.attentionTimestamp` and `.updatedAt`, both optional ISO-8601 strings
  *   bounded like every other record string, then validated and re-emitted in
  *   canonical UTC form (`Date.parse` + `toISOString`, unparseable → null) —
