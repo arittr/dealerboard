@@ -179,10 +179,27 @@ const resolveEvenerHubSettings = (dependencies: EvenerHubConfigDependencies): Ev
 export const resolveEvenerHubEndpoints = (dependencies: EvenerHubConfigDependencies): EvenerHubEndpoints | null =>
   resolveEvenerHubSettings(dependencies)?.endpoints ?? null;
 
+const hasUnpairedSurrogate = (text: string): boolean => {
+  for (let index = 0; index < text.length; index += 1) {
+    const codeUnit = text.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = text.charCodeAt(index + 1);
+      if (!(nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const validSessionId = (sessionId: string): boolean =>
   sessionId.length > 0 &&
   sessionId === sessionId.trim() &&
   Array.from(sessionId).length <= MAX_WIRE_STRING_CODE_POINTS &&
+  !hasUnpairedSurrogate(sessionId) &&
   // biome-ignore lint/suspicious/noControlCharactersInRegex: Control characters are explicitly rejected by the wire contract.
   !/[\u0000-\u001f\u007f]/u.test(sessionId);
 

@@ -169,6 +169,8 @@ describe("Evener hub connection discovery", () => {
     expect(sessionUrl).not.toContain("sentinel-token");
     expect(evenerSessionUrl(endpoints, "")).toBeNull();
     expect(evenerSessionUrl(endpoints, "\nunsafe")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "\uD800")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "\uDC00")).toBeNull();
     expect(evenerSessionUrl(endpoints, "x".repeat(257))).toBeNull();
     expect(evenerSessionUrl(endpoints, "x".repeat(256))).not.toBeNull();
   });
