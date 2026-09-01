@@ -439,7 +439,8 @@ const parseThread = (value: unknown, previous?: EvenerThreadState): EvenerThread
   };
 };
 
-const isChild = (state: EvenerThreadState): boolean => state.kind === "subagent" || state.parentRef !== null;
+const isChild = (state: EvenerThreadState): boolean =>
+  state.delegateId !== null || state.kind === "subagent" || state.parentRef !== null;
 
 const requiresAttention = (state: EvenerThreadState): boolean => state.askPending || state.pendingEscalationCount > 0;
 
@@ -539,6 +540,132 @@ const endEvent = (state: EvenerThreadState, observedAt: string): RegistryEvent =
 const parseTurnStatus = (params: Record<string, unknown>): string | null => {
   const turn = params["turn"];
   return isRecord(turn) && typeof turn["status"] === "string" ? turn["status"] : null;
+};
+
+const delegateImmutableFields = ["ownerSessionId", "rootSessionId", "parentDelegateId"] as const;
+const delegateTrackedFields = [
+  "childSessionId",
+  "lifecycle",
+  "phase",
+  "status",
+  "terminal",
+  "resumable",
+  "needsAttention",
+  "model",
+] as const;
+
+const delegateProjectionEqual = (left: EvenerDelegateInfo, right: EvenerDelegateInfo): boolean =>
+  delegateImmutableFields.every((field) => left[field] === right[field]) &&
+  delegateTrackedFields.every((field) => left[field] === right[field]) &&
+  left.projectionRevision === right.projectionRevision;
+
+const parseRequiredDelegateIdentity = (value: unknown, field: string): string => {
+  const identity = wireIdentity(value);
+  if (identity === null) {
+    throw new EvenerCandidateRejected(`invalid Evener delegate ${field}`);
+  }
+  return identity;
+};
+
+const parseDelegateProjection = (value: unknown): EvenerDelegateInfo => {
+  if (!isRecord(value)) {
+    throw new EvenerCandidateRejected("invalid Evener delegate projection");
+  }
+  const parentDelegateValue = value["parentDelegateId"];
+  const parentDelegateId =
+    parentDelegateValue === null || parentDelegateValue === undefined
+      ? null
+      : parseRequiredDelegateIdentity(parentDelegateValue, "parentDelegateId");
+  const lifecycle = parseRequiredDelegateIdentity(value["lifecycle"], "lifecycle");
+  const phase = parseRequiredDelegateIdentity(value["phase"], "phase");
+  const status = parseRequiredDelegateIdentity(value["status"], "status");
+  const modelValue = value["model"];
+  const model = modelValue === null ? null : parseRequiredDelegateIdentity(modelValue, "model");
+  const projectionRevision = value["projectionRevision"];
+  if (
+    typeof projectionRevision !== "number" ||
+    !Number.isSafeInteger(projectionRevision) ||
+    projectionRevision < 0
+  ) {
+    throw new EvenerCandidateRejected("invalid Evener delegate projection revision");
+  }
+  const booleanFields = ["terminal", "resumable", "needsAttention"] as const;
+  for (const field of booleanFields) {
+    if (typeof value[field] !== "boolean") {
+      throw new EvenerCandidateRejected(`invalid Evener delegate ${field}`);
+    }
+  }
+  return {
+    delegateId: parseRequiredDelegateIdentity(value["delegateId"], "delegateId"),
+    ownerSessionId: parseRequiredDelegateIdentity(value["ownerSessionId"], "ownerSessionId"),
+    rootSessionId: parseRequiredDelegateIdentity(value["rootSessionId"], "rootSessionId"),
+    childSessionId: parseRequiredDelegateIdentity(value["childSessionId"], "childSessionId"),
+    parentDelegateId,
+    lifecycle,
+    phase,
+    status,
+    terminal: value["terminal"] as boolean,
+    resumable: value["resumable"] as boolean,
+    needsAttention: value["needsAttention"] as boolean,
+    model,
+    projectionRevision,
+  };
+};
+
+const delegateProjectionsFromThread = (value: unknown): EvenerDelegateInfo[] => {
+  if (!isRecord(value) || !isRecord(value["evener"])) {
+    return [];
+  }
+  const evener = value["evener"];
+  if (!isRecord(evener["diagnostics"])) {
+    return [];
+  }
+  const diagnostics = evener["diagnostics"];
+  const delegates = diagnostics["delegates"];
+  if (delegates === undefined) {
+    return [];
+  }
+  if (!Array.isArray(delegates)) {
+    throw new EvenerCandidateRejected("invalid Evener delegate diagnostics");
+  }
+  return delegates.map(parseDelegateProjection);
+};
+
+const mergeDelegateProjections = (
+  candidate: EvenerCollectorIndices,
+  projections: readonly EvenerDelegateInfo[],
+): void => {
+  const byId = new Map<string, EvenerDelegateInfo[]>();
+  for (const projection of projections) {
+    const entries = byId.get(projection.delegateId) ?? [];
+    entries.push(projection);
+    byId.set(projection.delegateId, entries);
+  }
+
+  for (const delegateId of Array.from(byId.keys()).sort()) {
+    const entries = byId.get(delegateId)!;
+    const first = entries[0]!;
+    for (const entry of entries.slice(1)) {
+      if (!delegateImmutableFields.every((field) => entry[field] === first[field])) {
+        throw new EvenerCandidateRejected("contradictory Evener delegate identity");
+      }
+    }
+    const highestRevision = Math.max(...entries.map((entry) => entry.projectionRevision));
+    const highest = entries.filter((entry) => entry.projectionRevision === highestRevision);
+    const selected = highest[0]!;
+    if (!highest.every((entry) => delegateProjectionEqual(entry, selected))) {
+      throw new EvenerCandidateRejected("contradictory Evener delegate projection");
+    }
+    candidate.delegatesById.set(delegateId, selected);
+  }
+
+  for (const delegate of candidate.delegatesById.values()) {
+    const existing = candidate.delegateByChildSession.get(delegate.childSessionId);
+    if (existing !== undefined && existing !== delegate.delegateId) {
+      throw new EvenerCandidateRejected("duplicate Evener delegate child session");
+    }
+    candidate.delegateByChildSession.set(delegate.childSessionId, delegate.delegateId);
+  }
 };
 
 /** Authenticated AppWire observer with ordered hydration, subscriptions, and reconnect. */
@@ -747,7 +874,31 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
 
   const resolveParentRefs = (candidate: EvenerCollectorIndices, rejectUnresolved = false): void => {
     for (const state of candidate.statesBySessionId.values()) {
+      state.delegateId = null;
       state.parentSessionId = null;
+    }
+    for (const delegate of candidate.delegatesById.values()) {
+      if (
+        !candidate.statesBySessionId.has(delegate.ownerSessionId) ||
+        !candidate.statesBySessionId.has(delegate.rootSessionId) ||
+        !candidate.statesBySessionId.has(delegate.childSessionId)
+      ) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing session");
+      }
+      if (delegate.parentDelegateId !== null && !candidate.delegatesById.has(delegate.parentDelegateId)) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing parent delegate");
+      }
+      const state = candidate.statesBySessionId.get(delegate.childSessionId)!;
+      state.delegateId = delegate.delegateId;
+      state.parentSessionId =
+        delegate.parentDelegateId === null
+          ? delegate.ownerSessionId
+          : candidate.delegatesById.get(delegate.parentDelegateId)!.childSessionId;
+    }
+    for (const state of candidate.statesBySessionId.values()) {
+      if (state.delegateId !== null) {
+        continue;
+      }
       if (state.parentRef === null) {
         if (rejectUnresolved && isChild(state)) {
           throw new EvenerCandidateRejected("unresolved Evener parent");
@@ -766,6 +917,19 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         continue;
       }
       state.parentSessionId = parentId;
+    }
+    for (const state of candidate.statesBySessionId.values()) {
+      if (state.parentSessionId === null) {
+        continue;
+      }
+      const visited = new Set<string>();
+      let parentSessionId: string | null = state.parentSessionId;
+      while (parentSessionId !== null) {
+        if (parentSessionId === state.sessionId || !visited.add(parentSessionId)) {
+          throw new EvenerCandidateRejected("cyclic Evener delegate lineage");
+        }
+        parentSessionId = candidate.statesBySessionId.get(parentSessionId)?.parentSessionId ?? null;
+      }
     }
   };
 
@@ -919,6 +1083,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     refreshInvalidatedSessionIds = new Set<string>();
     try {
       const candidate = emptyIndices();
+      const delegateProjections: EvenerDelegateInfo[] = [];
       const values = await listThreads(target);
       for (const value of values) {
         if (!isRecord(value)) {
@@ -959,12 +1124,14 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         if (state === null || state.sessionId !== listed.sessionId || state.ref !== listed.ref) {
           throw new EvenerCandidateRejected("invalid Evener thread/read identity");
         }
+        delegateProjections.push(...delegateProjectionsFromThread(result["thread"]));
         candidate.statesBySessionId.set(listed.sessionId, state);
         candidate.subscribedSessionIds.add(listed.sessionId);
         if (refreshInvalidatedSessionIds.has(listed.sessionId)) {
           throw new EvenerCandidateRejected("Evener refresh candidate was invalidated");
         }
       }
+      mergeDelegateProjections(candidate, delegateProjections);
       const events = deriveCandidateEvents(candidate, false);
       const activeChildSessionIds = Array.from(candidate.statesBySessionId.values())
         .filter(
@@ -975,7 +1142,8 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
             state.rawStatus !== "notLoaded" &&
             effectiveStatus(state) !== "idle",
         )
-        .map((state) => state.sessionId);
+        .map((state) => state.sessionId)
+        .sort();
       if (refreshInvalidatedSessionIds.size > 0) {
         throw new EvenerCandidateRejected("Evener refresh candidate was invalidated");
       }

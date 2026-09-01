@@ -121,6 +121,34 @@ const thread = (
   },
 });
 
+const delegateProjection = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  delegateId: "dlg-parent",
+  ownerSessionId: "root",
+  rootSessionId: "root",
+  childSessionId: "child",
+  parentDelegateId: null,
+  lifecycle: "running",
+  phase: "executing",
+  status: "active",
+  terminal: false,
+  resumable: false,
+  needsAttention: false,
+  model: "gpt-5.6-sol",
+  projectionRevision: 1,
+  ...overrides,
+});
+
+const withDelegates = (
+  value: Record<string, unknown>,
+  delegates: readonly Record<string, unknown>[],
+): Record<string, unknown> => ({
+  ...value,
+  evener: {
+    ...(value["evener"] as Record<string, unknown>),
+    diagnostics: { delegates },
+  },
+});
+
 const requestByMethod = (socket: FakeSocket, method: string): Record<string, unknown> => {
   const frame = socket.sent.find((candidate) => candidate["method"] === method && "id" in candidate);
   if (frame === undefined) {
@@ -140,8 +168,12 @@ const latestRequestByMethod = (socket: FakeSocket, method: string): Record<strin
   return request;
 };
 
-const respondToReads = async (socket: FakeSocket, fixtures: ReadonlyMap<string, Record<string, unknown>>): Promise<void> => {
-  let handled = 0;
+const respondToReads = async (
+  socket: FakeSocket,
+  fixtures: ReadonlyMap<string, Record<string, unknown>>,
+  startAt = 0,
+): Promise<void> => {
+  let handled = startAt;
   for (;;) {
     const reads = requestsByMethod(socket, "thread/read");
     const request = reads[handled];
@@ -530,6 +562,257 @@ describe("Evener AppWire collector", () => {
       expect(diagnostics).toHaveLength(1);
       collector.stop();
     }
+  });
+
+  test("resolves direct and nested delegate lineage in either list order", async () => {
+    const orders = [
+      ["root", "child", "grandchild"],
+      ["grandchild", "child", "root"],
+    ];
+    for (const order of orders) {
+      const socket = new FakeSocket();
+      const updates: EvenerCollectorUpdate[] = [];
+      const parent = delegateProjection();
+      const nested = delegateProjection({
+        delegateId: "dlg-nested",
+        childSessionId: "grandchild",
+        parentDelegateId: "dlg-parent",
+        model: "claude-opus-4.1",
+      });
+      const values = [
+        withDelegates(thread("root", "active", { ref: "local:root" }), [parent, nested]),
+        thread("child", "active", { ref: "local:root", kind: "subagent" }),
+        thread("grandchild", "active", { ref: "local:root", kind: "subagent" }),
+      ];
+      const fixtureBySession = new Map(values.map((value) => [value["sessionId"] as string, value]));
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        onUpdate: (update) => updates.push(update),
+      });
+
+      collector.start();
+      socket.open();
+      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+      await flush();
+      respond(socket, requestByMethod(socket, "thread/list"), {
+        data: order.map((sessionId) => fixtureBySession.get(sessionId)!),
+      });
+      await flush();
+      await respondToReads(socket, threadFixtures(...values));
+
+      const starts = updates.flatMap((update) => update.events).filter((event) => event.kind === "SubagentStart");
+      expect(starts).toContainEqual(expect.objectContaining({ sessionId: "child", parentSessionId: "root" }));
+      expect(starts).toContainEqual(expect.objectContaining({ sessionId: "grandchild", parentSessionId: "child" }));
+      expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child", "grandchild"]);
+      collector.stop();
+    }
+  });
+
+  test("uses a unique legacy parentRef when delegate diagnostics are absent", async () => {
+    const socket = new FakeSocket();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = thread("root", "active", { ref: "local:root" });
+    const child = thread("child", "active", { ref: "local:child", parentRef: "local:root", kind: "subagent" });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child]);
+    expect(updates.flatMap((update) => update.events)).toContainEqual(
+      expect.objectContaining({ kind: "SubagentStart", sessionId: "child", parentSessionId: "root" }),
+    );
+    collector.stop();
+  });
+
+  test("rejects ambiguous, missing, duplicate, contradictory, and cyclic delegate candidates", async () => {
+    const candidates = [
+      {
+        label: "ambiguous legacy parent",
+        values: [
+          thread("parent-a", "active", { ref: "local:shared" }),
+          thread("parent-b", "active", { ref: "local:shared" }),
+          thread("child", "active", { ref: "local:child", parentRef: "local:shared", kind: "subagent" }),
+        ],
+      },
+      {
+        label: "missing parent delegate",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ parentDelegateId: "missing" }),
+          ]),
+        ],
+      },
+      {
+        label: "missing owner",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ ownerSessionId: "missing" }),
+          ]),
+        ],
+      },
+      {
+        label: "missing parent child session",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ childSessionId: "missing" }),
+          ]),
+        ],
+      },
+      {
+        label: "duplicate child session",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection(),
+            delegateProjection({ delegateId: "dlg-other" }),
+          ]),
+        ],
+      },
+      {
+        label: "contradictory immutable identity",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection(),
+            delegateProjection({ ownerSessionId: "other" }),
+          ]),
+        ],
+      },
+      {
+        label: "equal revision disagreement",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection(),
+            delegateProjection({ lifecycle: "finished" }),
+          ]),
+        ],
+      },
+      {
+        label: "cyclic delegate lineage",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ parentDelegateId: "dlg-nested" }),
+          ]),
+          withDelegates(thread("grandchild", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({
+              delegateId: "dlg-nested",
+              childSessionId: "grandchild",
+              parentDelegateId: "dlg-parent",
+            }),
+          ]),
+        ],
+      },
+    ];
+    for (const candidate of candidates) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+      collector.start();
+      await acceptBaseline(socket, updates);
+      updates.length = 0;
+      const baselineReadCount = requestsByMethod(socket, "thread/read").length;
+      timers.run(2_000);
+      respond(socket, latestRequestByMethod(socket, "thread/list"), { data: candidate.values });
+      await flush();
+      await respondToReads(socket, threadFixtures(...candidate.values), baselineReadCount);
+      await flush();
+      expect(updates).toEqual([]);
+      expect(diagnostics).toHaveLength(1);
+      expect(socket.closed).toBe(false);
+      collector.stop();
+    }
+  });
+
+  test("rejects malformed delegate identity, booleans, and revisions atomically", async () => {
+    const malformed = [
+      delegateProjection({ delegateId: "" }),
+      delegateProjection({ terminal: "false" }),
+      delegateProjection({ projectionRevision: 1.5 }),
+    ];
+    for (const projection of malformed) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+      collector.start();
+      await acceptBaseline(socket, updates);
+      updates.length = 0;
+      const baselineReadCount = requestsByMethod(socket, "thread/read").length;
+      timers.run(2_000);
+      const root = withDelegates(thread("root", "active"), [projection]);
+      respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [root] });
+      await flush();
+      await respondToReads(socket, threadFixtures(root), baselineReadCount);
+      await flush();
+      expect(updates).toEqual([]);
+      expect(diagnostics).toHaveLength(1);
+      collector.stop();
+    }
+  });
+
+  test("merges higher delegate revisions and replaces generation A with B", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const root = thread("root", "active");
+    const childA = withDelegates(thread("child-a", "active", { ref: "local:root", kind: "subagent" }), [
+      delegateProjection({ childSessionId: "child-a", projectionRevision: 1 }),
+    ]);
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    await acceptBaseline(socket, updates, [root, childA]);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child-a"]);
+    updates.length = 0;
+    const baselineReadCount = requestsByMethod(socket, "thread/read").length;
+
+    timers.run(2_000);
+    const childB = withDelegates(thread("child-b", "active", { ref: "local:root", kind: "subagent" }), [
+      delegateProjection({ childSessionId: "child-b", projectionRevision: 2 }),
+    ]);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [root, childB] });
+    await flush();
+    await respondToReads(socket, threadFixtures(root, childB), baselineReadCount);
+    await flush();
+
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child-b"]);
+    expect(updates.flatMap((update) => update.events)).toContainEqual(
+      expect.objectContaining({ kind: "SubagentStart", sessionId: "child-b", parentSessionId: "root" }),
+    );
+    expect(updates.flatMap((update) => update.events)).not.toContainEqual(
+      expect.objectContaining({ sessionId: "child-a" }),
+    );
+    expect(diagnostics).toHaveLength(0);
+    collector.stop();
   });
 
   test("rejects a partial refresh that would orphan an active child", async () => {
