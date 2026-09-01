@@ -1890,7 +1890,9 @@ describe("readProjection", () => {
             observedAt: "2026-08-26T05:00:00.000Z",
           },
           { kind: "Stop", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:01:00.000Z" },
-          { kind: "SessionEnd", provider: "claude", sessionId: "ended", observedAt: "2026-08-26T05:02:00.000Z" },
+        ]);
+        writer.run("UPDATE active_sessions SET ended_at = ? WHERE provider = 'claude' AND session_id = 'ended'", [
+          "2026-08-26T05:02:00.000Z",
         ]);
       } finally {
         writer.close();

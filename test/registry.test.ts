@@ -199,7 +199,7 @@ describe("applyRegistryEvents", () => {
     expect(getRow("evener-1", "evener")?.updated_at).toBe(at(3));
   });
 
-  test("drives one session through idle, working, waiting, idle, error, and ended", () => {
+  test("drives one session through idle, working, waiting, idle, error, and closed", () => {
     expect(applyRegistryEvents(db, [start("s1", { title: "First", project: "proj", at: at(1) })])).toEqual(["applied"]);
     expect(getRow("s1")).toEqual({
       provider: "claude",
@@ -245,20 +245,12 @@ describe("applyRegistryEvents", () => {
     expect(applyRegistryEvents(db, [simple("StopFailure", "s1", { at: at(5) })])).toEqual(["applied"]);
     expect(getRow("s1")).toMatchObject({ status: "error", logical_slot: 1, updated_at: at(5) });
 
-    // The failure at at(5) is unviewed, so the end retains the row as an
-    // ended card instead of deleting it.
     expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(6) })])).toEqual(["applied"]);
-    expect(getRow("s1")).toMatchObject({
-      status: "idle",
-      unread_since: at(5),
-      done_since: at(4), // the Stop at at(4) stamped the hold; retention keeps it
-      ended_at: at(6),
-      updated_at: at(6),
-    });
-    expect(countRows()).toBe(1);
+    expect(getRow("s1")).toBeNull();
+    expect(countRows()).toBe(0);
   });
 
-  test("never recreates an ended session from late non-start events", () => {
+  test("never recreates a closed session from late non-start events", () => {
     applyRegistryEvents(db, [start("s1")]);
     applyRegistryEvents(db, [simple("SessionEnd", "s1")]);
 
@@ -595,7 +587,7 @@ describe("applyEvenerCollectorUpdate", () => {
     expect(identities()).toEqual(["codex:codex-child:codex-root", "codex:codex-root:root", "evener:root:root"]);
   });
 
-  test("retained root keeps no recursively closed children and preserves unrelated sessions", () => {
+  test("a closed root drops its descendants and preserves unrelated sessions", () => {
     applyRegistryEvents(db, [
       start("root", { provider: "evener" }),
       subStart("child", "root", { provider: "evener" }),
@@ -620,11 +612,7 @@ describe("applyEvenerCollectorUpdate", () => {
         ),
       ),
     ).toEqual(["applied", "applied", "applied"]);
-    expect(getRow("root", "evener")).toMatchObject({
-      parent_session_id: null,
-      ended_at: at(3),
-      unread_since: at(2),
-    });
+    expect(getRow("root", "evener")).toBeNull();
     expect(getRow("child", "evener")).toBeNull();
     expect(getRow("grandchild", "evener")).toBeNull();
     expect(identities()).toEqual([
@@ -632,7 +620,6 @@ describe("applyEvenerCollectorUpdate", () => {
       "codex:codex-root:root",
       "evener:other-child:other",
       "evener:other:root",
-      "evener:root:root",
     ]);
   });
 
@@ -2165,18 +2152,15 @@ describe("pruneStaleSessions", () => {
     expect(allRows().map((row) => row.session_id)).toEqual(["stale-unviewed"]);
   });
 
-  test("removes a retained Roborev session even while its result is fresh and unviewed", () => {
+  test("removes a legacy ended session even while its result is fresh and unviewed", () => {
     applyRegistryEvents(db, [
-      start("review", { at: "2026-08-06T00:00:00.000Z" }),
-      simple("Stop", "review", { at: "2026-08-06T00:00:01.000Z" }),
-      simple("SessionEnd", "review", { at: "2026-08-06T00:00:02.000Z" }),
+      start("ended", { at: "2026-08-06T00:00:00.000Z" }),
+      simple("Stop", "ended", { at: "2026-08-06T00:00:01.000Z" }),
     ]);
-    // Seed the retained shape directly so this test isolates prune behavior
-    // from the separate SessionEnd policy.
-    db.run("UPDATE active_sessions SET origin_kind = 'roborev', origin_ref = 'shim' WHERE session_id = 'review'");
+    db.run("UPDATE active_sessions SET ended_at = '2026-08-06T00:00:02.000Z' WHERE session_id = 'ended'");
 
     expect(pruneStaleSessions(db, "2026-08-01T00:00:00.000Z")).toBe(1);
-    expect(getRow("review")).toBeNull();
+    expect(getRow("ended")).toBeNull();
   });
 
   test("an unviewed zcode row survives its 1h TTL", () => {
@@ -2965,7 +2949,7 @@ describe("acknowledgeSession as dismiss", () => {
   });
 });
 
-describe("SessionEnd retention (ended cards)", () => {
+describe("SessionEnd deletion", () => {
   test("SessionEnd removes a Roborev session even when it holds an unviewed result", () => {
     applyRegistryEvents(db, [
       start("review", { origin: { kind: "roborev", ref: "shim" } }),
@@ -2976,16 +2960,10 @@ describe("SessionEnd retention (ended cards)", () => {
     expect(getRow("review")).toBeNull();
   });
 
-  test("SessionEnd with an unviewed result retains the row as an ended card", () => {
+  test("SessionEnd deletes a session even when it holds an unviewed result", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
     expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })])).toEqual(["applied"]);
-    expect(getRow("s1")).toMatchObject({
-      status: "idle",
-      unread_since: at(5),
-      done_since: at(5),
-      ended_at: at(9),
-      updated_at: at(9),
-    });
+    expect(getRow("s1")).toBeNull();
   });
 
   test("SessionEnd without an unviewed result deletes the row as today", () => {
@@ -2995,90 +2973,43 @@ describe("SessionEnd retention (ended cards)", () => {
     expect(getRow("s1")).toBeNull();
   });
 
-  test("a reused SessionStart revives the ended card in place", () => {
+  test("SessionStart after close creates a new session life", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
     applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
-    viewSession(db, "claude", "s1", at(11)); // start the clock before the new life
     applyRegistryEvents(db, [start("s1", { at: at(12) })]);
     expect(getRow("s1")).toMatchObject({
       status: "idle",
+      opened_at: at(12),
       ended_at: null,
       unread_since: null,
       done_since: null,
-      viewed_since: null, // the new life clears any stale view clock too
+      viewed_since: null,
     });
   });
 
-  test("a duplicate or late SessionEnd for an ended row is a no-op", () => {
+  test("a duplicate SessionEnd for an already deleted row is a no-op", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
     applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
     expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(15) })])).toEqual(["ignored"]);
-    expect(getRow("s1")?.ended_at).toBe(at(9));
+    expect(getRow("s1")).toBeNull();
   });
 
-  test("SessionEnd → Stop → SessionEnd produces one ended card", () => {
+  test("late stop and end events never recreate a closed session", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
     const results = applyRegistryEvents(db, [
       simple("SessionEnd", "s1", { at: at(9) }),
       simple("Stop", "s1", { at: at(12) }),
       simple("SessionEnd", "s1", { at: at(15) }),
     ]);
-    expect(results).toEqual(["applied", "applied", "ignored"]);
-    expect(getRow("s1")).toMatchObject({
-      status: "idle",
-      ended_at: at(9),
-      unread_since: at(12),
-      done_since: at(12),
-      viewed_since: null, // the late Stop re-stamped a fresh result
-    });
-    expect(countRows()).toBe(1);
+    expect(results).toEqual(["applied", "ignored", "ignored"]);
+    expect(getRow("s1")).toBeNull();
+    expect(countRows()).toBe(0);
   });
 
-  test("ending an error-only session stamps a done hold so the ended card survives its view", () => {
-    // StopFailure creates unread attention but no done_since. Retention must
-    // establish an idle hold, or the card would vanish the moment it is
-    // viewed (unread cleared, nothing left to hold it) — R10 keeps it for
-    // the full post-view window.
+  test("SessionEnd deletes an error-only session", () => {
     applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
-    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
-    expect(getRow("s1")).toMatchObject({
-      status: "idle",
-      unread_since: at(5),
-      done_since: at(9), // stamped at the end stamp
-      ended_at: at(9),
-    });
-
-    // View: badge off, clock starts — and the done hold keeps the card.
-    expect(viewSession(db, "claude", "s1", at(12))).toBe("applied");
-    expect(getRow("s1")).toMatchObject({
-      unread_since: null,
-      done_since: at(9),
-      viewed_since: at(12),
-      ended_at: at(9),
-    });
-  });
-
-  test("ending a row that already holds a done stamp keeps that stamp", () => {
-    applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
-    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
-    expect(getRow("s1")?.done_since).toBe(at(5)); // not regressed to the end stamp
-  });
-
-  test("a causal dismiss consumes an ended card whose done hold postdates the seen unread", () => {
-    // Failure at at(5) stamps unread only; the end at at(9) adds the done
-    // hold. The gesture's snapshot showed the unread at(5) — the dismiss must
-    // consume the whole ended card even though the auxiliary done stamp is
-    // newer than the watermark (consumption keys on the result identity).
-    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
-    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
-    expect(acknowledgeSession(db, "claude", "s1", at(12), { unreadSince: at(5) })).toBe("applied");
-    expect(getRow("s1")).toMatchObject({
-      status: "idle",
-      unread_since: null,
-      done_since: null,
-      viewed_since: null,
-      ended_at: at(9), // the row itself remains until prune
-    });
+    expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })])).toEqual(["applied"]);
+    expect(getRow("s1")).toBeNull();
   });
 });
 
@@ -3170,23 +3101,5 @@ describe("sweepExpiredResults", () => {
     db.run("UPDATE active_sessions SET unread_since = ? WHERE session_id = 's1'", [at(9)]);
     expect(sweepExpiredResults(db, CUTOFF, SWEPT_AT)).toBe(0);
     expect(getRow("s1")).toMatchObject({ unread_since: at(9), done_since: at(5) });
-  });
-
-  test("an ended error card lives out its post-view window, then the sweep dismisses it", () => {
-    // The full R10 chain: failure → end (retained with a done hold) → view
-    // (clock starts, card stays) → expiry (dismissed after the window).
-    const viewedAt = "2026-08-06T01:00:00.000Z";
-    const cutoff = "2026-08-07T01:00:00.000Z"; // viewedAt + 24h
-    const sweptAt = "2026-08-07T02:00:00.000Z";
-    applyRegistryEvents(db, [start("s1"), simple("StopFailure", "s1", { at: at(5) })]);
-    applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })]);
-    expect(viewSession(db, "claude", "s1", viewedAt)).toBe("applied");
-    expect(getRow("s1")).toMatchObject({ ended_at: at(9), done_since: at(9), viewed_since: viewedAt });
-    // Inside the window the card stays.
-    expect(sweepExpiredResults(db, "2026-08-05T12:00:00.000Z", sweptAt)).toBe(0);
-    expect(getRow("s1")?.done_since).toBe(at(9));
-    // Past it, the sweep dismisses; the row remains for prune at its TTL.
-    expect(sweepExpiredResults(db, cutoff, sweptAt)).toBe(1);
-    expect(getRow("s1")).toMatchObject({ status: "idle", done_since: null, viewed_since: null, ended_at: at(9) });
   });
 });

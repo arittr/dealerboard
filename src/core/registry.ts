@@ -14,11 +14,9 @@
  * `clearSession`/`clearAllSessions`/`pruneStaleSessions` repairs delete
  * trees — prune skipping any tree that still holds an unviewed result or
  * a live view clock (a viewed finished result awaiting its expiry). A
- * Stop or StopFailure always retains its row. SessionEnd deletes a row
- * only when nothing is unviewed; otherwise it
- * retains the row as a terminal "ended" card (idle, `ended_at` stamped)
- * under the normal contract, and a reused SessionStart revives it in
- * place. Slots are never compacted; a new top-level row receives the
+ * Stop or StopFailure always retains its row; SessionEnd always deletes
+ * the top-level row and its native descendants. Slots are never compacted;
+ * a new top-level row receives the
  * lowest free positive slot found from the sorted non-null slot list.
  *
  * The unread ledger records results the user has not viewed: a turn ending
@@ -31,8 +29,7 @@
  * mark a session read. Unread drives the badge/styling channel: reading a
  * result never removes the card at view time, but the view starts the
  * expiry clock — a viewed done/errored card auto-dismisses 24h later —
- * while an unviewed result is exempt from SessionEnd deletion and the
- * stale prune.
+ * while an unviewed result is exempt from the stale prune.
  *
  * The done ledger records finished results still owed a board slot: a Stop
  * settling to idle stamps `done_since` (so do the Paseo missed-completion
@@ -529,37 +526,7 @@ const applySessionEnd = (db: Database, event: Extract<RegistryEvent, { kind: "Se
   if (existing === null || existing.parent_session_id !== null) {
     return "ignored";
   }
-  // Ordering tolerance: a duplicate or late SessionEnd for a row already
-  // retained as an ended card is a no-op.
-  if (existing.ended_at !== null) {
-    return "ignored";
-  }
-  // Roborev owns and presents the review result. Dealerboard only shows the
-  // reviewer while it is running, so the process card has no result to retain.
-  if (existing.origin_kind === "roborev") {
-    db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
-    return "applied";
-  }
-  // Nothing unviewed: delete as today.
-  if (existing.unread_since === null) {
-    db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
-    return "applied";
-  }
-  // An unviewed result survives the session: retain the row as a terminal
-  // "ended" card — settle to idle, stamp ended_at, keep the ledgers. A row
-  // holding only unread (an error/attention result — StopFailure stamps no
-  // done) gets a done hold at the end stamp, or viewing it would clear the
-  // unread and leave nothing holding the card. Late events still process
-  // normally and simply re-stamp.
-  db.run(
-    `UPDATE active_sessions
-     SET status = 'idle', ended_at = ?, background_outstanding = 0,
-         done_since = COALESCE(done_since, ?),
-         status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END,
-         updated_at = ?
-     WHERE provider = ? AND session_id = ?`,
-    [event.observedAt, event.observedAt, event.observedAt, event.observedAt, event.provider, event.sessionId],
-  );
+  db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
   return "applied";
 };
 
@@ -1367,11 +1334,11 @@ export const updateSessionActivityLines = (db: Database, updates: readonly Sessi
  * alive, and so does any row holding an unviewed result (`unread_since`
  * non-null) or a live view clock (`viewed_since` non-null on a row still
  * holding a finished result — `done_since` or an `error` status) — the
- * native tree joined with the resolved Paseo tree. Ended Roborev process
- * indicators are the exception because Roborev, not Dealerboard, owns their
- * results. Otherwise prune is liveness cleanup, never a purge of results the
- * user has not seen, and never a shortcut past the 24h post-view expiry that
- * owns a viewed result's removal. The clock's age is not compared here: the daemon runs
+ * native tree joined with the resolved Paseo tree. Legacy ended rows are
+ * removed because a closed session no longer belongs on the board. Otherwise
+ * prune is liveness cleanup, never a purge of results the user has not seen,
+ * and never a shortcut past the 24h post-view expiry that owns a viewed
+ * result's removal. The clock's age is not compared here: the daemon runs
  * `sweepExpiredResults` before prune on the same tick, so an overdue clock
  * is already dismissed by the time prune looks; a standalone operator
  * `sessions prune` may therefore leave an overdue clocked row in place
@@ -1473,13 +1440,12 @@ export const pruneStaleSessions = (db: Database, cutoffIso: string, zcodeCutoffI
         }
       }
     }
-    // Only top-level rows are deleted; their native children cascade. Ended
-    // Roborev rows are process indicators, not results, so maintenance removes
-    // them even if their ledgers seeded `keep`.
+    // Only top-level rows are deleted; their native children cascade. Legacy
+    // ended rows predate the always-delete SessionEnd contract, so maintenance
+    // removes them even if their ledgers seeded `keep`.
     let count = 0;
     for (const row of rows) {
-      const endedRoborev = row.origin_kind === "roborev" && row.ended_at !== null;
-      if (row.parent_session_id === null && (endedRoborev || !keep.has(keyOf(row.provider, row.session_id)))) {
+      if (row.parent_session_id === null && (row.ended_at !== null || !keep.has(keyOf(row.provider, row.session_id)))) {
         db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [row.provider, row.session_id]);
         count += 1;
       }
