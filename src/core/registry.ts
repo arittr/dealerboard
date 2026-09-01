@@ -583,10 +583,18 @@ const applyEvent = (db: Database, event: RegistryEvent): MutationResult => {
 export const applyRegistryEvents = (db: Database, events: readonly RegistryEvent[]): MutationResult[] =>
   inWriteTransaction(db, () => events.map((event) => applyEvent(db, event)));
 
-/** Apply Evener events and reconcile an accepted authoritative child snapshot atomically. */
+/** Apply Evener events and reconcile accepted archive and active-child snapshots atomically. */
 export const applyEvenerCollectorUpdate = (db: Database, update: EvenerCollectorUpdate): MutationResult[] =>
   inWriteTransaction(db, () => {
     const results = update.events.map((event) => applyEvent(db, event));
+    if (update.archivedRootSessionIds !== null) {
+      const removeArchivedRoot = db.query(
+        "DELETE FROM active_sessions WHERE provider = 'evener' AND parent_session_id IS NULL AND session_id = ?",
+      );
+      for (const sessionId of new Set(update.archivedRootSessionIds)) {
+        removeArchivedRoot.run(sessionId);
+      }
+    }
     if (update.activeChildSessionIds === null) {
       return results;
     }

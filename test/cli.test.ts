@@ -1757,9 +1757,10 @@ describe("daemon Evener collector boundary", () => {
                 },
               ],
               activeChildSessionIds: null,
+              archivedRootSessionIds: null,
             });
             afterIncremental = listRows();
-            options.onUpdate({ events: [], activeChildSessionIds: [] });
+            options.onUpdate({ events: [], activeChildSessionIds: [], archivedRootSessionIds: [] });
             afterAuthoritative = listRows();
           },
         }),
@@ -1794,7 +1795,7 @@ describe("daemon Evener collector boundary", () => {
       },
       createEvenerCollector: (options) =>
         evenerCollectorStub({
-          start: () => options.onUpdate({ events: [], activeChildSessionIds: null }),
+          start: () => options.onUpdate({ events: [], activeChildSessionIds: null, archivedRootSessionIds: null }),
         }),
       createQuotaCollector: () => collectorStub(),
       createTokenUsageCollector: () => tokenCollectorStub(),

@@ -26,6 +26,7 @@ const HIGH_VOLUME_NOTIFICATIONS = [
 
 const THREAD_STATUSES = ["idle", "active", "awaiting", "warning", "systemError"] as const;
 const KNOWN_THREAD_STATUSES = new Set<string>([...THREAD_STATUSES, "closed", "notLoaded"]);
+const NAVIGATION_TIERS = new Set(["live", "needs_you", "current", "recent", "archived"]);
 
 export type EvenerHubConnection = {
   url: string;
@@ -248,6 +249,7 @@ export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependen
 export type EvenerCollectorUpdate = {
   events: RegistryEvent[];
   activeChildSessionIds: readonly string[] | null;
+  archivedRootSessionIds: readonly string[] | null;
 };
 
 export type EvenerSocket = {
@@ -732,7 +734,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   };
 
   const emitUpdate = (update: EvenerCollectorUpdate): void => {
-    if (update.events.length === 0 && update.activeChildSessionIds === null) {
+    if (update.events.length === 0 && update.activeChildSessionIds === null && update.archivedRootSessionIds === null) {
       return;
     }
     try {
@@ -742,7 +744,8 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
   };
 
-  const emitIncremental = (events: RegistryEvent[]): void => emitUpdate({ events, activeChildSessionIds: null });
+  const emitIncremental = (events: RegistryEvent[]): void =>
+    emitUpdate({ events, activeChildSessionIds: null, archivedRootSessionIds: null });
 
   const clearTimer = (timer: EvenerTimer | null): null => {
     timer?.clear();
@@ -897,24 +900,28 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
   };
 
-  const removeSessionFromIndices = (sessionId: string): void => {
-    const state = indices.statesBySessionId.get(sessionId);
+  const removeSessionFromCandidate = (candidate: EvenerCollectorIndices, sessionId: string): void => {
+    const state = candidate.statesBySessionId.get(sessionId);
     if (state !== undefined) {
-      removeSessionFromRef(indices, state);
-      indices.statesBySessionId.delete(sessionId);
-      indices.subscribedSessionIds.delete(sessionId);
+      removeSessionFromRef(candidate, state);
+      candidate.statesBySessionId.delete(sessionId);
+      candidate.subscribedSessionIds.delete(sessionId);
     }
-    rootSessionIdBySessionId.delete(sessionId);
-    ancestryDepthBySessionId.delete(sessionId);
 
-    const delegateId = indices.delegateByChildSession.get(sessionId);
-    indices.delegateByChildSession.delete(sessionId);
+    const delegateId = candidate.delegateByChildSession.get(sessionId);
+    candidate.delegateByChildSession.delete(sessionId);
     if (delegateId !== undefined) {
-      const delegate = indices.delegatesById.get(delegateId);
+      const delegate = candidate.delegatesById.get(delegateId);
       if (delegate?.childSessionId === sessionId) {
-        indices.delegatesById.delete(delegateId);
+        candidate.delegatesById.delete(delegateId);
       }
     }
+  };
+
+  const removeSessionFromIndices = (sessionId: string): void => {
+    removeSessionFromCandidate(indices, sessionId);
+    rootSessionIdBySessionId.delete(sessionId);
+    ancestryDepthBySessionId.delete(sessionId);
   };
 
   const rememberCandidateAncestry = (candidate: EvenerCollectorIndices): void => {
@@ -1261,6 +1268,53 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         }
       }
       mergeDelegateProjections(candidate, delegateProjections);
+      resolveParentRefs(candidate, true);
+      const archivedRootSessionIds: string[] = [];
+      const roots = Array.from(candidate.statesBySessionId.values())
+        .filter((state) => state.parentSessionId === null)
+        .sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+      for (const root of roots) {
+        const ref = `${LOCAL_SOURCE_ID}:${root.sessionId}`;
+        const result = await request(target, "evener/navigation/read", { resource: "location", ref });
+        assertRefreshGeneration(expectedGeneration);
+        if (!isRecord(result) || result["status"] !== "ok" || !isRecord(result["data"])) {
+          throw new EvenerCandidateRejected("invalid Evener navigation location response");
+        }
+        const location = result["data"];
+        const tier = nonEmptyString(location["tier"]);
+        if (
+          wireIdentity(location["ref"]) !== ref ||
+          wireIdentity(location["top_level_ref"]) !== ref ||
+          location["top_level"] !== true ||
+          tier === null ||
+          !NAVIGATION_TIERS.has(tier)
+        ) {
+          throw new EvenerCandidateRejected("invalid Evener navigation location identity");
+        }
+        if (tier === "archived") {
+          archivedRootSessionIds.push(root.sessionId);
+        }
+      }
+      if (archivedRootSessionIds.length > 0) {
+        const removedSessionIds = new Set(archivedRootSessionIds);
+        let addedDescendant = true;
+        while (addedDescendant) {
+          addedDescendant = false;
+          for (const state of candidate.statesBySessionId.values()) {
+            if (
+              state.parentSessionId !== null &&
+              removedSessionIds.has(state.parentSessionId) &&
+              !removedSessionIds.has(state.sessionId)
+            ) {
+              removedSessionIds.add(state.sessionId);
+              addedDescendant = true;
+            }
+          }
+        }
+        for (const sessionId of removedSessionIds) {
+          removeSessionFromCandidate(candidate, sessionId);
+        }
+      }
       const events = deriveCandidateEvents(candidate, false);
       const activeChildSessionIds = Array.from(candidate.statesBySessionId.values())
         .filter(
@@ -1280,7 +1334,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       assertRefreshGeneration(expectedGeneration);
       rememberCandidateAncestry(candidate);
       indices = candidate;
-      emitUpdate({ events, activeChildSessionIds });
+      emitUpdate({ events, activeChildSessionIds, archivedRootSessionIds });
       failureReported = false;
     } catch (error) {
       if (error instanceof EvenerRefreshInvalidated) {
@@ -1603,6 +1657,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       case "evener/thread/resync":
       case "evener/tree/changed":
       case "evener/delegate/updated":
+      case "evener/navigation/invalidated":
         invalidateRefreshGeneration();
         scheduleRefresh(0);
         return;

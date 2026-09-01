@@ -14,6 +14,7 @@ import {
 
 class FakeSocket implements EvenerSocket {
   readonly sent: Array<Record<string, unknown>> = [];
+  readonly respondedRequestIds = new Set<unknown>();
   closed = false;
   onopen: ((event: unknown) => void) | null = null;
   onmessage: ((event: unknown) => void) | null = null;
@@ -172,13 +173,16 @@ const respondToReads = async (
   socket: FakeSocket,
   fixtures: ReadonlyMap<string, Record<string, unknown>>,
   startAt = 0,
+  locationTiersByRef: ReadonlyMap<string, string> = new Map(
+    Array.from(fixtures.keys(), (sessionId) => [`local:${sessionId}`, "current"]),
+  ),
 ): Promise<void> => {
   let handled = startAt;
   for (;;) {
     const reads = requestsByMethod(socket, "thread/read");
     const request = reads[handled];
     if (request === undefined) {
-      return;
+      break;
     }
     const params = request["params"] as Record<string, unknown>;
     const sessionId = params["threadId"];
@@ -193,12 +197,49 @@ const respondToReads = async (
     handled += 1;
     await flush();
   }
+  await respondToLocations(socket, locationTiersByRef);
+};
+
+const respondToLocations = async (socket: FakeSocket, tiersByRef: ReadonlyMap<string, string>): Promise<void> => {
+  for (;;) {
+    const request = requestsByMethod(socket, "evener/navigation/read").find(
+      (candidate) => !socket.respondedRequestIds.has(candidate["id"]),
+    );
+    if (request === undefined) {
+      return;
+    }
+    const params = request["params"] as Record<string, unknown>;
+    const ref = params["ref"];
+    if (typeof ref !== "string") {
+      throw new Error("location read omitted ref");
+    }
+    const tier = tiersByRef.get(ref);
+    if (tier === undefined) {
+      throw new Error(`missing location fixture for ${ref}`);
+    }
+    respond(socket, request, {
+      status: "ok",
+      generationId: "generation-1",
+      revision: 1,
+      etag: `etag-${ref}`,
+      data: {
+        generation_id: "generation-1",
+        revision: 1,
+        ref,
+        top_level_ref: ref,
+        top_level: true,
+        tier,
+      },
+    });
+    await flush();
+  }
 };
 
 const threadFixtures = (...values: Record<string, unknown>[]): ReadonlyMap<string, Record<string, unknown>> =>
   new Map(values.map((value) => [value["sessionId"] as string, value]));
 
 const respond = (socket: FakeSocket, request: Record<string, unknown>, result: unknown): void => {
+  socket.respondedRequestIds.add(request["id"]);
   socket.message({ id: request["id"], result });
 };
 
@@ -349,11 +390,82 @@ describe("Evener hub connection discovery", () => {
 describe("Evener AppWire collector", () => {
   test("delivers an authoritative update with no events to the update harness", () => {
     const harness = authoritativeUpdateHarness();
-    harness.onUpdate({ events: [], activeChildSessionIds: [] });
+    harness.onUpdate({ events: [], activeChildSessionIds: [], archivedRootSessionIds: [] });
     expect(harness.updates.at(-1)).toEqual({
       events: [],
       activeChildSessionIds: [],
+      archivedRootSessionIds: [],
     });
+  });
+
+  test("reports archived roots and excludes their entire subtree from the accepted snapshot", async () => {
+    const socket = new FakeSocket();
+    const updates: EvenerCollectorUpdate[] = [];
+    const archivedRoot = thread("archived", "idle");
+    const archivedChild = thread("archived-child", "active", {
+      parentRef: "local:archived",
+      kind: "subagent",
+    });
+    const currentRoot = thread("current", "active");
+    const values = [archivedChild, currentRoot, archivedRoot];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), { data: values });
+    await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(...values),
+      0,
+      new Map([
+        ["local:archived", "archived"],
+        ["local:current", "current"],
+      ]),
+    );
+
+    expect(
+      requestsByMethod(socket, "evener/navigation/read")
+        .map((request) => (request["params"] as Record<string, unknown>)["ref"])
+        .sort(),
+    ).toEqual(["local:archived", "local:current"]);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.archivedRootSessionIds).toEqual(["archived"]);
+    expect(updates[0]?.activeChildSessionIds).toEqual([]);
+    expect(updates[0]?.events.some((event) => event.sessionId === "current")).toBe(true);
+    expect(updates[0]?.events.some((event) => event.sessionId === "archived")).toBe(false);
+    expect(updates[0]?.events.some((event) => event.sessionId === "archived-child")).toBe(false);
+    collector.stop();
+  });
+
+  test("refreshes immediately when Evener invalidates navigation", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [thread("root", "active")]);
+    socket.message({
+      method: "evener/navigation/invalidated",
+      params: { generationId: "generation-1", sequence: 2, targets: [{ kind: "project", projectKey: "work" }] },
+    });
+
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    timers.run(0);
+    expect(requestsByMethod(socket, "thread/list")).toHaveLength(2);
+    collector.stop();
   });
 
   test("handshakes, hydrates roots before subagents, and subscribes with one replacement", async () => {
@@ -459,6 +571,7 @@ describe("Evener AppWire collector", () => {
     await flush();
     reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
     expect(reads).toHaveLength(3);
+    await respondToLocations(socket, new Map([["local:root", "current"]]));
 
     const initialEvents = updates.flatMap((update) => update.events);
     expect(initialEvents.map((event) => [event.kind, event.sessionId])).toEqual([
@@ -506,6 +619,7 @@ describe("Evener AppWire collector", () => {
         },
       ],
       activeChildSessionIds: null,
+      archivedRootSessionIds: null,
     });
     expect(timers.timers.some((timer) => timer.active && timer.delayMs === 2_000)).toBe(true);
 
@@ -881,7 +995,7 @@ describe("Evener AppWire collector", () => {
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), { data: [] });
     await flush();
-    expect(updates).toEqual([{ events: [], activeChildSessionIds: [] }]);
+    expect(updates).toEqual([{ events: [], activeChildSessionIds: [], archivedRootSessionIds: [] }]);
     collector.stop();
   });
 
@@ -1372,6 +1486,7 @@ describe("Evener AppWire collector", () => {
     expect(updates.at(-1)).toEqual({
       events: [{ kind: "SubagentStop", provider: "evener", sessionId: "child", observedAt: expect.any(String) }],
       activeChildSessionIds: null,
+      archivedRootSessionIds: null,
     });
 
     socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
@@ -1381,6 +1496,7 @@ describe("Evener AppWire collector", () => {
         { kind: "SessionEnd", provider: "evener", sessionId: "root", observedAt: expect.any(String) },
       ],
       activeChildSessionIds: null,
+      archivedRootSessionIds: null,
     });
     expect(updates.flatMap((update) => update.events).map((event) => [event.kind, event.sessionId])).toEqual([
       ["SubagentStop", "child"],
@@ -1563,6 +1679,7 @@ describe("Evener AppWire collector", () => {
       thread: thread("child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
     });
     await flush();
+    await respondToLocations(socket, new Map([["local:root", "current"]]));
 
     expect(events.filter((event) => event.sessionId === "child")).toEqual([
       {

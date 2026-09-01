@@ -155,7 +155,8 @@ const identities = (): string[] =>
 const evenerUpdate = (
   events: RegistryEvent[],
   activeChildSessionIds: readonly string[] | null,
-): Parameters<typeof applyEvenerCollectorUpdate>[1] => ({ events, activeChildSessionIds });
+  archivedRootSessionIds: readonly string[] | null = null,
+): Parameters<typeof applyEvenerCollectorUpdate>[1] => ({ events, activeChildSessionIds, archivedRootSessionIds });
 
 describe("applyRegistryEvents", () => {
   test("reconciles an observed status without changing the unread ledger", () => {
@@ -550,6 +551,19 @@ describe("applyRegistryEvents", () => {
 });
 
 describe("applyEvenerCollectorUpdate", () => {
+  test("deletes archived Evener roots and their descendants without touching other providers", () => {
+    applyRegistryEvents(db, [
+      start("archived", { provider: "evener" }),
+      subStart("child", "archived", { provider: "evener" }),
+      subStart("grandchild", "child", { provider: "evener" }),
+      start("current", { provider: "evener" }),
+      start("archived", { provider: "codex" }),
+    ]);
+
+    expect(applyEvenerCollectorUpdate(db, evenerUpdate([], null, ["archived"]))).toEqual([]);
+    expect(identities()).toEqual(["codex:archived:root", "evener:current:root"]);
+  });
+
   test("deletes only omitted Evener children in the authoritative active set", () => {
     applyRegistryEvents(db, [
       start("root", { provider: "evener" }),
