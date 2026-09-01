@@ -745,10 +745,13 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
   };
 
-  const resolveParentRefs = (candidate: EvenerCollectorIndices): void => {
+  const resolveParentRefs = (candidate: EvenerCollectorIndices, rejectUnresolved = false): void => {
     for (const state of candidate.statesBySessionId.values()) {
       state.parentSessionId = null;
       if (state.parentRef === null) {
+        if (rejectUnresolved && isChild(state)) {
+          throw new EvenerCandidateRejected("unresolved Evener parent");
+        }
         continue;
       }
       const parentIds = candidate.sessionIdsByRef.get(state.parentRef);
@@ -756,12 +759,18 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         throw new EvenerCandidateRejected("ambiguous Evener parent ref");
       }
       const parentId = parentIds?.values().next().value;
-      state.parentSessionId = typeof parentId === "string" ? parentId : null;
+      if (typeof parentId !== "string") {
+        if (rejectUnresolved) {
+          throw new EvenerCandidateRejected("unresolved Evener parent ref");
+        }
+        continue;
+      }
+      state.parentSessionId = parentId;
     }
   };
 
   const deriveCandidateEvents = (candidate: EvenerCollectorIndices, liveStart: boolean): RegistryEvent[] => {
-    resolveParentRefs(candidate);
+    resolveParentRefs(candidate, true);
     const observedAt = now();
     const parsed: EvenerThreadState[] = [];
     const events: RegistryEvent[] = [];
