@@ -36,16 +36,17 @@ jumping to the session that needs you.
 - Live top-level sessions and their native or Paseo subagent trees.
 - `working`, `waiting`, `idle`, and `error` state with elapsed timers.
 - Finished results that stay on the board — viewing one elsewhere only clears
-  its unread mark — until you flick or ack the card, archive the agent, or
-  the session moves on.
+  its unread mark — until you flick or ack the card, restart the session, or
+  the provider reports that the tab/session was closed or archived.
 - Provider, model, project, and privacy-safe activity categories.
 - Optional quota meters and daily token-usage trends.
 - Tap-to-open for integrations with an exact route; a visible flash when no
   safe route exists.
 
 Dealerboard is a live status surface, not a transcript viewer or historical
-inbox. Finished, dismissed sessions stay in the registry temporarily but
-leave the board.
+inbox. Dismissal hides a finished session while retaining its registry row
+temporarily. Closed or archived sessions and their descendants are removed from
+the registry immediately when the harness supplies that lifecycle signal.
 
 ## How it works
 
@@ -137,7 +138,7 @@ source checkout.
 | ZCode | Manual hooks | Work, approval wait, finish; one-hour stale lease | Flash |
 | Grok | Installer-managed hook when `~/.grok` exists | Work, permission wait, finish, failure | Flash |
 | Qwen Code | Manual hooks | Work, permission wait, finish, failure | Flash |
-| Evener | Automatic local AppWire discovery | Inventory, work, question/escalation wait, finish, failure, subagents | Flash |
+| Evener | Automatic local AppWire discovery | Inventory, work, question/escalation wait, finish, failure, archive removal, subagents | Flash |
 | DeepSeek | Protocol/decoder support only; no public setup adapter | Depends on external event ingress | Flash |
 
 A Paseo-origin card with a known agent reference overrides provider routing

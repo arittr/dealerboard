@@ -304,3 +304,24 @@ to ready and re-run the ratify gate. -->
   tests, 0 fail; full gate + cargo). Spec status flips to completed. SDD
   run row already in ~/.agents/run-ledger.md.
 - **Deciders:** user
+
+## 2026-09-01 — Supersedes: Session end keeps unviewed results as an ended card
+
+- **Decided:** An authoritative tab/session close or archive removes its
+  Dealerboard slat and descendants immediately, even when the tree holds
+  unread or failed results. Provider `SessionEnd`, Paseo `archivedAt`, and
+  Evener's archived navigation tier are terminal lifecycle evidence. `Stop`
+  and turn completion are not terminal: they retain finished results under
+  the existing view, dismiss, and expiry contract.
+- **Decided:** Evener reads navigation locations by canonical
+  `local:<sessionId>` root identity and refreshes immediately on
+  `evener/navigation/invalidated`. Idle is never inferred to mean closed.
+  Harnesses without a close/archive signal retain their stale-session TTL,
+  and maintenance removes legacy rows carrying `ended_at`.
+- **Rejected:** Retaining an unread ended card after the harness says the
+  session is gone; inferring closure from idle or turn completion.
+- **Because:** Dealerboard is a live status surface. A slat must reflect an
+  extant tab/session, while a completed turn inside an extant session still
+  needs to hold its result for review.
+- **Deciders:** user ("always drop the slat if the tab/session is closed or
+  archived in any harness")

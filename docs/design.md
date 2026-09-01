@@ -51,15 +51,17 @@ rows are display-only and disappear when they finish.
 Reading a result never removes a card. A view clears the unread badge and
 starts a 24-hour expiry clock (`viewedSince`); the card leaves only
 through an explicit dismiss (app flick, action-sheet Dismiss, CLI
-`sessions ack`, Stream Deck key press), a manual clear, a Paseo archive,
-a reused session start, the viewed-expiry sweep, or the stale prune —
-which skips any tree holding an unviewed result. Viewing in Paseo is
-inert. A session that ends holding an unviewed result stays as a terminal
-"ended" card. Unviewed results never expire and are exempt from prune;
-there is no cap on how long or how many accumulate. The standard top-level
-prune lease is 24 hours; ZCode uses one hour because it has no
-session-end hook. Every provider late-joins on the next submitted prompt
-when a start was missed or a live row was pruned.
+`sessions ack`, Stream Deck key press), a manual clear, a reused session
+start, the viewed-expiry sweep, or the stale prune — which skips any tree
+holding an unviewed result. Viewing in Paseo is inert. A turn completion
+(`Stop`) retains its finished result, but an authoritative session close or
+archive removes the root and its descendants immediately, even when they
+hold unread results. Those terminal signals are provider `SessionEnd`,
+Paseo `archivedAt`, and Evener's archived navigation tier. Idle is never a
+close signal. Harnesses without a close/archive signal retain the standard
+24-hour top-level prune lease; ZCode uses one hour. Every provider late-joins
+on the next submitted prompt when a start was missed or a live row was
+pruned.
 
 ## Data boundaries
 
@@ -144,11 +146,11 @@ leaves the age standing alone.
 
 A tap views the card — clearing its unread badge and starting its expiry
 clock — then routes Paseo, Claude/Ghostty, Codex, or Kimi when an exact
-target exists; an ended card views but never routes. Unsupported or
-unbound routes flash. A vertical flick dismisses a finished card — one
-holding done/unread or in error (active working/waiting cards can never be
-flicked away); a long press opens Open, Dismiss (same eligibility), Reveal
-transcript, Copy session ID, and double-confirmed Clear actions. Both
+target exists. Unsupported or unbound routes flash. A vertical flick
+dismisses a finished card — one holding done/unread or in error (active
+working/waiting cards can never be flicked away); a long press opens Open,
+Dismiss (same eligibility), Reveal transcript, Copy session ID, and
+double-confirmed Clear actions. Both
 dismiss paths carry the causality watermark of the stamp the gesture was
 issued from, so a result landing after the render survives the gesture.
 A horizontal drag on the board follows the finger and commits or
@@ -163,8 +165,10 @@ interaction path.
 - `agentsview` runs every 30 seconds for aggregate daily token totals.
 - Paseo overlay state refreshes every two seconds.
 - Evener uses authenticated loopback AppWire v3 and refreshes every two
-  seconds. Lists are capped at 16 pages and 4,096 records before any hydration
-  is emitted.
+  seconds. Each accepted refresh reads the navigation location of every root;
+  archived roots and their descendants are removed. Navigation invalidation
+  triggers an immediate refresh. Lists are capped at 16 pages and 4,096
+  records before any hydration is emitted.
 
 Raw helper output and capabilities are not logged or persisted. Evener's
 current protocol sends its bearer in the initial WebSocket Authorization
