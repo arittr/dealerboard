@@ -31,7 +31,7 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
 
 type RecordedCall = { fn: string; args: unknown[] };
 
-type DepsOptions = { failView?: boolean; failOpenUrl?: boolean };
+type DepsOptions = { failView?: boolean; failOpenUrl?: boolean; failActivation?: boolean };
 
 /** Fake bridge deps: every call is recorded (flashes included) in order. */
 const makeDeps = (options: DepsOptions = {}) => {
@@ -44,6 +44,10 @@ const makeDeps = (options: DepsOptions = {}) => {
     openUrl: (url) => {
       calls.push({ fn: "openUrl", args: [url] });
       return options.failOpenUrl === true ? Promise.reject(new Error("open_url failed")) : Promise.resolve();
+    },
+    activateEvenerSession: (sessionId) => {
+      calls.push({ fn: "activateEvenerSession", args: [sessionId] });
+      return options.failActivation === true ? Promise.reject(new Error("activation failed")) : Promise.resolve();
     },
     focusGhostty: (script, terminalId) => {
       calls.push({ fn: "focusGhostty", args: [script, terminalId] });
@@ -61,6 +65,8 @@ const makeDeps = (options: DepsOptions = {}) => {
 };
 
 const callNames = (calls: RecordedCall[]): string[] => calls.map((call) => call.fn);
+
+const callRows = (calls: RecordedCall[]): unknown[][] => calls.map((call) => [call.fn, ...call.args]);
 
 const flashCount = (calls: RecordedCall[]): number => calls.filter((call) => call.fn === "flash").length;
 
@@ -152,6 +158,33 @@ describe("pressSessionTile", () => {
     expect(flashCount(calls)).toBe(1);
   });
 
+  test("an evener root views first, then activates the exact session id", async () => {
+    const { deps, calls } = makeDeps();
+    await pressSessionTile(
+      session({ provider: "evener", sessionId: "evener-a", unreadSince: "2026-08-31T12:00:00.000Z" }),
+      seen("2026-08-31T12:00:00.000Z"),
+      deps,
+    );
+    expect(callRows(calls)).toEqual([
+      ["view", "evener", "evener-a", { unreadSince: "2026-08-31T12:00:00.000Z" }],
+      ["activateEvenerSession", "evener-a"],
+    ]);
+  });
+
+  test("a rejected evener activation flashes exactly once", async () => {
+    const { deps, calls } = makeDeps({ failActivation: true });
+    await pressSessionTile(session({ provider: "evener", sessionId: "evener-a" }), seen(), deps);
+    expect(callNames(calls)).toEqual(["view", "activateEvenerSession", "flash"]);
+    expect(flashCount(calls)).toBe(1);
+  });
+
+  test("a rejected view does not block evener activation and never flashes", async () => {
+    const { deps, calls } = makeDeps({ failView: true });
+    await pressSessionTile(session({ provider: "evener", sessionId: "evener-a" }), seen(), deps);
+    expect(callNames(calls)).toEqual(["view", "activateEvenerSession"]);
+    expect(flashCount(calls)).toBe(0);
+  });
+
   test("an ended card views but never routes (and does not flash)", async () => {
     const { deps, calls } = makeDeps();
     await pressSessionTile(
@@ -164,6 +197,18 @@ describe("pressSessionTile", () => {
       fn: "view",
       args: ["claude", "session-1", { unreadSince: "2026-08-26T04:00:00.000Z" }],
     });
+  });
+
+  test("an ended evener card views but never activates", async () => {
+    const { deps, calls } = makeDeps();
+    await pressSessionTile(
+      session({ provider: "evener", sessionId: "evener-a", endedAt: "2026-08-26T05:00:00.000Z" }),
+      seen(),
+      deps,
+    );
+    expect(callNames(calls)).toEqual(["view"]);
+    expect(callNames(calls)).not.toContain("activateEvenerSession");
+    expect(flashCount(calls)).toBe(0);
   });
 });
 

@@ -27,6 +27,9 @@ const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
   ...overrides,
 });
 
+const evenerSession = (overrides: Partial<ProjectedSession> = {}): ProjectedSession =>
+  session({ provider: "evener", ...overrides });
+
 describe("routeForSession", () => {
   test("a paseo origin with a ref routes to paseo regardless of provider", () => {
     expect(routeForSession(session({ provider: "claude", originKind: "paseo", originRef: "agent-42" }))).toEqual({
@@ -67,8 +70,21 @@ describe("routeForSession", () => {
     });
   });
 
+  test("an evener root routes to the exact evener session activation", () => {
+    expect(routeForSession(evenerSession({ sessionId: "evener-a" }))).toEqual({
+      kind: "evener",
+      sessionId: "evener-a",
+    });
+  });
+
+  test("a paseo origin wins over evener routing", () => {
+    expect(
+      routeForSession(evenerSession({ sessionId: "evener-a", originKind: "paseo", originRef: "agent-42" })),
+    ).toEqual({ kind: "paseo", agentId: "agent-42" });
+  });
+
   test("providers without an activation binding flash", () => {
-    for (const provider of ["pi", "omp", "zcode", "deepseek", "grok", "qwen", "evener"] as const) {
+    for (const provider of ["pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const) {
       expect(routeForSession(session({ provider }))).toEqual({ kind: "flash" });
     }
   });
