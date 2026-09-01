@@ -81,8 +81,10 @@ const thread = (
   sessionId: string,
   status: string,
   options: {
+    ref?: string;
     parentRef?: string;
     kind?: string;
+    diagnostics?: unknown;
     name?: string;
     model?: string;
     askPending?: boolean;
@@ -98,7 +100,7 @@ const thread = (
   path: sessionId,
   status: { type: status },
   evener: {
-    ref: `local:${sessionId}`,
+    ref: options.ref ?? `local:${sessionId}`,
     ...(options.parentRef === undefined ? {} : { parentRef: options.parentRef }),
     ...(options.kind === undefined ? {} : { kind: options.kind }),
     ...(options.askPending === undefined ? {} : { askPending: options.askPending }),
@@ -115,6 +117,7 @@ const thread = (
             deniedPath: "/work/denied",
           })),
         }),
+    ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
   },
 });
 
@@ -125,6 +128,43 @@ const requestByMethod = (socket: FakeSocket, method: string): Record<string, unk
   }
   return frame;
 };
+
+const requestsByMethod = (socket: FakeSocket, method: string): Array<Record<string, unknown>> =>
+  socket.sent.filter((candidate) => candidate["method"] === method && "id" in candidate);
+
+const latestRequestByMethod = (socket: FakeSocket, method: string): Record<string, unknown> => {
+  const request = requestsByMethod(socket, method).at(-1);
+  if (request === undefined) {
+    throw new Error(`missing ${method} request`);
+  }
+  return request;
+};
+
+const respondToReads = async (socket: FakeSocket, fixtures: ReadonlyMap<string, Record<string, unknown>>): Promise<void> => {
+  let handled = 0;
+  for (;;) {
+    const reads = requestsByMethod(socket, "thread/read");
+    const request = reads[handled];
+    if (request === undefined) {
+      return;
+    }
+    const params = request["params"] as Record<string, unknown>;
+    const sessionId = params["threadId"];
+    if (typeof sessionId !== "string") {
+      throw new Error("targeted read omitted threadId");
+    }
+    const fixture = fixtures.get(sessionId);
+    if (fixture === undefined) {
+      throw new Error(`missing read fixture for ${sessionId}`);
+    }
+    respond(socket, request, { thread: fixture });
+    handled += 1;
+    await flush();
+  }
+};
+
+const threadFixtures = (...values: Record<string, unknown>[]): ReadonlyMap<string, Record<string, unknown>> =>
+  new Map(values.map((value) => [value["sessionId"] as string, value]));
 
 const respond = (socket: FakeSocket, request: Record<string, unknown>, result: unknown): void => {
   socket.message({ id: request["id"], result });
@@ -140,7 +180,6 @@ const authoritativeUpdateHarness = (): {
 
 const collectIncrementalEvents = (events: EvenerCollectorUpdate["events"]): ((update: EvenerCollectorUpdate) => void) =>
   (update) => {
-    expect(update.activeChildSessionIds).toBeNull();
     events.push(...update.events);
   };
 
@@ -276,7 +315,6 @@ describe("Evener AppWire collector", () => {
       schedule: timers.schedule,
       now: () => "2026-08-26T05:00:00.000Z",
       onUpdate: (update) => {
-        expect(update.activeChildSessionIds).toBeNull();
         updates.push(update);
       },
     });
@@ -326,6 +364,43 @@ describe("Evener AppWire collector", () => {
     });
     await flush();
 
+    const firstRead = requestByMethod(socket, "thread/read");
+    expect(firstRead["params"]).toMatchObject({
+      ref: "local:terra-child",
+      threadId: "terra-child",
+      includeTurns: false,
+      subscribe: true,
+      replaceSubscription: true,
+    });
+    respond(socket, firstRead, {
+      thread: thread("terra-child", "active", {
+        parentRef: "local:root",
+        kind: "subagent",
+        model: "gpt-5.6-terra",
+      }),
+    });
+    await flush();
+    let reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(2);
+    expect(reads[1]?.["params"]).toMatchObject({ ref: "local:opus-child", threadId: "opus-child", replaceSubscription: false });
+    respond(socket, reads[1]!, {
+      thread: thread("opus-child", "active", {
+        parentRef: "local:root",
+        kind: "subagent",
+        model: "claude-opus-4.1",
+      }),
+    });
+    await flush();
+    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(3);
+    expect(reads[2]?.["params"]).toMatchObject({ ref: "local:root", threadId: "root", replaceSubscription: false });
+    respond(socket, reads[2]!, {
+      thread: thread("root", "active", { name: "Root title", model: "gpt-5.6-sol" }),
+    });
+    await flush();
+    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(3);
+
     const initialEvents = updates.flatMap((update) => update.events);
     expect(initialEvents.map((event) => [event.kind, event.sessionId])).toEqual([
       ["SessionObserved", "root"],
@@ -357,42 +432,6 @@ describe("Evener AppWire collector", () => {
       ["terra-child", "gpt-5.6-terra"],
     ]);
 
-    const firstRead = requestByMethod(socket, "thread/read");
-    expect(firstRead["params"]).toMatchObject({
-      ref: "local:root",
-      includeTurns: false,
-      subscribe: true,
-      replaceSubscription: true,
-    });
-    respond(socket, firstRead, {
-      thread: thread("root", "active", { name: "Root title", model: "gpt-5.6-sol" }),
-    });
-    await flush();
-    let reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
-    expect(reads).toHaveLength(2);
-    expect(reads[1]?.["params"]).toMatchObject({ ref: "local:opus-child", replaceSubscription: false });
-    respond(socket, reads[1]!, {
-      thread: thread("opus-child", "active", {
-        parentRef: "local:root",
-        kind: "subagent",
-        model: "claude-opus-4.1",
-      }),
-    });
-    await flush();
-    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
-    expect(reads).toHaveLength(3);
-    expect(reads[2]?.["params"]).toMatchObject({ ref: "local:terra-child", replaceSubscription: false });
-    respond(socket, reads[2]!, {
-      thread: thread("terra-child", "active", {
-        parentRef: "local:root",
-        kind: "subagent",
-        model: "gpt-5.6-terra",
-      }),
-    });
-    await flush();
-    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
-    expect(reads).toHaveLength(3);
-
     socket.message({
       method: "thread/model/changed",
       params: { ref: "local:terra-child", model: "gemini-3-pro" },
@@ -413,6 +452,121 @@ describe("Evener AppWire collector", () => {
 
     collector.stop();
     expect(socket.closed).toBe(true);
+  });
+
+  test("targets every shared-ref session in either list order and rejects ambiguous compatibility parents", async () => {
+    const orders = [
+      ["root", "child", "grandchild"],
+      ["child", "grandchild", "root"],
+    ];
+    for (const order of orders) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const fixtureBySession = new Map<string, Record<string, unknown>>([
+        ["root", thread("root", "active", { ref: "local:root" })],
+        [
+          "child",
+          thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
+        ],
+        [
+          "grandchild",
+          thread("grandchild", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
+        ],
+      ]);
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+      collector.start();
+      socket.open();
+      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+      await flush();
+      const list = requestByMethod(socket, "thread/list");
+      respond(socket, list, { data: order.map((sessionId) => fixtureBySession.get(sessionId)!) });
+      await flush();
+      await respondToReads(socket, fixtureBySession);
+
+      const reads = requestsByMethod(socket, "thread/read");
+      expect(reads.map((request) => (request["params"] as Record<string, unknown>)["threadId"]).sort()).toEqual([
+        "child",
+        "grandchild",
+        "root",
+      ]);
+      expect(reads.every((request) => (request["params"] as Record<string, unknown>)["ref"] === "local:root")).toBe(true);
+      expect((reads[0]?.["params"] as Record<string, unknown>)["replaceSubscription"]).toBe(true);
+      expect(
+        reads.slice(1).every((request) => (request["params"] as Record<string, unknown>)["replaceSubscription"] === false),
+      ).toBe(true);
+      expect(updates).toEqual([]);
+      expect(socket.closed).toBe(false);
+      expect(diagnostics).toHaveLength(1);
+      collector.stop();
+    }
+  });
+
+  test("publishes an empty authoritative update after an empty complete candidate", async () => {
+    const socket = new FakeSocket();
+    const updates: EvenerCollectorUpdate[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), { data: [] });
+    await flush();
+    expect(updates).toEqual([{ events: [], activeChildSessionIds: [] }]);
+    collector.stop();
+  });
+
+  test("keeps the accepted session state when a duplicate candidate is rejected", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    const baseline = thread("baseline", "active");
+    respond(socket, requestByMethod(socket, "thread/list"), { data: [baseline] });
+    await flush();
+    await respondToReads(socket, threadFixtures(baseline));
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual([]);
+    updates.length = 0;
+
+    timers.run(2_000);
+    await flush();
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [baseline, baseline] });
+    await flush();
+    expect(updates).toEqual([]);
+    expect(socket.closed).toBe(false);
+    expect(diagnostics).toHaveLength(1);
+
+    socket.message({
+      method: "turn/started",
+      params: { ref: "local:baseline", threadId: "baseline", turn: { status: "inProgress" } },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "Activity", sessionId: "baseline" }],
+    });
+    collector.stop();
   });
 
   test("disconnects without partial hydration when thread/list exceeds the page cap", async () => {
@@ -493,6 +647,7 @@ describe("Evener AppWire collector", () => {
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), { data: [thread("root", "awaiting")] });
     await flush();
+    await respondToReads(socket, threadFixtures(thread("root", "awaiting")));
 
     expect(events.find((event) => event.kind === "SessionStatusObserved")).toMatchObject({ status: "idle" });
 
@@ -537,6 +692,10 @@ describe("Evener AppWire collector", () => {
       ],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(thread("question", "awaiting", { askPending: true }), thread("escalation", "active", { pendingEscalations: 1 })),
+    );
 
     expect(
       events.filter((event) => event.kind === "SessionStatusObserved").map((event) => [event.sessionId, event.status]),
@@ -605,6 +764,14 @@ describe("Evener AppWire collector", () => {
       ],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        thread("root", "active"),
+        thread("status-child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
+        thread("turn-child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
+      ),
+    );
     events.length = 0;
 
     socket.message({
@@ -651,6 +818,13 @@ describe("Evener AppWire collector", () => {
       ],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        thread("question", "awaiting", { askPending: true, pendingEscalations: 1 }),
+        thread("escalations", "active", { pendingEscalations: 2 }),
+      ),
+    );
     events.length = 0;
 
     socket.message({
@@ -698,6 +872,10 @@ describe("Evener AppWire collector", () => {
       data: [thread("root", "active"), thread("child", "active", { parentRef: "local:root", kind: "subagent" })],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(thread("root", "active"), thread("child", "active", { parentRef: "local:root", kind: "subagent" })),
+    );
     events.length = 0;
 
     socket.message({
