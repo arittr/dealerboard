@@ -989,6 +989,95 @@ describe("diagnostic records", () => {
 });
 
 describe("sessions commands", () => {
+  type ActivationExecution = { file: string; args: string[] };
+  type ActivationOverrides = {
+    environment?: Readonly<Record<string, string | undefined>>;
+    resolveEvenerHubEndpoints?: (...args: never[]) => unknown;
+    evenerSessionUrl?: (...args: never[]) => unknown;
+    executeFile?: (file: string, args: readonly string[]) => Promise<void>;
+  };
+
+  const makeActivationHarness = (overrides: ActivationOverrides = {}) => {
+    const executions: ActivationExecution[] = [];
+    let databaseOpens = 0;
+    const harness = makeHarness();
+    Object.assign(harness.deps, {
+      openDatabase: (() => {
+        databaseOpens += 1;
+        throw sqliteError("SQLITE_CANTOPEN", "database unavailable");
+      }) as CliDependencies["openDatabase"],
+      executeFile: async (file: string, args: readonly string[]) => {
+        executions.push({ file, args: [...args] });
+      },
+      ...overrides,
+    });
+    return { harness, executions, databaseOpens: () => databaseOpens };
+  };
+
+  test("sessions activate evener opens the exact token-free session URL without opening the database", async () => {
+    const { harness, executions, databaseOpens } = makeActivationHarness();
+
+    expect(await runCli(["sessions", "activate", "evener", "session-a"], harness.deps)).toBe(0);
+    expect(executions).toEqual([
+      {
+        file: "/usr/bin/open",
+        args: ["-u", "http://127.0.0.1:9180/s/local%3Asession-a"],
+      },
+    ]);
+    expect(databaseOpens()).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.stderr()).toBe("");
+  });
+
+  test("sessions activate evener uses the configured hub port", async () => {
+    const { harness, executions } = makeActivationHarness({
+      environment: { EVENER_HUB_ADDR: "127.0.0.1:9777" },
+    });
+
+    expect(await runCli(["sessions", "activate", "evener", "session-a"], harness.deps)).toBe(0);
+    expect(executions).toEqual([
+      {
+        file: "/usr/bin/open",
+        args: ["-u", "http://127.0.0.1:9777/s/local%3Asession-a"],
+      },
+    ]);
+  });
+
+  test("sessions activate evener rejects malformed grammar without executing a process", async () => {
+    for (const args of [
+      ["sessions", "activate", "codex", "session-a"],
+      ["sessions", "activate", "evener"],
+      ["sessions", "activate", "evener", "session-a", "extra"],
+      ["sessions", "activate", "evener", "\nunsafe"],
+    ]) {
+      const { harness, executions, databaseOpens } = makeActivationHarness();
+      expect(await runCli(args, harness.deps)).toBe(1);
+      expect(harness.stderr()).not.toBe("");
+      expect(harness.stderr().length).toBeLessThanOrEqual(1024);
+      expect(harness.stdout()).toBe("");
+      expect(executions).toEqual([]);
+      expect(databaseOpens()).toBe(0);
+    }
+  });
+
+  test("sessions activate evener reports endpoint, identity, spawn, and exit failures without fallback", async () => {
+    const cases: ActivationOverrides[] = [
+      { resolveEvenerHubEndpoints: () => null },
+      { evenerSessionUrl: () => null },
+      { executeFile: () => Promise.reject(new Error("executor rejection sentinel")) },
+      { executeFile: () => Promise.reject(new Error("child process failed sentinel")) },
+    ];
+
+    for (const overrides of cases) {
+      const { harness, executions, databaseOpens } = makeActivationHarness(overrides);
+      expect(await runCli(["sessions", "activate", "evener", "session-a"], harness.deps)).toBe(1);
+      expect(harness.stderr()).toBe("sessions activate failed\n");
+      expect(harness.stdout()).toBe("");
+      expect(executions).toEqual([]);
+      expect(databaseOpens()).toBe(0);
+    }
+  });
+
   const seed = (): void => {
     initRegistry();
     const db = openRegistryDatabase(paths.database, "readwrite");
