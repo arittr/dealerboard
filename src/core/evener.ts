@@ -590,13 +590,20 @@ const parseDelegateProjection = (value: unknown): EvenerDelegateInfo => {
   const lifecycle = parseRequiredDelegateIdentity(value["lifecycle"], "lifecycle");
   const phase = parseRequiredDelegateIdentity(value["phase"], "phase");
   const status = parseRequiredDelegateIdentity(value["status"], "status");
+  // model and terminal are omitempty on the wire: an absent key is Go's zero
+  // value (no model, terminal=false), never a malformed projection.
   const modelValue = value["model"];
-  const model = modelValue === null ? null : parseRequiredDelegateIdentity(modelValue, "model");
+  const model =
+    modelValue === null || modelValue === undefined ? null : parseRequiredDelegateIdentity(modelValue, "model");
+  const terminalValue = value["terminal"] ?? false;
+  if (typeof terminalValue !== "boolean") {
+    throw new EvenerCandidateRejected("invalid Evener delegate terminal");
+  }
   const projectionRevision = value["projectionRevision"];
   if (typeof projectionRevision !== "number" || !Number.isSafeInteger(projectionRevision) || projectionRevision < 0) {
     throw new EvenerCandidateRejected("invalid Evener delegate projection revision");
   }
-  const booleanFields = ["terminal", "resumable", "needsAttention"] as const;
+  const booleanFields = ["resumable", "needsAttention"] as const;
   for (const field of booleanFields) {
     if (typeof value[field] !== "boolean") {
       throw new EvenerCandidateRejected(`invalid Evener delegate ${field}`);
@@ -611,7 +618,7 @@ const parseDelegateProjection = (value: unknown): EvenerDelegateInfo => {
     lifecycle,
     phase,
     status,
-    terminal: value["terminal"] as boolean,
+    terminal: terminalValue,
     resumable: value["resumable"] as boolean,
     needsAttention: value["needsAttention"] as boolean,
     model,
@@ -949,6 +956,13 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         !candidate.statesBySessionId.has(delegate.rootSessionId) ||
         !candidate.statesBySessionId.has(delegate.childSessionId)
       ) {
+        // A terminal delegate legitimately outlives its closed child run in
+        // the owner's diagnostics; history never links and never rejects a
+        // live candidate. A live delegate naming a missing session is a
+        // genuine contradiction and still fails the candidate.
+        if (delegate.terminal) {
+          continue;
+        }
         throw new EvenerCandidateRejected("Evener delegate refers to a missing session");
       }
       if (delegate.parentDelegateId !== null && !candidate.delegatesById.has(delegate.parentDelegateId)) {
@@ -1229,10 +1243,17 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
           throw new Error("invalid Evener thread/read response");
         }
         const state = parseThread(result["thread"], listed);
-        if (state === null || state.sessionId !== listed.sessionId || state.ref !== listed.ref) {
+        if (state === null || state.sessionId !== listed.sessionId) {
           throw new EvenerCandidateRejected("invalid Evener thread/read identity");
         }
         delegateProjections.push(...delegateProjectionsFromThread(result["thread"]));
+        // Identity is the sessionId; the ref is a workspace route. A delegate
+        // child lists under its root's shared ref but reads back under its
+        // own, so adopt the read's ref and keep the ref index coherent.
+        if (state.ref !== listed.ref) {
+          removeSessionFromRef(candidate, listed);
+          addSessionToRef(candidate, state);
+        }
         candidate.statesBySessionId.set(listed.sessionId, state);
         candidate.subscribedSessionIds.add(listed.sessionId);
         if (refreshInvalidatedSessionIds.has(listed.sessionId)) {
@@ -1271,7 +1292,10 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       }
       if (error instanceof EvenerCandidateRejected) {
         reportFailure();
-        scheduleRefresh(0);
+        // A rejected candidate is usually persistent (a wire-shape mismatch,
+        // not a race): retry at the normal cadence so rejection can never
+        // become a no-gap request loop against the hub.
+        scheduleRefresh(refreshIntervalMs);
         return;
       }
       disconnect(target, "Evener AppWire refresh failed");
