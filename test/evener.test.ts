@@ -1130,6 +1130,59 @@ describe("Evener AppWire collector", () => {
     collector.stop();
   });
 
+  test("root close stops descendants after a non-leaf child close", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const parent = delegateProjection();
+    const nested = delegateProjection({
+      delegateId: "dlg-nested",
+      childSessionId: "grandchild",
+      parentDelegateId: "dlg-parent",
+    });
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [parent, nested]);
+    const child = thread("child", "active", { ref: "local:root", kind: "subagent" });
+    const grandchild = thread("grandchild", "active", { ref: "local:root", kind: "subagent" });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child, grandchild]);
+    updates.length = 0;
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "child" } });
+    expect(updates.at(-1)).toEqual({
+      events: [{ kind: "SubagentStop", provider: "evener", sessionId: "child", observedAt: expect.any(String) }],
+      activeChildSessionIds: null,
+    });
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    expect(updates.at(-1)).toEqual({
+      events: [
+        { kind: "SubagentStop", provider: "evener", sessionId: "grandchild", observedAt: expect.any(String) },
+        { kind: "SessionEnd", provider: "evener", sessionId: "root", observedAt: expect.any(String) },
+      ],
+      activeChildSessionIds: null,
+    });
+    expect(updates.flatMap((update) => update.events).map((event) => [event.kind, event.sessionId])).toEqual([
+      ["SubagentStop", "child"],
+      ["SubagentStop", "grandchild"],
+      ["SessionEnd", "root"],
+    ]);
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "grandchild", status: { type: "active" } },
+    });
+    expect(updates).toHaveLength(2);
+    collector.stop();
+  });
+
   test("disconnects without partial hydration when thread/list exceeds the page cap", async () => {
     const socket = new FakeSocket();
     const timers = timerHarness();

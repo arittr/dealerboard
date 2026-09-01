@@ -693,6 +693,8 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   let failureReported = false;
   const pending = new Map<number, PendingRequest>();
   let indices = emptyIndices();
+  const rootSessionIdBySessionId = new Map<string, string>();
+  const ancestryDepthBySessionId = new Map<string, number>();
   let refreshInvalidatedSessionIds: Set<string> | null = null;
   let refreshGeneration = 0;
 
@@ -882,6 +884,8 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       indices.statesBySessionId.delete(sessionId);
       indices.subscribedSessionIds.delete(sessionId);
     }
+    rootSessionIdBySessionId.delete(sessionId);
+    ancestryDepthBySessionId.delete(sessionId);
 
     const delegateId = indices.delegateByChildSession.get(sessionId);
     indices.delegateByChildSession.delete(sessionId);
@@ -889,6 +893,34 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       const delegate = indices.delegatesById.get(delegateId);
       if (delegate?.childSessionId === sessionId) {
         indices.delegatesById.delete(delegateId);
+      }
+    }
+  };
+
+  const rememberCandidateAncestry = (candidate: EvenerCollectorIndices): void => {
+    const currentSessionIds = new Set(candidate.statesBySessionId.keys());
+    for (const trackedSessionId of rootSessionIdBySessionId.keys()) {
+      if (!currentSessionIds.has(trackedSessionId)) {
+        rootSessionIdBySessionId.delete(trackedSessionId);
+        ancestryDepthBySessionId.delete(trackedSessionId);
+      }
+    }
+    for (const state of candidate.statesBySessionId.values()) {
+      let rootSessionId = state.sessionId;
+      let depth = 0;
+      let parentSessionId = state.parentSessionId;
+      while (parentSessionId !== null) {
+        const parent = candidate.statesBySessionId.get(parentSessionId);
+        if (parent === undefined) {
+          break;
+        }
+        rootSessionId = parent.sessionId;
+        depth += 1;
+        parentSessionId = parent.parentSessionId;
+      }
+      if (parentSessionId === null) {
+        rootSessionIdBySessionId.set(state.sessionId, rootSessionId);
+        ancestryDepthBySessionId.set(state.sessionId, depth);
       }
     }
   };
@@ -1025,6 +1057,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     addSessionToRef(candidate, state);
     resolveParentRefs(candidate);
     const events = hydrateState(candidate, state, liveStart, now());
+    rememberCandidateAncestry(candidate);
     indices = candidate;
     emitIncremental(events);
     return state;
@@ -1202,6 +1235,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         throw new EvenerCandidateRejected("Evener refresh candidate was invalidated");
       }
       assertRefreshGeneration(expectedGeneration);
+      rememberCandidateAncestry(candidate);
       indices = candidate;
       emitUpdate({ events, activeChildSessionIds });
       failureReported = false;
@@ -1385,6 +1419,25 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         descendants.push(childSessionId);
       }
     };
+    const appendOrphanedDescendants = (): void => {
+      const orphanedDescendants = Array.from(indices.statesBySessionId.values())
+        .filter(
+          (candidate) =>
+            candidate.sessionId !== sessionId &&
+            rootSessionIdBySessionId.get(candidate.sessionId) === sessionId &&
+            !visited.has(candidate.sessionId),
+        )
+        .sort((left, right) => {
+          const depthDifference =
+            (ancestryDepthBySessionId.get(right.sessionId) ?? 0) -
+            (ancestryDepthBySessionId.get(left.sessionId) ?? 0);
+          return depthDifference !== 0 ? depthDifference : left.sessionId.localeCompare(right.sessionId);
+        });
+      for (const descendant of orphanedDescendants) {
+        visited.add(descendant.sessionId);
+        descendants.push(descendant.sessionId);
+      }
+    };
 
     const events: RegistryEvent[] = [];
     if (isChild(state)) {
@@ -1393,6 +1446,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       }
     } else {
       visitDescendants(sessionId);
+      appendOrphanedDescendants();
       for (const descendantSessionId of descendants) {
         const descendant = indices.statesBySessionId.get(descendantSessionId);
         if (descendant !== undefined && !descendant.cleanupEmitted) {
