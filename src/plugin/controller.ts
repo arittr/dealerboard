@@ -20,6 +20,7 @@
 
 import type { ActivateClaudeSession } from "./claude-session-activation";
 import type { ActivateCodexSession } from "./codex-session-activation";
+import type { ActivateEvenerSession } from "./evener-session-activation";
 import type { ActivateKimiSession } from "./kimi-session-activation";
 import { advanceLayoutPage, type KeyModel, type LayoutResult, type LayoutSettingsV1, reduceLayout } from "./layout";
 import type { ActivatePaseoSession } from "./paseo-session-activation";
@@ -50,6 +51,7 @@ export type SessionGridPorts = {
   activateCodexSession: ActivateCodexSession;
   activateKimiSession: ActivateKimiSession;
   activatePaseoSession: ActivatePaseoSession;
+  activateEvenerSession: ActivateEvenerSession;
   ackSession: AckSession;
   showAlert: (context: string) => Promise<void>;
   clock: SchedulerClock;
@@ -210,15 +212,18 @@ export class SessionGridController {
         activateSession = this.ports.activateKimiSession;
         activationTarget = session.sessionId;
         return runActivation();
+      case "evener":
+        activateSession = this.ports.activateEvenerSession;
+        activationTarget = session.sessionId;
+        return runActivation();
       case "pi":
       case "omp":
       case "zcode":
       case "deepseek":
       case "grok":
       case "qwen":
-      case "evener":
-        // pi, omp, zcode, deepseek, grok, qwen, and evener have no activation binding
-        // yet; match the unbound-Claude behavior instead of silently doing nothing.
+        // pi, omp, zcode, deepseek, grok, and qwen have no activation binding;
+        // match the unbound-Claude behavior instead of silently doing nothing.
         await this.showActivationAlert(context);
         return;
     }
