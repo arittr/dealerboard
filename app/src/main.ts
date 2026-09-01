@@ -32,6 +32,7 @@ import {
 } from "./action-sheet";
 import { type BoardPage, type BoardResult, type BoardSession, jumpBoard, type PlacedCard, reduceBoard } from "./board";
 import {
+  activateEvenerSession,
   ackSession,
   clearSession,
   focusGhostty,
@@ -522,6 +523,7 @@ const onBoardClick = (): void => {
     return;
   }
   void pressBoardCard(settled.card, settled.watermark, {
+    activateEvenerSession,
     view: viewSession,
     openUrl,
     focusGhostty,
@@ -642,6 +644,7 @@ const runSheetAction = async (context: SheetContext, id: SheetActionId): Promise
       // flash; the sheet's job is done either way.
       dismissActionSheet();
       void pressSessionTile(session, watermark, {
+        activateEvenerSession,
         view: viewSession,
         openUrl,
         focusGhostty,
