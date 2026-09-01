@@ -130,6 +130,20 @@ const respond = (socket: FakeSocket, request: Record<string, unknown>, result: u
   socket.message({ id: request["id"], result });
 };
 
+const authoritativeUpdateHarness = (): {
+  updates: EvenerCollectorUpdate[];
+  onUpdate: (update: EvenerCollectorUpdate) => void;
+} => {
+  const updates: EvenerCollectorUpdate[] = [];
+  return { updates, onUpdate: (update) => updates.push(update) };
+};
+
+const collectIncrementalEvents = (events: EvenerCollectorUpdate["events"]): ((update: EvenerCollectorUpdate) => void) =>
+  (update) => {
+    expect(update.activeChildSessionIds).toBeNull();
+    events.push(...update.events);
+  };
+
 describe("Evener hub connection discovery", () => {
   test("normalizes only loopback hub addresses", () => {
     expect(evenerAppWireUrl("127.0.0.1:9180")).toBe("ws://127.0.0.1:9180/rpc");
@@ -239,6 +253,15 @@ describe("Evener hub connection discovery", () => {
 });
 
 describe("Evener AppWire collector", () => {
+  test("delivers an authoritative update with no events to the update harness", () => {
+    const harness = authoritativeUpdateHarness();
+    harness.onUpdate({ events: [], activeChildSessionIds: [] });
+    expect(harness.updates.at(-1)).toEqual({
+      events: [],
+      activeChildSessionIds: [],
+    });
+  });
+
   test("handshakes, hydrates roots before subagents, and subscribes with one replacement", async () => {
     const socket = new FakeSocket();
     const timers = timerHarness();
@@ -252,7 +275,10 @@ describe("Evener AppWire collector", () => {
       },
       schedule: timers.schedule,
       now: () => "2026-08-26T05:00:00.000Z",
-      onUpdate: (update) => updates.push(update),
+      onUpdate: (update) => {
+        expect(update.activeChildSessionIds).toBeNull();
+        updates.push(update);
+      },
     });
 
     collector.start();
@@ -371,12 +397,17 @@ describe("Evener AppWire collector", () => {
       method: "thread/model/changed",
       params: { ref: "local:terra-child", model: "gemini-3-pro" },
     });
-    expect(updates.flatMap((update) => update.events).at(-1)).toEqual({
-      kind: "SessionModelChanged",
-      provider: "evener",
-      sessionId: "terra-child",
-      model: "gemini-3-pro",
-      observedAt: "2026-08-26T05:00:00.000Z",
+    expect(updates.at(-1)).toEqual({
+      events: [
+        {
+          kind: "SessionModelChanged",
+          provider: "evener",
+          sessionId: "terra-child",
+          model: "gemini-3-pro",
+          observedAt: "2026-08-26T05:00:00.000Z",
+        },
+      ],
+      activeChildSessionIds: null,
     });
     expect(timers.timers.some((timer) => timer.active && timer.delayMs === 2_000)).toBe(true);
 
@@ -454,7 +485,7 @@ describe("Evener AppWire collector", () => {
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
       now: () => "2026-08-26T05:00:30.000Z",
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -493,7 +524,7 @@ describe("Evener AppWire collector", () => {
     const collector = createEvenerCollector({
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -522,7 +553,7 @@ describe("Evener AppWire collector", () => {
     const collector = createEvenerCollector({
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -560,7 +591,7 @@ describe("Evener AppWire collector", () => {
     const collector = createEvenerCollector({
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -607,7 +638,7 @@ describe("Evener AppWire collector", () => {
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
       schedule: timers.schedule,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -655,7 +686,7 @@ describe("Evener AppWire collector", () => {
       socketFactory: () => socket,
       schedule: timers.schedule,
       now: () => "2026-08-26T05:01:00.000Z",
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();

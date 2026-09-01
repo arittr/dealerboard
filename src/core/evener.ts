@@ -228,6 +228,7 @@ export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependen
 
 export type EvenerCollectorUpdate = {
   events: RegistryEvent[];
+  activeChildSessionIds: readonly string[] | null;
 };
 
 export type EvenerSocket = {
@@ -513,16 +514,19 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
   };
 
-  const emit = (events: RegistryEvent[]): void => {
-    if (events.length === 0) {
+  const emitUpdate = (update: EvenerCollectorUpdate): void => {
+    if (update.events.length === 0 && update.activeChildSessionIds === null) {
       return;
     }
     try {
-      dependencies.onUpdate({ events });
+      dependencies.onUpdate(update);
     } catch {
       reportFailure();
     }
   };
+
+  const emitIncremental = (events: RegistryEvent[]): void =>
+    emitUpdate({ events, activeChildSessionIds: null });
 
   const clearTimer = (timer: EvenerTimer | null): null => {
     timer?.clear();
@@ -707,7 +711,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         progressed = true;
       }
     }
-    emit(events);
+    emitIncremental(events);
     return ordered;
   };
 
@@ -839,20 +843,20 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
         state.registered = false;
         state.cleanupEmitted = true;
-        emit(events);
+        emitIncremental(events);
         return;
       }
       if (!state.registered) {
-        emit(hydrateState(state, true, observedAt));
+        emitIncremental(hydrateState(state, true, observedAt));
         return;
       }
     }
     if (rawStatus === "closed" || rawStatus === "notLoaded") {
-      emit([endEvent(state, observedAt)]);
+      emitIncremental([endEvent(state, observedAt)]);
       states.delete(state.ref);
       return;
     }
-    emit([liveStatusEvent(state, previousStatus, observedAt)]);
+    emitIncremental([liveStatusEvent(state, previousStatus, observedAt)]);
   };
 
   const handleTurnStarted = (params: Record<string, unknown>): void => {
@@ -866,10 +870,10 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     state.failedTurn = false;
     const observedAt = now();
     if (isChild(state) && !state.registered) {
-      emit(hydrateState(state, true, observedAt));
+      emitIncremental(hydrateState(state, true, observedAt));
       return;
     }
-    emit([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt }]);
+    emitIncremental([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt }]);
   };
 
   const handleTurnCompleted = (params: Record<string, unknown>): void => {
@@ -884,20 +888,20 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
       state.registered = false;
       state.cleanupEmitted = true;
-      emit(events);
+      emitIncremental(events);
       return;
     }
     if (turnStatus === "failed") {
       state.failedTurn = true;
       state.rawStatus = "idle";
-      emit([{ kind: "StopFailure", provider: "evener", sessionId: state.sessionId, observedAt }]);
+      emitIncremental([{ kind: "StopFailure", provider: "evener", sessionId: state.sessionId, observedAt }]);
     } else if (turnStatus === "completed" || turnStatus === "interrupted") {
       state.failedTurn = false;
       const events: RegistryEvent[] = [{ kind: "Stop", provider: "evener", sessionId: state.sessionId, observedAt }];
       if (turnStatus === "completed" && requiresAttention(state)) {
         events.push({ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt });
       }
-      emit(events);
+      emitIncremental(events);
     }
   };
 
@@ -921,7 +925,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       return;
     }
     const observedAt = now();
-    emit([endEvent(state, observedAt)]);
+    emitIncremental([endEvent(state, observedAt)]);
     states.delete(state.ref);
     subscribed.delete(state.ref);
     for (const [ref, candidate] of states) {
@@ -941,7 +945,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     state.title = title;
     const event = titleEvent(state, now());
     if (event !== null) {
-      emit([event]);
+      emitIncremental([event]);
     }
   };
 
@@ -952,7 +956,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       return;
     }
     state.model = model;
-    emit([
+    emitIncremental([
       {
         kind: "SessionModelChanged",
         provider: "evener",
@@ -992,7 +996,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         if (state !== null) {
           state.pendingEscalationCount += 1;
           state.failedTurn = false;
-          emit([{ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt: now() }]);
+          emitIncremental([{ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt: now() }]);
         }
         return;
       }
