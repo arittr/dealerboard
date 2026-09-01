@@ -32,8 +32,8 @@ import {
 } from "./action-sheet";
 import { type BoardPage, type BoardResult, type BoardSession, jumpBoard, type PlacedCard, reduceBoard } from "./board";
 import {
-  activateEvenerSession,
   ackSession,
+  activateEvenerSession,
   clearSession,
   focusGhostty,
   type GestureWatermark,

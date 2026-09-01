@@ -199,7 +199,7 @@ describe("pressSessionTile", () => {
     });
   });
 
-  test("an ended evener card views but never activates", async () => {
+  test("an ended Evener card views but never activates", async () => {
     const { deps, calls } = makeDeps();
     await pressSessionTile(
       session({ provider: "evener", sessionId: "evener-a", endedAt: "2026-08-26T05:00:00.000Z" }),

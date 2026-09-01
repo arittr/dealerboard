@@ -68,11 +68,21 @@ const boundedString = (value: unknown): string | null => {
   return text === null ? null : Array.from(text).slice(0, MAX_WIRE_STRING_CODE_POINTS).join("");
 };
 
+const hasWireControlCharacters = (value: string): boolean => {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const wireIdentity = (value: unknown): string | null => {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
   }
-  if (Array.from(value).length > MAX_WIRE_STRING_CODE_POINTS || /[\u0000-\u001f\u007f]/u.test(value)) {
+  if (Array.from(value).length > MAX_WIRE_STRING_CODE_POINTS || hasWireControlCharacters(value)) {
     return null;
   }
   return value;
@@ -210,8 +220,7 @@ const validSessionId = (sessionId: string): boolean =>
   sessionId === sessionId.trim() &&
   Array.from(sessionId).length <= MAX_WIRE_STRING_CODE_POINTS &&
   !hasUnpairedSurrogate(sessionId) &&
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: Control characters are explicitly rejected by the wire contract.
-  !/[\u0000-\u001f\u007f]/u.test(sessionId);
+  !hasWireControlCharacters(sessionId);
 
 export const evenerSessionUrl = (endpoints: EvenerHubEndpoints, sessionId: string): string | null => {
   if (!validSessionId(sessionId)) {
@@ -584,11 +593,7 @@ const parseDelegateProjection = (value: unknown): EvenerDelegateInfo => {
   const modelValue = value["model"];
   const model = modelValue === null ? null : parseRequiredDelegateIdentity(modelValue, "model");
   const projectionRevision = value["projectionRevision"];
-  if (
-    typeof projectionRevision !== "number" ||
-    !Number.isSafeInteger(projectionRevision) ||
-    projectionRevision < 0
-  ) {
+  if (typeof projectionRevision !== "number" || !Number.isSafeInteger(projectionRevision) || projectionRevision < 0) {
     throw new EvenerCandidateRejected("invalid Evener delegate projection revision");
   }
   const booleanFields = ["terminal", "resumable", "needsAttention"] as const;
@@ -645,8 +650,14 @@ const mergeDelegateProjections = (
   }
 
   for (const delegateId of Array.from(byId.keys()).sort()) {
-    const entries = byId.get(delegateId)!;
-    const first = entries[0]!;
+    const entries = byId.get(delegateId);
+    if (entries === undefined) {
+      continue;
+    }
+    const first = entries[0];
+    if (first === undefined) {
+      continue;
+    }
     for (const entry of entries.slice(1)) {
       if (!delegateImmutableFields.every((field) => entry[field] === first[field])) {
         throw new EvenerCandidateRejected("contradictory Evener delegate identity");
@@ -654,7 +665,10 @@ const mergeDelegateProjections = (
     }
     const highestRevision = Math.max(...entries.map((entry) => entry.projectionRevision));
     const highest = entries.filter((entry) => entry.projectionRevision === highestRevision);
-    const selected = highest[0]!;
+    const selected = highest[0];
+    if (selected === undefined) {
+      continue;
+    }
     if (!highest.every((entry) => delegateProjectionEqual(entry, selected))) {
       throw new EvenerCandidateRejected("contradictory Evener delegate projection");
     }
@@ -721,8 +735,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
   };
 
-  const emitIncremental = (events: RegistryEvent[]): void =>
-    emitUpdate({ events, activeChildSessionIds: null });
+  const emitIncremental = (events: RegistryEvent[]): void => emitUpdate({ events, activeChildSessionIds: null });
 
   const clearTimer = (timer: EvenerTimer | null): null => {
     timer?.clear();
@@ -941,12 +954,17 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       if (delegate.parentDelegateId !== null && !candidate.delegatesById.has(delegate.parentDelegateId)) {
         throw new EvenerCandidateRejected("Evener delegate refers to a missing parent delegate");
       }
-      const state = candidate.statesBySessionId.get(delegate.childSessionId)!;
+      const state = candidate.statesBySessionId.get(delegate.childSessionId);
+      if (state === undefined) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing session");
+      }
+      const parentDelegate =
+        delegate.parentDelegateId === null ? null : candidate.delegatesById.get(delegate.parentDelegateId);
+      if (parentDelegate === undefined) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing parent delegate");
+      }
       state.delegateId = delegate.delegateId;
-      state.parentSessionId =
-        delegate.parentDelegateId === null
-          ? delegate.ownerSessionId
-          : candidate.delegatesById.get(delegate.parentDelegateId)!.childSessionId;
+      state.parentSessionId = parentDelegate === null ? delegate.ownerSessionId : parentDelegate.childSessionId;
     }
     for (const state of candidate.statesBySessionId.values()) {
       if (state.delegateId !== null) {
@@ -1064,7 +1082,11 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   };
 
   const subscribeLive = async (target: EvenerSocket, state: EvenerThreadState): Promise<void> => {
-    if (indices.subscribedSessionIds.has(state.sessionId) || state.rawStatus === "closed" || state.rawStatus === "notLoaded") {
+    if (
+      indices.subscribedSessionIds.has(state.sessionId) ||
+      state.rawStatus === "closed" ||
+      state.rawStatus === "notLoaded"
+    ) {
       return;
     }
     const replaceSubscription = indices.subscribedSessionIds.size === 0;
@@ -1429,8 +1451,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         )
         .sort((left, right) => {
           const depthDifference =
-            (ancestryDepthBySessionId.get(right.sessionId) ?? 0) -
-            (ancestryDepthBySessionId.get(left.sessionId) ?? 0);
+            (ancestryDepthBySessionId.get(right.sessionId) ?? 0) - (ancestryDepthBySessionId.get(left.sessionId) ?? 0);
           return depthDifference !== 0 ? depthDifference : left.sessionId.localeCompare(right.sessionId);
         });
       for (const descendant of orphanedDescendants) {

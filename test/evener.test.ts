@@ -264,7 +264,7 @@ describe("Evener hub connection discovery", () => {
     expect(evenerHubEndpoints("http://user:password@localhost:9180")).toBeNull();
   });
 
-  test("builds the canonical token-free session route", () => {
+  test("builds the canonical token-free session url", () => {
     const endpoints = {
       appWireUrl: "ws://127.0.0.1:9180/rpc",
       browserOrigin: "http://127.0.0.1:9180",
@@ -437,7 +437,11 @@ describe("Evener AppWire collector", () => {
     await flush();
     let reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
     expect(reads).toHaveLength(2);
-    expect(reads[1]?.["params"]).toMatchObject({ ref: "local:opus-child", threadId: "opus-child", replaceSubscription: false });
+    expect(reads[1]?.["params"]).toMatchObject({
+      ref: "local:opus-child",
+      threadId: "opus-child",
+      replaceSubscription: false,
+    });
     respond(socket, reads[1]!, {
       thread: thread("opus-child", "active", {
         parentRef: "local:root",
@@ -521,10 +525,7 @@ describe("Evener AppWire collector", () => {
       const diagnostics: string[] = [];
       const fixtureBySession = new Map<string, Record<string, unknown>>([
         ["root", thread("root", "active", { ref: "local:root" })],
-        [
-          "child",
-          thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
-        ],
+        ["child", thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" })],
         [
           "grandchild",
           thread("grandchild", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
@@ -552,10 +553,16 @@ describe("Evener AppWire collector", () => {
         "grandchild",
         "root",
       ]);
-      expect(reads.every((request) => (request["params"] as Record<string, unknown>)["ref"] === "local:root")).toBe(true);
-      expect((reads[0]?.["params"] as Record<string, unknown>)["replaceSubscription"]).toBe(true);
+      expect(reads.every((request) => (request["params"] as Record<string, unknown>)["ref"] === "local:root")).toBe(
+        true,
+      );
+      expect(((reads[0] as Record<string, unknown>)["params"] as Record<string, unknown>)["replaceSubscription"]).toBe(
+        true,
+      );
       expect(
-        reads.slice(1).every((request) => (request["params"] as Record<string, unknown>)["replaceSubscription"] === false),
+        reads
+          .slice(1)
+          .every((request) => (request["params"] as Record<string, unknown>)["replaceSubscription"] === false),
       ).toBe(true);
       expect(updates).toEqual([]);
       expect(socket.closed).toBe(false);
@@ -1308,7 +1315,10 @@ describe("Evener AppWire collector", () => {
     await flush();
     await respondToReads(
       socket,
-      threadFixtures(thread("question", "awaiting", { askPending: true }), thread("escalation", "active", { pendingEscalations: 1 })),
+      threadFixtures(
+        thread("question", "awaiting", { askPending: true }),
+        thread("escalation", "active", { pendingEscalations: 1 }),
+      ),
     );
 
     expect(
@@ -1488,7 +1498,10 @@ describe("Evener AppWire collector", () => {
     await flush();
     await respondToReads(
       socket,
-      threadFixtures(thread("root", "active"), thread("child", "active", { parentRef: "local:root", kind: "subagent" })),
+      threadFixtures(
+        thread("root", "active"),
+        thread("child", "active", { parentRef: "local:root", kind: "subagent" }),
+      ),
     );
     events.length = 0;
 
@@ -1790,7 +1803,10 @@ describe("Evener AppWire collector", () => {
     uniqueCollector.start();
     await acceptBaseline(uniqueSocket, uniqueUpdates, [thread("legacy", "active", { ref: "local:legacy" })]);
     uniqueUpdates.length = 0;
-    uniqueSocket.message({ method: "evener/thread/name/changed", params: { ref: "local:legacy", name: "Legacy renamed" } });
+    uniqueSocket.message({
+      method: "evener/thread/name/changed",
+      params: { ref: "local:legacy", name: "Legacy renamed" },
+    });
     expect(uniqueUpdates.at(-1)?.events).toEqual([
       {
         kind: "SessionTitleChanged",
@@ -1819,7 +1835,10 @@ describe("Evener AppWire collector", () => {
     ambiguousCollector.start();
     await acceptBaseline(ambiguousSocket, ambiguousUpdates, ambiguousValues);
     ambiguousUpdates.length = 0;
-    ambiguousSocket.message({ method: "evener/thread/name/changed", params: { ref: "local:shared", name: "Ambiguous" } });
+    ambiguousSocket.message({
+      method: "evener/thread/name/changed",
+      params: { ref: "local:shared", name: "Ambiguous" },
+    });
     expect(ambiguousUpdates).toEqual([]);
     expect(ambiguousTimers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
     ambiguousSocket.message({

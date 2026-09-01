@@ -617,10 +617,7 @@ export const applyRegistryEvents = (db: Database, events: readonly RegistryEvent
   inWriteTransaction(db, () => events.map((event) => applyEvent(db, event)));
 
 /** Apply Evener events and reconcile an accepted authoritative child snapshot atomically. */
-export const applyEvenerCollectorUpdate = (
-  db: Database,
-  update: EvenerCollectorUpdate,
-): MutationResult[] =>
+export const applyEvenerCollectorUpdate = (db: Database, update: EvenerCollectorUpdate): MutationResult[] =>
   inWriteTransaction(db, () => {
     const results = update.events.map((event) => applyEvent(db, event));
     if (update.activeChildSessionIds === null) {
@@ -629,9 +626,7 @@ export const applyEvenerCollectorUpdate = (
 
     const active = new Set(update.activeChildSessionIds);
     const existing = db
-      .query(
-        "SELECT session_id FROM active_sessions WHERE provider = 'evener' AND parent_session_id IS NOT NULL",
-      )
+      .query("SELECT session_id FROM active_sessions WHERE provider = 'evener' AND parent_session_id IS NOT NULL")
       .all() as Array<{ session_id: string }>;
     const remove = db.query(
       "DELETE FROM active_sessions WHERE provider = 'evener' AND parent_session_id IS NOT NULL AND session_id = ?",

@@ -568,14 +568,16 @@ describe("applyEvenerCollectorUpdate", () => {
     ]);
 
     expect(applyEvenerCollectorUpdate(db, evenerUpdate([], ["keep"]))).toEqual([]);
-    expect(identities()).toEqual(["codex:codex-child:codex-root", "codex:codex-root:root", "evener:keep:root", "evener:root:root"]);
+    expect(identities()).toEqual([
+      "codex:codex-child:codex-root",
+      "codex:codex-root:root",
+      "evener:keep:root",
+      "evener:root:root",
+    ]);
   });
 
   test("does not delete omitted children for a null active set", () => {
-    applyRegistryEvents(db, [
-      start("root", { provider: "evener" }),
-      subStart("stale", "root", { provider: "evener" }),
-    ]);
+    applyRegistryEvents(db, [start("root", { provider: "evener" }), subStart("stale", "root", { provider: "evener" })]);
 
     expect(applyEvenerCollectorUpdate(db, evenerUpdate([], null))).toEqual([]);
     expect(identities()).toEqual(["evener:root:root", "evener:stale:root"]);
@@ -635,16 +637,10 @@ describe("applyEvenerCollectorUpdate", () => {
   });
 
   test("reconciles an omitted child and a new child in one call", () => {
-    applyRegistryEvents(db, [
-      start("root", { provider: "evener" }),
-      subStart("A", "root", { provider: "evener" }),
-    ]);
+    applyRegistryEvents(db, [start("root", { provider: "evener" }), subStart("A", "root", { provider: "evener" })]);
 
     expect(
-      applyEvenerCollectorUpdate(
-        db,
-        evenerUpdate([subStart("B", "root", { provider: "evener" })], ["B"]),
-      ),
+      applyEvenerCollectorUpdate(db, evenerUpdate([subStart("B", "root", { provider: "evener" })], ["B"])),
     ).toEqual(["applied"]);
     expect(identities()).toEqual(["evener:B:root", "evener:root:root"]);
   });
