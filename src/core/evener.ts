@@ -39,6 +39,16 @@ export type EvenerHubConfigDependencies = {
   parseToml?: (text: string) => object;
 };
 
+export type EvenerHubEndpoints = Readonly<{
+  appWireUrl: string;
+  browserOrigin: string;
+}>;
+
+type EvenerHubSettings = Readonly<{
+  endpoints: EvenerHubEndpoints;
+  stateRoot: string;
+}>;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -58,6 +68,26 @@ const boundedString = (value: unknown): string | null => {
   return text === null ? null : Array.from(text).slice(0, MAX_WIRE_STRING_CODE_POINTS).join("");
 };
 
+const hasWireControlCharacters = (value: string): boolean => {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const wireIdentity = (value: unknown): string | null => {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  if (Array.from(value).length > MAX_WIRE_STRING_CODE_POINTS || hasWireControlCharacters(value)) {
+    return null;
+  }
+  return value;
+};
+
 const safeToken = (value: string | null): string | null => {
   if (value === null) {
     return null;
@@ -74,11 +104,8 @@ const xdgRoot = (environment: Readonly<Record<string, string | undefined>>, key:
   return candidate !== undefined && candidate.length > 0 && isAbsolute(candidate) ? candidate : fallback;
 };
 
-/**
- * Turn Evener's bind/client address forms into a loopback WebSocket endpoint.
- * The capability token is never sent to a non-loopback host.
- */
-export const evenerAppWireUrl = (rawAddress: string): string | null => {
+/** Turn an Evener hub address into token-free AppWire and browser endpoints. */
+export const evenerHubEndpoints = (rawAddress: string): EvenerHubEndpoints | null => {
   let address = rawAddress.trim();
   if (address.length === 0) {
     return null;
@@ -95,7 +122,10 @@ export const evenerAppWireUrl = (rawAddress: string): string | null => {
   } catch {
     return null;
   }
-  if (parsed.hostname === "0.0.0.0" || parsed.hostname === "::") {
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    return null;
+  }
+  if (parsed.hostname === "0.0.0.0" || parsed.hostname === "::" || parsed.hostname === "[::]") {
     parsed.hostname = "127.0.0.1";
   }
   const loopback =
@@ -106,21 +136,33 @@ export const evenerAppWireUrl = (rawAddress: string): string | null => {
   if (!loopback) {
     return null;
   }
-  if (parsed.protocol === "http:") {
-    parsed.protocol = "ws:";
-  } else if (parsed.protocol === "https:") {
-    parsed.protocol = "wss:";
-  } else if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+  if (
+    parsed.protocol !== "http:" &&
+    parsed.protocol !== "https:" &&
+    parsed.protocol !== "ws:" &&
+    parsed.protocol !== "wss:"
+  ) {
     return null;
   }
-  parsed.pathname = "/rpc";
-  parsed.search = "";
-  parsed.hash = "";
-  return parsed.toString();
+  const browser = new URL(parsed.toString());
+  if (browser.protocol === "ws:") {
+    browser.protocol = "http:";
+  } else if (browser.protocol === "wss:") {
+    browser.protocol = "https:";
+  }
+  browser.pathname = "/";
+  browser.search = "";
+  browser.hash = "";
+  const appWire = new URL(browser.toString());
+  appWire.protocol = browser.protocol === "https:" ? "wss:" : "ws:";
+  appWire.pathname = "/rpc";
+  return { appWireUrl: appWire.toString(), browserOrigin: browser.origin };
 };
 
-/** Resolve the same address, state root, and bearer-token precedence Evener's TUI uses. */
-export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependencies): EvenerHubConnection | null => {
+export const evenerAppWireUrl = (rawAddress: string): string | null =>
+  evenerHubEndpoints(rawAddress)?.appWireUrl ?? null;
+
+const resolveEvenerHubSettings = (dependencies: EvenerHubConfigDependencies): EvenerHubSettings | null => {
   const readText = dependencies.readText ?? defaultReadText;
   const parseToml = dependencies.parseToml ?? Bun.TOML.parse;
   const configRoot = xdgRoot(dependencies.environment, "XDG_CONFIG_HOME", join(dependencies.home, ".config"));
@@ -150,14 +192,62 @@ export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependen
       // A malformed optional config falls back to Evener's documented defaults.
     }
   }
+  const endpoints = evenerHubEndpoints(address);
+  return endpoints === null ? null : { endpoints, stateRoot };
+};
+
+export const resolveEvenerHubEndpoints = (dependencies: EvenerHubConfigDependencies): EvenerHubEndpoints | null =>
+  resolveEvenerHubSettings(dependencies)?.endpoints ?? null;
+
+const hasUnpairedSurrogate = (text: string): boolean => {
+  for (let index = 0; index < text.length; index += 1) {
+    const codeUnit = text.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = text.charCodeAt(index + 1);
+      if (!(nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const validSessionId = (sessionId: string): boolean =>
+  sessionId.length > 0 &&
+  sessionId === sessionId.trim() &&
+  Array.from(sessionId).length <= MAX_WIRE_STRING_CODE_POINTS &&
+  !hasUnpairedSurrogate(sessionId) &&
+  !hasWireControlCharacters(sessionId);
+
+export const evenerSessionUrl = (endpoints: EvenerHubEndpoints, sessionId: string): string | null => {
+  if (!validSessionId(sessionId)) {
+    return null;
+  }
+  const url = new URL(endpoints.browserOrigin);
+  url.pathname = `/s/${encodeURIComponent(`local:${sessionId}`)}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+};
+
+/** Resolve the same address, state root, and bearer-token precedence Evener's TUI uses. */
+export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependencies): EvenerHubConnection | null => {
+  const settings = resolveEvenerHubSettings(dependencies);
+  if (settings === null) {
+    return null;
+  }
+  const readText = dependencies.readText ?? defaultReadText;
   const environmentToken = safeToken(dependencies.environment["EVENER_HUB_AUTH_TOKEN"] ?? null);
-  const token = environmentToken ?? safeToken(readText(join(stateRoot, "auth-token")));
-  const url = evenerAppWireUrl(address);
-  return token === null || url === null ? null : { url, token };
+  const token = environmentToken ?? safeToken(readText(join(settings.stateRoot, "auth-token")));
+  return token === null ? null : { url: settings.endpoints.appWireUrl, token };
 };
 
 export type EvenerCollectorUpdate = {
   events: RegistryEvent[];
+  activeChildSessionIds: readonly string[] | null;
 };
 
 export type EvenerSocket = {
@@ -204,6 +294,8 @@ type EvenerThreadState = {
   ref: string;
   sessionId: string;
   parentRef: string | null;
+  delegateId: string | null;
+  parentSessionId: string | null;
   kind: string | null;
   title: string | null;
   project: string | null;
@@ -216,11 +308,47 @@ type EvenerThreadState = {
   cleanupEmitted: boolean;
 };
 
+type EvenerDelegateInfo = Readonly<{
+  delegateId: string;
+  ownerSessionId: string;
+  rootSessionId: string;
+  childSessionId: string;
+  parentDelegateId: string | null;
+  lifecycle: string;
+  phase: string;
+  status: string;
+  terminal: boolean;
+  resumable: boolean;
+  needsAttention: boolean;
+  model: string | null;
+  projectionRevision: number;
+}>;
+
+type EvenerCollectorIndices = {
+  statesBySessionId: Map<string, EvenerThreadState>;
+  sessionIdsByRef: Map<string, Set<string>>;
+  delegatesById: Map<string, EvenerDelegateInfo>;
+  delegateByChildSession: Map<string, string>;
+  subscribedSessionIds: Set<string>;
+};
+
+const emptyIndices = (): EvenerCollectorIndices => ({
+  statesBySessionId: new Map(),
+  sessionIdsByRef: new Map(),
+  delegatesById: new Map(),
+  delegateByChildSession: new Map(),
+  subscribedSessionIds: new Set(),
+});
+
 type PendingRequest = {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: EvenerTimer;
 };
+
+class EvenerCandidateRejected extends Error {}
+
+class EvenerRefreshInvalidated extends Error {}
 
 const defaultSchedule: EvenerSchedule = (callback, delayMs) => {
   const timer = setTimeout(callback, delayMs);
@@ -254,6 +382,13 @@ const parseStatus = (value: unknown): AppWireStatus | null => {
   return value["type"] as AppWireStatus;
 };
 
+const optionalWireIdentity = (value: unknown): string | null => {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return wireIdentity(value);
+};
+
 const projectFromThread = (thread: Record<string, unknown>): string | null => {
   const cwd = nonEmptyString(thread["cwd"]);
   const projectPath = nonEmptyString(thread["projectPath"]);
@@ -275,23 +410,34 @@ const parseThread = (value: unknown, previous?: EvenerThreadState): EvenerThread
   if (!isRecord(evener)) {
     return null;
   }
-  const ref = boundedString(evener["ref"]);
-  const sessionId = boundedString(value["sessionId"]);
+  const ref = wireIdentity(evener["ref"]);
+  const sessionId = wireIdentity(value["sessionId"]);
   const source = nonEmptyString(value["source"]);
   if (source !== LOCAL_SOURCE_ID || ref === null || !ref.startsWith(`${LOCAL_SOURCE_ID}:`) || sessionId === null) {
     return null;
   }
   const rawStatus = parseStatus(value["status"]);
   if (rawStatus === null) {
-    throw new Error("invalid Evener thread status");
+    throw new EvenerCandidateRejected("invalid Evener thread status");
   }
-  const kind = boundedString(evener["kind"]);
-  const parentRef = boundedString(evener["parentRef"]);
+  const kindValue = optionalWireIdentity(evener["kind"]);
+  const parentRefValue = optionalWireIdentity(evener["parentRef"]);
+  if (
+    (evener["kind"] !== undefined && evener["kind"] !== null && kindValue === null) ||
+    (evener["parentRef"] !== undefined && evener["parentRef"] !== null && parentRefValue === null)
+  ) {
+    return null;
+  }
+  if (parentRefValue !== null && !parentRefValue.startsWith(`${LOCAL_SOURCE_ID}:`)) {
+    return null;
+  }
   return {
     ref,
     sessionId,
-    parentRef,
-    kind,
+    parentRef: parentRefValue,
+    delegateId: previous?.delegateId ?? null,
+    parentSessionId: null,
+    kind: kindValue,
     title: boundedString(value["name"]),
     project: projectFromThread(value),
     model: boundedString(value["modelProvider"]),
@@ -304,7 +450,8 @@ const parseThread = (value: unknown, previous?: EvenerThreadState): EvenerThread
   };
 };
 
-const isChild = (state: EvenerThreadState): boolean => state.kind === "subagent" || state.parentRef !== null;
+const isChild = (state: EvenerThreadState): boolean =>
+  state.delegateId !== null || state.kind === "subagent" || state.parentRef !== null;
 
 const requiresAttention = (state: EvenerThreadState): boolean => state.askPending || state.pendingEscalationCount > 0;
 
@@ -406,6 +553,137 @@ const parseTurnStatus = (params: Record<string, unknown>): string | null => {
   return isRecord(turn) && typeof turn["status"] === "string" ? turn["status"] : null;
 };
 
+const delegateImmutableFields = ["ownerSessionId", "rootSessionId", "parentDelegateId"] as const;
+const delegateTrackedFields = [
+  "childSessionId",
+  "lifecycle",
+  "phase",
+  "status",
+  "terminal",
+  "resumable",
+  "needsAttention",
+  "model",
+] as const;
+
+const delegateProjectionEqual = (left: EvenerDelegateInfo, right: EvenerDelegateInfo): boolean =>
+  delegateImmutableFields.every((field) => left[field] === right[field]) &&
+  delegateTrackedFields.every((field) => left[field] === right[field]) &&
+  left.projectionRevision === right.projectionRevision;
+
+const parseRequiredDelegateIdentity = (value: unknown, field: string): string => {
+  const identity = wireIdentity(value);
+  if (identity === null) {
+    throw new EvenerCandidateRejected(`invalid Evener delegate ${field}`);
+  }
+  return identity;
+};
+
+const parseDelegateProjection = (value: unknown): EvenerDelegateInfo => {
+  if (!isRecord(value)) {
+    throw new EvenerCandidateRejected("invalid Evener delegate projection");
+  }
+  const parentDelegateValue = value["parentDelegateId"];
+  const parentDelegateId =
+    parentDelegateValue === null || parentDelegateValue === undefined
+      ? null
+      : parseRequiredDelegateIdentity(parentDelegateValue, "parentDelegateId");
+  const lifecycle = parseRequiredDelegateIdentity(value["lifecycle"], "lifecycle");
+  const phase = parseRequiredDelegateIdentity(value["phase"], "phase");
+  const status = parseRequiredDelegateIdentity(value["status"], "status");
+  const modelValue = value["model"];
+  const model = modelValue === null ? null : parseRequiredDelegateIdentity(modelValue, "model");
+  const projectionRevision = value["projectionRevision"];
+  if (typeof projectionRevision !== "number" || !Number.isSafeInteger(projectionRevision) || projectionRevision < 0) {
+    throw new EvenerCandidateRejected("invalid Evener delegate projection revision");
+  }
+  const booleanFields = ["terminal", "resumable", "needsAttention"] as const;
+  for (const field of booleanFields) {
+    if (typeof value[field] !== "boolean") {
+      throw new EvenerCandidateRejected(`invalid Evener delegate ${field}`);
+    }
+  }
+  return {
+    delegateId: parseRequiredDelegateIdentity(value["delegateId"], "delegateId"),
+    ownerSessionId: parseRequiredDelegateIdentity(value["ownerSessionId"], "ownerSessionId"),
+    rootSessionId: parseRequiredDelegateIdentity(value["rootSessionId"], "rootSessionId"),
+    childSessionId: parseRequiredDelegateIdentity(value["childSessionId"], "childSessionId"),
+    parentDelegateId,
+    lifecycle,
+    phase,
+    status,
+    terminal: value["terminal"] as boolean,
+    resumable: value["resumable"] as boolean,
+    needsAttention: value["needsAttention"] as boolean,
+    model,
+    projectionRevision,
+  };
+};
+
+const delegateProjectionsFromThread = (value: unknown): EvenerDelegateInfo[] => {
+  if (!isRecord(value) || !isRecord(value["evener"])) {
+    return [];
+  }
+  const evener = value["evener"];
+  if (!isRecord(evener["diagnostics"])) {
+    return [];
+  }
+  const diagnostics = evener["diagnostics"];
+  const delegates = diagnostics["delegates"];
+  if (delegates === undefined) {
+    return [];
+  }
+  if (!Array.isArray(delegates)) {
+    throw new EvenerCandidateRejected("invalid Evener delegate diagnostics");
+  }
+  return delegates.map(parseDelegateProjection);
+};
+
+const mergeDelegateProjections = (
+  candidate: EvenerCollectorIndices,
+  projections: readonly EvenerDelegateInfo[],
+): void => {
+  const byId = new Map<string, EvenerDelegateInfo[]>();
+  for (const projection of projections) {
+    const entries = byId.get(projection.delegateId) ?? [];
+    entries.push(projection);
+    byId.set(projection.delegateId, entries);
+  }
+
+  for (const delegateId of Array.from(byId.keys()).sort()) {
+    const entries = byId.get(delegateId);
+    if (entries === undefined) {
+      continue;
+    }
+    const first = entries[0];
+    if (first === undefined) {
+      continue;
+    }
+    for (const entry of entries.slice(1)) {
+      if (!delegateImmutableFields.every((field) => entry[field] === first[field])) {
+        throw new EvenerCandidateRejected("contradictory Evener delegate identity");
+      }
+    }
+    const highestRevision = Math.max(...entries.map((entry) => entry.projectionRevision));
+    const highest = entries.filter((entry) => entry.projectionRevision === highestRevision);
+    const selected = highest[0];
+    if (selected === undefined) {
+      continue;
+    }
+    if (!highest.every((entry) => delegateProjectionEqual(entry, selected))) {
+      throw new EvenerCandidateRejected("contradictory Evener delegate projection");
+    }
+    candidate.delegatesById.set(delegateId, selected);
+  }
+
+  for (const delegate of candidate.delegatesById.values()) {
+    const existing = candidate.delegateByChildSession.get(delegate.childSessionId);
+    if (existing !== undefined && existing !== delegate.delegateId) {
+      throw new EvenerCandidateRejected("duplicate Evener delegate child session");
+    }
+    candidate.delegateByChildSession.set(delegate.childSessionId, delegate.delegateId);
+  }
+};
+
 /** Authenticated AppWire observer with ordered hydration, subscriptions, and reconnect. */
 export const createEvenerCollector = (dependencies: EvenerCollectorDependencies): EvenerCollector => {
   const diagnostics = dependencies.diagnostics ?? (() => {});
@@ -428,8 +706,11 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   let refreshAgain = false;
   let failureReported = false;
   const pending = new Map<number, PendingRequest>();
-  const states = new Map<string, EvenerThreadState>();
-  const subscribed = new Set<string>();
+  let indices = emptyIndices();
+  const rootSessionIdBySessionId = new Map<string, string>();
+  const ancestryDepthBySessionId = new Map<string, number>();
+  let refreshInvalidatedSessionIds: Set<string> | null = null;
+  let refreshGeneration = 0;
 
   const reportFailure = (): void => {
     if (failureReported) {
@@ -443,16 +724,18 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
   };
 
-  const emit = (events: RegistryEvent[]): void => {
-    if (events.length === 0) {
+  const emitUpdate = (update: EvenerCollectorUpdate): void => {
+    if (update.events.length === 0 && update.activeChildSessionIds === null) {
       return;
     }
     try {
-      dependencies.onUpdate({ events });
+      dependencies.onUpdate(update);
     } catch {
       reportFailure();
     }
   };
+
+  const emitIncremental = (events: RegistryEvent[]): void => emitUpdate({ events, activeChildSessionIds: null });
 
   const clearTimer = (timer: EvenerTimer | null): null => {
     timer?.clear();
@@ -485,7 +768,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     socket = null;
     connectTimer = clearTimer(connectTimer);
     refreshTimer = clearTimer(refreshTimer);
-    subscribed.clear();
+    indices.subscribedSessionIds.clear();
     refreshing = false;
     refreshAgain = false;
     rejectPending(reason);
@@ -529,20 +812,25 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     target.send(JSON.stringify({ method, params }));
   };
 
-  const rootParent = (state: EvenerThreadState): EvenerThreadState | null => {
-    if (state.parentRef === null) {
+  const rootParent = (candidate: EvenerCollectorIndices, state: EvenerThreadState): EvenerThreadState | null => {
+    if (state.parentSessionId === null) {
       return null;
     }
-    return states.get(state.parentRef) ?? null;
+    return candidate.statesBySessionId.get(state.parentSessionId) ?? null;
   };
 
-  const hydrateState = (state: EvenerThreadState, liveStart: boolean, observedAt: string): RegistryEvent[] => {
+  const hydrateState = (
+    candidate: EvenerCollectorIndices,
+    state: EvenerThreadState,
+    liveStart: boolean,
+    observedAt: string,
+  ): RegistryEvent[] => {
     if (state.rawStatus === "closed" || state.rawStatus === "notLoaded") {
       state.registered = false;
       return [endEvent(state, observedAt)];
     }
     if (isChild(state)) {
-      const parent = rootParent(state);
+      const parent = rootParent(candidate, state);
       if (parent === null || !parent.registered || effectiveStatus(state) === "idle") {
         const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
         state.registered = false;
@@ -585,40 +873,150 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     return events;
   };
 
-  const hydrateThreads = (values: unknown[], liveStart: boolean): EvenerThreadState[] => {
-    const parsed: EvenerThreadState[] = [];
-    for (const value of values) {
-      if (!isRecord(value)) {
-        throw new Error("invalid Evener thread/list item");
+  const addSessionToRef = (candidate: EvenerCollectorIndices, state: EvenerThreadState): void => {
+    const sessionIds = candidate.sessionIdsByRef.get(state.ref) ?? new Set<string>();
+    sessionIds.add(state.sessionId);
+    candidate.sessionIdsByRef.set(state.ref, sessionIds);
+  };
+
+  const removeSessionFromRef = (candidate: EvenerCollectorIndices, state: EvenerThreadState): void => {
+    const sessionIds = candidate.sessionIdsByRef.get(state.ref);
+    if (sessionIds === undefined) {
+      return;
+    }
+    sessionIds.delete(state.sessionId);
+    if (sessionIds.size === 0) {
+      candidate.sessionIdsByRef.delete(state.ref);
+    }
+  };
+
+  const removeSessionFromIndices = (sessionId: string): void => {
+    const state = indices.statesBySessionId.get(sessionId);
+    if (state !== undefined) {
+      removeSessionFromRef(indices, state);
+      indices.statesBySessionId.delete(sessionId);
+      indices.subscribedSessionIds.delete(sessionId);
+    }
+    rootSessionIdBySessionId.delete(sessionId);
+    ancestryDepthBySessionId.delete(sessionId);
+
+    const delegateId = indices.delegateByChildSession.get(sessionId);
+    indices.delegateByChildSession.delete(sessionId);
+    if (delegateId !== undefined) {
+      const delegate = indices.delegatesById.get(delegateId);
+      if (delegate?.childSessionId === sessionId) {
+        indices.delegatesById.delete(delegateId);
       }
-      const source = nonEmptyString(value["source"]);
-      if (source !== LOCAL_SOURCE_ID) {
+    }
+  };
+
+  const rememberCandidateAncestry = (candidate: EvenerCollectorIndices): void => {
+    const currentSessionIds = new Set(candidate.statesBySessionId.keys());
+    for (const trackedSessionId of rootSessionIdBySessionId.keys()) {
+      if (!currentSessionIds.has(trackedSessionId)) {
+        rootSessionIdBySessionId.delete(trackedSessionId);
+        ancestryDepthBySessionId.delete(trackedSessionId);
+      }
+    }
+    for (const state of candidate.statesBySessionId.values()) {
+      let rootSessionId = state.sessionId;
+      let depth = 0;
+      let parentSessionId = state.parentSessionId;
+      while (parentSessionId !== null) {
+        const parent = candidate.statesBySessionId.get(parentSessionId);
+        if (parent === undefined) {
+          break;
+        }
+        rootSessionId = parent.sessionId;
+        depth += 1;
+        parentSessionId = parent.parentSessionId;
+      }
+      if (parentSessionId === null) {
+        rootSessionIdBySessionId.set(state.sessionId, rootSessionId);
+        ancestryDepthBySessionId.set(state.sessionId, depth);
+      }
+    }
+  };
+
+  const resolveParentRefs = (candidate: EvenerCollectorIndices, rejectUnresolved = false): void => {
+    for (const state of candidate.statesBySessionId.values()) {
+      state.delegateId = null;
+      state.parentSessionId = null;
+    }
+    for (const delegate of candidate.delegatesById.values()) {
+      if (
+        !candidate.statesBySessionId.has(delegate.ownerSessionId) ||
+        !candidate.statesBySessionId.has(delegate.rootSessionId) ||
+        !candidate.statesBySessionId.has(delegate.childSessionId)
+      ) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing session");
+      }
+      if (delegate.parentDelegateId !== null && !candidate.delegatesById.has(delegate.parentDelegateId)) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing parent delegate");
+      }
+      const state = candidate.statesBySessionId.get(delegate.childSessionId);
+      if (state === undefined) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing session");
+      }
+      const parentDelegate =
+        delegate.parentDelegateId === null ? null : candidate.delegatesById.get(delegate.parentDelegateId);
+      if (parentDelegate === undefined) {
+        throw new EvenerCandidateRejected("Evener delegate refers to a missing parent delegate");
+      }
+      state.delegateId = delegate.delegateId;
+      state.parentSessionId = parentDelegate === null ? delegate.ownerSessionId : parentDelegate.childSessionId;
+    }
+    for (const state of candidate.statesBySessionId.values()) {
+      if (state.delegateId !== null) {
         continue;
       }
-      const evener = value["evener"];
-      const ref = isRecord(evener) ? boundedString(evener["ref"]) : null;
-      const previous = ref === null ? undefined : states.get(ref);
-      const state = parseThread(value, previous);
-      if (state === null) {
-        throw new Error("invalid local Evener thread");
+      if (state.parentRef === null) {
+        if (rejectUnresolved && isChild(state)) {
+          throw new EvenerCandidateRejected("unresolved Evener parent");
+        }
+        continue;
       }
-      parsed.push(state);
+      const parentIds = candidate.sessionIdsByRef.get(state.parentRef);
+      if (parentIds !== undefined && parentIds.size > 1) {
+        throw new EvenerCandidateRejected("ambiguous Evener parent ref");
+      }
+      const parentId = parentIds?.values().next().value;
+      if (typeof parentId !== "string") {
+        if (rejectUnresolved) {
+          throw new EvenerCandidateRejected("unresolved Evener parent ref");
+        }
+        continue;
+      }
+      state.parentSessionId = parentId;
     }
+    for (const state of candidate.statesBySessionId.values()) {
+      if (state.parentSessionId === null) {
+        continue;
+      }
+      const visited = new Set<string>();
+      let parentSessionId: string | null = state.parentSessionId;
+      while (parentSessionId !== null) {
+        if (parentSessionId === state.sessionId || !visited.add(parentSessionId)) {
+          throw new EvenerCandidateRejected("cyclic Evener delegate lineage");
+        }
+        parentSessionId = candidate.statesBySessionId.get(parentSessionId)?.parentSessionId ?? null;
+      }
+    }
+  };
+
+  const deriveCandidateEvents = (candidate: EvenerCollectorIndices, liveStart: boolean): RegistryEvent[] => {
+    resolveParentRefs(candidate, true);
     const observedAt = now();
+    const parsed: EvenerThreadState[] = [];
     const events: RegistryEvent[] = [];
-    const ordered: EvenerThreadState[] = [];
-    for (const state of parsed) {
-      states.set(state.ref, state);
-    }
-    const pendingChildren: EvenerThreadState[] = [];
-    for (const state of parsed) {
+    for (const state of candidate.statesBySessionId.values()) {
       if (isChild(state)) {
-        pendingChildren.push(state);
+        parsed.push(state);
       } else {
-        events.push(...hydrateState(state, liveStart, observedAt));
-        ordered.push(state);
+        events.push(...hydrateState(candidate, state, liveStart, observedAt));
       }
     }
+    const pendingChildren = parsed;
     let progressed = true;
     while (pendingChildren.length > 0 && progressed) {
       progressed = false;
@@ -627,27 +1025,74 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         if (state === undefined) {
           continue;
         }
-        const parent = rootParent(state);
+        const parent = rootParent(candidate, state);
         if (parent === null || !parent.registered) {
           continue;
         }
-        events.push(...hydrateState(state, liveStart, observedAt));
-        ordered.push(state);
+        events.push(...hydrateState(candidate, state, liveStart, observedAt));
         pendingChildren.splice(index, 1);
         progressed = true;
       }
     }
-    emit(events);
-    return ordered;
+    return events;
   };
 
-  const subscribe = async (target: EvenerSocket, state: EvenerThreadState): Promise<void> => {
-    if (subscribed.has(state.ref) || state.rawStatus === "closed" || state.rawStatus === "notLoaded") {
+  const hydrateLiveThread = (value: unknown, liveStart: boolean): EvenerThreadState | null => {
+    if (!isRecord(value)) {
+      throw new Error("invalid Evener thread/list item");
+    }
+    const source = nonEmptyString(value["source"]);
+    if (source !== LOCAL_SOURCE_ID) {
+      return null;
+    }
+    const candidate = emptyIndices();
+    for (const [sessionId, state] of indices.statesBySessionId) {
+      candidate.statesBySessionId.set(sessionId, { ...state });
+    }
+    for (const [ref, sessionIds] of indices.sessionIdsByRef) {
+      candidate.sessionIdsByRef.set(ref, new Set(sessionIds));
+    }
+    for (const [delegateId, delegate] of indices.delegatesById) {
+      candidate.delegatesById.set(delegateId, delegate);
+    }
+    for (const [sessionId, delegateId] of indices.delegateByChildSession) {
+      candidate.delegateByChildSession.set(sessionId, delegateId);
+    }
+    for (const sessionId of indices.subscribedSessionIds) {
+      candidate.subscribedSessionIds.add(sessionId);
+    }
+    const sessionId = wireIdentity(value["sessionId"]);
+    const previous = sessionId === null ? undefined : candidate.statesBySessionId.get(sessionId);
+    const state = parseThread(value, previous);
+    if (state === null) {
+      throw new EvenerCandidateRejected("invalid local Evener thread");
+    }
+    const old = candidate.statesBySessionId.get(state.sessionId);
+    if (old !== undefined) {
+      removeSessionFromRef(candidate, old);
+    }
+    candidate.statesBySessionId.set(state.sessionId, state);
+    addSessionToRef(candidate, state);
+    resolveParentRefs(candidate);
+    const events = hydrateState(candidate, state, liveStart, now());
+    rememberCandidateAncestry(candidate);
+    indices = candidate;
+    emitIncremental(events);
+    return state;
+  };
+
+  const subscribeLive = async (target: EvenerSocket, state: EvenerThreadState): Promise<void> => {
+    if (
+      indices.subscribedSessionIds.has(state.sessionId) ||
+      state.rawStatus === "closed" ||
+      state.rawStatus === "notLoaded"
+    ) {
       return;
     }
-    const replaceSubscription = subscribed.size === 0;
+    const replaceSubscription = indices.subscribedSessionIds.size === 0;
     const result = await request(target, "thread/read", {
       ref: state.ref,
+      threadId: state.sessionId,
       includeTurns: false,
       subscribe: true,
       replaceSubscription,
@@ -655,11 +1100,25 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     if (!isRecord(result) || !("thread" in result)) {
       throw new Error("invalid Evener thread/read response");
     }
-    subscribed.add(state.ref);
-    hydrateThreads([result["thread"]], false);
+    const readState = parseThread(result["thread"], state);
+    if (readState === null || readState.sessionId !== state.sessionId || readState.ref !== state.ref) {
+      throw new Error("invalid Evener thread/read identity");
+    }
+    removeSessionFromRef(indices, state);
+    indices.statesBySessionId.set(state.sessionId, readState);
+    addSessionToRef(indices, readState);
+    resolveParentRefs(indices);
+    indices.subscribedSessionIds.add(state.sessionId);
+    emitIncremental(hydrateState(indices, readState, false, now()));
   };
 
-  const listThreads = async (target: EvenerSocket): Promise<EvenerThreadState[]> => {
+  const assertRefreshGeneration = (expectedGeneration: number): void => {
+    if (refreshGeneration !== expectedGeneration) {
+      throw new EvenerRefreshInvalidated("Evener refresh generation changed");
+    }
+  };
+
+  const listThreads = async (target: EvenerSocket, expectedGeneration: number): Promise<unknown[]> => {
     const values: unknown[] = [];
     let cursor: string | null = null;
     let pageCount = 0;
@@ -674,6 +1133,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         includeSubagents: true,
         ...(cursor === null ? {} : { cursor }),
       });
+      assertRefreshGeneration(expectedGeneration);
       if (!isRecord(result) || !Array.isArray(result["data"])) {
         throw new Error("invalid Evener thread/list response");
       }
@@ -692,7 +1152,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       seenCursors.add(nextCursor);
       cursor = nextCursor;
     }
-    return hydrateThreads(values, false);
+    return values;
   };
 
   const scheduleRefresh = (delayMs: number): void => {
@@ -710,6 +1170,13 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     refreshTimer.unref();
   };
 
+  const invalidateRefreshGeneration = (): void => {
+    refreshGeneration += 1;
+    if (refreshing) {
+      scheduleRefresh(0);
+    }
+  };
+
   const refresh = async (target: EvenerSocket): Promise<void> => {
     if (socket !== target || stopped) {
       return;
@@ -719,20 +1186,98 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       return;
     }
     refreshing = true;
+    refreshInvalidatedSessionIds = new Set<string>();
+    const expectedGeneration = refreshGeneration;
     try {
-      const listed = await listThreads(target);
-      for (const state of listed) {
-        try {
-          await subscribe(target, state);
-        } catch {
-          // A thread may close between list and read; the next list reconciles it.
+      const candidate = emptyIndices();
+      const delegateProjections: EvenerDelegateInfo[] = [];
+      const values = await listThreads(target, expectedGeneration);
+      for (const value of values) {
+        if (!isRecord(value)) {
+          throw new Error("invalid Evener thread/list item");
+        }
+        const source = nonEmptyString(value["source"]);
+        if (source !== LOCAL_SOURCE_ID) {
+          continue;
+        }
+        const sessionId = wireIdentity(value["sessionId"]);
+        const previous = sessionId === null ? undefined : indices.statesBySessionId.get(sessionId);
+        const state = parseThread(value, previous);
+        if (state === null) {
+          throw new EvenerCandidateRejected("invalid local Evener thread");
+        }
+        if (candidate.statesBySessionId.has(state.sessionId)) {
+          throw new EvenerCandidateRejected("duplicate Evener thread session ID");
+        }
+        candidate.statesBySessionId.set(state.sessionId, state);
+        addSessionToRef(candidate, state);
+      }
+
+      for (const listed of candidate.statesBySessionId.values()) {
+        if (listed.rawStatus === "closed" || listed.rawStatus === "notLoaded") {
+          continue;
+        }
+        const result = await request(target, "thread/read", {
+          ref: listed.ref,
+          threadId: listed.sessionId,
+          includeTurns: false,
+          subscribe: true,
+          replaceSubscription: candidate.subscribedSessionIds.size === 0,
+        });
+        assertRefreshGeneration(expectedGeneration);
+        if (!isRecord(result) || !("thread" in result)) {
+          throw new Error("invalid Evener thread/read response");
+        }
+        const state = parseThread(result["thread"], listed);
+        if (state === null || state.sessionId !== listed.sessionId || state.ref !== listed.ref) {
+          throw new EvenerCandidateRejected("invalid Evener thread/read identity");
+        }
+        delegateProjections.push(...delegateProjectionsFromThread(result["thread"]));
+        candidate.statesBySessionId.set(listed.sessionId, state);
+        candidate.subscribedSessionIds.add(listed.sessionId);
+        if (refreshInvalidatedSessionIds.has(listed.sessionId)) {
+          throw new EvenerCandidateRejected("Evener refresh candidate was invalidated");
         }
       }
+      mergeDelegateProjections(candidate, delegateProjections);
+      const events = deriveCandidateEvents(candidate, false);
+      const activeChildSessionIds = Array.from(candidate.statesBySessionId.values())
+        .filter(
+          (state) =>
+            isChild(state) &&
+            state.registered &&
+            state.rawStatus !== "closed" &&
+            state.rawStatus !== "notLoaded" &&
+            effectiveStatus(state) !== "idle",
+        )
+        .map((state) => state.sessionId)
+        .sort();
+      assertRefreshGeneration(expectedGeneration);
+      if (refreshInvalidatedSessionIds.size > 0) {
+        throw new EvenerCandidateRejected("Evener refresh candidate was invalidated");
+      }
+      assertRefreshGeneration(expectedGeneration);
+      rememberCandidateAncestry(candidate);
+      indices = candidate;
+      emitUpdate({ events, activeChildSessionIds });
       failureReported = false;
-    } catch {
+    } catch (error) {
+      if (error instanceof EvenerRefreshInvalidated) {
+        if (refreshInvalidatedSessionIds !== null && refreshInvalidatedSessionIds.size > 0) {
+          reportFailure();
+        }
+        scheduleRefresh(0);
+        return;
+      }
+      if (error instanceof EvenerCandidateRejected) {
+        reportFailure();
+        scheduleRefresh(0);
+        return;
+      }
       disconnect(target, "Evener AppWire refresh failed");
       return;
     } finally {
+      refreshInvalidatedSessionIds = null;
       refreshing = false;
     }
     if (socket !== target || stopped) {
@@ -747,8 +1292,20 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
   };
 
   const stateForParams = (params: Record<string, unknown>): EvenerThreadState | null => {
-    const ref = boundedString(params["ref"]);
-    return ref === null ? null : (states.get(ref) ?? null);
+    if ("threadId" in params) {
+      const sessionId = wireIdentity(params["threadId"]);
+      return sessionId === null ? null : (indices.statesBySessionId.get(sessionId) ?? null);
+    }
+    const ref = wireIdentity(params["ref"]);
+    if (ref === null) {
+      return null;
+    }
+    const sessionIds = indices.sessionIdsByRef.get(ref);
+    if (sessionIds?.size !== 1) {
+      return null;
+    }
+    const sessionId = sessionIds.values().next().value;
+    return sessionId === undefined ? null : (indices.statesBySessionId.get(sessionId) ?? null);
   };
 
   const handleStatusNotification = (params: Record<string, unknown>): void => {
@@ -769,20 +1326,20 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
         state.registered = false;
         state.cleanupEmitted = true;
-        emit(events);
+        emitIncremental(events);
         return;
       }
       if (!state.registered) {
-        emit(hydrateState(state, true, observedAt));
+        emitIncremental(hydrateState(indices, state, true, observedAt));
         return;
       }
     }
     if (rawStatus === "closed" || rawStatus === "notLoaded") {
-      emit([endEvent(state, observedAt)]);
-      states.delete(state.ref);
+      emitIncremental([endEvent(state, observedAt)]);
+      removeSessionFromIndices(state.sessionId);
       return;
     }
-    emit([liveStatusEvent(state, previousStatus, observedAt)]);
+    emitIncremental([liveStatusEvent(state, previousStatus, observedAt)]);
   };
 
   const handleTurnStarted = (params: Record<string, unknown>): void => {
@@ -796,10 +1353,10 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     state.failedTurn = false;
     const observedAt = now();
     if (isChild(state) && !state.registered) {
-      emit(hydrateState(state, true, observedAt));
+      emitIncremental(hydrateState(indices, state, true, observedAt));
       return;
     }
-    emit([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt }]);
+    emitIncremental([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt }]);
   };
 
   const handleTurnCompleted = (params: Record<string, unknown>): void => {
@@ -814,20 +1371,20 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
       state.registered = false;
       state.cleanupEmitted = true;
-      emit(events);
+      emitIncremental(events);
       return;
     }
     if (turnStatus === "failed") {
       state.failedTurn = true;
       state.rawStatus = "idle";
-      emit([{ kind: "StopFailure", provider: "evener", sessionId: state.sessionId, observedAt }]);
+      emitIncremental([{ kind: "StopFailure", provider: "evener", sessionId: state.sessionId, observedAt }]);
     } else if (turnStatus === "completed" || turnStatus === "interrupted") {
       state.failedTurn = false;
       const events: RegistryEvent[] = [{ kind: "Stop", provider: "evener", sessionId: state.sessionId, observedAt }];
       if (turnStatus === "completed" && requiresAttention(state)) {
         events.push({ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt });
       }
-      emit(events);
+      emitIncremental(events);
     }
   };
 
@@ -836,42 +1393,113 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       scheduleRefresh(0);
       return;
     }
-    hydrateThreads([params["thread"]], true);
-    const state = stateForParams(params);
-    if (state !== null && socket !== null) {
-      void subscribe(socket, state).catch(() => scheduleRefresh(0));
-    } else {
+    let state: EvenerThreadState | null;
+    try {
+      state = hydrateLiveThread(params["thread"], true);
+    } catch {
       scheduleRefresh(0);
+      return;
     }
+    if (state === null || socket === null) {
+      scheduleRefresh(0);
+      return;
+    }
+    void subscribeLive(socket, state).catch(() => scheduleRefresh(0));
   };
 
   const handleClosed = (params: Record<string, unknown>): void => {
+    const notifiedSessionId = wireIdentity(params["threadId"]);
+    if (notifiedSessionId !== null) {
+      refreshInvalidatedSessionIds?.add(notifiedSessionId);
+    }
     const state = stateForParams(params);
     if (state === null) {
+      scheduleRefresh(0);
       return;
     }
+    const sessionId = state.sessionId;
+    refreshInvalidatedSessionIds?.add(sessionId);
     const observedAt = now();
-    emit([endEvent(state, observedAt)]);
-    states.delete(state.ref);
-    subscribed.delete(state.ref);
-    for (const [ref, candidate] of states) {
-      if (candidate.parentRef === state.ref) {
-        states.delete(ref);
-        subscribed.delete(ref);
+    const childrenByParent = new Map<string, string[]>();
+    for (const candidate of indices.statesBySessionId.values()) {
+      if (candidate.parentSessionId === null) {
+        continue;
       }
+      const children = childrenByParent.get(candidate.parentSessionId) ?? [];
+      children.push(candidate.sessionId);
+      childrenByParent.set(candidate.parentSessionId, children);
     }
+
+    const descendants: string[] = [];
+    const visited = new Set<string>();
+    const visitDescendants = (parentSessionId: string): void => {
+      for (const childSessionId of childrenByParent.get(parentSessionId) ?? []) {
+        if (!visited.add(childSessionId)) {
+          continue;
+        }
+        visitDescendants(childSessionId);
+        descendants.push(childSessionId);
+      }
+    };
+    const appendOrphanedDescendants = (): void => {
+      const orphanedDescendants = Array.from(indices.statesBySessionId.values())
+        .filter(
+          (candidate) =>
+            candidate.sessionId !== sessionId &&
+            rootSessionIdBySessionId.get(candidate.sessionId) === sessionId &&
+            !visited.has(candidate.sessionId),
+        )
+        .sort((left, right) => {
+          const depthDifference =
+            (ancestryDepthBySessionId.get(right.sessionId) ?? 0) - (ancestryDepthBySessionId.get(left.sessionId) ?? 0);
+          return depthDifference !== 0 ? depthDifference : left.sessionId.localeCompare(right.sessionId);
+        });
+      for (const descendant of orphanedDescendants) {
+        visited.add(descendant.sessionId);
+        descendants.push(descendant.sessionId);
+      }
+    };
+
+    const events: RegistryEvent[] = [];
+    if (isChild(state)) {
+      if (!state.cleanupEmitted) {
+        events.push(endEvent(state, observedAt));
+      }
+    } else {
+      visitDescendants(sessionId);
+      appendOrphanedDescendants();
+      for (const descendantSessionId of descendants) {
+        const descendant = indices.statesBySessionId.get(descendantSessionId);
+        if (descendant !== undefined && !descendant.cleanupEmitted) {
+          events.push({ kind: "SubagentStop", provider: "evener", sessionId: descendantSessionId, observedAt });
+        }
+      }
+      events.push(endEvent(state, observedAt));
+    }
+    emitIncremental(events);
+
+    if (isChild(state)) {
+      removeSessionFromIndices(sessionId);
+    } else {
+      for (const descendantSessionId of descendants) {
+        removeSessionFromIndices(descendantSessionId);
+      }
+      removeSessionFromIndices(sessionId);
+    }
+    scheduleRefresh(0);
   };
 
   const handleNameChanged = (params: Record<string, unknown>): void => {
     const state = stateForParams(params);
     const title = boundedString(params["name"]);
     if (state === null || title === null) {
+      scheduleRefresh(0);
       return;
     }
     state.title = title;
     const event = titleEvent(state, now());
     if (event !== null) {
-      emit([event]);
+      emitIncremental([event]);
     }
   };
 
@@ -879,10 +1507,11 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     const state = stateForParams(params);
     const model = boundedString(params["model"]);
     if (state === null || model === null) {
+      scheduleRefresh(0);
       return;
     }
     state.model = model;
-    emit([
+    emitIncremental([
       {
         kind: "SessionModelChanged",
         provider: "evener",
@@ -897,45 +1526,60 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     const params = isRecord(paramsValue) ? paramsValue : {};
     switch (method) {
       case "thread/started":
+        invalidateRefreshGeneration();
         handleStarted(params);
         return;
       case "thread/closed":
+        invalidateRefreshGeneration();
         handleClosed(params);
         return;
       case "thread/status/changed":
+        invalidateRefreshGeneration();
         handleStatusNotification(params);
         return;
       case "evener/thread/name/changed":
+        invalidateRefreshGeneration();
         handleNameChanged(params);
         return;
       case "thread/model/changed":
+        invalidateRefreshGeneration();
         handleModelChanged(params);
         return;
       case "turn/started":
+        invalidateRefreshGeneration();
         handleTurnStarted(params);
         return;
       case "turn/completed":
+        invalidateRefreshGeneration();
         handleTurnCompleted(params);
         return;
       case "evener/sandbox/escalation/requested": {
+        invalidateRefreshGeneration();
         const state = stateForParams(params);
         if (state !== null) {
           state.pendingEscalationCount += 1;
           state.failedTurn = false;
-          emit([{ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt: now() }]);
+          emitIncremental([{ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt: now() }]);
+        } else {
+          scheduleRefresh(0);
         }
         return;
       }
       case "evener/sandbox/escalation/resolved": {
+        invalidateRefreshGeneration();
         const state = stateForParams(params);
         if (state !== null) {
           state.pendingEscalationCount = Math.max(0, state.pendingEscalationCount - 1);
+        } else {
+          scheduleRefresh(0);
         }
         scheduleRefresh(0);
         return;
       }
       case "evener/thread/resync":
       case "evener/tree/changed":
+      case "evener/delegate/updated":
+        invalidateRefreshGeneration();
         scheduleRefresh(0);
         return;
       default:
@@ -1048,7 +1692,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
       refreshTimer = clearTimer(refreshTimer);
       const target = socket;
       socket = null;
-      subscribed.clear();
+      indices.subscribedSessionIds.clear();
       rejectPending("Evener collector stopped");
       try {
         target?.close();

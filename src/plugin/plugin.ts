@@ -15,6 +15,7 @@ import { resolveAppPaths } from "../core/paths";
 import { activateClaudeSession } from "./claude-session-activation";
 import { activateCodexSession, executeFile } from "./codex-session-activation";
 import { SessionGridController } from "./controller";
+import { createEvenerSessionActivator } from "./evener-session-activation";
 import { createKimiSessionActivator } from "./kimi-session-activation";
 import { createPaseoSessionActivator } from "./paseo-session-activation";
 import { createSessionAck } from "./session-ack";
@@ -28,6 +29,7 @@ const activateKimiSession = createKimiSessionActivator((url) => streamDeck.syste
 const activatePaseoSession = createPaseoSessionActivator(executeFile, () =>
   readFileSync(join(appPaths.home, ".paseo", "server-id"), "utf8").trim(),
 );
+const activateEvenerSession = createEvenerSessionActivator(executeFile, appPaths.executable);
 const ackSession = createSessionAck(executeFile, appPaths.executable);
 
 const keyActionForContext = (context: string) => {
@@ -59,6 +61,7 @@ const controller = new SessionGridController({
   activateCodexSession,
   activateKimiSession,
   activatePaseoSession,
+  activateEvenerSession,
   ackSession,
   showAlert: (context) => keyActionForContext(context)?.showAlert() ?? Promise.resolve(),
   clock: {

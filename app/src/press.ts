@@ -22,6 +22,7 @@ export type PressDeps = {
   openUrl: (url: string) => Promise<void>;
   focusGhostty: (script: string, terminalId: string) => Promise<void>;
   readPaseoServerId: () => Promise<string>;
+  activateEvenerSession: (sessionId: string) => Promise<void>;
   flash: () => void;
 };
 
@@ -67,6 +68,9 @@ export const pressSessionTile = async (
         return;
       case "url":
         await deps.openUrl(route.url);
+        return;
+      case "evener":
+        await deps.activateEvenerSession(route.sessionId);
         return;
       case "flash":
         deps.flash();

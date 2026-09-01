@@ -168,9 +168,17 @@ class FakeImagePort {
 class FakeActivationPort {
   readonly sessionIds: string[] = [];
   failure: Error | null = null;
+  private readonly events: string[] | undefined;
+  private readonly eventName: string;
+
+  constructor(events?: string[], eventName = "activation") {
+    this.events = events;
+    this.eventName = eventName;
+  }
 
   readonly activate = (sessionId: string): Promise<void> => {
     this.sessionIds.push(sessionId);
+    this.events?.push(`${this.eventName}:${sessionId}`);
     return this.failure === null ? Promise.resolve() : Promise.reject(this.failure);
   };
 }
@@ -180,9 +188,15 @@ type AckCall = { provider: string; sessionId: string };
 class FakeAckPort {
   readonly calls: AckCall[] = [];
   failure: Error | null = null;
+  private readonly events: string[] | undefined;
+
+  constructor(events?: string[]) {
+    this.events = events;
+  }
 
   readonly ack = (provider: string, sessionId: string): Promise<void> => {
     this.calls.push({ provider, sessionId });
+    this.events?.push(`ack:${provider}:${sessionId}`);
     return this.failure === null ? Promise.resolve() : Promise.reject(this.failure);
   };
 }
@@ -207,6 +221,8 @@ type Harness = {
   claudeActivation: FakeActivationPort;
   kimiActivation: FakeActivationPort;
   paseoActivation: FakeActivationPort;
+  evenerActivation: FakeActivationPort;
+  events: string[];
   acks: FakeAckPort;
   alerts: FakeAlertPort;
 };
@@ -222,7 +238,9 @@ const makeController = (
   const claudeActivation = new FakeActivationPort();
   const kimiActivation = new FakeActivationPort();
   const paseoActivation = new FakeActivationPort();
-  const acks = new FakeAckPort();
+  const evenerEvents: string[] = [];
+  const evenerActivation = new FakeActivationPort(evenerEvents, "evener");
+  const acks = new FakeAckPort(evenerEvents);
   const alerts = new FakeAlertPort();
   if (options.stored !== undefined) {
     settingsPort.stored = options.stored;
@@ -240,6 +258,7 @@ const makeController = (
     activateClaudeSession: claudeActivation.activate,
     activateKimiSession: kimiActivation.activate,
     activatePaseoSession: paseoActivation.activate,
+    activateEvenerSession: evenerActivation.activate,
     ackSession: acks.ack,
     showAlert: alerts.show,
     clock,
@@ -254,6 +273,8 @@ const makeController = (
     claudeActivation,
     kimiActivation,
     paseoActivation,
+    evenerActivation,
+    events: evenerEvents,
     acks,
     alerts,
   };
@@ -687,7 +708,7 @@ describe("SessionGridController", () => {
     expect(harness.alerts.contexts).toEqual(["ctx-claude"]);
   });
 
-  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen", "evener"] as const)(
+  test.each(["pi", "omp", "zcode", "deepseek", "grok", "qwen"] as const)(
     "a %s tile press alerts without invoking any activator",
     async (provider) => {
       const harness = makeController({ view: healthyView([session(1, { provider })]) });
@@ -698,9 +719,51 @@ describe("SessionGridController", () => {
       expect(harness.claudeActivation.sessionIds).toEqual([]);
       expect(harness.activation.sessionIds).toEqual([]);
       expect(harness.kimiActivation.sessionIds).toEqual([]);
+      expect(harness.evenerActivation.sessionIds).toEqual([]);
       expect(harness.alerts.contexts).toEqual(["ctx-new"]);
     },
   );
+
+  test("an Evener tile acks before activating its exact session ID", async () => {
+    const harness = makeController({
+      view: healthyView([session(1, { provider: "evener", sessionId: "session;still-data" })]),
+    });
+    await harness.controller.willAppear(appear("ctx-evener", 0, 0));
+
+    await harness.controller.keyDown("ctx-evener");
+
+    expect(harness.events).toEqual(["ack:evener:session;still-data", "evener:session;still-data"]);
+    expect(harness.acks.calls).toEqual([{ provider: "evener", sessionId: "session;still-data" }]);
+    expect(harness.evenerActivation.sessionIds).toEqual(["session;still-data"]);
+    expect(harness.alerts.contexts).toEqual([]);
+  });
+
+  test("a rejected Evener ack still allows activation", async () => {
+    const harness = makeController({
+      view: healthyView([session(1, { provider: "evener", sessionId: "evener-1" })]),
+    });
+    harness.acks.failure = new Error("ack failed");
+    await harness.controller.willAppear(appear("ctx-evener", 0, 0));
+
+    await harness.controller.keyDown("ctx-evener");
+    await flushMicrotasks();
+
+    expect(harness.evenerActivation.sessionIds).toEqual(["evener-1"]);
+    expect(harness.alerts.contexts).toEqual([]);
+  });
+
+  test("a rejected Evener activation shows exactly one alert", async () => {
+    const harness = makeController({
+      view: healthyView([session(1, { provider: "evener", sessionId: "evener-failing" })]),
+    });
+    harness.evenerActivation.failure = new Error("activation failed");
+    await harness.controller.willAppear(appear("ctx-evener", 0, 0));
+
+    await harness.controller.keyDown("ctx-evener");
+
+    expect(harness.evenerActivation.sessionIds).toEqual(["evener-failing"]);
+    expect(harness.alerts.contexts).toEqual(["ctx-evener"]);
+  });
 
   test("pressing a paseo-origin tile routes to paseo activation and acks the session", async () => {
     const harness = makeController({

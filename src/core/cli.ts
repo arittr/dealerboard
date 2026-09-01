@@ -6,6 +6,7 @@
  *   dealerboard event <claude|codex|kimi|pi|omp|zcode|deepseek|grok|qwen|evener>
  *   dealerboard daemon
  *   dealerboard sessions list
+ *   dealerboard sessions activate evener <session-id>
  *   dealerboard sessions clear <provider> <session-id>
  *   dealerboard sessions ack <provider> <session-id> [watermark]
  *   dealerboard sessions view <provider> <session-id> [watermark]
@@ -27,7 +28,12 @@ import { PROVIDER_KEYS, type Provider, type RegistryEvent } from "../protocol";
 import { type DiscoverClaudeGhosttyTerminal, discoverClaudeGhosttyTerminal } from "./claude-ghostty-binding";
 import { PASEO_BACKGROUND_SETTLE_GRACE_MS, ProjectionDaemon } from "./daemon";
 import { createFileDiagnostics, type DiagnosticRecord } from "./diagnostics";
-import { createEvenerCollector, resolveEvenerHubConnection } from "./evener";
+import {
+  createEvenerCollector,
+  evenerSessionUrl,
+  resolveEvenerHubConnection,
+  resolveEvenerHubEndpoints,
+} from "./evener";
 import { detectOrigin } from "./origin";
 import { createPaseoAgentStateLoader, isKnownProviderState } from "./paseo";
 import { type AppPaths, resolveAppPaths } from "./paths";
@@ -35,6 +41,7 @@ import { decodeNativeHook } from "./providers";
 import { createQuotaCollector } from "./quota";
 import {
   acknowledgeSession,
+  applyEvenerCollectorUpdate,
   applyRegistryEvents,
   clearAllSessions,
   clearSession,
@@ -52,6 +59,26 @@ export const MAX_STDIN_BYTES = 65_536;
 const RETRY_DELAY_MS = 25;
 const DIAGNOSTIC_COMPONENT = "cli";
 
+export type CliProcessExecutor = (file: string, args: readonly string[]) => Promise<void>;
+
+const executeFile: CliProcessExecutor = async (file, args) => {
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[0] !== "EVENER_HUB_AUTH_TOKEN" && entry[1] !== undefined,
+    ),
+  );
+  const child = Bun.spawn([file, ...args], {
+    env: environment,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  const exitCode = await child.exited;
+  if (exitCode !== 0) {
+    throw new Error("child process failed");
+  }
+};
+
 export type CliDependencies = {
   paths: AppPaths;
   stdin?: AsyncIterable<Uint8Array>;
@@ -62,6 +89,7 @@ export type CliDependencies = {
   stderr?: (text: string) => void;
   openDatabase?: typeof openRegistryDatabase;
   applyEvents?: typeof applyRegistryEvents;
+  applyEvenerUpdate?: typeof applyEvenerCollectorUpdate;
   discoverClaudeGhosttyTerminal?: DiscoverClaudeGhosttyTerminal;
   environment?: Readonly<Record<string, string | undefined>>;
   parentPid?: number;
@@ -69,6 +97,9 @@ export type CliDependencies = {
   createTokenUsageCollector?: typeof createTokenUsageCollector;
   createEvenerCollector?: typeof createEvenerCollector;
   resolveEvenerHubConnection?: typeof resolveEvenerHubConnection;
+  resolveEvenerHubEndpoints?: typeof resolveEvenerHubEndpoints;
+  evenerSessionUrl?: typeof evenerSessionUrl;
+  executeFile?: CliProcessExecutor;
   runDaemon?: (paths: AppPaths, diagnostics: (record: DiagnosticRecord) => void) => number | Promise<number>;
 };
 
@@ -133,6 +164,7 @@ commands:
   event <${PROVIDER_KEYS.join("|")}>
   daemon
   sessions list
+  sessions activate evener <session-id>
   sessions clear <provider> <session-id>
   sessions ack <provider> <session-id> [watermark]
   sessions view <provider> <session-id> [watermark]
@@ -320,9 +352,31 @@ const runInit = (args: readonly string[], deps: ResolvedDependencies): number =>
   }
 };
 
-const runSessions = (args: readonly string[], deps: ResolvedDependencies): number => {
+const runSessions = async (args: readonly string[], deps: ResolvedDependencies): Promise<number> => {
   const [subcommand, ...rest] = args;
   switch (subcommand) {
+    case "activate": {
+      const [providerArg, sessionId, ...extra] = rest;
+      if (providerArg !== "evener" || sessionId === undefined || sessionId.length === 0 || extra.length > 0) {
+        deps.stderr(USAGE);
+        return 1;
+      }
+      try {
+        const endpoints = deps.resolveEvenerHubEndpoints({ home: deps.paths.home, environment: deps.environment });
+        if (endpoints === null) {
+          throw new Error("endpoint resolution failed");
+        }
+        const url = deps.evenerSessionUrl(endpoints, sessionId);
+        if (url === null) {
+          throw new Error("session identity resolution failed");
+        }
+        await deps.executeFile("/usr/bin/open", ["-u", url]);
+        return 0;
+      } catch {
+        deps.stderr("sessions activate failed\n");
+        return 1;
+      }
+    }
     case "list": {
       if (rest.length !== 0) {
         deps.stderr(USAGE);
@@ -468,6 +522,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   stderr: (text) => process.stderr.write(text),
   openDatabase: openRegistryDatabase,
   applyEvents: applyRegistryEvents,
+  applyEvenerUpdate: applyEvenerCollectorUpdate,
   discoverClaudeGhosttyTerminal,
   environment: process.env,
   parentPid: process.ppid,
@@ -475,6 +530,9 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   createTokenUsageCollector,
   createEvenerCollector,
   resolveEvenerHubConnection,
+  resolveEvenerHubEndpoints,
+  evenerSessionUrl,
+  executeFile,
   runDaemon: (daemonPaths, diagnostics) => {
     const environment = process.env;
     const zcodeRoot = environment["ZCODE_HOME"] ?? join(daemonPaths.home, ".zcode");
@@ -498,6 +556,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
       );
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
+    const applyUpdate = dependencies.applyEvenerUpdate ?? applyEvenerCollectorUpdate;
     // Evener is observed through its supported daemon-wide AppWire feed. The
     // bearer capability stays in memory and is never logged or persisted.
     try {
@@ -506,10 +565,10 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
       const evenerCollector = createCollector({
         connection: () => resolveConnection({ home: daemonPaths.home, environment }),
         diagnostics,
-        onUpdate: ({ events }) => {
+        onUpdate: (update) => {
           const db = openRegistryDatabase(daemonPaths.database, "readwrite");
           try {
-            applyRegistryEvents(db, events);
+            applyUpdate(db, update);
           } finally {
             db.close();
           }
@@ -594,7 +653,7 @@ export const runCli = async (args: readonly string[], dependencies: CliDependenc
       return deps.runDaemon(deps.paths, deps.diagnostics);
     }
     case "sessions":
-      return runSessions(rest, deps);
+      return await runSessions(rest, deps);
     default:
       deps.stderr(USAGE);
       return 1;

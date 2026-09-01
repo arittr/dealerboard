@@ -142,12 +142,19 @@ async fn read_paseo_server_id() -> Result<String, String> {
     Ok(contents.trim().to_string())
 }
 
+#[tauri::command]
+async fn activate_evener_session(session_id: &str) -> Result<(), String> {
+    let executable = app_support_root()?.join("bin/dealerboard");
+    activate_evener_session_with(&executable, session_id, run)
+}
+
 /// Blocking child-process wait inside async commands: acceptable at this
 /// scale (a few short-lived processes per user gesture) and keeps the crate
 /// dependency-light beyond tauri/serde/notify.
 fn run(program: &str, args: &[&str]) -> Result<(), String> {
     let status = Command::new(program)
         .args(args)
+        .env_remove("EVENER_HUB_AUTH_TOKEN")
         .status()
         .map_err(|error| error.to_string())?;
     if status.success() {
@@ -155,6 +162,18 @@ fn run(program: &str, args: &[&str]) -> Result<(), String> {
     } else {
         Err(format!("{program} exited with {status}"))
     }
+}
+
+fn activate_evener_session_with<F>(
+    executable: &Path,
+    session_id: &str,
+    runner: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&str, &[&str]) -> Result<(), String>,
+{
+    let path = executable.to_string_lossy().to_string();
+    runner(&path, &["sessions", "activate", "evener", session_id])
 }
 
 /// The causal content of a view/dismiss gesture: the unread stamp visible
@@ -392,6 +411,7 @@ fn main() {
             read_quota_snapshot,
             read_token_usage_snapshot,
             read_paseo_server_id,
+            activate_evener_session,
             ack_session,
             view_session,
             reveal_transcript,
@@ -418,6 +438,43 @@ mod tests {
     // sink refuses, and a refused sink neither sends nor stamps the
     // coalescing stamp (the stamp-on-success invariant under test).
     const STREAM_SETTLE_MS: u64 = 200;
+
+    #[test]
+    fn evener_activation_uses_fixed_installed_cli_argv() {
+        let executable = Path::new("/tmp/dealerboard");
+        let mut seen = None;
+        let result = activate_evener_session_with(executable, "session-a", |program, args| {
+            seen = Some((
+                program.to_string(),
+                args.iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>(),
+            ));
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(
+            seen,
+            Some((
+                executable.to_string_lossy().to_string(),
+                vec!["sessions", "activate", "evener", "session-a"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            )),
+        );
+    }
+
+    #[test]
+    fn evener_activation_propagates_runner_failure() {
+        let result = activate_evener_session_with(
+            Path::new("/tmp/dealerboard"),
+            "session-a",
+            |_, _| Err("non-zero".to_string()),
+        );
+        assert_eq!(result, Err("non-zero".to_string()));
+    }
 
     fn event_for(kind: EventKind, path: PathBuf) -> Event {
         Event {

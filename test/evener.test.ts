@@ -6,7 +6,10 @@ import {
   type EvenerSocket,
   type EvenerTimer,
   evenerAppWireUrl,
+  evenerHubEndpoints,
+  evenerSessionUrl,
   resolveEvenerHubConnection,
+  resolveEvenerHubEndpoints,
 } from "../src/core/evener";
 
 class FakeSocket implements EvenerSocket {
@@ -78,8 +81,10 @@ const thread = (
   sessionId: string,
   status: string,
   options: {
+    ref?: string;
     parentRef?: string;
     kind?: string;
+    diagnostics?: unknown;
     name?: string;
     model?: string;
     askPending?: boolean;
@@ -95,7 +100,7 @@ const thread = (
   path: sessionId,
   status: { type: status },
   evener: {
-    ref: `local:${sessionId}`,
+    ref: options.ref ?? `local:${sessionId}`,
     ...(options.parentRef === undefined ? {} : { parentRef: options.parentRef }),
     ...(options.kind === undefined ? {} : { kind: options.kind }),
     ...(options.askPending === undefined ? {} : { askPending: options.askPending }),
@@ -112,6 +117,35 @@ const thread = (
             deniedPath: "/work/denied",
           })),
         }),
+    ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
+  },
+});
+
+const delegateProjection = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  delegateId: "dlg-parent",
+  ownerSessionId: "root",
+  rootSessionId: "root",
+  childSessionId: "child",
+  parentDelegateId: null,
+  lifecycle: "running",
+  phase: "executing",
+  status: "active",
+  terminal: false,
+  resumable: false,
+  needsAttention: false,
+  model: "gpt-5.6-sol",
+  projectionRevision: 1,
+  ...overrides,
+});
+
+const withDelegates = (
+  value: Record<string, unknown>,
+  delegates: readonly Record<string, unknown>[],
+): Record<string, unknown> => ({
+  ...value,
+  evener: {
+    ...(value["evener"] as Record<string, unknown>),
+    diagnostics: { delegates },
   },
 });
 
@@ -123,8 +157,85 @@ const requestByMethod = (socket: FakeSocket, method: string): Record<string, unk
   return frame;
 };
 
+const requestsByMethod = (socket: FakeSocket, method: string): Array<Record<string, unknown>> =>
+  socket.sent.filter((candidate) => candidate["method"] === method && "id" in candidate);
+
+const latestRequestByMethod = (socket: FakeSocket, method: string): Record<string, unknown> => {
+  const request = requestsByMethod(socket, method).at(-1);
+  if (request === undefined) {
+    throw new Error(`missing ${method} request`);
+  }
+  return request;
+};
+
+const respondToReads = async (
+  socket: FakeSocket,
+  fixtures: ReadonlyMap<string, Record<string, unknown>>,
+  startAt = 0,
+): Promise<void> => {
+  let handled = startAt;
+  for (;;) {
+    const reads = requestsByMethod(socket, "thread/read");
+    const request = reads[handled];
+    if (request === undefined) {
+      return;
+    }
+    const params = request["params"] as Record<string, unknown>;
+    const sessionId = params["threadId"];
+    if (typeof sessionId !== "string") {
+      throw new Error("targeted read omitted threadId");
+    }
+    const fixture = fixtures.get(sessionId);
+    if (fixture === undefined) {
+      throw new Error(`missing read fixture for ${sessionId}`);
+    }
+    respond(socket, request, { thread: fixture });
+    handled += 1;
+    await flush();
+  }
+};
+
+const threadFixtures = (...values: Record<string, unknown>[]): ReadonlyMap<string, Record<string, unknown>> =>
+  new Map(values.map((value) => [value["sessionId"] as string, value]));
+
 const respond = (socket: FakeSocket, request: Record<string, unknown>, result: unknown): void => {
   socket.message({ id: request["id"], result });
+};
+
+const acceptBaseline = async (
+  socket: FakeSocket,
+  updates: EvenerCollectorUpdate[],
+  values: Record<string, unknown>[] = [thread("baseline", "active")],
+): Promise<void> => {
+  socket.open();
+  respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+  await flush();
+  respond(socket, requestByMethod(socket, "thread/list"), { data: values });
+  await flush();
+  await respondToReads(socket, threadFixtures(...values));
+  expect(updates.at(-1)?.activeChildSessionIds).toEqual(expect.any(Array));
+};
+
+const authoritativeUpdateHarness = (): {
+  updates: EvenerCollectorUpdate[];
+  onUpdate: (update: EvenerCollectorUpdate) => void;
+} => {
+  const updates: EvenerCollectorUpdate[] = [];
+  return { updates, onUpdate: (update) => updates.push(update) };
+};
+
+const collectIncrementalEvents = (
+  events: EvenerCollectorUpdate["events"],
+): ((update: EvenerCollectorUpdate) => void) => {
+  let firstUpdate = true;
+  return (update) => {
+    if (firstUpdate) {
+      firstUpdate = false;
+    } else {
+      expect(update.activeChildSessionIds).toBeNull();
+    }
+    events.push(...update.events);
+  };
 };
 
 describe("Evener hub connection discovery", () => {
@@ -134,6 +245,59 @@ describe("Evener hub connection discovery", () => {
     expect(evenerAppWireUrl("0.0.0.0:9180")).toBe("ws://127.0.0.1:9180/rpc");
     expect(evenerAppWireUrl("127.example.com:9180")).toBeNull();
     expect(evenerAppWireUrl("https://example.com:9180")).toBeNull();
+  });
+
+  test("resolves token-free AppWire and browser endpoints", () => {
+    expect(evenerHubEndpoints("127.0.0.1:9180")).toEqual({
+      appWireUrl: "ws://127.0.0.1:9180/rpc",
+      browserOrigin: "http://127.0.0.1:9180",
+    });
+    expect(evenerHubEndpoints("wss://localhost:9443/rpc?token=leak#fragment")).toEqual({
+      appWireUrl: "wss://localhost:9443/rpc",
+      browserOrigin: "https://localhost:9443",
+    });
+    expect(evenerHubEndpoints("http://0.0.0.0:9180/custom?x=1#y")).toEqual({
+      appWireUrl: "ws://127.0.0.1:9180/rpc",
+      browserOrigin: "http://127.0.0.1:9180",
+    });
+    expect(evenerHubEndpoints("https://example.com:9180")).toBeNull();
+    expect(evenerHubEndpoints("http://user:password@localhost:9180")).toBeNull();
+  });
+
+  test("builds the canonical token-free session url", () => {
+    const endpoints = {
+      appWireUrl: "ws://127.0.0.1:9180/rpc",
+      browserOrigin: "http://127.0.0.1:9180",
+    };
+    const sessionUrl = evenerSessionUrl(endpoints, "session/a b");
+    expect(sessionUrl).toBe("http://127.0.0.1:9180/s/local%3Asession%2Fa%20b");
+    expect(sessionUrl).not.toContain("/rpc/s/");
+    expect(sessionUrl).not.toContain("?");
+    expect(sessionUrl).not.toContain("#");
+    expect(sessionUrl).not.toContain("sentinel-token");
+    expect(evenerSessionUrl(endpoints, "")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "\nunsafe")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "\uD800")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "\uDC00")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "x".repeat(257))).toBeNull();
+    expect(evenerSessionUrl(endpoints, "x".repeat(256))).not.toBeNull();
+  });
+
+  test("resolves endpoints without reading token paths", () => {
+    const reads: string[] = [];
+    const endpoints = resolveEvenerHubEndpoints({
+      home: "/Users/test",
+      environment: {},
+      readText: (path) => {
+        reads.push(path);
+        return path.endsWith("hub.toml")
+          ? 'addr = "127.0.0.1:9777"\nhub_state_root = "/state/evener"\n'
+          : "must-not-be-read";
+      },
+      parseToml: Bun.TOML.parse,
+    });
+    expect(endpoints?.browserOrigin).toBe("http://127.0.0.1:9777");
+    expect(reads).toEqual(["/Users/test/.config/evener/hub.toml"]);
   });
 
   test("uses documented defaults and reads the capability without exposing it", () => {
@@ -183,6 +347,15 @@ describe("Evener hub connection discovery", () => {
 });
 
 describe("Evener AppWire collector", () => {
+  test("delivers an authoritative update with no events to the update harness", () => {
+    const harness = authoritativeUpdateHarness();
+    harness.onUpdate({ events: [], activeChildSessionIds: [] });
+    expect(harness.updates.at(-1)).toEqual({
+      events: [],
+      activeChildSessionIds: [],
+    });
+  });
+
   test("handshakes, hydrates roots before subagents, and subscribes with one replacement", async () => {
     const socket = new FakeSocket();
     const timers = timerHarness();
@@ -196,7 +369,9 @@ describe("Evener AppWire collector", () => {
       },
       schedule: timers.schedule,
       now: () => "2026-08-26T05:00:00.000Z",
-      onUpdate: (update) => updates.push(update),
+      onUpdate: (update) => {
+        updates.push(update);
+      },
     });
 
     collector.start();
@@ -244,6 +419,47 @@ describe("Evener AppWire collector", () => {
     });
     await flush();
 
+    const firstRead = requestByMethod(socket, "thread/read");
+    expect(firstRead["params"]).toMatchObject({
+      ref: "local:terra-child",
+      threadId: "terra-child",
+      includeTurns: false,
+      subscribe: true,
+      replaceSubscription: true,
+    });
+    respond(socket, firstRead, {
+      thread: thread("terra-child", "active", {
+        parentRef: "local:root",
+        kind: "subagent",
+        model: "gpt-5.6-terra",
+      }),
+    });
+    await flush();
+    let reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(2);
+    expect(reads[1]?.["params"]).toMatchObject({
+      ref: "local:opus-child",
+      threadId: "opus-child",
+      replaceSubscription: false,
+    });
+    respond(socket, reads[1]!, {
+      thread: thread("opus-child", "active", {
+        parentRef: "local:root",
+        kind: "subagent",
+        model: "claude-opus-4.1",
+      }),
+    });
+    await flush();
+    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(3);
+    expect(reads[2]?.["params"]).toMatchObject({ ref: "local:root", threadId: "root", replaceSubscription: false });
+    respond(socket, reads[2]!, {
+      thread: thread("root", "active", { name: "Root title", model: "gpt-5.6-sol" }),
+    });
+    await flush();
+    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
+    expect(reads).toHaveLength(3);
+
     const initialEvents = updates.flatMap((update) => update.events);
     expect(initialEvents.map((event) => [event.kind, event.sessionId])).toEqual([
       ["SessionObserved", "root"],
@@ -275,57 +491,703 @@ describe("Evener AppWire collector", () => {
       ["terra-child", "gpt-5.6-terra"],
     ]);
 
-    const firstRead = requestByMethod(socket, "thread/read");
-    expect(firstRead["params"]).toMatchObject({
-      ref: "local:root",
-      includeTurns: false,
-      subscribe: true,
-      replaceSubscription: true,
-    });
-    respond(socket, firstRead, {
-      thread: thread("root", "active", { name: "Root title", model: "gpt-5.6-sol" }),
-    });
-    await flush();
-    let reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
-    expect(reads).toHaveLength(2);
-    expect(reads[1]?.["params"]).toMatchObject({ ref: "local:opus-child", replaceSubscription: false });
-    respond(socket, reads[1]!, {
-      thread: thread("opus-child", "active", {
-        parentRef: "local:root",
-        kind: "subagent",
-        model: "claude-opus-4.1",
-      }),
-    });
-    await flush();
-    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
-    expect(reads).toHaveLength(3);
-    expect(reads[2]?.["params"]).toMatchObject({ ref: "local:terra-child", replaceSubscription: false });
-    respond(socket, reads[2]!, {
-      thread: thread("terra-child", "active", {
-        parentRef: "local:root",
-        kind: "subagent",
-        model: "gpt-5.6-terra",
-      }),
-    });
-    await flush();
-    reads = socket.sent.filter((frame) => frame["method"] === "thread/read" && "id" in frame);
-    expect(reads).toHaveLength(3);
-
     socket.message({
       method: "thread/model/changed",
       params: { ref: "local:terra-child", model: "gemini-3-pro" },
     });
-    expect(updates.flatMap((update) => update.events).at(-1)).toEqual({
-      kind: "SessionModelChanged",
-      provider: "evener",
-      sessionId: "terra-child",
-      model: "gemini-3-pro",
-      observedAt: "2026-08-26T05:00:00.000Z",
+    expect(updates.at(-1)).toEqual({
+      events: [
+        {
+          kind: "SessionModelChanged",
+          provider: "evener",
+          sessionId: "terra-child",
+          model: "gemini-3-pro",
+          observedAt: "2026-08-26T05:00:00.000Z",
+        },
+      ],
+      activeChildSessionIds: null,
     });
     expect(timers.timers.some((timer) => timer.active && timer.delayMs === 2_000)).toBe(true);
 
     collector.stop();
     expect(socket.closed).toBe(true);
+  });
+
+  test("targets every shared-ref session in either list order and rejects ambiguous compatibility parents", async () => {
+    const orders = [
+      ["root", "child", "grandchild"],
+      ["child", "grandchild", "root"],
+    ];
+    for (const order of orders) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const fixtureBySession = new Map<string, Record<string, unknown>>([
+        ["root", thread("root", "active", { ref: "local:root" })],
+        ["child", thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" })],
+        [
+          "grandchild",
+          thread("grandchild", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
+        ],
+      ]);
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+      collector.start();
+      socket.open();
+      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+      await flush();
+      const list = requestByMethod(socket, "thread/list");
+      respond(socket, list, { data: order.map((sessionId) => fixtureBySession.get(sessionId)!) });
+      await flush();
+      await respondToReads(socket, fixtureBySession);
+
+      const reads = requestsByMethod(socket, "thread/read");
+      expect(reads.map((request) => (request["params"] as Record<string, unknown>)["threadId"]).sort()).toEqual([
+        "child",
+        "grandchild",
+        "root",
+      ]);
+      expect(reads.every((request) => (request["params"] as Record<string, unknown>)["ref"] === "local:root")).toBe(
+        true,
+      );
+      expect(((reads[0] as Record<string, unknown>)["params"] as Record<string, unknown>)["replaceSubscription"]).toBe(
+        true,
+      );
+      expect(
+        reads
+          .slice(1)
+          .every((request) => (request["params"] as Record<string, unknown>)["replaceSubscription"] === false),
+      ).toBe(true);
+      expect(updates).toEqual([]);
+      expect(socket.closed).toBe(false);
+      expect(diagnostics).toHaveLength(1);
+      collector.stop();
+    }
+  });
+
+  test("resolves direct and nested delegate lineage in either list order", async () => {
+    const orders = [
+      ["root", "child", "grandchild"],
+      ["grandchild", "child", "root"],
+    ];
+    for (const order of orders) {
+      const socket = new FakeSocket();
+      const updates: EvenerCollectorUpdate[] = [];
+      const parent = delegateProjection();
+      const nested = delegateProjection({
+        delegateId: "dlg-nested",
+        childSessionId: "grandchild",
+        parentDelegateId: "dlg-parent",
+        model: "claude-opus-4.1",
+      });
+      const values = [
+        withDelegates(thread("root", "active", { ref: "local:root" }), [parent, nested]),
+        thread("child", "active", { ref: "local:root", kind: "subagent" }),
+        thread("grandchild", "active", { ref: "local:root", kind: "subagent" }),
+      ];
+      const fixtureBySession = new Map(values.map((value) => [value["sessionId"] as string, value]));
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        onUpdate: (update) => updates.push(update),
+      });
+
+      collector.start();
+      socket.open();
+      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+      await flush();
+      respond(socket, requestByMethod(socket, "thread/list"), {
+        data: order.map((sessionId) => fixtureBySession.get(sessionId)!),
+      });
+      await flush();
+      await respondToReads(socket, threadFixtures(...values));
+
+      const starts = updates.flatMap((update) => update.events).filter((event) => event.kind === "SubagentStart");
+      expect(starts).toContainEqual(expect.objectContaining({ sessionId: "child", parentSessionId: "root" }));
+      expect(starts).toContainEqual(expect.objectContaining({ sessionId: "grandchild", parentSessionId: "child" }));
+      expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child", "grandchild"]);
+      collector.stop();
+    }
+  });
+
+  test("uses a unique legacy parentRef when delegate diagnostics are absent", async () => {
+    const socket = new FakeSocket();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = thread("root", "active", { ref: "local:root" });
+    const child = thread("child", "active", { ref: "local:child", parentRef: "local:root", kind: "subagent" });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child]);
+    expect(updates.flatMap((update) => update.events)).toContainEqual(
+      expect.objectContaining({ kind: "SubagentStart", sessionId: "child", parentSessionId: "root" }),
+    );
+    collector.stop();
+  });
+
+  test("rejects ambiguous, missing, duplicate, contradictory, and cyclic delegate candidates", async () => {
+    const candidates = [
+      {
+        label: "ambiguous legacy parent",
+        values: [
+          thread("parent-a", "active", { ref: "local:shared" }),
+          thread("parent-b", "active", { ref: "local:shared" }),
+          thread("child", "active", { ref: "local:child", parentRef: "local:shared", kind: "subagent" }),
+        ],
+      },
+      {
+        label: "missing parent delegate",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ parentDelegateId: "missing" }),
+          ]),
+        ],
+      },
+      {
+        label: "missing owner",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ ownerSessionId: "missing" }),
+          ]),
+        ],
+      },
+      {
+        label: "missing parent child session",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ childSessionId: "missing" }),
+          ]),
+        ],
+      },
+      {
+        label: "duplicate child session",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection(),
+            delegateProjection({ delegateId: "dlg-other" }),
+          ]),
+        ],
+      },
+      {
+        label: "contradictory immutable identity",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection(),
+            delegateProjection({ ownerSessionId: "other" }),
+          ]),
+        ],
+      },
+      {
+        label: "equal revision disagreement",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection(),
+            delegateProjection({ lifecycle: "finished" }),
+          ]),
+        ],
+      },
+      {
+        label: "cyclic delegate lineage",
+        values: [
+          thread("root", "active"),
+          withDelegates(thread("child", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({ parentDelegateId: "dlg-nested" }),
+          ]),
+          withDelegates(thread("grandchild", "active", { ref: "local:root", kind: "subagent" }), [
+            delegateProjection({
+              delegateId: "dlg-nested",
+              childSessionId: "grandchild",
+              parentDelegateId: "dlg-parent",
+            }),
+          ]),
+        ],
+      },
+    ];
+    for (const candidate of candidates) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+      collector.start();
+      await acceptBaseline(socket, updates);
+      updates.length = 0;
+      const baselineReadCount = requestsByMethod(socket, "thread/read").length;
+      timers.run(2_000);
+      respond(socket, latestRequestByMethod(socket, "thread/list"), { data: candidate.values });
+      await flush();
+      await respondToReads(socket, threadFixtures(...candidate.values), baselineReadCount);
+      await flush();
+      expect(updates).toEqual([]);
+      expect(diagnostics).toHaveLength(1);
+      expect(socket.closed).toBe(false);
+      collector.stop();
+    }
+  });
+
+  test("rejects malformed delegate identity, booleans, and revisions atomically", async () => {
+    const malformed = [
+      delegateProjection({ delegateId: "" }),
+      delegateProjection({ terminal: "false" }),
+      delegateProjection({ projectionRevision: 1.5 }),
+    ];
+    for (const projection of malformed) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+      collector.start();
+      await acceptBaseline(socket, updates);
+      updates.length = 0;
+      const baselineReadCount = requestsByMethod(socket, "thread/read").length;
+      timers.run(2_000);
+      const root = withDelegates(thread("root", "active"), [projection]);
+      respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [root] });
+      await flush();
+      await respondToReads(socket, threadFixtures(root), baselineReadCount);
+      await flush();
+      expect(updates).toEqual([]);
+      expect(diagnostics).toHaveLength(1);
+      collector.stop();
+    }
+  });
+
+  test("merges higher delegate revisions and replaces generation A with B", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const root = thread("root", "active");
+    const childA = withDelegates(thread("child-a", "active", { ref: "local:root", kind: "subagent" }), [
+      delegateProjection({ childSessionId: "child-a", projectionRevision: 1 }),
+    ]);
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    await acceptBaseline(socket, updates, [root, childA]);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child-a"]);
+    updates.length = 0;
+    const baselineReadCount = requestsByMethod(socket, "thread/read").length;
+
+    timers.run(2_000);
+    const childB = withDelegates(thread("child-b", "active", { ref: "local:root", kind: "subagent" }), [
+      delegateProjection({ childSessionId: "child-b", projectionRevision: 2 }),
+    ]);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [root, childB] });
+    await flush();
+    await respondToReads(socket, threadFixtures(root, childB), baselineReadCount);
+    await flush();
+
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child-b"]);
+    expect(updates.flatMap((update) => update.events)).toContainEqual(
+      expect.objectContaining({ kind: "SubagentStart", sessionId: "child-b", parentSessionId: "root" }),
+    );
+    expect(updates.flatMap((update) => update.events)).not.toContainEqual(
+      expect.objectContaining({ sessionId: "child-a" }),
+    );
+    expect(diagnostics).toHaveLength(0);
+    collector.stop();
+  });
+
+  test("rejects a partial refresh that would orphan an active child", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const root = thread("root", "active", { ref: "local:root" });
+    const child = thread("child", "active", { parentRef: "local:root", kind: "subagent" });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child]);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child"]);
+    updates.length = 0;
+
+    timers.run(2_000);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [child] });
+    await flush();
+    const childRead = latestRequestByMethod(socket, "thread/read");
+    respond(socket, childRead, { thread: child });
+    await flush();
+
+    expect(updates).toEqual([]);
+    expect(socket.closed).toBe(false);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).not.toContain("child");
+    expect(diagnostics[0]).not.toContain("local:root");
+
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "root", status: { type: "active" } },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "Activity", provider: "evener", sessionId: "root" }],
+    });
+    expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+    collector.stop();
+  });
+
+  test("publishes an empty authoritative update after an empty complete candidate", async () => {
+    const socket = new FakeSocket();
+    const updates: EvenerCollectorUpdate[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), { data: [] });
+    await flush();
+    expect(updates).toEqual([{ events: [], activeChildSessionIds: [] }]);
+    collector.stop();
+  });
+
+  test("keeps the accepted session state when a duplicate candidate is rejected", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    const baseline = thread("baseline", "active");
+    respond(socket, requestByMethod(socket, "thread/list"), { data: [baseline] });
+    await flush();
+    await respondToReads(socket, threadFixtures(baseline));
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual([]);
+    updates.length = 0;
+
+    timers.run(2_000);
+    await flush();
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [baseline, baseline] });
+    await flush();
+    expect(updates).toEqual([]);
+    expect(socket.closed).toBe(false);
+    expect(diagnostics).toHaveLength(1);
+
+    socket.message({
+      method: "turn/started",
+      params: { ref: "local:baseline", threadId: "baseline", turn: { status: "inProgress" } },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "Activity", sessionId: "baseline" }],
+    });
+    collector.stop();
+  });
+
+  test("rejects malformed identity and status candidates without swapping the baseline", async () => {
+    const candidates = [
+      { label: "identity", value: thread("\u0000malformed", "active") },
+      { label: "status", value: thread("baseline", "not-a-status") },
+    ];
+    for (const candidate of candidates) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        now: () => "2026-08-26T05:00:00.000Z",
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+
+      collector.start();
+      await acceptBaseline(socket, updates);
+      updates.length = 0;
+
+      timers.run(2_000);
+      respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [candidate.value] });
+      await flush();
+
+      expect(updates).toEqual([]);
+      expect(socket.closed).toBe(false);
+      expect(diagnostics).toEqual([
+        JSON.stringify({
+          timestamp: "2026-08-26T05:00:00.000Z",
+          component: "evener",
+          code: "evener_collector_failed",
+          provider: "evener",
+        }),
+      ]);
+      expect(diagnostics[0]).not.toContain(candidate.label);
+      expect(diagnostics[0]).not.toContain("malformed");
+
+      socket.message({
+        method: "thread/status/changed",
+        params: { ref: "local:baseline", threadId: "baseline", status: { type: "active" } },
+      });
+      expect(updates.at(-1)).toMatchObject({
+        activeChildSessionIds: null,
+        events: [{ kind: "Activity", provider: "evener", sessionId: "baseline" }],
+      });
+      expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+      expect(diagnostics).toHaveLength(1);
+      collector.stop();
+    }
+  });
+
+  test("rejects malformed and mismatched thread reads without swapping the baseline", async () => {
+    const readFailures = [
+      { label: "malformed", result: { thread: {} } },
+      { label: "mismatch", result: { thread: thread("different-session", "active") } },
+    ];
+    for (const failure of readFailures) {
+      const socket = new FakeSocket();
+      const timers = timerHarness();
+      const updates: EvenerCollectorUpdate[] = [];
+      const diagnostics: string[] = [];
+      const collector = createEvenerCollector({
+        connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+        socketFactory: () => socket,
+        schedule: timers.schedule,
+        now: () => "2026-08-26T05:00:00.000Z",
+        diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+        onUpdate: (update) => updates.push(update),
+      });
+
+      collector.start();
+      await acceptBaseline(socket, updates);
+      updates.length = 0;
+
+      timers.run(2_000);
+      respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [thread("baseline", "active")] });
+      await flush();
+      respond(socket, latestRequestByMethod(socket, "thread/read"), failure.result);
+      await flush();
+
+      expect(updates).toEqual([]);
+      expect(socket.closed).toBe(false);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).not.toContain(failure.label);
+      expect(diagnostics[0]).not.toContain("different-session");
+
+      socket.message({
+        method: "thread/status/changed",
+        params: { ref: "local:baseline", threadId: "baseline", status: { type: "active" } },
+      });
+      expect(updates.at(-1)).toMatchObject({
+        activeChildSessionIds: null,
+        events: [{ kind: "Activity", provider: "evener", sessionId: "baseline" }],
+      });
+      expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+      expect(diagnostics).toHaveLength(1);
+      collector.stop();
+    }
+  });
+
+  test("retains the baseline through a rejected thread read and reconnect", async () => {
+    const sockets = [new FakeSocket(), new FakeSocket()];
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    let socketIndex = 0;
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => sockets[socketIndex++]!,
+      schedule: timers.schedule,
+      now: () => "2026-08-26T05:00:00.000Z",
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(sockets[0]!, updates);
+    updates.length = 0;
+
+    timers.run(2_000);
+    respond(sockets[0]!, latestRequestByMethod(sockets[0]!, "thread/list"), {
+      data: [thread("baseline", "active")],
+    });
+    await flush();
+    const rejectedRead = latestRequestByMethod(sockets[0]!, "thread/read");
+    sockets[0]!.message({ id: rejectedRead["id"], error: { code: -1 } });
+    await flush();
+
+    expect(updates).toEqual([]);
+    expect(sockets[0]!.closed).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).not.toContain("baseline");
+
+    timers.run(5_000);
+    expect(socketIndex).toBe(2);
+    sockets[1]!.open();
+    respond(sockets[1]!, requestByMethod(sockets[1]!, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    sockets[1]!.message({
+      method: "thread/status/changed",
+      params: { ref: "local:baseline", threadId: "baseline", status: { type: "active" } },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "Activity", provider: "evener", sessionId: "baseline" }],
+    });
+    expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+    expect(diagnostics).toHaveLength(1);
+    collector.stop();
+  });
+
+  test("rejects a refresh when a listed child closes before its targeted read", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const root = thread("root", "active", { ref: "local:root" });
+    const child = thread("child", "active", { parentRef: "local:root", kind: "subagent" });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      now: () => "2026-08-26T05:00:00.000Z",
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child]);
+    updates.length = 0;
+
+    timers.run(2_000);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [root, child] });
+    await flush();
+    const refreshRootRead = latestRequestByMethod(socket, "thread/read");
+    expect((refreshRootRead["params"] as Record<string, unknown>)["threadId"]).toBe("root");
+    respond(socket, refreshRootRead, { thread: root });
+    await flush();
+    const childRead = latestRequestByMethod(socket, "thread/read");
+    expect((childRead["params"] as Record<string, unknown>)["threadId"]).toBe("child");
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "child" } });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "SubagentStop", provider: "evener", sessionId: "child" }],
+    });
+    respond(socket, childRead, { thread: child });
+    await flush();
+
+    expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+    expect(updates).toHaveLength(1);
+    expect(socket.closed).toBe(false);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).not.toContain("child");
+
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "root", status: { type: "active" } },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "Activity", provider: "evener", sessionId: "root" }],
+    });
+    expect(diagnostics).toHaveLength(1);
+    collector.stop();
+  });
+
+  test("root close stops descendants after a non-leaf child close", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const parent = delegateProjection();
+    const nested = delegateProjection({
+      delegateId: "dlg-nested",
+      childSessionId: "grandchild",
+      parentDelegateId: "dlg-parent",
+    });
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [parent, nested]);
+    const child = thread("child", "active", { ref: "local:root", kind: "subagent" });
+    const grandchild = thread("grandchild", "active", { ref: "local:root", kind: "subagent" });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child, grandchild]);
+    updates.length = 0;
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "child" } });
+    expect(updates.at(-1)).toEqual({
+      events: [{ kind: "SubagentStop", provider: "evener", sessionId: "child", observedAt: expect.any(String) }],
+      activeChildSessionIds: null,
+    });
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    expect(updates.at(-1)).toEqual({
+      events: [
+        { kind: "SubagentStop", provider: "evener", sessionId: "grandchild", observedAt: expect.any(String) },
+        { kind: "SessionEnd", provider: "evener", sessionId: "root", observedAt: expect.any(String) },
+      ],
+      activeChildSessionIds: null,
+    });
+    expect(updates.flatMap((update) => update.events).map((event) => [event.kind, event.sessionId])).toEqual([
+      ["SubagentStop", "child"],
+      ["SubagentStop", "grandchild"],
+      ["SessionEnd", "root"],
+    ]);
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "grandchild", status: { type: "active" } },
+    });
+    expect(updates).toHaveLength(2);
+    collector.stop();
   });
 
   test("disconnects without partial hydration when thread/list exceeds the page cap", async () => {
@@ -398,7 +1260,7 @@ describe("Evener AppWire collector", () => {
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
       now: () => "2026-08-26T05:00:30.000Z",
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -406,6 +1268,7 @@ describe("Evener AppWire collector", () => {
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), { data: [thread("root", "awaiting")] });
     await flush();
+    await respondToReads(socket, threadFixtures(thread("root", "awaiting")));
 
     expect(events.find((event) => event.kind === "SessionStatusObserved")).toMatchObject({ status: "idle" });
 
@@ -437,7 +1300,7 @@ describe("Evener AppWire collector", () => {
     const collector = createEvenerCollector({
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -450,6 +1313,13 @@ describe("Evener AppWire collector", () => {
       ],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        thread("question", "awaiting", { askPending: true }),
+        thread("escalation", "active", { pendingEscalations: 1 }),
+      ),
+    );
 
     expect(
       events.filter((event) => event.kind === "SessionStatusObserved").map((event) => [event.sessionId, event.status]),
@@ -466,7 +1336,7 @@ describe("Evener AppWire collector", () => {
     const collector = createEvenerCollector({
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -504,7 +1374,7 @@ describe("Evener AppWire collector", () => {
     const collector = createEvenerCollector({
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -518,6 +1388,14 @@ describe("Evener AppWire collector", () => {
       ],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        thread("root", "active"),
+        thread("status-child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
+        thread("turn-child", "awaiting", { parentRef: "local:root", kind: "subagent" }),
+      ),
+    );
     events.length = 0;
 
     socket.message({
@@ -551,7 +1429,7 @@ describe("Evener AppWire collector", () => {
       connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
       socketFactory: () => socket,
       schedule: timers.schedule,
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -564,6 +1442,13 @@ describe("Evener AppWire collector", () => {
       ],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        thread("question", "awaiting", { askPending: true, pendingEscalations: 1 }),
+        thread("escalations", "active", { pendingEscalations: 2 }),
+      ),
+    );
     events.length = 0;
 
     socket.message({
@@ -599,7 +1484,7 @@ describe("Evener AppWire collector", () => {
       socketFactory: () => socket,
       schedule: timers.schedule,
       now: () => "2026-08-26T05:01:00.000Z",
-      onUpdate: (update) => events.push(...update.events),
+      onUpdate: collectIncrementalEvents(events),
     });
     collector.start();
     socket.open();
@@ -611,6 +1496,13 @@ describe("Evener AppWire collector", () => {
       data: [thread("root", "active"), thread("child", "active", { parentRef: "local:root", kind: "subagent" })],
     });
     await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        thread("root", "active"),
+        thread("child", "active", { parentRef: "local:root", kind: "subagent" }),
+      ),
+    );
     events.length = 0;
 
     socket.message({
@@ -661,6 +1553,357 @@ describe("Evener AppWire collector", () => {
     expect(events[1]).toMatchObject({ status: "idle" });
     expect(events[3]).toMatchObject({ model: "gpt-5.6-terra" });
     expect(events[6]).toMatchObject({ status: "error" });
+    collector.stop();
+  });
+
+  test("closes only a grandchild and clears every live lookup", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [
+      delegateProjection(),
+      delegateProjection({ delegateId: "dlg-nested", childSessionId: "grandchild", parentDelegateId: "dlg-parent" }),
+    ]);
+    const child = thread("child", "active", {
+      ref: "local:child",
+      parentRef: "local:root",
+      kind: "subagent",
+    });
+    const grandchild = thread("grandchild", "active", {
+      ref: "local:grandchild",
+      parentRef: "local:child",
+      kind: "subagent",
+    });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child, grandchild]);
+    updates.length = 0;
+    const readCount = requestsByMethod(socket, "thread/read").length;
+
+    socket.message({ method: "thread/closed", params: { ref: "local:grandchild", threadId: "grandchild" } });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "SubagentStop", provider: "evener", sessionId: "grandchild" }],
+    });
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+
+    // Both the exact session and its former unique ref are gone; a duplicate
+    // close is confirmation-only and cannot emit another stop.
+    socket.message({ method: "evener/thread/name/changed", params: { ref: "local:grandchild", name: "stale" } });
+    socket.message({ method: "thread/closed", params: { ref: "local:grandchild", threadId: "grandchild" } });
+    expect(updates).toHaveLength(1);
+
+    // Reusing the identity proves subscription and delegate indexes were
+    // removed: it is a new root and must issue a fresh read, not a subagent
+    // update inherited from the closed delegate.
+    const restarted = thread("grandchild", "active", { ref: "local:grandchild" });
+    socket.message({
+      method: "thread/started",
+      params: { ref: "local:grandchild", threadId: "grandchild", thread: restarted },
+    });
+    expect(updates.at(-1)?.events[0]).toMatchObject({
+      kind: "SessionStart",
+      provider: "evener",
+      sessionId: "grandchild",
+    });
+    expect(requestsByMethod(socket, "thread/read")).toHaveLength(readCount + 1);
+    respond(socket, latestRequestByMethod(socket, "thread/read"), { thread: restarted });
+    await flush();
+    collector.stop();
+  });
+
+  test("root close stops descendants post-order and suppresses duplicate closes", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [
+      delegateProjection(),
+      delegateProjection({ delegateId: "dlg-nested", childSessionId: "grandchild", parentDelegateId: "dlg-parent" }),
+    ]);
+    const child = thread("child", "active", {
+      ref: "local:child",
+      parentRef: "local:root",
+      kind: "subagent",
+    });
+    const grandchild = thread("grandchild", "active", {
+      ref: "local:grandchild",
+      parentRef: "local:child",
+      kind: "subagent",
+    });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child, grandchild]);
+    updates.length = 0;
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      activeChildSessionIds: null,
+      events: [
+        { kind: "SubagentStop", provider: "evener", sessionId: "grandchild" },
+        { kind: "SubagentStop", provider: "evener", sessionId: "child" },
+        { kind: "SessionEnd", provider: "evener", sessionId: "root" },
+      ],
+    });
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    expect(updates).toHaveLength(1);
+    collector.stop();
+  });
+
+  test("routes supported notifications by child session before shared ref fallback", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [
+      delegateProjection(),
+      delegateProjection({ delegateId: "dlg-nested", childSessionId: "grandchild", parentDelegateId: "dlg-parent" }),
+    ]);
+    const child = thread("child", "active", {
+      ref: "local:root",
+      parentRef: "local:root",
+      kind: "subagent",
+      name: "Child title",
+      model: "child-model",
+    });
+    const grandchild = thread("grandchild", "active", {
+      ref: "local:root",
+      parentRef: "local:root",
+      kind: "subagent",
+      name: "Grandchild title",
+      model: "grandchild-model",
+    });
+    const values = [root, child, grandchild];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, values);
+    updates.length = 0;
+
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "child", status: { type: "warning" } },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "StopFailure", provider: "evener", sessionId: "child", observedAt: expect.any(String) },
+    ]);
+    socket.message({
+      method: "turn/started",
+      params: { ref: "local:root", threadId: "grandchild", turn: { status: "inProgress" } },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "Activity", provider: "evener", sessionId: "grandchild", observedAt: expect.any(String) },
+    ]);
+    socket.message({
+      method: "turn/completed",
+      params: { ref: "local:root", threadId: "root", turn: { status: "completed" } },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "Stop", provider: "evener", sessionId: "root", observedAt: expect.any(String) },
+    ]);
+    socket.message({
+      method: "evener/thread/name/changed",
+      params: { ref: "local:root", threadId: "child", name: "Child renamed" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      {
+        kind: "SessionTitleChanged",
+        provider: "evener",
+        sessionId: "child",
+        title: "Child renamed",
+        observedAt: expect.any(String),
+      },
+    ]);
+    socket.message({
+      method: "thread/model/changed",
+      params: { ref: "local:root", threadId: "grandchild", model: "grandchild-renamed" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      {
+        kind: "SessionModelChanged",
+        provider: "evener",
+        sessionId: "grandchild",
+        model: "grandchild-renamed",
+        observedAt: expect.any(String),
+      },
+    ]);
+    socket.message({
+      method: "evener/sandbox/escalation/requested",
+      params: { ref: "local:root", threadId: "child", escalationId: "escalation-child" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "Attention", provider: "evener", sessionId: "child", observedAt: expect.any(String) },
+    ]);
+    const updateCountBeforeResolved = updates.length;
+    socket.message({
+      method: "evener/sandbox/escalation/resolved",
+      params: { ref: "local:root", threadId: "child", escalationId: "escalation-child" },
+    });
+    expect(updates).toHaveLength(updateCountBeforeResolved);
+    socket.message({
+      method: "evener/sandbox/escalation/requested",
+      params: { ref: "local:root", threadId: "child", escalationId: "escalation-child-2" },
+    });
+    expect(updates.at(-1)?.events[0]?.sessionId).toBe("child");
+    socket.message({
+      method: "thread/started",
+      params: {
+        ref: "local:root",
+        threadId: "root",
+        thread: thread("child", "active", {
+          ref: "local:root",
+          parentRef: "local:root",
+          kind: "subagent",
+          name: "Child started",
+          model: "child-started-model",
+        }),
+      },
+    });
+    expect(updates.at(-1)?.events.every((event) => event.sessionId === "child")).toBe(true);
+    socket.message({
+      method: "thread/closed",
+      params: { ref: "local:root", threadId: "grandchild" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "SubagentStop", provider: "evener", sessionId: "grandchild", observedAt: expect.any(String) },
+    ]);
+    expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+    collector.stop();
+  });
+
+  test("accepts unique ref-only notifications and rejects ambiguous or invalid targets", async () => {
+    const uniqueSocket = new FakeSocket();
+    const uniqueTimers = timerHarness();
+    const uniqueUpdates: EvenerCollectorUpdate[] = [];
+    const uniqueCollector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => uniqueSocket,
+      schedule: uniqueTimers.schedule,
+      onUpdate: (update) => uniqueUpdates.push(update),
+    });
+    uniqueCollector.start();
+    await acceptBaseline(uniqueSocket, uniqueUpdates, [thread("legacy", "active", { ref: "local:legacy" })]);
+    uniqueUpdates.length = 0;
+    uniqueSocket.message({
+      method: "evener/thread/name/changed",
+      params: { ref: "local:legacy", name: "Legacy renamed" },
+    });
+    expect(uniqueUpdates.at(-1)?.events).toEqual([
+      {
+        kind: "SessionTitleChanged",
+        provider: "evener",
+        sessionId: "legacy",
+        title: "Legacy renamed",
+        observedAt: expect.any(String),
+      },
+    ]);
+    uniqueCollector.stop();
+
+    const ambiguousSocket = new FakeSocket();
+    const ambiguousTimers = timerHarness();
+    const ambiguousUpdates: EvenerCollectorUpdate[] = [];
+    const ambiguousValues = [
+      thread("root", "active", { ref: "local:shared" }),
+      thread("child", "active", { ref: "local:shared" }),
+      thread("grandchild", "active", { ref: "local:shared" }),
+    ];
+    const ambiguousCollector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => ambiguousSocket,
+      schedule: ambiguousTimers.schedule,
+      onUpdate: (update) => ambiguousUpdates.push(update),
+    });
+    ambiguousCollector.start();
+    await acceptBaseline(ambiguousSocket, ambiguousUpdates, ambiguousValues);
+    ambiguousUpdates.length = 0;
+    ambiguousSocket.message({
+      method: "evener/thread/name/changed",
+      params: { ref: "local:shared", name: "Ambiguous" },
+    });
+    expect(ambiguousUpdates).toEqual([]);
+    expect(ambiguousTimers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    ambiguousSocket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:shared", threadId: "\ninvalid", status: { type: "warning" } },
+    });
+    expect(ambiguousUpdates).toEqual([]);
+    expect(ambiguousTimers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    ambiguousCollector.stop();
+  });
+
+  test("protects refresh generation when a notification arrives during hydration", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = thread("root", "active");
+    const child = thread("child", "active", { parentRef: "local:root", kind: "subagent" });
+    const values = [root, child];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    await acceptBaseline(socket, updates, values);
+    updates.length = 0;
+
+    timers.run(2_000);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: values });
+    await flush();
+    const refreshRootRead = latestRequestByMethod(socket, "thread/read");
+    respond(socket, refreshRootRead, { thread: root });
+    await flush();
+    const childRead = latestRequestByMethod(socket, "thread/read");
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "child", status: { type: "warning" } },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "StopFailure", provider: "evener", sessionId: "child" }],
+    });
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    respond(socket, childRead, { thread: child });
+    await flush();
+    expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+
+    timers.run(0);
+    const rerunList = latestRequestByMethod(socket, "thread/list");
+    respond(socket, rerunList, { data: values });
+    await flush();
+    await respondToReads(socket, threadFixtures(...values), 4);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child"]);
+    expect(updates.filter((update) => update.activeChildSessionIds !== null)).toHaveLength(1);
+    updates.length = 0;
+    socket.message({ method: "evener/delegate/updated", params: { delegateId: "unknown" } });
+    expect(updates).toEqual([]);
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    timers.run(0);
+    const delegateRerunList = latestRequestByMethod(socket, "thread/list");
+    respond(socket, delegateRerunList, { data: values });
+    await flush();
+    await respondToReads(socket, threadFixtures(...values), 6);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child"]);
     collector.stop();
   });
 

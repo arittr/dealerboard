@@ -7,6 +7,7 @@ import { resolveAppPaths } from "../src/core/paths";
 import { readProjection } from "../src/core/projection";
 import {
   acknowledgeSession,
+  applyEvenerCollectorUpdate,
   applyRegistryEvents,
   clearAllSessions,
   clearSession,
@@ -145,6 +146,16 @@ const countRows = (): number => {
   }
   return row.n;
 };
+
+const identities = (): string[] =>
+  allRows()
+    .map((row) => `${row.provider}:${row.session_id}:${row.parent_session_id ?? "root"}`)
+    .sort();
+
+const evenerUpdate = (
+  events: RegistryEvent[],
+  activeChildSessionIds: readonly string[] | null,
+): Parameters<typeof applyEvenerCollectorUpdate>[1] => ({ events, activeChildSessionIds });
 
 describe("applyRegistryEvents", () => {
   test("reconciles an observed status without changing the unread ledger", () => {
@@ -543,6 +554,120 @@ describe("applyRegistryEvents", () => {
 
     expect(applyRegistryEvents(db, [simple("SessionEnd", "p")])).toEqual(["applied"]);
     expect(countRows()).toBe(0);
+  });
+});
+
+describe("applyEvenerCollectorUpdate", () => {
+  test("deletes only omitted Evener children in the authoritative active set", () => {
+    applyRegistryEvents(db, [
+      start("root", { provider: "evener" }),
+      subStart("keep", "root", { provider: "evener" }),
+      subStart("stale", "root", { provider: "evener" }),
+      start("codex-root", { provider: "codex" }),
+      subStart("codex-child", "codex-root", { provider: "codex" }),
+    ]);
+
+    expect(applyEvenerCollectorUpdate(db, evenerUpdate([], ["keep"]))).toEqual([]);
+    expect(identities()).toEqual([
+      "codex:codex-child:codex-root",
+      "codex:codex-root:root",
+      "evener:keep:root",
+      "evener:root:root",
+    ]);
+  });
+
+  test("does not delete omitted children for a null active set", () => {
+    applyRegistryEvents(db, [start("root", { provider: "evener" }), subStart("stale", "root", { provider: "evener" })]);
+
+    expect(applyEvenerCollectorUpdate(db, evenerUpdate([], null))).toEqual([]);
+    expect(identities()).toEqual(["evener:root:root", "evener:stale:root"]);
+  });
+
+  test("deletes every Evener child for an empty authoritative active set", () => {
+    applyRegistryEvents(db, [
+      start("root", { provider: "evener" }),
+      subStart("child", "root", { provider: "evener" }),
+      start("codex-root", { provider: "codex" }),
+      subStart("codex-child", "codex-root", { provider: "codex" }),
+    ]);
+
+    expect(applyEvenerCollectorUpdate(db, evenerUpdate([], []))).toEqual([]);
+    expect(identities()).toEqual(["codex:codex-child:codex-root", "codex:codex-root:root", "evener:root:root"]);
+  });
+
+  test("retained root keeps no recursively closed children and preserves unrelated sessions", () => {
+    applyRegistryEvents(db, [
+      start("root", { provider: "evener" }),
+      subStart("child", "root", { provider: "evener" }),
+      subStart("grandchild", "child", { provider: "evener" }),
+      start("other", { provider: "evener" }),
+      subStart("other-child", "other", { provider: "evener" }),
+      start("codex-root", { provider: "codex" }),
+      subStart("codex-child", "codex-root", { provider: "codex" }),
+    ]);
+    applyRegistryEvents(db, [simple("Stop", "root", { provider: "evener", at: at(2) })]);
+
+    expect(
+      applyEvenerCollectorUpdate(
+        db,
+        evenerUpdate(
+          [
+            simple("SubagentStop", "grandchild", { provider: "evener", at: at(3) }),
+            simple("SubagentStop", "child", { provider: "evener", at: at(3) }),
+            simple("SessionEnd", "root", { provider: "evener", at: at(3) }),
+          ],
+          null,
+        ),
+      ),
+    ).toEqual(["applied", "applied", "applied"]);
+    expect(getRow("root", "evener")).toMatchObject({
+      parent_session_id: null,
+      ended_at: at(3),
+      unread_since: at(2),
+    });
+    expect(getRow("child", "evener")).toBeNull();
+    expect(getRow("grandchild", "evener")).toBeNull();
+    expect(identities()).toEqual([
+      "codex:codex-child:codex-root",
+      "codex:codex-root:root",
+      "evener:other-child:other",
+      "evener:other:root",
+      "evener:root:root",
+    ]);
+  });
+
+  test("reconciles an omitted child and a new child in one call", () => {
+    applyRegistryEvents(db, [start("root", { provider: "evener" }), subStart("A", "root", { provider: "evener" })]);
+
+    expect(
+      applyEvenerCollectorUpdate(db, evenerUpdate([subStart("B", "root", { provider: "evener" })], ["B"])),
+    ).toEqual(["applied"]);
+    expect(identities()).toEqual(["evener:B:root", "evener:root:root"]);
+  });
+
+  test("rolls back event mutations and omission deletions together", () => {
+    applyRegistryEvents(db, [
+      start("root", { provider: "evener" }),
+      subStart("keep", "root", { provider: "evener" }),
+      subStart("stale", "root", { provider: "evener" }),
+    ]);
+    db.exec(`
+      CREATE TRIGGER fail_evener_stale_delete
+      BEFORE DELETE ON active_sessions
+      WHEN OLD.provider = 'evener' AND OLD.session_id = 'stale'
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked stale deletion');
+      END
+    `);
+
+    expect(() =>
+      applyEvenerCollectorUpdate(
+        db,
+        evenerUpdate([simple("Activity", "root", { provider: "evener", at: at(2) })], ["keep"]),
+      ),
+    ).toThrow("blocked stale deletion");
+    expect(getRow("root", "evener")).toMatchObject({ status: "idle", updated_at: at(1) });
+    expect(identities()).toEqual(["evener:keep:root", "evener:root:root", "evener:stale:root"]);
   });
 });
 

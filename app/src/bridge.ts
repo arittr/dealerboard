@@ -21,6 +21,9 @@ export const readTokenUsageSnapshot = (): Promise<SnapshotPayload> =>
 
 export const readPaseoServerId = (): Promise<string> => invoke<string>("read_paseo_server_id");
 
+export const activateEvenerSession = (sessionId: string): Promise<void> =>
+  invoke<void>("activate_evener_session", { sessionId });
+
 /** View gesture: clears the unread badge and starts the viewed-expiry clock; the card stays. */
 export const viewSession = (provider: Provider, sessionId: string, watermark: GestureWatermark | null): Promise<void> =>
   invoke<void>("view_session", { provider, sessionId, watermark });

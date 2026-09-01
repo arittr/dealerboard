@@ -2,7 +2,8 @@
  * Tile-press routing rules, ported from the Stream Deck controller's keyDown
  * (src/plugin/controller.ts): a Paseo origin with a known agent ref wins over
  * provider routing; claude focuses its Ghostty terminal; codex and kimi open
- * deep links; everything else flashes the tile. Pure — no Tauri imports.
+ * deep links; evener activates its exact session; everything else flashes the
+ * tile. Pure — no Tauri imports.
  */
 
 import type { BoardSession } from "./board";
@@ -11,6 +12,7 @@ export type SessionRoute =
   | { kind: "paseo"; agentId: string }
   | { kind: "ghostty"; terminalId: string }
   | { kind: "url"; url: string }
+  | { kind: "evener"; sessionId: string }
   | { kind: "flash" };
 
 const KIMI_WEB_SESSIONS_URL = "http://127.0.0.1:58627/sessions/";
@@ -28,13 +30,14 @@ export const routeForSession = (session: BoardSession): SessionRoute => {
       return { kind: "url", url: `codex://threads/${encodeURIComponent(session.sessionId)}` };
     case "kimi":
       return { kind: "url", url: `${KIMI_WEB_SESSIONS_URL}${encodeURIComponent(session.sessionId)}` };
+    case "evener":
+      return { kind: "evener", sessionId: session.sessionId };
     case "pi":
     case "omp":
     case "zcode":
     case "deepseek":
     case "grok":
     case "qwen":
-    case "evener":
       return { kind: "flash" };
   }
   // Exhaustiveness proof: adding a Provider without a case fails typecheck.

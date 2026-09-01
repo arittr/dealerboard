@@ -989,6 +989,95 @@ describe("diagnostic records", () => {
 });
 
 describe("sessions commands", () => {
+  type ActivationExecution = { file: string; args: string[] };
+  type ActivationOverrides = {
+    environment?: Readonly<Record<string, string | undefined>>;
+    resolveEvenerHubEndpoints?: (...args: never[]) => unknown;
+    evenerSessionUrl?: (...args: never[]) => unknown;
+    executeFile?: (file: string, args: readonly string[]) => Promise<void>;
+  };
+
+  const makeActivationHarness = (overrides: ActivationOverrides = {}) => {
+    const executions: ActivationExecution[] = [];
+    let databaseOpens = 0;
+    const harness = makeHarness();
+    Object.assign(harness.deps, {
+      openDatabase: (() => {
+        databaseOpens += 1;
+        throw sqliteError("SQLITE_CANTOPEN", "database unavailable");
+      }) as CliDependencies["openDatabase"],
+      executeFile: async (file: string, args: readonly string[]) => {
+        executions.push({ file, args: [...args] });
+      },
+      ...overrides,
+    });
+    return { harness, executions, databaseOpens: () => databaseOpens };
+  };
+
+  test("sessions activate evener opens the exact token-free session URL without opening the database", async () => {
+    const { harness, executions, databaseOpens } = makeActivationHarness();
+
+    expect(await runCli(["sessions", "activate", "evener", "session-a"], harness.deps)).toBe(0);
+    expect(executions).toEqual([
+      {
+        file: "/usr/bin/open",
+        args: ["-u", "http://127.0.0.1:9180/s/local%3Asession-a"],
+      },
+    ]);
+    expect(databaseOpens()).toBe(0);
+    expect(harness.stdout()).toBe("");
+    expect(harness.stderr()).toBe("");
+  });
+
+  test("sessions activate evener uses the configured hub port", async () => {
+    const { harness, executions } = makeActivationHarness({
+      environment: { EVENER_HUB_ADDR: "127.0.0.1:9777" },
+    });
+
+    expect(await runCli(["sessions", "activate", "evener", "session-a"], harness.deps)).toBe(0);
+    expect(executions).toEqual([
+      {
+        file: "/usr/bin/open",
+        args: ["-u", "http://127.0.0.1:9777/s/local%3Asession-a"],
+      },
+    ]);
+  });
+
+  test("sessions activate evener rejects malformed grammar without executing a process", async () => {
+    for (const args of [
+      ["sessions", "activate", "codex", "session-a"],
+      ["sessions", "activate", "evener"],
+      ["sessions", "activate", "evener", "session-a", "extra"],
+      ["sessions", "activate", "evener", "\nunsafe"],
+    ]) {
+      const { harness, executions, databaseOpens } = makeActivationHarness();
+      expect(await runCli(args, harness.deps)).toBe(1);
+      expect(harness.stderr()).not.toBe("");
+      expect(harness.stderr().length).toBeLessThanOrEqual(1024);
+      expect(harness.stdout()).toBe("");
+      expect(executions).toEqual([]);
+      expect(databaseOpens()).toBe(0);
+    }
+  });
+
+  test("sessions activate evener reports endpoint, identity, spawn, and exit failures without fallback", async () => {
+    const cases: ActivationOverrides[] = [
+      { resolveEvenerHubEndpoints: () => null },
+      { evenerSessionUrl: () => null },
+      { executeFile: () => Promise.reject(new Error("executor rejection sentinel")) },
+      { executeFile: () => Promise.reject(new Error("child process failed sentinel")) },
+    ];
+
+    for (const overrides of cases) {
+      const { harness, executions, databaseOpens } = makeActivationHarness(overrides);
+      expect(await runCli(["sessions", "activate", "evener", "session-a"], harness.deps)).toBe(1);
+      expect(harness.stderr()).toBe("sessions activate failed\n");
+      expect(harness.stdout()).toBe("");
+      expect(executions).toEqual([]);
+      expect(databaseOpens()).toBe(0);
+    }
+  });
+
   const seed = (): void => {
     initRegistry();
     const db = openRegistryDatabase(paths.database, "readwrite");
@@ -1596,8 +1685,58 @@ describe("daemon Evener collector boundary", () => {
 
   test("starts after publication and applies AppWire updates through the registry", async () => {
     initRegistry();
+    const boundaryObservedAt = new Date().toISOString();
+    const seedDb = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(seedDb, [
+        {
+          kind: "SessionObserved",
+          provider: "evener",
+          sessionId: "root",
+          title: "Evener root",
+          project: "project",
+          transcriptPath: null,
+          model: "evener-model",
+          observedAt: boundaryObservedAt,
+        },
+        {
+          kind: "SubagentStart",
+          provider: "evener",
+          sessionId: "stale",
+          parentSessionId: "root",
+          title: "Stale child",
+          project: "project",
+          model: "evener-model",
+          observedAt: boundaryObservedAt,
+        },
+        {
+          kind: "SessionObserved",
+          provider: "codex",
+          sessionId: "codex-root",
+          title: "Codex root",
+          project: "project",
+          transcriptPath: null,
+          model: "codex-model",
+          observedAt: boundaryObservedAt,
+        },
+        {
+          kind: "SubagentStart",
+          provider: "codex",
+          sessionId: "codex-child",
+          parentSessionId: "codex-root",
+          title: "Codex child",
+          project: "project",
+          model: "codex-model",
+          observedAt: boundaryObservedAt,
+        },
+      ]);
+    } finally {
+      seedDb.close();
+    }
     let snapshotExistedAtStart = false;
     let resolvedConnection = false;
+    let afterIncremental: ReturnType<typeof listSessions> = [];
+    let afterAuthoritative: ReturnType<typeof listSessions> = [];
     const harness = makeHarness({
       createEvenerCollector: (options) =>
         evenerCollectorStub({
@@ -1617,7 +1756,11 @@ describe("daemon Evener collector boundary", () => {
                   observedAt: NOW,
                 },
               ],
+              activeChildSessionIds: null,
             });
+            afterIncremental = listRows();
+            options.onUpdate({ events: [], activeChildSessionIds: [] });
+            afterAuthoritative = listRows();
           },
         }),
       resolveEvenerHubConnection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "test-only" }),
@@ -1632,6 +1775,37 @@ describe("daemon Evener collector boundary", () => {
     expect(listRows()).toContainEqual(
       expect.objectContaining({ provider: "evener", sessionId: "evener-1", model: "gpt-5.6-sol" }),
     );
+    expect(afterIncremental).toContainEqual(expect.objectContaining({ provider: "evener", sessionId: "stale" }));
+    expect(afterAuthoritative).not.toContainEqual(expect.objectContaining({ provider: "evener", sessionId: "stale" }));
+    expect(afterAuthoritative).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "evener", sessionId: "root" }),
+        expect.objectContaining({ provider: "codex", sessionId: "codex-root" }),
+        expect.objectContaining({ provider: "codex", sessionId: "codex-child" }),
+      ]),
+    );
+  });
+
+  test("contains an Evener registry callback failure and still starts the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      applyEvenerUpdate: () => {
+        throw new Error("registry callback exploded");
+      },
+      createEvenerCollector: (options) =>
+        evenerCollectorStub({
+          start: () => options.onUpdate({ events: [], activeChildSessionIds: null }),
+        }),
+      createQuotaCollector: () => collectorStub(),
+      createTokenUsageCollector: () => tokenCollectorStub(),
+    });
+
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(harness.diagnostics).toEqual([
+      expect.objectContaining({ component: "evener", code: "evener_collector_failed", provider: "evener" }),
+    ]);
   });
 });
 
