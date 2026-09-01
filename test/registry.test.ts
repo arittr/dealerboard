@@ -593,6 +593,47 @@ describe("applyEvenerCollectorUpdate", () => {
     expect(identities()).toEqual(["codex:codex-child:codex-root", "codex:codex-root:root", "evener:root:root"]);
   });
 
+  test("retained root keeps no recursively closed children and preserves unrelated sessions", () => {
+    applyRegistryEvents(db, [
+      start("root", { provider: "evener" }),
+      subStart("child", "root", { provider: "evener" }),
+      subStart("grandchild", "child", { provider: "evener" }),
+      start("other", { provider: "evener" }),
+      subStart("other-child", "other", { provider: "evener" }),
+      start("codex-root", { provider: "codex" }),
+      subStart("codex-child", "codex-root", { provider: "codex" }),
+    ]);
+    applyRegistryEvents(db, [simple("Stop", "root", { provider: "evener", at: at(2) })]);
+
+    expect(
+      applyEvenerCollectorUpdate(
+        db,
+        evenerUpdate(
+          [
+            simple("SubagentStop", "grandchild", { provider: "evener", at: at(3) }),
+            simple("SubagentStop", "child", { provider: "evener", at: at(3) }),
+            simple("SessionEnd", "root", { provider: "evener", at: at(3) }),
+          ],
+          null,
+        ),
+      ),
+    ).toEqual(["applied", "applied", "applied"]);
+    expect(getRow("root", "evener")).toMatchObject({
+      parent_session_id: null,
+      ended_at: at(3),
+      unread_since: at(2),
+    });
+    expect(getRow("child", "evener")).toBeNull();
+    expect(getRow("grandchild", "evener")).toBeNull();
+    expect(identities()).toEqual([
+      "codex:codex-child:codex-root",
+      "codex:codex-root:root",
+      "evener:other-child:other",
+      "evener:other:root",
+      "evener:root:root",
+    ]);
+  });
+
   test("reconciles an omitted child and a new child in one call", () => {
     applyRegistryEvents(db, [
       start("root", { provider: "evener" }),

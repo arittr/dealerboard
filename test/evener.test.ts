@@ -1490,6 +1490,115 @@ describe("Evener AppWire collector", () => {
     collector.stop();
   });
 
+  test("closes only a grandchild and clears every live lookup", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [
+      delegateProjection(),
+      delegateProjection({ delegateId: "dlg-nested", childSessionId: "grandchild", parentDelegateId: "dlg-parent" }),
+    ]);
+    const child = thread("child", "active", {
+      ref: "local:child",
+      parentRef: "local:root",
+      kind: "subagent",
+    });
+    const grandchild = thread("grandchild", "active", {
+      ref: "local:grandchild",
+      parentRef: "local:child",
+      kind: "subagent",
+    });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child, grandchild]);
+    updates.length = 0;
+    const readCount = requestsByMethod(socket, "thread/read").length;
+
+    socket.message({ method: "thread/closed", params: { ref: "local:grandchild", threadId: "grandchild" } });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "SubagentStop", provider: "evener", sessionId: "grandchild" }],
+    });
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+
+    // Both the exact session and its former unique ref are gone; a duplicate
+    // close is confirmation-only and cannot emit another stop.
+    socket.message({ method: "evener/thread/name/changed", params: { ref: "local:grandchild", name: "stale" } });
+    socket.message({ method: "thread/closed", params: { ref: "local:grandchild", threadId: "grandchild" } });
+    expect(updates).toHaveLength(1);
+
+    // Reusing the identity proves subscription and delegate indexes were
+    // removed: it is a new root and must issue a fresh read, not a subagent
+    // update inherited from the closed delegate.
+    const restarted = thread("grandchild", "active", { ref: "local:grandchild" });
+    socket.message({
+      method: "thread/started",
+      params: { ref: "local:grandchild", threadId: "grandchild", thread: restarted },
+    });
+    expect(updates.at(-1)?.events[0]).toMatchObject({
+      kind: "SessionStart",
+      provider: "evener",
+      sessionId: "grandchild",
+    });
+    expect(requestsByMethod(socket, "thread/read")).toHaveLength(readCount + 1);
+    respond(socket, latestRequestByMethod(socket, "thread/read"), { thread: restarted });
+    await flush();
+    collector.stop();
+  });
+
+  test("root close stops descendants post-order and suppresses duplicate closes", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [
+      delegateProjection(),
+      delegateProjection({ delegateId: "dlg-nested", childSessionId: "grandchild", parentDelegateId: "dlg-parent" }),
+    ]);
+    const child = thread("child", "active", {
+      ref: "local:child",
+      parentRef: "local:root",
+      kind: "subagent",
+    });
+    const grandchild = thread("grandchild", "active", {
+      ref: "local:grandchild",
+      parentRef: "local:child",
+      kind: "subagent",
+    });
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [root, child, grandchild]);
+    updates.length = 0;
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      activeChildSessionIds: null,
+      events: [
+        { kind: "SubagentStop", provider: "evener", sessionId: "grandchild" },
+        { kind: "SubagentStop", provider: "evener", sessionId: "child" },
+        { kind: "SessionEnd", provider: "evener", sessionId: "root" },
+      ],
+    });
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+
+    socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
+    expect(updates).toHaveLength(1);
+    collector.stop();
+  });
+
   test("routes supported notifications by child session before shared ref fallback", async () => {
     const socket = new FakeSocket();
     const timers = timerHarness();

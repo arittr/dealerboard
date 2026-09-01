@@ -875,6 +875,24 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
   };
 
+  const removeSessionFromIndices = (sessionId: string): void => {
+    const state = indices.statesBySessionId.get(sessionId);
+    if (state !== undefined) {
+      removeSessionFromRef(indices, state);
+      indices.statesBySessionId.delete(sessionId);
+      indices.subscribedSessionIds.delete(sessionId);
+    }
+
+    const delegateId = indices.delegateByChildSession.get(sessionId);
+    indices.delegateByChildSession.delete(sessionId);
+    if (delegateId !== undefined) {
+      const delegate = indices.delegatesById.get(delegateId);
+      if (delegate?.childSessionId === sessionId) {
+        indices.delegatesById.delete(delegateId);
+      }
+    }
+  };
+
   const resolveParentRefs = (candidate: EvenerCollectorIndices, rejectUnresolved = false): void => {
     for (const state of candidate.statesBySessionId.values()) {
       state.delegateId = null;
@@ -1262,9 +1280,7 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     }
     if (rawStatus === "closed" || rawStatus === "notLoaded") {
       emitIncremental([endEvent(state, observedAt)]);
-      removeSessionFromRef(indices, state);
-      indices.statesBySessionId.delete(state.sessionId);
-      indices.subscribedSessionIds.delete(state.sessionId);
+      removeSessionFromIndices(state.sessionId);
       return;
     }
     emitIncremental([liveStatusEvent(state, previousStatus, observedAt)]);
@@ -1348,30 +1364,54 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     const sessionId = state.sessionId;
     refreshInvalidatedSessionIds?.add(sessionId);
     const observedAt = now();
-    emitIncremental([endEvent(state, observedAt)]);
-    const closing = new Set<string>([sessionId]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const candidate of indices.statesBySessionId.values()) {
-        if (
-          candidate.parentSessionId !== null &&
-          closing.has(candidate.parentSessionId) &&
-          !closing.has(candidate.sessionId)
-        ) {
-          closing.add(candidate.sessionId);
-          changed = true;
+    const childrenByParent = new Map<string, string[]>();
+    for (const candidate of indices.statesBySessionId.values()) {
+      if (candidate.parentSessionId === null) {
+        continue;
+      }
+      const children = childrenByParent.get(candidate.parentSessionId) ?? [];
+      children.push(candidate.sessionId);
+      childrenByParent.set(candidate.parentSessionId, children);
+    }
+
+    const descendants: string[] = [];
+    const visited = new Set<string>();
+    const visitDescendants = (parentSessionId: string): void => {
+      for (const childSessionId of childrenByParent.get(parentSessionId) ?? []) {
+        if (!visited.add(childSessionId)) {
+          continue;
+        }
+        visitDescendants(childSessionId);
+        descendants.push(childSessionId);
+      }
+    };
+
+    const events: RegistryEvent[] = [];
+    if (isChild(state)) {
+      if (!state.cleanupEmitted) {
+        events.push(endEvent(state, observedAt));
+      }
+    } else {
+      visitDescendants(sessionId);
+      for (const descendantSessionId of descendants) {
+        const descendant = indices.statesBySessionId.get(descendantSessionId);
+        if (descendant !== undefined && !descendant.cleanupEmitted) {
+          events.push({ kind: "SubagentStop", provider: "evener", sessionId: descendantSessionId, observedAt });
         }
       }
+      events.push(endEvent(state, observedAt));
     }
-    for (const closingSessionId of closing) {
-      const closingState = indices.statesBySessionId.get(closingSessionId);
-      if (closingState !== undefined) {
-        removeSessionFromRef(indices, closingState);
-        indices.statesBySessionId.delete(closingSessionId);
-        indices.subscribedSessionIds.delete(closingSessionId);
+    emitIncremental(events);
+
+    if (isChild(state)) {
+      removeSessionFromIndices(sessionId);
+    } else {
+      for (const descendantSessionId of descendants) {
+        removeSessionFromIndices(descendantSessionId);
       }
+      removeSessionFromIndices(sessionId);
     }
+    scheduleRefresh(0);
   };
 
   const handleNameChanged = (params: Record<string, unknown>): void => {
