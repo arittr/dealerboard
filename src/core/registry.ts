@@ -15,7 +15,7 @@
  * trees — prune skipping any tree that still holds an unviewed result or
  * a live view clock (a viewed finished result awaiting its expiry). A
  * Stop or StopFailure always retains its row; SessionEnd always deletes
- * the top-level row and its native descendants. Slots are never compacted;
+ * the top-level row and its native and resolved Paseo descendants. Slots are never compacted;
  * a new top-level row receives the
  * lowest free positive slot found from the sorted non-null slot list.
  *
@@ -526,7 +526,7 @@ const applySessionEnd = (db: Database, event: Extract<RegistryEvent, { kind: "Se
   if (existing === null || existing.parent_session_id !== null) {
     return "ignored";
   }
-  db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [event.provider, event.sessionId]);
+  deletePaseoSubtree(db, event.provider, event.sessionId);
   return "applied";
 };
 
@@ -686,6 +686,14 @@ export const clearSession = (db: Database, provider: Provider, sessionId: string
  */
 export type GestureWatermark = { unreadSince: string | null };
 
+type PaseoLineageHint = Readonly<{
+  provider: Provider;
+  sessionId: string;
+  agentId: string;
+  isSubagent: boolean;
+  parentAgentId: string | null;
+}>;
+
 /**
  * The Paseo-lineage subtree seeded at one identity, walked with the exact
  * resolution the projection publishes (unique refs only, cycle members
@@ -693,34 +701,59 @@ export type GestureWatermark = { unreadSince: string | null };
  * into its own root card is never mutated through an alleged parent. The
  * seed itself is always included (even when unknown or non-Paseo — the
  * caller's UPDATE then simply matches nothing). Native children are never
- * members (they publish null ledgers).
+ * members (they publish null ledgers). Optional lineage hints override the
+ * persisted origin facts for identities in the current Paseo snapshot, so a
+ * first-sync archive can resolve the tree before any origin backfill occurs.
  */
 const paseoSubtreeIdentities = (
   db: Database,
   provider: Provider,
   sessionId: string,
+  lineageHints: readonly PaseoLineageHint[] = [],
 ): Array<{ provider: Provider; sessionId: string }> => {
   const rows = db
     .query(
-      `SELECT provider, session_id, origin_ref, origin_subagent, origin_parent_ref
+      `SELECT provider, session_id, origin_kind, origin_ref, origin_subagent, origin_parent_ref
          FROM active_sessions
-        WHERE origin_kind = 'paseo' AND parent_session_id IS NULL`,
+        WHERE parent_session_id IS NULL`,
     )
     .all() as Array<{
     provider: Provider;
     session_id: string;
+    origin_kind: SessionOriginKind | null;
     origin_ref: string | null;
     origin_subagent: number;
     origin_parent_ref: string | null;
   }>;
+  const hintsByIdentity = new Map(
+    lineageHints.map((hint) => [`${hint.provider}\u0000${hint.sessionId}`, hint] as const),
+  );
   const links = resolvePaseoParentLinks(
-    rows.map((row) => ({
-      provider: row.provider,
-      sessionId: row.session_id,
-      originRef: row.origin_ref,
-      originSubagent: row.origin_subagent,
-      originParentRef: row.origin_parent_ref,
-    })),
+    rows.flatMap((row) => {
+      const hint = hintsByIdentity.get(`${row.provider}\u0000${row.session_id}`);
+      if (hint !== undefined) {
+        return [
+          {
+            provider: row.provider,
+            sessionId: row.session_id,
+            originRef: hint.agentId,
+            originSubagent: hint.isSubagent ? 1 : 0,
+            originParentRef: hint.parentAgentId,
+          },
+        ];
+      }
+      return row.origin_kind === "paseo"
+        ? [
+            {
+              provider: row.provider,
+              sessionId: row.session_id,
+              originRef: row.origin_ref,
+              originSubagent: row.origin_subagent,
+              originParentRef: row.origin_parent_ref,
+            },
+          ]
+        : [];
+    }),
   );
   const childrenOf = new Map<string, string[]>();
   for (const [childKey, parentKey] of links) {
@@ -752,11 +785,16 @@ const paseoSubtreeIdentities = (
 };
 
 /** Delete one resolved Paseo subtree; native descendants cascade with each top-level row. */
-const deletePaseoSubtree = (db: Database, provider: Provider, sessionId: string): number => {
+function deletePaseoSubtree(
+  db: Database,
+  provider: Provider,
+  sessionId: string,
+  lineageHints: readonly PaseoLineageHint[] = [],
+): number {
   let changed = 0;
   // Resolve the lineage before deleting anything: the walk reads the Paseo
   // rows the deletes are about to remove.
-  for (const identity of paseoSubtreeIdentities(db, provider, sessionId)) {
+  for (const identity of paseoSubtreeIdentities(db, provider, sessionId, lineageHints)) {
     const result = db.run("DELETE FROM active_sessions WHERE provider = ? AND session_id = ?", [
       identity.provider,
       identity.sessionId,
@@ -764,7 +802,7 @@ const deletePaseoSubtree = (db: Database, provider: Provider, sessionId: string)
     changed += result.changes;
   }
   return changed;
-};
+}
 
 /**
  * View one session's result: the user's read gesture. Clears `unread_since`
@@ -1057,7 +1095,7 @@ export const syncPaseoStates = (
     }
     for (const state of states) {
       if (state.archivedAt !== null) {
-        changed += deletePaseoSubtree(db, state.provider, state.sessionId);
+        changed += deletePaseoSubtree(db, state.provider, state.sessionId, states);
         continue;
       }
       // Update title when Paseo provides one and it differs from the stored value.

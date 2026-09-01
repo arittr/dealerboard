@@ -1788,6 +1788,43 @@ describe("syncPaseoStates", () => {
     expect(getRow("child")).toBeNull();
   });
 
+  test("an archive resolves unstamped descendants from the same Paseo snapshot", () => {
+    applyRegistryEvents(db, [
+      start("parent"),
+      start("child"),
+      start("grandchild"),
+      subStart("native-child", "child"),
+      start("unrelated"),
+    ]);
+
+    const changed = syncPaseoStates(db, [
+      paseoState({ sessionId: "parent", requiresAttention: false, updatedAt: at(8), archivedAt: at(9) }),
+      {
+        ...paseoState({
+          sessionId: "child",
+          isSubagent: true,
+          parentAgentId: "a1",
+          requiresAttention: false,
+          updatedAt: at(8),
+        }),
+        agentId: "a2",
+      },
+      {
+        ...paseoState({
+          sessionId: "grandchild",
+          isSubagent: true,
+          parentAgentId: "a2",
+          requiresAttention: false,
+          updatedAt: at(8),
+        }),
+        agentId: "a3",
+      },
+    ]);
+
+    expect(changed).toBeGreaterThan(0);
+    expect(identities()).toEqual(["claude:unrelated:root"]);
+  });
+
   test("an archive deletes newer descendant results without timestamp gating", () => {
     applyRegistryEvents(db, [
       { ...start("parent"), origin: { kind: "paseo", ref: "a1" } },
@@ -2935,6 +2972,21 @@ describe("SessionEnd deletion", () => {
     applyRegistryEvents(db, [start("s1"), simple("Stop", "s1", { at: at(5) })]);
     expect(applyRegistryEvents(db, [simple("SessionEnd", "s1", { at: at(9) })])).toEqual(["applied"]);
     expect(getRow("s1")).toBeNull();
+  });
+
+  test("SessionEnd deletes resolved Paseo descendants and their native children", () => {
+    applyRegistryEvents(db, [
+      start("parent", { origin: { kind: "paseo", ref: "a1" } }),
+      start("child", { origin: { kind: "paseo", ref: "a2" } }),
+      start("grandchild", { origin: { kind: "paseo", ref: "a3" } }),
+      subStart("native-child", "child"),
+      start("unrelated"),
+    ]);
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'a1' WHERE session_id = 'child'");
+    db.run("UPDATE active_sessions SET origin_subagent = 1, origin_parent_ref = 'a2' WHERE session_id = 'grandchild'");
+
+    expect(applyRegistryEvents(db, [simple("SessionEnd", "parent", { at: at(9) })])).toEqual(["applied"]);
+    expect(identities()).toEqual(["claude:unrelated:root"]);
   });
 
   test("SessionEnd without an unviewed result deletes the row as today", () => {
