@@ -981,6 +981,213 @@ describe("Evener AppWire collector", () => {
     }
   });
 
+  test("accepts a delegate projection whose omitempty model and terminal keys are absent", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      now: () => "2026-08-26T05:00:00.000Z",
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    // The hub's Go struct marks model and terminal omitempty: a delegate with
+    // no model and terminal=false arrives with both keys missing entirely.
+    const bareDelegate = delegateProjection();
+    delete bareDelegate["model"];
+    delete bareDelegate["terminal"];
+    const values = [thread("child", "active"), thread("root", "active")];
+    respond(socket, requestByMethod(socket, "thread/list"), { data: values });
+    await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(thread("child", "active"), withDelegates(thread("root", "active"), [bareDelegate])),
+    );
+
+    expect(diagnostics).toEqual([]);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(expect.any(Array));
+    collector.stop();
+  });
+
+  test("commits a refresh whose delegate child lists the root's ref but reads back its own", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      now: () => "2026-08-26T05:00:00.000Z",
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    // Live hub behavior: thread/list aliases a delegate child under its
+    // root's workspace ref, while thread/read returns the child under its
+    // own ref. Identity is the sessionId; the ref is routing, not identity.
+    respond(socket, requestByMethod(socket, "thread/list"), {
+      data: [
+        thread("root", "active"),
+        thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
+      ],
+    });
+    await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        withDelegates(thread("root", "active"), [delegateProjection()]),
+        thread("child", "active", { kind: "subagent" }),
+      ),
+    );
+
+    expect(diagnostics).toEqual([]);
+    const starts = updates.flatMap((update) => update.events).filter((event) => event.kind === "SubagentStart");
+    expect(starts).toContainEqual(expect.objectContaining({ sessionId: "child", parentSessionId: "root" }));
+    expect(updates.at(-1)?.activeChildSessionIds).toContain("child");
+    collector.stop();
+  });
+
+  test("ignores a terminal delegate whose closed child is no longer listed", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      now: () => "2026-08-26T05:00:00.000Z",
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), {
+      data: [
+        thread("root", "active"),
+        thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
+      ],
+    });
+    await flush();
+    // A finished delegate legitimately outlives its closed child run in the
+    // owner's diagnostics; history must not reject the live candidate.
+    const finished = delegateProjection({
+      delegateId: "dlg-finished",
+      childSessionId: "ghost",
+      lifecycle: "idle",
+      phase: "idle",
+      status: "idle",
+      terminal: true,
+      resumable: true,
+    });
+    await respondToReads(
+      socket,
+      threadFixtures(
+        withDelegates(thread("root", "active"), [delegateProjection(), finished]),
+        thread("child", "active", { kind: "subagent" }),
+      ),
+    );
+
+    expect(diagnostics).toEqual([]);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child"]);
+    collector.stop();
+  });
+
+  test("a started shared-ref child falls back to a refresh that commits it", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      now: () => "2026-08-26T05:00:00.000Z",
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, [thread("root", "active")]);
+    updates.length = 0;
+
+    // A child announced under its root's shared ref is ambiguous until the
+    // next refresh resolves it through delegate lineage.
+    socket.message({
+      method: "thread/started",
+      params: {
+        thread: thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
+      },
+    });
+    await flush();
+    timers.run(0);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), {
+      data: [
+        thread("root", "active"),
+        thread("child", "active", { ref: "local:root", parentRef: "local:root", kind: "subagent" }),
+      ],
+    });
+    await flush();
+    await respondToReads(
+      socket,
+      threadFixtures(
+        withDelegates(thread("root", "active"), [delegateProjection()]),
+        thread("child", "active", { kind: "subagent" }),
+      ),
+      1,
+    );
+
+    const starts = updates.flatMap((update) => update.events).filter((event) => event.kind === "SubagentStart");
+    expect(starts).toContainEqual(expect.objectContaining({ sessionId: "child", parentSessionId: "root" }));
+    expect(updates.at(-1)?.activeChildSessionIds).toContain("child");
+    collector.stop();
+  });
+
+  test("a rejected refresh candidate retries at the refresh interval, not immediately", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const diagnostics: string[] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      now: () => "2026-08-26T05:00:00.000Z",
+      diagnostics: (record) => diagnostics.push(JSON.stringify(record)),
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates);
+    updates.length = 0;
+
+    timers.run(2_000);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: [thread("baseline", "not-a-status")] });
+    await flush();
+
+    expect(diagnostics).toHaveLength(1);
+    const refreshDelays = timers.timers.filter((timer) => timer.active).map((timer) => timer.delayMs);
+    expect(refreshDelays).toContain(2_000);
+    expect(refreshDelays).not.toContain(0);
+    collector.stop();
+  });
+
   test("rejects malformed and mismatched thread reads without swapping the baseline", async () => {
     const readFailures = [
       { label: "malformed", result: { thread: {} } },
