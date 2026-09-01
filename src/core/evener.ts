@@ -39,6 +39,16 @@ export type EvenerHubConfigDependencies = {
   parseToml?: (text: string) => object;
 };
 
+export type EvenerHubEndpoints = Readonly<{
+  appWireUrl: string;
+  browserOrigin: string;
+}>;
+
+type EvenerHubSettings = Readonly<{
+  endpoints: EvenerHubEndpoints;
+  stateRoot: string;
+}>;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -74,11 +84,8 @@ const xdgRoot = (environment: Readonly<Record<string, string | undefined>>, key:
   return candidate !== undefined && candidate.length > 0 && isAbsolute(candidate) ? candidate : fallback;
 };
 
-/**
- * Turn Evener's bind/client address forms into a loopback WebSocket endpoint.
- * The capability token is never sent to a non-loopback host.
- */
-export const evenerAppWireUrl = (rawAddress: string): string | null => {
+/** Turn an Evener hub address into token-free AppWire and browser endpoints. */
+export const evenerHubEndpoints = (rawAddress: string): EvenerHubEndpoints | null => {
   let address = rawAddress.trim();
   if (address.length === 0) {
     return null;
@@ -95,7 +102,10 @@ export const evenerAppWireUrl = (rawAddress: string): string | null => {
   } catch {
     return null;
   }
-  if (parsed.hostname === "0.0.0.0" || parsed.hostname === "::") {
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    return null;
+  }
+  if (parsed.hostname === "0.0.0.0" || parsed.hostname === "::" || parsed.hostname === "[::]") {
     parsed.hostname = "127.0.0.1";
   }
   const loopback =
@@ -106,21 +116,33 @@ export const evenerAppWireUrl = (rawAddress: string): string | null => {
   if (!loopback) {
     return null;
   }
-  if (parsed.protocol === "http:") {
-    parsed.protocol = "ws:";
-  } else if (parsed.protocol === "https:") {
-    parsed.protocol = "wss:";
-  } else if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+  if (
+    parsed.protocol !== "http:" &&
+    parsed.protocol !== "https:" &&
+    parsed.protocol !== "ws:" &&
+    parsed.protocol !== "wss:"
+  ) {
     return null;
   }
-  parsed.pathname = "/rpc";
-  parsed.search = "";
-  parsed.hash = "";
-  return parsed.toString();
+  const browser = new URL(parsed.toString());
+  if (browser.protocol === "ws:") {
+    browser.protocol = "http:";
+  } else if (browser.protocol === "wss:") {
+    browser.protocol = "https:";
+  }
+  browser.pathname = "/";
+  browser.search = "";
+  browser.hash = "";
+  const appWire = new URL(browser.toString());
+  appWire.protocol = browser.protocol === "https:" ? "wss:" : "ws:";
+  appWire.pathname = "/rpc";
+  return { appWireUrl: appWire.toString(), browserOrigin: browser.origin };
 };
 
-/** Resolve the same address, state root, and bearer-token precedence Evener's TUI uses. */
-export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependencies): EvenerHubConnection | null => {
+export const evenerAppWireUrl = (rawAddress: string): string | null =>
+  evenerHubEndpoints(rawAddress)?.appWireUrl ?? null;
+
+const resolveEvenerHubSettings = (dependencies: EvenerHubConfigDependencies): EvenerHubSettings | null => {
   const readText = dependencies.readText ?? defaultReadText;
   const parseToml = dependencies.parseToml ?? Bun.TOML.parse;
   const configRoot = xdgRoot(dependencies.environment, "XDG_CONFIG_HOME", join(dependencies.home, ".config"));
@@ -150,10 +172,41 @@ export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependen
       // A malformed optional config falls back to Evener's documented defaults.
     }
   }
+  const endpoints = evenerHubEndpoints(address);
+  return endpoints === null ? null : { endpoints, stateRoot };
+};
+
+export const resolveEvenerHubEndpoints = (dependencies: EvenerHubConfigDependencies): EvenerHubEndpoints | null =>
+  resolveEvenerHubSettings(dependencies)?.endpoints ?? null;
+
+const validSessionId = (sessionId: string): boolean =>
+  sessionId.length > 0 &&
+  sessionId === sessionId.trim() &&
+  Array.from(sessionId).length <= MAX_WIRE_STRING_CODE_POINTS &&
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: Control characters are explicitly rejected by the wire contract.
+  !/[\u0000-\u001f\u007f]/u.test(sessionId);
+
+export const evenerSessionUrl = (endpoints: EvenerHubEndpoints, sessionId: string): string | null => {
+  if (!validSessionId(sessionId)) {
+    return null;
+  }
+  const url = new URL(endpoints.browserOrigin);
+  url.pathname = `/s/${encodeURIComponent(`local:${sessionId}`)}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+};
+
+/** Resolve the same address, state root, and bearer-token precedence Evener's TUI uses. */
+export const resolveEvenerHubConnection = (dependencies: EvenerHubConfigDependencies): EvenerHubConnection | null => {
+  const settings = resolveEvenerHubSettings(dependencies);
+  if (settings === null) {
+    return null;
+  }
+  const readText = dependencies.readText ?? defaultReadText;
   const environmentToken = safeToken(dependencies.environment["EVENER_HUB_AUTH_TOKEN"] ?? null);
-  const token = environmentToken ?? safeToken(readText(join(stateRoot, "auth-token")));
-  const url = evenerAppWireUrl(address);
-  return token === null || url === null ? null : { url, token };
+  const token = environmentToken ?? safeToken(readText(join(settings.stateRoot, "auth-token")));
+  return token === null ? null : { url: settings.endpoints.appWireUrl, token };
 };
 
 export type EvenerCollectorUpdate = {

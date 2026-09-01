@@ -6,7 +6,10 @@ import {
   type EvenerSocket,
   type EvenerTimer,
   evenerAppWireUrl,
+  evenerHubEndpoints,
+  evenerSessionUrl,
   resolveEvenerHubConnection,
+  resolveEvenerHubEndpoints,
 } from "../src/core/evener";
 
 class FakeSocket implements EvenerSocket {
@@ -134,6 +137,57 @@ describe("Evener hub connection discovery", () => {
     expect(evenerAppWireUrl("0.0.0.0:9180")).toBe("ws://127.0.0.1:9180/rpc");
     expect(evenerAppWireUrl("127.example.com:9180")).toBeNull();
     expect(evenerAppWireUrl("https://example.com:9180")).toBeNull();
+  });
+
+  test("resolves token-free AppWire and browser endpoints", () => {
+    expect(evenerHubEndpoints("127.0.0.1:9180")).toEqual({
+      appWireUrl: "ws://127.0.0.1:9180/rpc",
+      browserOrigin: "http://127.0.0.1:9180",
+    });
+    expect(evenerHubEndpoints("wss://localhost:9443/rpc?token=leak#fragment")).toEqual({
+      appWireUrl: "wss://localhost:9443/rpc",
+      browserOrigin: "https://localhost:9443",
+    });
+    expect(evenerHubEndpoints("http://0.0.0.0:9180/custom?x=1#y")).toEqual({
+      appWireUrl: "ws://127.0.0.1:9180/rpc",
+      browserOrigin: "http://127.0.0.1:9180",
+    });
+    expect(evenerHubEndpoints("https://example.com:9180")).toBeNull();
+    expect(evenerHubEndpoints("http://user:password@localhost:9180")).toBeNull();
+  });
+
+  test("builds the canonical token-free session route", () => {
+    const endpoints = {
+      appWireUrl: "ws://127.0.0.1:9180/rpc",
+      browserOrigin: "http://127.0.0.1:9180",
+    };
+    const sessionUrl = evenerSessionUrl(endpoints, "session/a b");
+    expect(sessionUrl).toBe("http://127.0.0.1:9180/s/local%3Asession%2Fa%20b");
+    expect(sessionUrl).not.toContain("/rpc/s/");
+    expect(sessionUrl).not.toContain("?");
+    expect(sessionUrl).not.toContain("#");
+    expect(sessionUrl).not.toContain("sentinel-token");
+    expect(evenerSessionUrl(endpoints, "")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "\nunsafe")).toBeNull();
+    expect(evenerSessionUrl(endpoints, "x".repeat(257))).toBeNull();
+    expect(evenerSessionUrl(endpoints, "x".repeat(256))).not.toBeNull();
+  });
+
+  test("resolves endpoints without reading token paths", () => {
+    const reads: string[] = [];
+    const endpoints = resolveEvenerHubEndpoints({
+      home: "/Users/test",
+      environment: {},
+      readText: (path) => {
+        reads.push(path);
+        return path.endsWith("hub.toml")
+          ? 'addr = "127.0.0.1:9777"\nhub_state_root = "/state/evener"\n'
+          : "must-not-be-read";
+      },
+      parseToml: Bun.TOML.parse,
+    });
+    expect(endpoints?.browserOrigin).toBe("http://127.0.0.1:9777");
+    expect(reads).toEqual(["/Users/test/.config/evener/hub.toml"]);
   });
 
   test("uses documented defaults and reads the capability without exposing it", () => {
