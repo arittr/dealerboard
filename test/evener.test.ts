@@ -1490,6 +1490,242 @@ describe("Evener AppWire collector", () => {
     collector.stop();
   });
 
+  test("routes supported notifications by child session before shared ref fallback", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = withDelegates(thread("root", "active", { ref: "local:root" }), [
+      delegateProjection(),
+      delegateProjection({ delegateId: "dlg-nested", childSessionId: "grandchild", parentDelegateId: "dlg-parent" }),
+    ]);
+    const child = thread("child", "active", {
+      ref: "local:root",
+      parentRef: "local:root",
+      kind: "subagent",
+      name: "Child title",
+      model: "child-model",
+    });
+    const grandchild = thread("grandchild", "active", {
+      ref: "local:root",
+      parentRef: "local:root",
+      kind: "subagent",
+      name: "Grandchild title",
+      model: "grandchild-model",
+    });
+    const values = [root, child, grandchild];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+
+    collector.start();
+    await acceptBaseline(socket, updates, values);
+    updates.length = 0;
+
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "child", status: { type: "warning" } },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "StopFailure", provider: "evener", sessionId: "child", observedAt: expect.any(String) },
+    ]);
+    socket.message({
+      method: "turn/started",
+      params: { ref: "local:root", threadId: "grandchild", turn: { status: "inProgress" } },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "Activity", provider: "evener", sessionId: "grandchild", observedAt: expect.any(String) },
+    ]);
+    socket.message({
+      method: "turn/completed",
+      params: { ref: "local:root", threadId: "root", turn: { status: "completed" } },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "Stop", provider: "evener", sessionId: "root", observedAt: expect.any(String) },
+    ]);
+    socket.message({
+      method: "evener/thread/name/changed",
+      params: { ref: "local:root", threadId: "child", name: "Child renamed" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      {
+        kind: "SessionTitleChanged",
+        provider: "evener",
+        sessionId: "child",
+        title: "Child renamed",
+        observedAt: expect.any(String),
+      },
+    ]);
+    socket.message({
+      method: "thread/model/changed",
+      params: { ref: "local:root", threadId: "grandchild", model: "grandchild-renamed" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      {
+        kind: "SessionModelChanged",
+        provider: "evener",
+        sessionId: "grandchild",
+        model: "grandchild-renamed",
+        observedAt: expect.any(String),
+      },
+    ]);
+    socket.message({
+      method: "evener/sandbox/escalation/requested",
+      params: { ref: "local:root", threadId: "child", escalationId: "escalation-child" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "Attention", provider: "evener", sessionId: "child", observedAt: expect.any(String) },
+    ]);
+    const updateCountBeforeResolved = updates.length;
+    socket.message({
+      method: "evener/sandbox/escalation/resolved",
+      params: { ref: "local:root", threadId: "child", escalationId: "escalation-child" },
+    });
+    expect(updates).toHaveLength(updateCountBeforeResolved);
+    socket.message({
+      method: "evener/sandbox/escalation/requested",
+      params: { ref: "local:root", threadId: "child", escalationId: "escalation-child-2" },
+    });
+    expect(updates.at(-1)?.events[0]?.sessionId).toBe("child");
+    socket.message({
+      method: "thread/started",
+      params: {
+        ref: "local:root",
+        threadId: "root",
+        thread: thread("child", "active", {
+          ref: "local:root",
+          parentRef: "local:root",
+          kind: "subagent",
+          name: "Child started",
+          model: "child-started-model",
+        }),
+      },
+    });
+    expect(updates.at(-1)?.events.every((event) => event.sessionId === "child")).toBe(true);
+    socket.message({
+      method: "thread/closed",
+      params: { ref: "local:root", threadId: "grandchild" },
+    });
+    expect(updates.at(-1)?.events).toEqual([
+      { kind: "SubagentStop", provider: "evener", sessionId: "grandchild", observedAt: expect.any(String) },
+    ]);
+    expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+    collector.stop();
+  });
+
+  test("accepts unique ref-only notifications and rejects ambiguous or invalid targets", async () => {
+    const uniqueSocket = new FakeSocket();
+    const uniqueTimers = timerHarness();
+    const uniqueUpdates: EvenerCollectorUpdate[] = [];
+    const uniqueCollector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => uniqueSocket,
+      schedule: uniqueTimers.schedule,
+      onUpdate: (update) => uniqueUpdates.push(update),
+    });
+    uniqueCollector.start();
+    await acceptBaseline(uniqueSocket, uniqueUpdates, [thread("legacy", "active", { ref: "local:legacy" })]);
+    uniqueUpdates.length = 0;
+    uniqueSocket.message({ method: "evener/thread/name/changed", params: { ref: "local:legacy", name: "Legacy renamed" } });
+    expect(uniqueUpdates.at(-1)?.events).toEqual([
+      {
+        kind: "SessionTitleChanged",
+        provider: "evener",
+        sessionId: "legacy",
+        title: "Legacy renamed",
+        observedAt: expect.any(String),
+      },
+    ]);
+    uniqueCollector.stop();
+
+    const ambiguousSocket = new FakeSocket();
+    const ambiguousTimers = timerHarness();
+    const ambiguousUpdates: EvenerCollectorUpdate[] = [];
+    const ambiguousValues = [
+      thread("root", "active", { ref: "local:shared" }),
+      thread("child", "active", { ref: "local:shared" }),
+      thread("grandchild", "active", { ref: "local:shared" }),
+    ];
+    const ambiguousCollector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => ambiguousSocket,
+      schedule: ambiguousTimers.schedule,
+      onUpdate: (update) => ambiguousUpdates.push(update),
+    });
+    ambiguousCollector.start();
+    await acceptBaseline(ambiguousSocket, ambiguousUpdates, ambiguousValues);
+    ambiguousUpdates.length = 0;
+    ambiguousSocket.message({ method: "evener/thread/name/changed", params: { ref: "local:shared", name: "Ambiguous" } });
+    expect(ambiguousUpdates).toEqual([]);
+    expect(ambiguousTimers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    ambiguousSocket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:shared", threadId: "\ninvalid", status: { type: "warning" } },
+    });
+    expect(ambiguousUpdates).toEqual([]);
+    expect(ambiguousTimers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    ambiguousCollector.stop();
+  });
+
+  test("protects refresh generation when a notification arrives during hydration", async () => {
+    const socket = new FakeSocket();
+    const timers = timerHarness();
+    const updates: EvenerCollectorUpdate[] = [];
+    const root = thread("root", "active");
+    const child = thread("child", "active", { parentRef: "local:root", kind: "subagent" });
+    const values = [root, child];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      schedule: timers.schedule,
+      onUpdate: (update) => updates.push(update),
+    });
+    collector.start();
+    await acceptBaseline(socket, updates, values);
+    updates.length = 0;
+
+    timers.run(2_000);
+    respond(socket, latestRequestByMethod(socket, "thread/list"), { data: values });
+    await flush();
+    const refreshRootRead = latestRequestByMethod(socket, "thread/read");
+    respond(socket, refreshRootRead, { thread: root });
+    await flush();
+    const childRead = latestRequestByMethod(socket, "thread/read");
+    socket.message({
+      method: "thread/status/changed",
+      params: { ref: "local:root", threadId: "child", status: { type: "warning" } },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      activeChildSessionIds: null,
+      events: [{ kind: "StopFailure", provider: "evener", sessionId: "child" }],
+    });
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    respond(socket, childRead, { thread: child });
+    await flush();
+    expect(updates.every((update) => update.activeChildSessionIds === null)).toBe(true);
+
+    timers.run(0);
+    const rerunList = latestRequestByMethod(socket, "thread/list");
+    respond(socket, rerunList, { data: values });
+    await flush();
+    await respondToReads(socket, threadFixtures(...values), 4);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child"]);
+    expect(updates.filter((update) => update.activeChildSessionIds !== null)).toHaveLength(1);
+    updates.length = 0;
+    socket.message({ method: "evener/delegate/updated", params: { delegateId: "unknown" } });
+    expect(updates).toEqual([]);
+    expect(timers.timers.some((timer) => timer.active && timer.delayMs === 0)).toBe(true);
+    timers.run(0);
+    const delegateRerunList = latestRequestByMethod(socket, "thread/list");
+    respond(socket, delegateRerunList, { data: values });
+    await flush();
+    await respondToReads(socket, threadFixtures(...values), 6);
+    expect(updates.at(-1)?.activeChildSessionIds).toEqual(["child"]);
+    collector.stop();
+  });
+
   test("reconnects after a socket failure without logging or exposing the token", () => {
     const sockets = [new FakeSocket(), new FakeSocket()];
     const timers = timerHarness();
