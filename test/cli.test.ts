@@ -1685,8 +1685,58 @@ describe("daemon Evener collector boundary", () => {
 
   test("starts after publication and applies AppWire updates through the registry", async () => {
     initRegistry();
+    const boundaryObservedAt = new Date().toISOString();
+    const seedDb = openRegistryDatabase(paths.database, "readwrite");
+    try {
+      applyRegistryEvents(seedDb, [
+        {
+          kind: "SessionObserved",
+          provider: "evener",
+          sessionId: "root",
+          title: "Evener root",
+          project: "project",
+          transcriptPath: null,
+          model: "evener-model",
+          observedAt: boundaryObservedAt,
+        },
+        {
+          kind: "SubagentStart",
+          provider: "evener",
+          sessionId: "stale",
+          parentSessionId: "root",
+          title: "Stale child",
+          project: "project",
+          model: "evener-model",
+          observedAt: boundaryObservedAt,
+        },
+        {
+          kind: "SessionObserved",
+          provider: "codex",
+          sessionId: "codex-root",
+          title: "Codex root",
+          project: "project",
+          transcriptPath: null,
+          model: "codex-model",
+          observedAt: boundaryObservedAt,
+        },
+        {
+          kind: "SubagentStart",
+          provider: "codex",
+          sessionId: "codex-child",
+          parentSessionId: "codex-root",
+          title: "Codex child",
+          project: "project",
+          model: "codex-model",
+          observedAt: boundaryObservedAt,
+        },
+      ]);
+    } finally {
+      seedDb.close();
+    }
     let snapshotExistedAtStart = false;
     let resolvedConnection = false;
+    let afterIncremental: ReturnType<typeof listSessions> = [];
+    let afterAuthoritative: ReturnType<typeof listSessions> = [];
     const harness = makeHarness({
       createEvenerCollector: (options) =>
         evenerCollectorStub({
@@ -1706,7 +1756,11 @@ describe("daemon Evener collector boundary", () => {
                   observedAt: NOW,
                 },
               ],
+              activeChildSessionIds: null,
             });
+            afterIncremental = listRows();
+            options.onUpdate({ events: [], activeChildSessionIds: [] });
+            afterAuthoritative = listRows();
           },
         }),
       resolveEvenerHubConnection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "test-only" }),
@@ -1721,6 +1775,37 @@ describe("daemon Evener collector boundary", () => {
     expect(listRows()).toContainEqual(
       expect.objectContaining({ provider: "evener", sessionId: "evener-1", model: "gpt-5.6-sol" }),
     );
+    expect(afterIncremental).toContainEqual(expect.objectContaining({ provider: "evener", sessionId: "stale" }));
+    expect(afterAuthoritative).not.toContainEqual(expect.objectContaining({ provider: "evener", sessionId: "stale" }));
+    expect(afterAuthoritative).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "evener", sessionId: "root" }),
+        expect.objectContaining({ provider: "codex", sessionId: "codex-root" }),
+        expect.objectContaining({ provider: "codex", sessionId: "codex-child" }),
+      ]),
+    );
+  });
+
+  test("contains an Evener registry callback failure and still starts the daemon", async () => {
+    initRegistry();
+    const harness = makeHarness({
+      applyEvenerUpdate: () => {
+        throw new Error("registry callback exploded");
+      },
+      createEvenerCollector: (options) =>
+        evenerCollectorStub({
+          start: () => options.onUpdate({ events: [], activeChildSessionIds: null }),
+        }),
+      createQuotaCollector: () => collectorStub(),
+      createTokenUsageCollector: () => tokenCollectorStub(),
+    });
+
+    const outcome = runCli(["daemon"], harness.deps);
+    expect(await Promise.race([outcome, stillRunning(25)])).toBe("still running");
+    expect(existsSync(paths.snapshot)).toBe(true);
+    expect(harness.diagnostics).toEqual([
+      expect.objectContaining({ component: "evener", code: "evener_collector_failed", provider: "evener" }),
+    ]);
   });
 });
 

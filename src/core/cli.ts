@@ -41,6 +41,7 @@ import { decodeNativeHook } from "./providers";
 import { createQuotaCollector } from "./quota";
 import {
   acknowledgeSession,
+  applyEvenerCollectorUpdate,
   applyRegistryEvents,
   clearAllSessions,
   clearSession,
@@ -88,6 +89,7 @@ export type CliDependencies = {
   stderr?: (text: string) => void;
   openDatabase?: typeof openRegistryDatabase;
   applyEvents?: typeof applyRegistryEvents;
+  applyEvenerUpdate?: typeof applyEvenerCollectorUpdate;
   discoverClaudeGhosttyTerminal?: DiscoverClaudeGhosttyTerminal;
   environment?: Readonly<Record<string, string | undefined>>;
   parentPid?: number;
@@ -520,6 +522,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
   stderr: (text) => process.stderr.write(text),
   openDatabase: openRegistryDatabase,
   applyEvents: applyRegistryEvents,
+  applyEvenerUpdate: applyEvenerCollectorUpdate,
   discoverClaudeGhosttyTerminal,
   environment: process.env,
   parentPid: process.ppid,
@@ -553,6 +556,7 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
       );
     const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
     daemon.start();
+    const applyUpdate = dependencies.applyEvenerUpdate ?? applyEvenerCollectorUpdate;
     // Evener is observed through its supported daemon-wide AppWire feed. The
     // bearer capability stays in memory and is never logged or persisted.
     try {
@@ -561,10 +565,10 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
       const evenerCollector = createCollector({
         connection: () => resolveConnection({ home: daemonPaths.home, environment }),
         diagnostics,
-        onUpdate: ({ events }) => {
+        onUpdate: (update) => {
           const db = openRegistryDatabase(daemonPaths.database, "readwrite");
           try {
-            applyRegistryEvents(db, events);
+            applyUpdate(db, update);
           } finally {
             db.close();
           }
