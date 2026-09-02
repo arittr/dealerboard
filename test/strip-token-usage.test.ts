@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ACTIVITY_BOUNDARY_MAX_AGE_MS,
   formatTokensCompact,
   laDayBoundsMs,
   reduceSparkline,
+  reduceTokenActivity,
   reduceTokenUsageRead,
   SPARKLINE_VIEWBOX,
   STALE_TOKEN_USAGE_AGE_MS,
@@ -10,7 +12,7 @@ import {
   sparklineFillPoints,
   sparklinePolylinePoints,
 } from "../app/src/token-usage";
-import type { TokenUsageSample, TokenUsageSnapshot } from "../src/token-usage-snapshot";
+import type { TokenUsageDayCurve, TokenUsageSample, TokenUsageSnapshot } from "../src/token-usage-snapshot";
 
 const NOW = Date.parse("2026-08-20T18:00:00.000Z"); // 11:00 in Los Angeles
 const DAY = "2026-08-20";
@@ -173,6 +175,209 @@ describe("laDayBoundsMs", () => {
     expect(spring.endMs - spring.startMs).toBe(23 * 3_600_000);
     const fall = laDayBoundsMs("2026-11-01");
     expect(fall.endMs - fall.startMs).toBe(25 * 3_600_000);
+  });
+});
+
+const curve = (providerDay: string, points: Array<[string, number]>): TokenUsageDayCurve => ({
+  providerDay,
+  points: points.map(([fetchedAt, totalTokens]) => ({ fetchedAt, totalTokens })),
+});
+
+const measured = (hour: number, tokens: number) => ({ hour, state: "measured" as const, tokens });
+const absent = (hour: number, state: "future" | "unmeasured" | "nonexistent") => ({
+  hour,
+  state,
+  tokens: null,
+});
+
+describe("reduceTokenActivity", () => {
+  test("differences today and adjacent yesterday by LA clock hour and marks the partial current hour", () => {
+    const today = curve(DAY, [
+      ["2026-08-20T07:00:00.000Z", 0], // LA midnight
+      ["2026-08-20T08:00:00.000Z", 10],
+      ["2026-08-20T09:00:00.000Z", 30],
+      ["2026-08-20T18:00:00.000Z", 80], // 11:00
+      ["2026-08-20T18:30:00.000Z", 100],
+    ]);
+    const yesterday = curve("2026-08-19", [
+      ["2026-08-19T07:00:00.000Z", 0],
+      ["2026-08-19T08:00:00.000Z", 5],
+      ["2026-08-19T09:00:00.000Z", 20],
+    ]);
+
+    const activity = reduceTokenActivity(snapshot({ dayCurves: { today, yesterday } }));
+
+    expect(activity?.today).toHaveLength(24);
+    expect(activity?.today[0]).toEqual(measured(0, 10));
+    expect(activity?.today[1]).toEqual(measured(1, 20));
+    expect(activity?.today[2]).toEqual(absent(2, "unmeasured"));
+    expect(activity?.today[11]).toEqual({ hour: 11, state: "current", tokens: 20 });
+    expect(activity?.today[12]).toEqual(absent(12, "future"));
+    expect(activity?.yesterday?.slice(0, 3)).toEqual([measured(0, 5), measured(1, 15), absent(2, "unmeasured")]);
+    expect(activity?.yMax).toBe(20);
+  });
+
+  test("accepts a boundary observation at 30 minutes old and rejects one at 30 minutes plus one millisecond", () => {
+    expect(ACTIVITY_BOUNDARY_MAX_AGE_MS).toBe(30 * 60_000);
+    const start = Date.parse("2026-08-20T07:00:00.000Z");
+    const modelFor = (firstOffsetMs: number) =>
+      reduceTokenActivity(
+        snapshot({
+          dayCurves: {
+            today: curve(DAY, [
+              [iso(start + firstOffsetMs), 10],
+              [iso(start + 2 * 60 * 60_000), 30],
+            ]),
+            yesterday: null,
+          },
+        }),
+      );
+
+    expect(modelFor(30 * 60_000)?.today[0]).toEqual(measured(0, 10));
+    expect(modelFor(30 * 60_000 - 1)?.today[0]).toEqual(absent(0, "unmeasured"));
+  });
+
+  test("does not interpolate across a collector gap", () => {
+    const activity = reduceTokenActivity(
+      snapshot({
+        dayCurves: {
+          today: curve(DAY, [
+            ["2026-08-20T07:00:00.000Z", 0],
+            ["2026-08-20T08:00:00.000Z", 10],
+            ["2026-08-20T12:00:00.000Z", 90],
+            ["2026-08-20T12:30:00.000Z", 100],
+          ]),
+          yesterday: null,
+        },
+      }),
+    );
+
+    expect(activity?.today[1]).toEqual(absent(1, "unmeasured"));
+    expect(activity?.today[2]).toEqual(absent(2, "unmeasured"));
+    expect(activity?.today[3]).toEqual(absent(3, "unmeasured"));
+    expect(activity?.today[5]).toEqual({ hour: 5, state: "current", tokens: 10 });
+  });
+
+  test("drops non-adjacent and isolated yesterday overlays", () => {
+    const today = curve(DAY, [
+      ["2026-08-20T07:00:00.000Z", 0],
+      ["2026-08-20T08:00:00.000Z", 10],
+    ]);
+    const nonAdjacent = reduceTokenActivity(
+      snapshot({
+        dayCurves: {
+          today,
+          yesterday: curve("2026-08-18", [
+            ["2026-08-18T07:00:00.000Z", 0],
+            ["2026-08-18T08:00:00.000Z", 5],
+            ["2026-08-18T09:00:00.000Z", 10],
+          ]),
+        },
+      }),
+    );
+    const isolated = reduceTokenActivity(
+      snapshot({
+        dayCurves: {
+          today,
+          yesterday: curve("2026-08-19", [
+            ["2026-08-19T07:00:00.000Z", 0],
+            ["2026-08-19T08:00:00.000Z", 5],
+          ]),
+        },
+      }),
+    );
+
+    expect(nonAdjacent?.yesterday).toBeNull();
+    expect(isolated?.yesterday).toBeNull();
+  });
+
+  test("keeps measured zero distinct and uses a finite one-token scale", () => {
+    const activity = reduceTokenActivity(
+      snapshot({
+        dayCurves: {
+          today: curve(DAY, [
+            ["2026-08-20T07:00:00.000Z", 0],
+            ["2026-08-20T08:00:00.000Z", 0],
+            ["2026-08-20T08:30:00.000Z", 0],
+          ]),
+          yesterday: null,
+        },
+      }),
+    );
+
+    expect(activity?.today[0]).toEqual(measured(0, 0));
+    expect(activity?.today[1]).toEqual({ hour: 1, state: "current", tokens: 0 });
+    expect(activity?.today[2]).toEqual(absent(2, "future"));
+    expect(activity?.yMax).toBe(1);
+  });
+
+  test("returns null without day curves or any reducible activity", () => {
+    expect(reduceTokenActivity(snapshot())).toBeNull();
+    expect(
+      reduceTokenActivity(
+        snapshot({
+          dayCurves: { today: curve(DAY, [["2026-08-20T18:45:00.000Z", 50]]), yesterday: null },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  test("spring DST leaves the nonexistent 02:00 clock position empty", () => {
+    const activity = reduceTokenActivity(
+      snapshot({
+        providerDay: "2026-03-08",
+        dayCurves: {
+          today: curve("2026-03-08", [
+            ["2026-03-08T08:00:00.000Z", 0], // 00:00 PST
+            ["2026-03-08T09:00:00.000Z", 10], // 01:00 PST
+            ["2026-03-08T10:00:00.000Z", 20], // 03:00 PDT
+            ["2026-03-08T10:30:00.000Z", 25],
+          ]),
+          yesterday: null,
+        },
+      }),
+    );
+
+    expect(activity?.today[0]).toEqual(measured(0, 10));
+    expect(activity?.today[1]).toEqual(measured(1, 10));
+    expect(activity?.today[2]).toEqual(absent(2, "nonexistent"));
+    expect(activity?.today[3]).toEqual({ hour: 3, state: "current", tokens: 5 });
+  });
+
+  test("fall DST folds both 01:00 intervals and rejects an incompletely measured fold", () => {
+    const complete = reduceTokenActivity(
+      snapshot({
+        providerDay: "2026-11-01",
+        dayCurves: {
+          today: curve("2026-11-01", [
+            ["2026-11-01T07:00:00.000Z", 0], // 00:00 PDT
+            ["2026-11-01T08:00:00.000Z", 10], // first 01:00
+            ["2026-11-01T09:00:00.000Z", 30], // second 01:00
+            ["2026-11-01T10:00:00.000Z", 35], // 02:00 PST
+            ["2026-11-01T10:30:00.000Z", 45],
+          ]),
+          yesterday: null,
+        },
+      }),
+    );
+    const incomplete = reduceTokenActivity(
+      snapshot({
+        providerDay: "2026-11-01",
+        dayCurves: {
+          today: curve("2026-11-01", [
+            ["2026-11-01T07:00:00.000Z", 0],
+            ["2026-11-01T08:00:00.000Z", 10],
+            ["2026-11-01T10:00:00.000Z", 35],
+            ["2026-11-01T10:30:00.000Z", 45],
+          ]),
+          yesterday: null,
+        },
+      }),
+    );
+
+    expect(complete?.today[1]).toEqual(measured(1, 25));
+    expect(complete?.today[2]).toEqual({ hour: 2, state: "current", tokens: 10 });
+    expect(incomplete?.today[1]).toEqual(absent(1, "unmeasured"));
   });
 });
 

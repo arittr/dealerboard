@@ -33,6 +33,23 @@ export type TokenUsageRailModel =
       sparkline: SparklineModel | null;
     };
 
+export const ACTIVITY_BOUNDARY_MAX_AGE_MS = 30 * 60_000;
+
+export type HourlyActivityBucket =
+  | { hour: number; state: "measured" | "current"; tokens: number }
+  | { hour: number; state: "future" | "unmeasured" | "nonexistent"; tokens: null };
+
+export type TokenActivityChartModel = {
+  today: HourlyActivityBucket[];
+  yesterday: HourlyActivityBucket[] | null;
+  yMax: number;
+};
+
+type NumberedCurvePoint = { atMs: number; totalTokens: number };
+type IntervalActivity =
+  | { state: "measured" | "current"; tokens: number }
+  | { state: "future" | "unmeasured"; tokens: null };
+
 type NumberedSample = { atMs: number; totalTokens: number };
 
 /**
@@ -88,6 +105,17 @@ const laWallClockFormat = new Intl.DateTimeFormat("en-US", {
   second: "2-digit",
 });
 
+const laHourFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: LA_TIME_ZONE,
+  hour: "2-digit",
+  hourCycle: "h23",
+});
+
+const laClockHour = (atMs: number): number => {
+  const hour = Number(laHourFormat.formatToParts(new Date(atMs)).find((part) => part.type === "hour")?.value ?? "0");
+  return hour % 24;
+};
+
 /** Offset of LA wall clock from UTC at an instant, in ms (negative west of UTC). */
 const laOffsetMs = (atMs: number): number => {
   const parts = laWallClockFormat.formatToParts(new Date(atMs));
@@ -120,6 +148,108 @@ export const laDayBoundsMs = (day: string): { startMs: number; endMs: number } =
   startMs: laMidnightMs(day),
   endMs: laMidnightMs(nextProviderDay(day)),
 });
+
+const measuredBucket = (hour: number, tokens: number, current: boolean): HourlyActivityBucket => ({
+  hour,
+  state: current ? "current" : "measured",
+  tokens: Math.max(0, tokens),
+});
+
+const absentBucket = (hour: number, state: "future" | "unmeasured" | "nonexistent"): HourlyActivityBucket => ({
+  hour,
+  state,
+  tokens: null,
+});
+
+const pointsWithinDay = (curve: TokenUsageDayCurve, startMs: number, endMs: number): NumberedCurvePoint[] =>
+  curve.points
+    .map((point) => ({ atMs: Date.parse(point.fetchedAt), totalTokens: point.totalTokens }))
+    .filter((point) => point.atMs >= startMs && point.atMs < endMs);
+
+const totalAtBoundary = (
+  points: readonly NumberedCurvePoint[],
+  boundaryMs: number,
+  dayStartMs: number,
+): number | null => {
+  if (boundaryMs === dayStartMs) return 0;
+  let latest: NumberedCurvePoint | null = null;
+  for (const point of points) {
+    if (point.atMs > boundaryMs) break;
+    latest = point;
+  }
+  return latest !== null && boundaryMs - latest.atMs <= ACTIVITY_BOUNDARY_MAX_AGE_MS ? latest.totalTokens : null;
+};
+
+const reduceCurveActivity = (curve: TokenUsageDayCurve, today: boolean): HourlyActivityBucket[] => {
+  const { startMs, endMs } = laDayBoundsMs(curve.providerDay);
+  const points = pointsWithinDay(curve, startMs, endMs);
+  const latest = points.at(-1) ?? null;
+  const byHour = Array.from({ length: 24 }, () => [] as IntervalActivity[]);
+
+  for (let intervalStart = startMs; intervalStart < endMs; intervalStart += ONE_HOUR_MS) {
+    const intervalEnd = Math.min(intervalStart + ONE_HOUR_MS, endMs);
+    const hour = laClockHour(intervalStart);
+    if (today && (latest === null || latest.atMs < intervalStart)) {
+      byHour[hour]?.push({ state: "future", tokens: null });
+      continue;
+    }
+
+    const current = today && latest !== null && latest.atMs < intervalEnd;
+    const effectiveEnd = current && latest !== null ? latest.atMs : intervalEnd;
+    const startTotal = totalAtBoundary(points, intervalStart, startMs);
+    const endTotal = totalAtBoundary(points, effectiveEnd, startMs);
+    byHour[hour]?.push(
+      startTotal === null || endTotal === null
+        ? { state: "unmeasured", tokens: null }
+        : { state: current ? "current" : "measured", tokens: Math.max(0, endTotal - startTotal) },
+    );
+  }
+
+  return byHour.map((parts, hour) => {
+    if (parts.length === 0) return absentBucket(hour, "nonexistent");
+    const elapsed = parts.filter((part) => part.state !== "future");
+    if (elapsed.length === 0) return absentBucket(hour, "future");
+    if (elapsed.some((part) => part.state === "unmeasured")) return absentBucket(hour, "unmeasured");
+    const tokens = elapsed.reduce((sum, part) => sum + (part.tokens ?? 0), 0);
+    const current = elapsed.some((part) => part.state === "current") || parts.some((part) => part.state === "future");
+    return measuredBucket(hour, tokens, current);
+  });
+};
+
+const bucketIsObserved = (
+  bucket: HourlyActivityBucket,
+): bucket is Extract<HourlyActivityBucket, { state: "measured" | "current" }> =>
+  bucket.state === "measured" || bucket.state === "current";
+
+const hasYesterdaySegment = (buckets: readonly HourlyActivityBucket[]): boolean => {
+  let previousMeasured = false;
+  for (const bucket of buckets) {
+    const measuredNow = bucket.state === "measured";
+    if (previousMeasured && measuredNow) return true;
+    previousMeasured = measuredNow;
+  }
+  return false;
+};
+
+export const reduceTokenActivity = (snapshot: TokenUsageSnapshot): TokenActivityChartModel | null => {
+  const curves = snapshot.dayCurves;
+  if (curves === undefined) return null;
+
+  const today = reduceCurveActivity(curves.today, true);
+  const candidateYesterday =
+    curves.yesterday !== null && curves.yesterday.providerDay === previousProviderDay(curves.today.providerDay)
+      ? reduceCurveActivity(curves.yesterday, false)
+      : null;
+  const yesterday = candidateYesterday !== null && hasYesterdaySegment(candidateYesterday) ? candidateYesterday : null;
+  const observed = [...today, ...(yesterday ?? [])].filter(bucketIsObserved);
+  if (observed.length === 0) return null;
+
+  return {
+    today,
+    yesterday,
+    yMax: Math.max(1, ...observed.map((bucket) => bucket.tokens)),
+  };
+};
 
 /** Compact token formatting: one decimal, a trailing .0 stripped, k/M/B suffixes (1000.0k rolls up to 1M). */
 export const formatTokensCompact = (value: number): string => {
