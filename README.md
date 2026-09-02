@@ -39,7 +39,8 @@ jumping to the session that needs you.
   its unread mark — until you flick or ack the card, restart the session, or
   the provider reports that the tab/session was closed or archived.
 - Provider, model, project, and privacy-safe activity categories.
-- Optional quota meters and daily token-usage trends.
+- Optional quota meters, rolling token rates, and hourly today-versus-yesterday
+  activity.
 - Tap-to-open for integrations with an exact route; a visible flash when no
   safe route exists.
 
@@ -169,7 +170,7 @@ Dealerboard works without these helpers. Missing optional data simply stays
 hidden. For the complete right rail, install
 **[CodexBar](https://github.com/steipete/CodexBar)** for quota meters and
 **[`agentsview`](https://github.com/kenn-io/agentsview)** for daily token
-totals, rates, and trend curves; neither is required for the session board
+totals, rolling rates, and hourly activity curves; neither is required for the session board
 itself.
 
 - **Paseo:** supplies agent lineage, attention/view state, names, and exact
@@ -181,7 +182,7 @@ itself.
 - **`cswap`:** adds privacy-safe numeric Claude account meters when two or
   more accounts are present.
 - **[`agentsview`](https://github.com/kenn-io/agentsview):** supplies aggregate
-  daily token totals and trend curves.
+  daily token totals, rolling rates, and today/yesterday activity curves.
 - **Ghostty:** enables exact Claude terminal focus for direct, non-tmux
   sessions.
 - **[roborev](https://github.com/roborev-dev/roborev):** background review
