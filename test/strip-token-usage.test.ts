@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ACTIVITY_BOUNDARY_MAX_AGE_MS,
   formatTokensCompact,
+  type HourlyActivityBucket,
   laDayBoundsMs,
   reduceSparkline,
   reduceTokenActivity,
@@ -11,6 +12,11 @@ import {
   sparklineEndpoint,
   sparklineFillPoints,
   sparklinePolylinePoints,
+  TOKEN_ACTIVITY_TIME_LABELS,
+  TOKEN_ACTIVITY_VIEWBOX,
+  tokenActivityBarRects,
+  tokenActivityLineEndpoint,
+  tokenActivityLineSegments,
 } from "../app/src/token-usage";
 import type { TokenUsageDayCurve, TokenUsageSample, TokenUsageSnapshot } from "../src/token-usage-snapshot";
 
@@ -378,6 +384,80 @@ describe("reduceTokenActivity", () => {
     expect(complete?.today[1]).toEqual(measured(1, 25));
     expect(complete?.today[2]).toEqual({ hour: 2, state: "current", tokens: 10 });
     expect(incomplete?.today[1]).toEqual(absent(1, "unmeasured"));
+  });
+});
+
+const activityBuckets = (
+  values: Partial<Record<number, { state: "measured" | "current"; tokens: number }>>,
+): HourlyActivityBucket[] =>
+  Array.from({ length: 24 }, (_, hour) => {
+    const value = values[hour];
+    return value === undefined ? absent(hour, "unmeasured") : { hour, ...value };
+  });
+
+describe("token activity SVG geometry", () => {
+  test("maps measured and current buckets into stable centered bar slots", () => {
+    const bars = tokenActivityBarRects({
+      today: activityBuckets({
+        0: { state: "measured", tokens: 10 },
+        1: { state: "current", tokens: 20 },
+        2: { state: "measured", tokens: 0 },
+      }),
+      yesterday: null,
+      yMax: 20,
+    });
+
+    expect(TOKEN_ACTIVITY_VIEWBOX).toEqual({ width: 500, height: 84 });
+    expect(bars.map(({ hour, current }) => ({ hour, current }))).toEqual([
+      { hour: 0, current: false },
+      { hour: 1, current: true },
+      { hour: 2, current: false },
+    ]);
+    expect(bars[0]?.height).toBeCloseTo(28, 5);
+    expect(bars[1]?.height).toBeCloseTo(56, 5);
+    expect(bars[2]?.height).toBe(0);
+    expect(bars[0]?.x).toBeGreaterThanOrEqual(0);
+    expect(bars[1]?.x).toBeGreaterThan(bars[0]?.x ?? 0);
+  });
+
+  test("future, unmeasured, and nonexistent today buckets emit no rectangle", () => {
+    const today = Array.from(
+      { length: 24 },
+      (_, hour): HourlyActivityBucket =>
+        absent(hour, hour === 0 ? "future" : hour === 1 ? "nonexistent" : "unmeasured"),
+    );
+    expect(tokenActivityBarRects({ today, yesterday: null, yMax: 1 })).toEqual([]);
+  });
+
+  test("splits yesterday at missing buckets and places points at slot centers", () => {
+    const yesterday = activityBuckets({
+      0: { state: "measured", tokens: 10 },
+      1: { state: "measured", tokens: 20 },
+      3: { state: "measured", tokens: 5 },
+      4: { state: "measured", tokens: 15 },
+    });
+    const segments = tokenActivityLineSegments({
+      today: Array.from({ length: 24 }, (_, hour) => absent(hour, "future")),
+      yesterday,
+      yMax: 20,
+    });
+
+    expect(segments).toHaveLength(2);
+    expect(segments.map((segment) => segment.map((point) => point.hour))).toEqual([
+      [0, 1],
+      [3, 4],
+    ]);
+    expect(segments[0]?.[0]?.x).toBeCloseTo(500 / 48, 5);
+    expect(segments[0]?.[1]?.y).toBe(4);
+    expect(tokenActivityLineEndpoint(segments)).toEqual(segments[1]?.[1] ?? null);
+  });
+
+  test("publishes the fixed sparse time labels", () => {
+    expect(TOKEN_ACTIVITY_TIME_LABELS).toEqual([
+      { text: "12a", x: 0, anchor: "start" },
+      { text: "12p", x: 250, anchor: "middle" },
+      { text: "12a", x: 500, anchor: "end" },
+    ]);
   });
 });
 

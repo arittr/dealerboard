@@ -251,6 +251,73 @@ export const reduceTokenActivity = (snapshot: TokenUsageSnapshot): TokenActivity
   };
 };
 
+export const TOKEN_ACTIVITY_VIEWBOX = { width: 500, height: 84 } as const;
+const TOKEN_ACTIVITY_PLOT_TOP = 4;
+const TOKEN_ACTIVITY_PLOT_BOTTOM = 60;
+const TOKEN_ACTIVITY_BAR_WIDTH = 12;
+const TOKEN_ACTIVITY_SLOT_WIDTH = TOKEN_ACTIVITY_VIEWBOX.width / 24;
+
+export const TOKEN_ACTIVITY_TIME_LABELS = [
+  { text: "12a", x: 0, anchor: "start" },
+  { text: "12p", x: TOKEN_ACTIVITY_VIEWBOX.width / 2, anchor: "middle" },
+  { text: "12a", x: TOKEN_ACTIVITY_VIEWBOX.width, anchor: "end" },
+] as const;
+
+export type TokenActivityPoint = { hour: number; x: number; y: number };
+export type TokenActivityBarRect = TokenActivityPoint & {
+  width: number;
+  height: number;
+  current: boolean;
+};
+
+const activityHeight = (tokens: number, yMax: number): number =>
+  (tokens / Math.max(1, yMax)) * (TOKEN_ACTIVITY_PLOT_BOTTOM - TOKEN_ACTIVITY_PLOT_TOP);
+
+const activityPoint = (hour: number, tokens: number, yMax: number): TokenActivityPoint => {
+  const height = activityHeight(tokens, yMax);
+  return {
+    hour,
+    x: (hour + 0.5) * TOKEN_ACTIVITY_SLOT_WIDTH,
+    y: TOKEN_ACTIVITY_PLOT_BOTTOM - height,
+  };
+};
+
+export const tokenActivityBarRects = (model: TokenActivityChartModel): TokenActivityBarRect[] =>
+  model.today.flatMap((bucket) => {
+    if (!bucketIsObserved(bucket)) return [];
+    const point = activityPoint(bucket.hour, bucket.tokens, model.yMax);
+    const height = activityHeight(bucket.tokens, model.yMax);
+    return [
+      {
+        ...point,
+        x: point.x - TOKEN_ACTIVITY_BAR_WIDTH / 2,
+        width: TOKEN_ACTIVITY_BAR_WIDTH,
+        height,
+        current: bucket.state === "current",
+      },
+    ];
+  });
+
+export const tokenActivityLineSegments = (model: TokenActivityChartModel): TokenActivityPoint[][] => {
+  if (model.yesterday === null) return [];
+  const segments: TokenActivityPoint[][] = [];
+  let current: TokenActivityPoint[] = [];
+  const flush = (): void => {
+    if (current.length >= 2) segments.push(current);
+    current = [];
+  };
+  for (const bucket of model.yesterday) {
+    if (bucket.state === "measured") current.push(activityPoint(bucket.hour, bucket.tokens, model.yMax));
+    else flush();
+  }
+  flush();
+  return segments;
+};
+
+export const tokenActivityLineEndpoint = (
+  segments: readonly (readonly TokenActivityPoint[])[],
+): TokenActivityPoint | null => segments.at(-1)?.at(-1) ?? null;
+
 /** Compact token formatting: one decimal, a trailing .0 stripped, k/M/B suffixes (1000.0k rolls up to 1M). */
 export const formatTokensCompact = (value: number): string => {
   const tokens = Math.max(0, value);
