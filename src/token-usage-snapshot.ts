@@ -14,7 +14,7 @@ export const TOKEN_USAGE_SNAPSHOT_SCHEMA_VERSION = 1;
 /** At the 30s poll cadence, 288 samples cover ~2.4h — the 1h rate window plus its trend-comparison window. */
 export const TOKEN_USAGE_SAMPLE_LIMIT = 288;
 
-/** One day-curve point per 15 minutes covers 24h; the collector's running max keeps totals monotone. */
+/** Latest point per fixed 30-minute bucket uses at most 50 slots on an LA day; 96 remains the schema bound. */
 export const TOKEN_USAGE_DAY_CURVE_POINT_LIMIT = 96;
 
 export type TokenUsageSample = {

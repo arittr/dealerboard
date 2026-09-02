@@ -261,7 +261,7 @@ describe("appendDayCurvePoint", () => {
   test("same-day points append with a running max (a helper correction never dips the curve)", () => {
     const first = appendDayCurvePoint(undefined, "2026-08-25", point(0, 100));
     const second = appendDayCurvePoint(first, "2026-08-25", point(30, 90));
-    expect(second.today.points.map((p) => p.totalTokens)).toEqual([100, 100]);
+    expect(second.today.points).toEqual([point(30, 100)]);
     expect(second.yesterday).toBeNull();
   });
 
@@ -279,18 +279,77 @@ describe("appendDayCurvePoint", () => {
     const base = appendDayCurvePoint(undefined, "2026-08-25", point(10, 100));
     expect(appendDayCurvePoint(base, "2026-08-25", point(10, 150))).toEqual(base);
     expect(appendDayCurvePoint(base, "2026-08-25", point(5, 200))).toEqual(base);
-    const advanced = appendDayCurvePoint(base, "2026-08-25", point(11, 120));
+    const advanced = appendDayCurvePoint(base, "2026-08-25", {
+      fetchedAt: "2026-08-25T10:30:00.000Z",
+      totalTokens: 120,
+    });
     expect(advanced.today.points.map((p) => p.totalTokens)).toEqual([100, 120]);
   });
 
-  test("downsampling keeps at most the limit and always the first and latest points", () => {
-    let curves = appendDayCurvePoint(undefined, "2026-08-25", point(0, 0));
-    for (let i = 1; i <= 200; i++) {
-      curves = appendDayCurvePoint(curves, "2026-08-25", point(i, i));
+  test("retains the latest observation in every populated half-hour bucket across a full day", () => {
+    const start = Date.parse("2026-08-25T07:00:00.000Z");
+    let curves = appendDayCurvePoint(undefined, "2026-08-25", {
+      fetchedAt: new Date(start).toISOString(),
+      totalTokens: 0,
+    });
+    for (let i = 1; i < 2_880; i++) {
+      curves = appendDayCurvePoint(curves, "2026-08-25", {
+        fetchedAt: new Date(start + i * 30_000).toISOString(),
+        totalTokens: i,
+      });
     }
-    expect(curves.today.points.length).toBeLessThanOrEqual(TOKEN_USAGE_DAY_CURVE_POINT_LIMIT);
-    expect(curves.today.points[0]?.totalTokens).toBe(0);
-    expect(curves.today.points.at(-1)?.totalTokens).toBe(200);
+    const points = curves.today.points;
+    expect(points).toHaveLength(48);
+    expect(points[0]?.fetchedAt).toBe("2026-08-25T07:29:30.000Z");
+    expect(points[1]?.fetchedAt).toBe("2026-08-25T07:59:30.000Z");
+    expect(points[24]?.fetchedAt).toBe("2026-08-25T19:29:30.000Z");
+    expect(points[47]?.fetchedAt).toBe("2026-08-26T06:59:30.000Z");
+    for (let i = 1; i < points.length; i++) {
+      expect(Date.parse(points[i]?.fetchedAt ?? "") - Date.parse(points[i - 1]?.fetchedAt ?? "")).toBe(30 * 60_000);
+    }
+  });
+
+  test("compacts legacy same-bucket duplicates without filling missing buckets", () => {
+    const curves = {
+      today: {
+        providerDay: "2026-08-25",
+        points: [
+          { fetchedAt: "2026-08-25T07:01:00.000Z", totalTokens: 10 },
+          { fetchedAt: "2026-08-25T07:29:30.000Z", totalTokens: 20 },
+          { fetchedAt: "2026-08-25T12:03:00.000Z", totalTokens: 30 },
+          { fetchedAt: "2026-08-25T12:29:30.000Z", totalTokens: 40 },
+        ],
+      },
+      yesterday: null,
+    };
+
+    const appended = appendDayCurvePoint(curves, "2026-08-25", {
+      fetchedAt: "2026-08-25T13:01:00.000Z",
+      totalTokens: 50,
+    });
+
+    expect(appended.today.points).toEqual([
+      { fetchedAt: "2026-08-25T07:29:30.000Z", totalTokens: 20 },
+      { fetchedAt: "2026-08-25T12:29:30.000Z", totalTokens: 40 },
+      { fetchedAt: "2026-08-25T13:01:00.000Z", totalTokens: 50 },
+    ]);
+  });
+
+  test("a 25-hour fall-DST day fits below the unchanged compatibility limit", () => {
+    const start = Date.parse("2026-11-01T07:00:00.000Z");
+    let curves = appendDayCurvePoint(undefined, "2026-11-01", {
+      fetchedAt: new Date(start).toISOString(),
+      totalTokens: 0,
+    });
+    for (let i = 1; i < 3_000; i++) {
+      curves = appendDayCurvePoint(curves, "2026-11-01", {
+        fetchedAt: new Date(start + i * 30_000).toISOString(),
+        totalTokens: i,
+      });
+    }
+
+    expect(curves.today.points).toHaveLength(50);
+    expect(curves.today.points.length).toBeLessThan(TOKEN_USAGE_DAY_CURVE_POINT_LIMIT);
   });
 });
 
@@ -348,7 +407,7 @@ describe("createTokenUsageCollector day curves", () => {
     };
   };
 
-  test("two successful polls on one day publish a snapshot whose today curve has both points", async () => {
+  test("two successful polls in one half-hour publish the latest point", async () => {
     const harness = makeDayCurveHarness();
     const collector = createTokenUsageCollector(harness.deps);
     await collector.pollNow();
@@ -357,10 +416,7 @@ describe("createTokenUsageCollector day curves", () => {
     const snapshot = parseTokenUsageSnapshot(JSON.parse(harness.writes.at(-1) ?? ""));
     expect(snapshot.dayCurves?.today).toEqual({
       providerDay: "2026-08-25",
-      points: [
-        { fetchedAt: "2026-08-25T17:00:00.000Z", totalTokens: 1000 },
-        { fetchedAt: "2026-08-25T17:15:00.000Z", totalTokens: 1000 },
-      ],
+      points: [{ fetchedAt: "2026-08-25T17:15:00.000Z", totalTokens: 1000 }],
     });
     expect(snapshot.dayCurves?.yesterday).toBeNull();
   });

@@ -15,7 +15,6 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   parseTokenUsageSnapshot,
-  TOKEN_USAGE_DAY_CURVE_POINT_LIMIT,
   TOKEN_USAGE_SAMPLE_LIMIT,
   type TokenUsageDayCurvePoint,
   type TokenUsageDayCurves,
@@ -165,25 +164,20 @@ const emptySnapshot = (providerDay: string): TokenUsageSnapshot => ({
 export const previousProviderDay = (day: string): string =>
   new Date(Date.parse(`${day}T00:00:00.000Z`) - 86_400_000).toISOString().slice(0, 10);
 
-const downsampleDayPoints = (points: readonly TokenUsageDayCurvePoint[]): TokenUsageDayCurvePoint[] => {
-  if (points.length <= TOKEN_USAGE_DAY_CURVE_POINT_LIMIT) {
-    return [...points];
-  }
-  const picked: TokenUsageDayCurvePoint[] = [];
-  const last = points.length - 1;
-  let previousIndex = -1;
-  for (let i = 0; i < TOKEN_USAGE_DAY_CURVE_POINT_LIMIT; i++) {
-    const index = Math.round((i * last) / (TOKEN_USAGE_DAY_CURVE_POINT_LIMIT - 1));
-    if (index === previousIndex) {
-      continue;
-    }
-    previousIndex = index;
-    const entry = points[index];
-    if (entry !== undefined) {
-      picked.push(entry);
+const HALF_HOUR_MS = 30 * 60_000;
+
+const retainLatestHalfHourPoints = (points: readonly TokenUsageDayCurvePoint[]): TokenUsageDayCurvePoint[] => {
+  const retained: TokenUsageDayCurvePoint[] = [];
+  for (const point of points) {
+    const bucket = Math.floor(Date.parse(point.fetchedAt) / HALF_HOUR_MS);
+    const tail = retained.at(-1);
+    if (tail !== undefined && Math.floor(Date.parse(tail.fetchedAt) / HALF_HOUR_MS) === bucket) {
+      retained[retained.length - 1] = point;
+    } else {
+      retained.push(point);
     }
   }
-  return picked;
+  return retained;
 };
 
 /** Append a sample to the day curves: same day extends with a running max; a new day rotates date-keyed. */
@@ -201,7 +195,7 @@ export const appendDayCurvePoint = (
     if (last !== undefined && point.fetchedAt <= last.fetchedAt) {
       return curves;
     }
-    const points = downsampleDayPoints([
+    const points = retainLatestHalfHourPoints([
       ...curves.today.points,
       { fetchedAt: point.fetchedAt, totalTokens: Math.max(point.totalTokens, last?.totalTokens ?? 0) },
     ]);
