@@ -4,7 +4,7 @@
 
 **Goal:** Replace the cumulative token sparkline with a midnight-to-midnight activity chart: hourly bars for today, a cyan partial current hour, and a muted yesterday line aligned by LA clock hour.
 
-**Architecture:** Keep the existing schema-v1 token sidecar and collector unchanged. Add a pure reducer that differences validated cumulative day curves into 24 stateful clock-hour buckets, then add pure geometry helpers that map those buckets into the existing 500 by 84 SVG box. Finally swap the rail's thin DOM renderer and CSS from cumulative paths to activity bars plus a segmented yesterday overlay.
+**Architecture:** Keep the existing schema-v1 token sidecar, accounting, and polling contracts. Retain day-curve observations in fixed 30-minute elapsed-time buckets so every covered hour boundary survives, then difference those curves into 24 stateful clock-hour buckets. Pure geometry maps the buckets into the existing 500 by 84 SVG box, and the rail renders activity bars plus a segmented yesterday overlay.
 
 **Tech Stack:** TypeScript 7, Bun 1.3.14 and `bun:test`, plain DOM/SVG in the Tauri webview, existing `Intl.DateTimeFormat` LA timezone helpers, biome and tsc through `bun run check`.
 
@@ -12,13 +12,14 @@
 
 ## Global Constraints
 
-- Work only on `wip/hourly-token-activity-spec`; the branch already contains the approved spec commit `7d27cd4`.
+- Work only on `wip/hourly-token-activity-impl` in the fresh linked worktree Drew requested; it begins at the approved spec/plan head.
 - Dealerboard has no ticket workflow. Do not search for, create, or update Linear tickets.
 - No backward-compatibility implementation is authorized. Preserve only the existing behavior where an optional missing `dayCurves` field yields totals/rates without a chart.
-- Do not modify `src/core/token-usage.ts`, `src/token-usage-snapshot.ts`, token accounting, `agentsview` invocation, sidecar schema/version, point limits, poll cadence, session/quota protocols, database code, or gestures.
+- The post-install amendment may modify only same-day curve retention in `src/core/token-usage.ts` and its descriptive comment in `src/token-usage-snapshot.ts`. Do not change token accounting, `agentsview` invocation, sidecar schema/version, the 96-point limit, poll cadence, session/quota protocols, database code, or gestures.
 - Keep the rail structurally outside the gesture system. The new chart has no event handlers, controls, tooltip, hover, or tap behavior.
 - Exact visual data contract: 24 LA wall-clock positions; today bars through the newest observed hour; cyan only for the partial current hour; yesterday as muted-blue segmented line; shared zero-based y-scale; `12a` / `12p` / `12a` labels; `yda` label; no projection or cumulative line.
 - Exact coverage contract: cumulative boundary reads use the newest point at or before the boundary only when no more than 30 minutes old; LA midnight is an exact synthetic zero; no interpolation across gaps.
+- Exact retention contract: keep the latest valid observation in each fixed 30-minute elapsed-time bucket; compact legacy same-bucket duplicates on append; normal/spring/fall days stay within the unchanged 96-point limit; never backfill an already-lost interval.
 - Exact DST contract: spring's nonexistent clock hour stays absent; fall's two repeated-hour intervals fold into one position and are unmeasured if either elapsed interval lacks coverage.
 - Tests exercise reducer output, structured geometry, and minimal DOM behavior. Do not assert a complete rendered SVG or large command/string with regexes.
 - TDD for every code task: add the behavioral test, run it and observe the expected failure, implement the minimum, rerun it, then run the complete focused file.
@@ -29,15 +30,18 @@
 
 | File | Responsibility | Tasks |
 | --- | --- | --- |
+| `src/core/token-usage.ts` | Collector day-curve retention without accounting, polling, or publication changes | 5 |
+| `src/token-usage-snapshot.ts` | Shared schema comment; schema version and point limit remain unchanged | 5 |
 | `app/src/token-usage.ts` | Existing rates plus new hourly reduction and pure SVG geometry; final rail-model switch removes cumulative sparkline code | 1, 2, 3 |
 | `app/src/rail.ts` | Thin DOM/SVG renderer and rail composition | 3 |
-| `app/styles.css` | Existing 84px-native chart footprint and activity colors | 3 |
+| `app/styles.css` | Existing 84px-native chart footprint, activity colors, and physical label tuning | 3, 6 |
+| `test/token-usage.test.ts` | Full-day, legacy-compaction, and DST retention behavior | 5 |
 | `test/strip-token-usage.test.ts` | Reducer and geometry behavioral coverage | 1, 2, 3 |
 | `test/strip-rail.test.ts` | Minimal renderer structure, labels, draw order, and signature coverage | 3 |
 | `docs/design.md` | Current rail contract | 4 |
 | `README.md` | User-facing feature and optional-integration wording | 4 |
 
-Task 1 adds the activity model alongside the still-live cumulative sparkline so the branch compiles between commits. Task 2 adds geometry alongside the old geometry. Task 3 performs the atomic model/renderer cutover and deletes every old sparkline type/helper in the same commit. Task 4 updates documentation and runs delivery gates.
+Task 1 adds the activity model alongside the still-live cumulative sparkline so the branch compiles between commits. Task 2 adds geometry alongside the old geometry. Task 3 performs the atomic model/renderer cutover and deletes every old sparkline type/helper in the same commit. Task 4 updates documentation and runs the initial delivery gates. The installed screenshot then triggered Drew's approved retention amendment: Task 5 repairs the collector's full-day coverage, and Task 6 tunes labels and repeats daemon/app/physical delivery.
 
 ---
 
@@ -1001,7 +1005,9 @@ Replace the `.rail-sparkline` comment and rules in `app/styles.css` with:
 }
 ```
 
-The 16px SVG text scales through the view box and is intentionally smaller than the prior 20px `yda <total>` label. If the physical display requires opacity or offset tuning, change only the CSS/label offsets and repeat Task 4's on-glass gate.
+The initial 16px SVG text is the first-install value. Task 6 supersedes it after
+the physical screenshot showed that it was too small and low-contrast at the
+target strip scale.
 
 - [ ] **Step 7: Run focused tests, typecheck, build the webview, and scan removed names**
 
@@ -1165,11 +1171,138 @@ git diff --check main...HEAD
 git diff --stat main...HEAD
 ```
 
-Expected: clean `wip/hourly-token-activity-spec`; four implementation and
-documentation commits after the spec and plan commits; no whitespace errors;
+Expected after the initial delivery: clean `wip/hourly-token-activity-impl`;
+four implementation and documentation commits after the spec and plan commits;
+no whitespace errors;
 diff limited to the seven files listed in the file map plus the already-committed
 spec and this plan. Reconcile source, committed, installed, and physical
 evidence separately in the handoff.
+
+---
+
+### Task 5: Retain truthful coverage across the full provider day
+
+**Files:**
+- Modify: `src/core/token-usage.ts` (replace repeated whole-array resampling with fixed 30-minute retention buckets)
+- Modify: `src/token-usage-snapshot.ts` (correct the point-limit comment without changing the limit or schema)
+- Test: `test/token-usage.test.ts` (full-day distribution, legacy compaction, running max, and 25-hour DST capacity)
+
+**Interfaces:**
+- Preserve `appendDayCurvePoint`, `TokenUsageDayCurves`, `TOKEN_USAGE_DAY_CURVE_POINT_LIMIT = 96`, the schema version, poll cadence, and publication shape.
+- A bucket is `Math.floor(Date.parse(fetchedAt) / (30 * 60_000))`; LA clock boundaries align with these absolute half-hour boundaries for the supported timezone.
+- Within one bucket retain only the latest observation. Before retention, clamp the new total against the prior newest total exactly as today so the cumulative curve stays non-decreasing.
+- Compact multiple legacy points that fall in the same bucket whenever a new same-day point is appended. Do not synthesize any point for an empty bucket and do not fill the large gap already lost by the old implementation.
+
+- [ ] **Step 1: Replace the weak downsampling test with a full-day failing regression**
+
+Keep the existing adjacency and stepped-back-clock tests. Update the same-bucket running-max test to require one retained latest point rather than two points in the same half-hour.
+
+Replace `downsampling keeps at most the limit and always the first and latest points` with a deterministic 24-hour test that appends one observation every 30 seconds from `2026-08-25T07:00:00.000Z` through `2026-08-26T06:59:30.000Z`. Assert the retained curve has exactly 48 points and these hand-derived timestamps:
+
+```ts
+expect(points[0]?.fetchedAt).toBe("2026-08-25T07:29:30.000Z");
+expect(points[1]?.fetchedAt).toBe("2026-08-25T07:59:30.000Z");
+expect(points[24]?.fetchedAt).toBe("2026-08-25T19:29:30.000Z");
+expect(points[47]?.fetchedAt).toBe("2026-08-26T06:59:30.000Z");
+```
+
+Assert every adjacent retained timestamp differs by exactly 30 minutes. This test must fail against the current resampler, which produces 96 edge-clustered points and a 1392.5-minute middle gap.
+
+- [ ] **Step 2: Add legacy-compaction and fall-DST capacity failing tests**
+
+Add a same-day curve fixture containing multiple points in an early half-hour bucket and multiple points in a later bucket. Append one new point and assert only the latest point from each populated bucket remains, the chronological gap remains absent rather than backfilled, and the new point remains newest.
+
+Add a 25-hour fall-DST test by appending 3,000 observations at 30-second intervals starting `2026-11-01T07:00:00.000Z`. Assert exactly 50 half-hour buckets remain and the result stays below `TOKEN_USAGE_DAY_CURVE_POINT_LIMIT` without changing that constant.
+
+- [ ] **Step 3: Run the focused test and confirm RED**
+
+Run: `bun test test/token-usage.test.ts`
+
+Expected: the new full-day, same-bucket, legacy-compaction, and/or fall-day expectations fail because `downsampleDayPoints` retains edge clusters rather than one latest point per fixed bucket. Existing collector behavior tests remain green.
+
+- [ ] **Step 4: Implement fixed retention buckets**
+
+Replace `downsampleDayPoints` with a small domain-named helper that walks chronological points, compares each point's fixed half-hour bucket with the retained tail, replaces the tail for the same bucket, and appends for a new bucket. Keep the new point's existing running-max normalization before compaction.
+
+Do not add configuration, a migration, interpolation, historical backfill, another persisted field, or a compatibility branch. The already-validated curve and collector clock guarantee canonical increasing timestamps.
+
+Update only the stale comment above `TOKEN_USAGE_DAY_CURVE_POINT_LIMIT`; the exported value remains 96.
+
+- [ ] **Step 5: Verify and commit Task 5**
+
+Run:
+
+```bash
+bun test test/token-usage.test.ts
+bun run typecheck
+git diff --check
+```
+
+Then use exact-path staging and commit:
+
+```bash
+git add src/core/token-usage.ts src/token-usage-snapshot.ts test/token-usage.test.ts
+git commit -m "fix(core): retain token curves across the full day" \
+  -m "Replace recursive whole-array resampling with one latest observation per fixed 30-minute bucket. Preserve hourly boundary coverage across normal and DST days while keeping schema v1, the 96-point bound, accounting, and polling unchanged." \
+  -m "Add a 24-hour regression that reproduces the edge-clustering failure, plus legacy compaction and 25-hour capacity coverage. Lost historical intervals remain missing rather than fabricated."
+```
+
+---
+
+### Task 6: Tune chart labels and repeat installed delivery
+
+**Files:**
+- Modify: `app/styles.css` (label legibility only; footprint and data geometry unchanged)
+- Verify only: Task 5 collector files and all chart files/tests
+
+**Interfaces:**
+- The user-supplied installed screenshot is the visual RED: the three axis labels are present but too small and low-contrast at 2560 by 720.
+- Change only `.token-activity-axis, .token-activity-yda`: use `fill: #cbd5e1`, `font-size: 20px`, and `font-weight: 600`.
+- Do not change the 500 by 84 view box, plot bounds, bar width, series colors, opacity, layout height, labels, or interaction behavior.
+
+- [ ] **Step 1: Apply the minimal CSS tuning and build the app**
+
+Use the supplied screenshot as the pre-change physical failure evidence. Apply the exact three label declarations above; do not add a brittle source-text test for CSS declarations.
+
+Run:
+
+```bash
+bun run build:app
+bun test test/token-usage.test.ts test/strip-token-usage.test.ts test/strip-rail.test.ts
+bun run typecheck
+```
+
+- [ ] **Step 2: Commit the visual tuning**
+
+```bash
+git add app/styles.css
+git commit -m "fix(app): improve token activity label legibility" \
+  -m "Increase the sparse clock and yesterday labels to the prior chart's readable scale, strengthen their neutral contrast, and keep the existing 500 by 84 footprint and non-interactive rail boundary unchanged." \
+  -m "The installed 2560 by 720 screenshot supplied after the first install is the visual regression evidence; no brittle CSS source-string test is added."
+```
+
+- [ ] **Step 3: Run the complete source gate**
+
+Run: `bun run check`
+
+Record exact pass/fail/assertion counts from this post-amendment run.
+
+- [ ] **Step 4: Install the amended daemon and app**
+
+Run:
+
+```bash
+bun scripts/install-local.ts
+bun run install:app
+```
+
+Verify the daemon is running the newly built binary, the app is running from `/Applications/Dealerboard.app`, and a timestamp-only sidecar inspection shows no duplicate retained half-hour buckets after the next successful poll. Do not print token totals, credentials, prompts, session titles, project names, or account identities.
+
+- [ ] **Step 5: Repeat physical acceptance**
+
+Ask Drew to inspect the installed strip without requiring a captured identity-bearing screenshot. Confirm current/future bar treatment, yesterday overlay when retained coverage permits it, readable labels, unchanged layout, and inert rail gestures separately.
+
+State explicitly that already-destroyed history cannot reappear: coverage fills forward after the daemon update, and a complete yesterday overlay requires one fully collected day.
 
 ---
 
@@ -1180,6 +1313,8 @@ evidence separately in the handoff.
 | Reducer contract implemented | Focused Task 1 tests: standard day, tolerance edges, gap, adjacency, zero, spring/fall DST |
 | SVG geometry implemented | Focused Task 2 structured rectangle/segment/label tests |
 | Rail renderer implemented | Focused Task 3 DOM tests, typecheck, `build:app`, removed-name scan |
+| Full-day retention repaired | Task 5 24-hour, legacy-compaction, and 25-hour DST tests; timestamp-only installed sidecar check |
+| Labels legible | User-supplied physical RED, Task 6 app build, and Drew's post-install observation |
 | Source branch healthy | Fresh `bun run check` with exact test and failure count |
 | Installed app updated | Successful `bun run install:app` receipt and relaunched process |
 | Design works on target | Physical 2560 by 720 observations for legibility, layout, overlay, and non-interaction |

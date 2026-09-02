@@ -33,10 +33,33 @@ unchanged.
   adjacent previous calendar day; they do not retain the preceding rolling
   comparison window.
 - Adding hover, tap, drill-down, tooltips, or chart controls.
-- Changing token accounting, `agentsview` polling, curve retention,
-  downsampling, snapshot schema, or sidecar publication.
+- Changing token accounting, `agentsview` polling, snapshot schema, point
+  limits, or sidecar publication.
 - Adding provider-level token attribution.
 - Making historical gaps look like measured zero usage.
+
+## Post-install retention amendment
+
+The first installed physical check exposed a pre-existing retention defect,
+not a renderer defect. Repeatedly applying whole-array uniform downsampling to
+an already-downsampled 96-point curve retained roughly half of the points near
+midnight and half near the newest sample, progressively erasing the middle of
+the day. A 24-hour synthetic run reproduced the live first-edge/last-edge
+shape and its approximately 23-hour interior gap.
+
+Drew approved a narrow collector amendment: retain the latest observation in
+each fixed 30-minute elapsed-time bucket. A normal day then retains 48 points,
+spring DST retains 46, and fall DST retains 50, all below the unchanged
+96-point schema bound. LA hour boundaries align with these absolute half-hour
+buckets, so the reducer receives a recent observation before every covered
+hour boundary without interpolation. Missing collection buckets remain
+missing.
+
+The amendment does not backfill or fabricate history already destroyed by the
+old downsampler. Existing gaps remain visibly unmeasured while new coverage
+fills forward. The physical check also authorizes setting the sparse chart
+labels to `20px`, weight `600`, and neutral `#cbd5e1` inside the unchanged 500
+by 84 view box.
 
 ## Visual contract
 
@@ -147,11 +170,11 @@ An hourly value is the non-negative difference between the cumulative total at
 the interval's end and its cumulative total at the interval's start.
 
 For a boundary, use the newest point at or before that instant only when it is
-no more than 30 minutes old. The 30-minute tolerance is twice the curve's
-nominal 15-minute retained resolution, allowing normal downsampling jitter
-without treating a collector outage as coverage. Do not use a point after the
-boundary and do not interpolate across a gap; either would assign tokens to an
-hour that was not observed.
+no more than 30 minutes old. The tolerance matches the collector's fixed
+30-minute retention buckets, allowing normal polling jitter without treating
+a collector outage as coverage. Do not use a point after the boundary and do
+not interpolate across a gap; either would assign tokens to an hour that was
+not observed.
 
 LA midnight has an exact synthetic cumulative total of zero because the
 provider-day total resets at that boundary. Other boundaries require a retained
@@ -225,27 +248,29 @@ panel space at the 2560 by 720 target resolution.
 
 Expected implementation surface:
 
+- `src/core/token-usage.ts`: fixed 30-minute day-curve retention buckets.
+- `src/token-usage-snapshot.ts`: unchanged schema limit with accurate retention
+  documentation.
 - `app/src/token-usage.ts`: hourly reduction, activity model, and pure geometry.
 - `app/src/rail.ts`: SVG activity renderer and token-section wiring.
 - `app/styles.css`: domain-named activity chart styling within the current
   dimensions.
 - `test/strip-token-usage.test.ts`: reduction and geometry behavior.
+- `test/token-usage.test.ts`: full-day and DST retention coverage.
 - `test/strip-rail.test.ts`: minimal DOM contract and render-signature coverage.
 - `docs/design.md` and `README.md`: replace cumulative trend/sparkline wording
   with hourly activity comparison wording.
 
 The following are deliberately unchanged:
 
-- `src/core/token-usage.ts` collector behavior;
-- `src/token-usage-snapshot.ts` schema, validation, and point limits;
+- `src/token-usage-snapshot.ts` schema, validation, and point limit;
 - token accounting and `agentsview` command invocation;
 - app/daemon sidecar read cadence; and
 - session snapshot, quota snapshot, protocol, database, and gesture code.
 
-If implementation proves that the existing 96-point curve cannot support the
-coverage contract above, stop and bring the evidence back to Drew. Do not
-silently change collection, retention, or snapshot compatibility under this
-spec.
+The collector amendment is limited to how valid same-day points are retained.
+It must not change token calculation, polling, publication, schema version, or
+the 96-point compatibility bound.
 
 ## Testing
 
@@ -301,7 +326,8 @@ verify on the 2560 by 720 strip display with synthetic or sanitized data that:
    hour and scaled with today; absent data is not connected or invented.
 5. Total, `/hr`, `/10m`, trend arrows, stale opacity, unread count, quota
    panels, layout footprint, and interaction behavior remain unchanged.
-6. No persisted schema, collector, protocol, or polling change is introduced.
+6. No persisted schema, point-limit, protocol, or polling change is introduced;
+   the collector changes only its same-day retention compaction.
 7. Focused tests, `bun run check`, installed-app smoke, and physical strip
    legibility all pass before completion is claimed.
 
