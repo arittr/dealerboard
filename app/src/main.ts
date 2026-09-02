@@ -56,7 +56,7 @@ import { createDismissals, flickRemoves } from "./dismissals";
  * different session when the long-press sheet opens, the flick lands, or
  * the trailing click settles the tap.
  */
-import { capturePendingPress, type PendingPress, resolvePendingPress } from "./gesture-target";
+import { capturePendingPress, type PendingPress, resolveBoardClick, resolvePendingPress } from "./gesture-target";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -502,19 +502,17 @@ const flashCard = (card: HTMLElement): void => {
 };
 
 /**
- * The clean tap's settlement. The click carries no capture of its own — its
- * target may even be a card that re-rendered into the pressed one's place
- * mid-stroke — so it settles the press captured at pointer-down: the
- * pressed identity re-resolved against the current cards (left the grid →
- * cancel, never retarget), viewed with the pointer-down watermark.
+ * The clean tap's settlement prefers the pointer-down capture: the pressed
+ * identity is re-resolved against the current cards (left the grid → cancel,
+ * never retarget), viewed with the pointer-down watermark. WebKit can deliver
+ * a genuine click without the matching pointer release; only then does the
+ * click target provide the identity and watermark instead.
  */
-const onBoardClick = (): void => {
-  const pending = pressAwaitingClick;
+const onBoardClick = (event: MouseEvent): void => {
+  const pointerPress = pressAwaitingClick;
   pressAwaitingClick = null;
-  if (pending === null) {
-    return;
-  }
-  const settled = resolvePendingPress(currentCards, pending);
+  const clickPress = pointerPress === null ? cardFromPointerEvent(event) : null;
+  const settled = resolveBoardClick(currentCards, pointerPress, clickPress);
   if (settled === null) {
     return;
   }

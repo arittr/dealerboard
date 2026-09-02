@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PlacedCard } from "../app/src/board";
-import { capturePendingPress, resolvePendingPress } from "../app/src/gesture-target";
+import { capturePendingPress, resolveBoardClick, resolvePendingPress } from "../app/src/gesture-target";
 import type { ProjectedSession } from "../src/protocol";
 
 const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
@@ -111,5 +111,18 @@ describe("resolvePendingPress", () => {
   test("a pressed card that became display-only cancels", () => {
     const pending = capturePendingPress([card()], 0, point);
     expect(resolvePendingPress([card({}, { displayOnly: true })], pending!)).toBeNull();
+  });
+});
+
+describe("resolveBoardClick", () => {
+  test("a click with no saved pointer press settles the clicked card", () => {
+    const cards = [card({ unreadSince: "2026-08-26T05:00:00.000Z" })];
+    const clickPress = capturePendingPress(cards, 0, { x: 10, y: 20 });
+
+    expect(resolveBoardClick(cards, null, clickPress)).toEqual({
+      index: 0,
+      card: cards[0]!,
+      watermark: { unreadSince: "2026-08-26T05:00:00.000Z" },
+    });
   });
 });
