@@ -870,8 +870,9 @@ body[data-fullscreen] #rail {
 }
 .token-activity-axis,
 .token-activity-yda {
-  fill: #94a3b8;
-  font-size: 16px;
+  fill: #cbd5e1;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .rail-unread {
