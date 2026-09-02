@@ -292,6 +292,14 @@ describe("token block layout", () => {
     });
   });
 
+  test("places yda at the last rendered endpoint when yesterday ends early", () => {
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
+      const label = descendants(root).find((node) => node.attributes["class"] === "token-activity-yda");
+      expect(label?.attributes["x"]).toBe("31.25");
+    });
+  });
+
   test("today-only activity renders no yesterday line or label", () => {
     withFakeDocument((root) => {
       const todayOnly = activity();

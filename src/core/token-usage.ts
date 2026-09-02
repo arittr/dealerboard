@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   parseTokenUsageSnapshot,
+  TOKEN_USAGE_DAY_CURVE_POINT_LIMIT,
   TOKEN_USAGE_SAMPLE_LIMIT,
   type TokenUsageDayCurvePoint,
   type TokenUsageDayCurves,
@@ -178,21 +179,35 @@ const retainLatestHalfHourPoints = (points: readonly TokenUsageDayCurvePoint[]):
       retained.push(point);
     }
   }
-  return retained;
+  return retained.slice(-TOKEN_USAGE_DAY_CURVE_POINT_LIMIT);
 };
 
 const recoverActiveDayCurve = (
-  curves: TokenUsageDayCurves | undefined,
+  curves: TokenUsageDayCurves,
   day: string,
   samples: readonly TokenUsageSample[],
-): TokenUsageDayCurves | undefined => {
-  if (curves === undefined || curves.today.providerDay !== day) {
+): TokenUsageDayCurves => {
+  if (curves.today.providerDay !== day) {
     return curves;
   }
+  const authoritativePoints = curves.today.points;
+  const lastAuthoritativePoint = authoritativePoints.at(-1);
+  // Recovery may fill historical buckets only when a retained sample fits
+  // beneath the next authoritative total and before the accepted endpoint.
   const ordered = [
-    ...curves.today.points,
+    ...authoritativePoints,
     ...samples
-      .filter((sample) => sample.providerDay === day)
+      .filter((sample) => {
+        if (
+          sample.providerDay !== day ||
+          lastAuthoritativePoint === undefined ||
+          sample.fetchedAt >= lastAuthoritativePoint.fetchedAt
+        ) {
+          return false;
+        }
+        const nextAuthoritativePoint = authoritativePoints.find((point) => point.fetchedAt >= sample.fetchedAt);
+        return nextAuthoritativePoint !== undefined && sample.totalTokens <= nextAuthoritativePoint.totalTokens;
+      })
       .map(({ fetchedAt, totalTokens }) => ({ fetchedAt, totalTokens })),
   ].sort((left, right) => left.fetchedAt.localeCompare(right.fetchedAt) || left.totalTokens - right.totalTokens);
   const monotone: TokenUsageDayCurvePoint[] = [];
@@ -366,11 +381,17 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
         markFailed();
       } else {
         const fetchedAt = now();
-        const samples = [...state.snapshot.samples, { fetchedAt, totalTokens: total, providerDay }].slice(
-          -TOKEN_USAGE_SAMPLE_LIMIT,
-        );
-        const recoveredCurves = recoverActiveDayCurve(state.snapshot.dayCurves, providerDay, samples);
-        const dayCurves = appendDayCurvePoint(recoveredCurves, providerDay, { fetchedAt, totalTokens: total });
+        const appendedCurves = appendDayCurvePoint(state.snapshot.dayCurves, providerDay, {
+          fetchedAt,
+          totalTokens: total,
+        });
+        // Apply the curve's clock-order guard before the observation can join
+        // either the retained sample ring or historical recovery.
+        const observationAccepted = appendedCurves !== state.snapshot.dayCurves;
+        const samples = observationAccepted
+          ? [...state.snapshot.samples, { fetchedAt, totalTokens: total, providerDay }].slice(-TOKEN_USAGE_SAMPLE_LIMIT)
+          : state.snapshot.samples;
+        const dayCurves = recoverActiveDayCurve(appendedCurves, providerDay, state.snapshot.samples);
         state = {
           snapshot: {
             schemaVersion: 1,

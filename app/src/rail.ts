@@ -115,7 +115,7 @@ const tokenActivityBlock = (activity: TokenActivityChartModel): HTMLElement => {
   if (endpoint !== null) {
     const label = document.createElementNS(SVG_NAMESPACE, "text");
     label.setAttribute("class", "token-activity-yda");
-    label.setAttribute("x", "498");
+    label.setAttribute("x", endpoint.x.toFixed(2));
     label.setAttribute("y", String(Math.max(16, endpoint.y - 6)));
     label.setAttribute("text-anchor", "end");
     label.textContent = "yda";
