@@ -1,6 +1,6 @@
 /**
  * The strip's fixed right rail: the token block (total over
- * rates-beside-sparkline), the unread row carrying the daemon-health dot (red
+ * rates beside the hourly activity comparison), the unread row carrying the daemon-health dot (red
  * plus OFFLINE when degraded), the quota zone (per-provider quota panels:
  * binding window, tag pill, bar). Rebuilt
  * wholesale on each render — the rail is small and has no CSS animations to
@@ -21,13 +21,15 @@ import {
 } from "./quota";
 import {
   formatTokensCompact,
-  SPARKLINE_VIEWBOX,
-  type SparklineModel,
-  sparklineEndpoint,
-  sparklineFillPoints,
-  sparklinePolylinePoints,
+  TOKEN_ACTIVITY_TIME_LABELS,
+  TOKEN_ACTIVITY_VIEWBOX,
+  type TokenActivityChartModel,
+  type TokenActivityPoint,
   type TokenUsageRailModel,
   type TokenUsageRateLine,
+  tokenActivityBarRects,
+  tokenActivityLineEndpoint,
+  tokenActivityLineSegments,
 } from "./token-usage";
 
 export type RailModel = {
@@ -82,58 +84,54 @@ const rateSpan = (line: TokenUsageRateLine, unit: string): HTMLSpanElement => {
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
-const sparkPolyline = (points: string, stroke: string, strokeOpacity?: string): SVGElement => {
-  const polyline = document.createElementNS(SVG_NAMESPACE, "polyline");
-  polyline.setAttribute("fill", "none");
-  polyline.setAttribute("points", points);
-  polyline.setAttribute("stroke", stroke);
-  if (strokeOpacity !== undefined) {
-    polyline.setAttribute("stroke-opacity", strokeOpacity);
-  }
-  polyline.setAttribute("stroke-width", "2");
-  polyline.setAttribute("stroke-linejoin", "round");
-  return polyline;
-};
+const activityPoints = (points: readonly TokenActivityPoint[]): string =>
+  points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
 
-/** Day-over-day sparkline: faint fill under today's curve, dim yesterday line with its yda label, bright today line, endpoint dot. */
-const sparklineBlock = (sparkline: SparklineModel): HTMLElement => {
+const tokenActivityBlock = (activity: TokenActivityChartModel): HTMLElement => {
   const block = document.createElement("div");
-  block.className = "rail-sparkline";
+  block.className = "rail-token-activity";
   const svg = document.createElementNS(SVG_NAMESPACE, "svg");
-  // Matched-aspect geometry: the 500x84 viewBox scales uniformly (no
-  // preserveAspectRatio) so strokes and the endpoint circle stay true.
-  svg.setAttribute("viewBox", `0 0 ${SPARKLINE_VIEWBOX.width} ${SPARKLINE_VIEWBOX.height}`);
-  const fill = sparklineFillPoints(sparkline.today.points);
-  if (fill !== null) {
-    const polygon = document.createElementNS(SVG_NAMESPACE, "polygon");
-    polygon.setAttribute("fill", "rgba(232,238,247,0.08)");
-    polygon.setAttribute("points", fill);
-    svg.append(polygon);
-  }
-  if (sparkline.yesterday !== null) {
-    svg.append(sparkPolyline(sparklinePolylinePoints(sparkline.yesterday.points), "#94A3B8", "0.6"));
-  }
-  svg.append(sparkPolyline(sparklinePolylinePoints(sparkline.today.points), "#E8EEF7"));
-  const endpoint = sparklineEndpoint(sparkline.today.points);
-  if (endpoint !== null) {
-    const dot = document.createElementNS(SVG_NAMESPACE, "circle");
-    dot.setAttribute("cx", endpoint.cx.toFixed(2));
-    dot.setAttribute("cy", endpoint.cy.toFixed(2));
-    dot.setAttribute("r", "4");
-    dot.setAttribute("fill", "#E8EEF7");
-    svg.append(dot);
-  }
-  if (sparkline.yesterday !== null) {
+  svg.setAttribute("viewBox", `0 0 ${TOKEN_ACTIVITY_VIEWBOX.width} ${TOKEN_ACTIVITY_VIEWBOX.height}`);
+
+  for (const axis of TOKEN_ACTIVITY_TIME_LABELS) {
     const label = document.createElementNS(SVG_NAMESPACE, "text");
-    // The label baseline is y=48 of the 84px box, right-anchored at x=498.
-    label.setAttribute("x", "498");
-    label.setAttribute("y", "48");
-    label.setAttribute("text-anchor", "end");
-    label.setAttribute("font-size", "20");
-    label.setAttribute("fill", "#94A3B8");
-    label.textContent = sparkline.yesterday.label;
+    label.setAttribute("class", "token-activity-axis");
+    label.setAttribute("x", String(axis.x));
+    label.setAttribute("y", "82");
+    label.setAttribute("text-anchor", axis.anchor);
+    label.textContent = axis.text;
     svg.append(label);
   }
+
+  const segments = tokenActivityLineSegments(activity);
+  for (const segment of segments) {
+    const line = document.createElementNS(SVG_NAMESPACE, "polyline");
+    line.setAttribute("class", "token-activity-yesterday");
+    line.setAttribute("points", activityPoints(segment));
+    svg.append(line);
+  }
+
+  const endpoint = tokenActivityLineEndpoint(segments);
+  if (endpoint !== null) {
+    const label = document.createElementNS(SVG_NAMESPACE, "text");
+    label.setAttribute("class", "token-activity-yda");
+    label.setAttribute("x", "498");
+    label.setAttribute("y", String(Math.max(16, endpoint.y - 6)));
+    label.setAttribute("text-anchor", "end");
+    label.textContent = "yda";
+    svg.append(label);
+  }
+
+  for (const bar of tokenActivityBarRects(activity)) {
+    const rect = document.createElementNS(SVG_NAMESPACE, "rect");
+    rect.setAttribute("class", bar.current ? "token-activity-bar current" : "token-activity-bar");
+    rect.setAttribute("x", bar.x.toFixed(2));
+    rect.setAttribute("y", bar.y.toFixed(2));
+    rect.setAttribute("width", bar.width.toFixed(2));
+    rect.setAttribute("height", bar.height.toFixed(2));
+    svg.append(rect);
+  }
+
   block.append(svg);
   return block;
 };
@@ -154,8 +152,8 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   rates.className = "tokens-rate";
   rates.append(rateSpan(model.hour, "hr"), rateSpan(model.tenMin, "10m"));
   flow.append(rates);
-  if (model.sparkline !== null) {
-    flow.append(sparklineBlock(model.sparkline));
+  if (model.activity !== null) {
+    flow.append(tokenActivityBlock(model.activity));
   }
   section.append(today, flow);
   return section;

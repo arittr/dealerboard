@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { QuotaAccountMeterModel, QuotaPanelModel } from "../app/src/quota";
 import { quotaRenderModel, type RailModel, railRenderSignature, renderRail } from "../app/src/rail";
-import type { TokenUsageRailModel } from "../app/src/token-usage";
+import type { HourlyActivityBucket, TokenUsageRailModel } from "../app/src/token-usage";
 import { descendants, hasClass, renderedText, withFakeDocument } from "./support/fake-dom";
 
 const NOW = Date.parse("2026-08-25T20:00:00Z");
@@ -205,30 +205,29 @@ test("groups Claude account meters in one stack after the shared provider header
   });
 });
 
+const emptyActivity = (state: "future" | "unmeasured" = "future"): HourlyActivityBucket[] =>
+  Array.from({ length: 24 }, (_, hour) => ({ hour, state, tokens: null }));
+
+const activity = (): NonNullable<Extract<TokenUsageRailModel, { state: "ok" | "stale" }>["activity"]> => {
+  const today = emptyActivity();
+  today[0] = { hour: 0, state: "measured", tokens: 10 };
+  today[1] = { hour: 1, state: "current", tokens: 20 };
+  const yesterday = emptyActivity("unmeasured");
+  yesterday[0] = { hour: 0, state: "measured", tokens: 5 };
+  yesterday[1] = { hour: 1, state: "measured", tokens: 15 };
+  return { today, yesterday, yMax: 20 };
+};
+
 const visibleTokens = (): Extract<TokenUsageRailModel, { state: "ok" | "stale" }> => ({
   state: "ok",
   totalTokens: 562_700_000,
   hour: { tokens: 31_100_000, trend: "up" },
   tenMin: { tokens: 12_200_000, trend: "up" },
-  sparkline: {
-    today: {
-      points: [
-        { x: 0, y: 0 },
-        { x: 0.65, y: 0.88 },
-      ],
-    },
-    yesterday: {
-      points: [
-        { x: 0, y: 0 },
-        { x: 1, y: 1 },
-      ],
-      label: "yda 641M",
-    },
-  },
+  activity: activity(),
 });
 
 describe("token block layout", () => {
-  test("stacks the two rates in a column beside the sparkline, no separator", () => {
+  test("stacks the two rates in a column beside the activity chart, no separator", () => {
     withFakeDocument((root) => {
       renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
       expect(root.children.map((node) => node.className)).toEqual([
@@ -239,7 +238,7 @@ describe("token block layout", () => {
       const tokens = descendants(root).find((node) => node.className === "rail-tokens");
       expect(tokens?.children.map((node) => node.className)).toEqual(["tokens-today", "tokens-flow"]);
       const flow = tokens?.children[1];
-      expect(flow?.children.map((node) => node.className)).toEqual(["tokens-rate", "rail-sparkline"]);
+      expect(flow?.children.map((node) => node.className)).toEqual(["tokens-rate", "rail-token-activity"]);
       expect(flow?.children[0]?.children).toHaveLength(2);
       expect(descendants(root).some((node) => node.className === "tokens-rate-sep")).toBe(false);
       expect(renderedText(root)).toContain("562.7M today");
@@ -248,24 +247,69 @@ describe("token block layout", () => {
     });
   });
 
-  test("without day curves the row renders the rates column alone", () => {
+  test("renders today bars over yesterday segments in the fixed chart box", () => {
     withFakeDocument((root) => {
-      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), sparkline: null } }));
-      const flow = descendants(root).find((node) => node.className === "tokens-flow");
-      expect(flow?.children.map((node) => node.className)).toEqual(["tokens-rate"]);
+      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
+      const nodes = descendants(root);
+      const chart = nodes.find((node) => hasClass(node, "rail-token-activity"));
+      const svg = nodes.find((node) => node.tagName === "svg");
+      const svgHasClass = (node: (typeof nodes)[number], name: string): boolean =>
+        node.attributes["class"]?.split(/\s+/u).includes(name) ?? false;
+      const yesterday = nodes.filter((node) => svgHasClass(node, "token-activity-yesterday"));
+      const bars = nodes.filter((node) => svgHasClass(node, "token-activity-bar"));
+      expect(chart).toBeDefined();
+      expect(chart?.listeners).toEqual({});
+      expect(svg?.attributes["viewBox"]).toBe("0 0 500 84");
+      expect(yesterday).toHaveLength(1);
+      expect(bars).toHaveLength(2);
+      expect(svgHasClass(bars[1]!, "current")).toBe(true);
+      if (svg === undefined || yesterday[0] === undefined || bars[0] === undefined) {
+        throw new Error("expected activity SVG, yesterday segment, and today bar");
+      }
+      expect(svg.children.indexOf(yesterday[0])).toBeLessThan(svg.children.indexOf(bars[0]));
     });
   });
 
-  test("the yda label and viewBox carry the fixed 500x84 geometry", () => {
+  test("renders sparse clock labels plus yda and omits the chart without activity", () => {
     withFakeDocument((root) => {
       renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
-      const svg = descendants(root).find((node) => node.tagName === "svg");
-      expect(svg?.attributes["viewBox"]).toBe("0 0 500 84");
-      const label = descendants(root).find((node) => node.tagName === "text");
-      expect(label?.attributes["x"]).toBe("498");
-      expect(label?.attributes["y"]).toBe("48");
-      expect(label?.textContent).toBe("yda 641M");
+      const svgHasClass = (node: ReturnType<typeof descendants>[number], name: string): boolean =>
+        node.attributes["class"]?.split(/\s+/u).includes(name) ?? false;
+      expect(
+        descendants(root)
+          .filter((node) => svgHasClass(node, "token-activity-axis"))
+          .map((node) => node.textContent),
+      ).toEqual(["12a", "12p", "12a"]);
+      expect(
+        descendants(root)
+          .filter((node) => svgHasClass(node, "token-activity-yda"))
+          .map((node) => node.textContent),
+      ).toEqual(["yda"]);
     });
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), activity: null } }));
+      expect(descendants(root).some((node) => hasClass(node, "rail-token-activity"))).toBe(false);
+    });
+  });
+
+  test("today-only activity renders no yesterday line or label", () => {
+    withFakeDocument((root) => {
+      const todayOnly = activity();
+      todayOnly.yesterday = null;
+      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), activity: todayOnly } }));
+      const svgClasses = descendants(root).map((node) => node.attributes["class"] ?? "");
+      expect(svgClasses.some((value) => value.includes("token-activity-yesterday"))).toBe(false);
+      expect(svgClasses.some((value) => value.includes("token-activity-yda"))).toBe(false);
+    });
+  });
+
+  test("the rail signature tracks activity coverage and the current marker", () => {
+    const before = visibleTokens();
+    const afterActivity = activity();
+    afterActivity.today[2] = { hour: 2, state: "current", tokens: 4 };
+    afterActivity.today[1] = { hour: 1, state: "measured", tokens: 20 };
+    const after = { ...visibleTokens(), activity: afterActivity };
+    expect(railRenderSignature(model({ tokens: after }))).not.toBe(railRenderSignature(model({ tokens: before })));
   });
 });
 

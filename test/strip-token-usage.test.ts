@@ -4,14 +4,9 @@ import {
   formatTokensCompact,
   type HourlyActivityBucket,
   laDayBoundsMs,
-  reduceSparkline,
   reduceTokenActivity,
   reduceTokenUsageRead,
-  SPARKLINE_VIEWBOX,
   STALE_TOKEN_USAGE_AGE_MS,
-  sparklineEndpoint,
-  sparklineFillPoints,
-  sparklinePolylinePoints,
   TOKEN_ACTIVITY_TIME_LABELS,
   TOKEN_ACTIVITY_VIEWBOX,
   tokenActivityBarRects,
@@ -166,6 +161,44 @@ describe("reduceTokenUsageRead", () => {
     const oldFetch = iso(NOW - STALE_TOKEN_USAGE_AGE_MS - 1);
     expect(reduceTokenUsageRead(read(snapshot({ fetchedAt: oldFetch })), NOW)).toMatchObject({ state: "stale" });
     expect(reduceTokenUsageRead(read(snapshot()), NOW)).toMatchObject({ state: "ok" });
+  });
+
+  test("publishes hourly activity on the rail model", () => {
+    const value = snapshot({
+      dayCurves: {
+        today: curve(DAY, [
+          ["2026-08-20T07:00:00.000Z", 0],
+          ["2026-08-20T08:00:00.000Z", 10],
+          ["2026-08-20T08:30:00.000Z", 15],
+        ]),
+        yesterday: null,
+      },
+    });
+    const model = reduceTokenUsageRead(read(value), NOW);
+    if (model.state === "hidden") throw new Error("expected a rendered token model");
+    expect(model.activity?.today[0]).toEqual(measured(0, 10));
+    expect("sparkline" in model).toBe(false);
+  });
+
+  test("keeps existing missing-curve and stale last-good behavior", () => {
+    const withoutCurves = reduceTokenUsageRead(read(snapshot()), NOW);
+    if (withoutCurves.state === "hidden") throw new Error("expected a rendered token model");
+    expect(withoutCurves.activity).toBeNull();
+
+    const staleValue = snapshot({
+      unavailable: true,
+      dayCurves: {
+        today: curve(DAY, [
+          ["2026-08-20T07:00:00.000Z", 0],
+          ["2026-08-20T08:00:00.000Z", 10],
+        ]),
+        yesterday: null,
+      },
+    });
+    const stale = reduceTokenUsageRead(read(staleValue), NOW);
+    expect(stale.state).toBe("stale");
+    if (stale.state === "hidden") throw new Error("expected retained last-good activity");
+    expect(stale.activity).not.toBeNull();
   });
 });
 
@@ -458,84 +491,5 @@ describe("token activity SVG geometry", () => {
       { text: "12p", x: 250, anchor: "middle" },
       { text: "12a", x: 500, anchor: "end" },
     ]);
-  });
-});
-
-describe("reduceSparkline", () => {
-  const snapshotWith = (dayCurves: unknown) => ({ ...snapshot(), dayCurves }) as never;
-
-  test("no curves → no sparkline; empty today with no yesterday → no sparkline", () => {
-    expect(reduceSparkline(snapshot())).toBeNull();
-    expect(
-      reduceSparkline(snapshotWith({ today: { providerDay: "2026-08-25", points: [] }, yesterday: null })),
-    ).toBeNull();
-  });
-
-  test("today normalizes x by elapsed day fraction and y by the shared max", () => {
-    const model = reduceSparkline(
-      snapshotWith({
-        today: {
-          providerDay: "2026-08-25",
-          points: [
-            { fetchedAt: "2026-08-25T07:00:00.000Z", totalTokens: 0 },
-            { fetchedAt: "2026-08-25T19:00:00.000Z", totalTokens: 50 },
-          ],
-        },
-        yesterday: {
-          providerDay: "2026-08-24",
-          points: [{ fetchedAt: "2026-08-25T06:00:00.000Z", totalTokens: 100 }],
-        },
-      }),
-    );
-    expect(model).not.toBeNull();
-    expect(model?.today.points.at(-1)?.x).toBeCloseTo(0.5, 5); // noon of a 24h day
-    expect(model?.today.points.at(-1)?.y).toBeCloseTo(0.5, 5); // shared max is yesterday's 100
-    expect(model?.yesterday?.label).toBe("yda 100");
-  });
-
-  test("a non-adjacent yesterday is dropped from the model", () => {
-    const model = reduceSparkline(
-      snapshotWith({
-        today: { providerDay: "2026-08-25", points: [{ fetchedAt: "2026-08-25T07:00:00.000Z", totalTokens: 10 }] },
-        yesterday: { providerDay: "2026-08-22", points: [{ fetchedAt: "2026-08-22T08:00:00.000Z", totalTokens: 99 }] },
-      }),
-    );
-    expect(model?.yesterday).toBeNull();
-  });
-});
-
-describe("sparkline SVG geometry", () => {
-  test("polyline points map to the 500x84 viewBox: x*500, baseline 78 minus y*74", () => {
-    expect(
-      sparklinePolylinePoints([
-        { x: 0, y: 0 },
-        { x: 0.5, y: 0.5 },
-        { x: 1, y: 1 },
-      ]),
-    ).toBe("0.00,78.00 250.00,41.00 500.00,4.00");
-  });
-
-  test("fill closes today's curve along the baseline at both ends; no points → null", () => {
-    expect(
-      sparklineFillPoints([
-        { x: 0.25, y: 0 },
-        { x: 0.75, y: 1 },
-      ]),
-    ).toBe("125.00,78.00 375.00,4.00 375.00,78.00 125.00,78.00");
-    expect(sparklineFillPoints([])).toBeNull();
-  });
-
-  test("endpoint is the mapped last point; none when empty", () => {
-    expect(
-      sparklineEndpoint([
-        { x: 0, y: 1 },
-        { x: 0.5, y: 0.5 },
-      ]),
-    ).toEqual({ cx: 250, cy: 41 });
-    expect(sparklineEndpoint([])).toBeNull();
-  });
-
-  test("the viewBox matches the fixed 500x84 box", () => {
-    expect(SPARKLINE_VIEWBOX).toEqual({ width: 500, height: 84 });
   });
 });

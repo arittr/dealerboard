@@ -1,7 +1,7 @@
 /**
  * Pure view-model for the rail's token-usage block: reduce the token-usage
  * snapshot read to a rail model — today's total plus rolling /hr and /10m
- * rates with trend arrows, the day-over-day sparkline, and the
+ * rates with trend arrows, the hourly activity comparison, and the
  * compact token formatting. Kept DOM-free so the logic is unit-testable; the
  * rendering layer is app/src/rail.ts.
  */
@@ -30,7 +30,7 @@ export type TokenUsageRailModel =
       totalTokens: number;
       hour: TokenUsageRateLine;
       tenMin: TokenUsageRateLine;
-      sparkline: SparklineModel | null;
+      activity: TokenActivityChartModel | null;
     };
 
 export const ACTIVITY_BOUNDARY_MAX_AGE_MS = 30 * 60_000;
@@ -333,91 +333,6 @@ export const formatTokensCompact = (value: number): string => {
   return formatScaled(tokens / 1e9, "B");
 };
 
-export type SparklinePoint = { x: number; y: number };
-export type SparklineModel = {
-  today: { points: SparklinePoint[] };
-  yesterday: { points: SparklinePoint[]; label: string } | null;
-};
-
-const curveLine = (curve: TokenUsageDayCurve, yMax: number): SparklinePoint[] => {
-  const { startMs, endMs } = laDayBoundsMs(curve.providerDay);
-  const span = Math.max(1, endMs - startMs);
-  return curve.points.map((point) => ({
-    x: Math.min(1, Math.max(0, (Date.parse(point.fetchedAt) - startMs) / span)),
-    y: Math.min(1, Math.max(0, point.totalTokens / yMax)),
-  }));
-};
-
-/** Spec "Day-over-day sparkline": adjacent-yesterday only, shared zero-based y-scale, elapsed-fraction x. */
-export const reduceSparkline = (snapshot: TokenUsageSnapshot): SparklineModel | null => {
-  const curves = snapshot.dayCurves;
-  if (curves === undefined) {
-    return null;
-  }
-  const yesterday =
-    curves.yesterday !== null &&
-    curves.yesterday.providerDay === previousProviderDay(curves.today.providerDay) &&
-    curves.yesterday.points.length > 0
-      ? curves.yesterday
-      : null;
-  if (curves.today.points.length === 0 && yesterday === null) {
-    return null;
-  }
-  const yMax = Math.max(1, curves.today.points.at(-1)?.totalTokens ?? 0, yesterday?.points.at(-1)?.totalTokens ?? 0);
-  return {
-    today: { points: curveLine(curves.today, yMax) },
-    yesterday:
-      yesterday === null
-        ? null
-        : {
-            points: curveLine(yesterday, yMax),
-            label: `yda ${formatTokensCompact(yesterday.points.at(-1)?.totalTokens ?? 0)}`,
-          },
-  };
-};
-
-/* SVG geometry for the sparkline (fixed 500x84 box: curve baseline y=78,
-   curve max y=4). Pure and DOM-free so rail.ts stays a thin attribute shell. */
-
-export const SPARKLINE_VIEWBOX = { width: 500, height: 84 } as const;
-
-const SPARKLINE_BASELINE_Y = 78;
-const SPARKLINE_CURVE_SPAN = 74;
-
-const sparkCoordinate = (point: SparklinePoint): string => {
-  const x = (point.x * SPARKLINE_VIEWBOX.width).toFixed(2);
-  const y = (SPARKLINE_BASELINE_Y - point.y * SPARKLINE_CURVE_SPAN).toFixed(2);
-  return `${x},${y}`;
-};
-
-/** Polyline points attribute for a curve: x*500, 78 − y*74. */
-export const sparklinePolylinePoints = (points: readonly SparklinePoint[]): string =>
-  points.map(sparkCoordinate).join(" ");
-
-/** Fill polygon points: today's curve closed along the baseline at both ends; null with no points. */
-export const sparklineFillPoints = (points: readonly SparklinePoint[]): string | null => {
-  const first = points.at(0);
-  const last = points.at(-1);
-  if (first === undefined || last === undefined) {
-    return null;
-  }
-  const baselineAt = (x: number): string =>
-    `${(x * SPARKLINE_VIEWBOX.width).toFixed(2)},${SPARKLINE_BASELINE_Y.toFixed(2)}`;
-  return `${sparklinePolylinePoints(points)} ${baselineAt(last.x)} ${baselineAt(first.x)}`;
-};
-
-/** Endpoint circle center for today's last point; null with no points. */
-export const sparklineEndpoint = (points: readonly SparklinePoint[]): { cx: number; cy: number } | null => {
-  const last = points.at(-1);
-  if (last === undefined) {
-    return null;
-  }
-  return {
-    cx: last.x * SPARKLINE_VIEWBOX.width,
-    cy: SPARKLINE_BASELINE_Y - last.y * SPARKLINE_CURVE_SPAN,
-  };
-};
-
 export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number): TokenUsageRailModel => {
   if (read === null) {
     return { state: "hidden" };
@@ -447,13 +362,19 @@ export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number
   if (anchor === undefined) {
     // A success with no usable samples yet — render zeros rather than vanish.
     const zero: TokenUsageRateLine = { tokens: 0, trend: "flat" };
-    return { state, totalTokens: snapshot.totalTokens, hour: zero, tenMin: zero, sparkline: reduceSparkline(snapshot) };
+    return {
+      state,
+      totalTokens: snapshot.totalTokens,
+      hour: zero,
+      tenMin: zero,
+      activity: reduceTokenActivity(snapshot),
+    };
   }
   return {
     state,
     totalTokens: snapshot.totalTokens,
     hour: rateLine(daySamples, anchor.atMs, ONE_HOUR_MS),
     tenMin: rateLine(daySamples, anchor.atMs, TEN_MINUTES_MS),
-    sparkline: reduceSparkline(snapshot),
+    activity: reduceTokenActivity(snapshot),
   };
 };
