@@ -421,6 +421,58 @@ describe("createTokenUsageCollector day curves", () => {
     expect(snapshot.dayCurves?.yesterday).toBeNull();
   });
 
+  test("a successful poll recovers retained same-day sample buckets without filling older gaps", async () => {
+    const yesterday = {
+      providerDay: "2026-08-24",
+      points: [{ fetchedAt: "2026-08-24T22:00:00.000Z", totalTokens: 700 }],
+    };
+    const seededFile = `${JSON.stringify({
+      schemaVersion: 1,
+      providerDay: "2026-08-25",
+      totalTokens: 600,
+      unavailable: false,
+      fetchedAt: "2026-08-25T16:49:00.000Z",
+      samples: [
+        { fetchedAt: "2026-08-25T14:01:00.000Z", totalTokens: 100, providerDay: "2026-08-25" },
+        { fetchedAt: "2026-08-25T14:29:00.000Z", totalTokens: 120, providerDay: "2026-08-25" },
+        { fetchedAt: "2026-08-25T14:59:00.000Z", totalTokens: 200, providerDay: "2026-08-25" },
+        { fetchedAt: "2026-08-25T15:29:00.000Z", totalTokens: 190, providerDay: "2026-08-25" },
+        { fetchedAt: "2026-08-25T15:59:00.000Z", totalTokens: 300, providerDay: "2026-08-25" },
+        { fetchedAt: "2026-08-25T16:29:00.000Z", totalTokens: 350, providerDay: "2026-08-25" },
+        { fetchedAt: "2026-08-25T16:44:00.000Z", totalTokens: 450, providerDay: "2026-08-25" },
+      ],
+      dayCurves: {
+        today: {
+          providerDay: "2026-08-25",
+          points: [
+            { fetchedAt: "2026-08-25T07:29:00.000Z", totalTokens: 10 },
+            { fetchedAt: "2026-08-25T16:49:00.000Z", totalTokens: 600 },
+          ],
+        },
+        yesterday,
+      },
+    })}\n`;
+    const harness = makeDayCurveHarness({ "/tmp/token-usage-snapshot.json": seededFile });
+
+    await createTokenUsageCollector(harness.deps).pollNow();
+
+    const snapshot = parseTokenUsageSnapshot(JSON.parse(harness.writes.at(-1) ?? ""));
+    const recoveredPoints = snapshot.dayCurves?.today.points ?? [];
+    expect(recoveredPoints).toEqual([
+      { fetchedAt: "2026-08-25T07:29:00.000Z", totalTokens: 10 },
+      { fetchedAt: "2026-08-25T14:29:00.000Z", totalTokens: 120 },
+      { fetchedAt: "2026-08-25T14:59:00.000Z", totalTokens: 200 },
+      { fetchedAt: "2026-08-25T15:29:00.000Z", totalTokens: 200 },
+      { fetchedAt: "2026-08-25T15:59:00.000Z", totalTokens: 300 },
+      { fetchedAt: "2026-08-25T16:29:00.000Z", totalTokens: 350 },
+      { fetchedAt: "2026-08-25T16:49:00.000Z", totalTokens: 600 },
+      { fetchedAt: "2026-08-25T17:00:00.000Z", totalTokens: 1000 },
+    ]);
+    const halfHourBuckets = recoveredPoints.map((point) => Math.floor(Date.parse(point.fetchedAt) / (30 * 60_000)));
+    expect(new Set(halfHourBuckets).size).toBe(halfHourBuckets.length);
+    expect(snapshot.dayCurves?.yesterday).toEqual(yesterday);
+  });
+
   test("a seeded curve from yesterday rotates into yesterday on today's poll", async () => {
     const seededCurve = {
       today: { providerDay: "2026-08-24", points: [{ fetchedAt: "2026-08-24T22:00:00.000Z", totalTokens: 700 }] },

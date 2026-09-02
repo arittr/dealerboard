@@ -18,6 +18,7 @@ import {
   TOKEN_USAGE_SAMPLE_LIMIT,
   type TokenUsageDayCurvePoint,
   type TokenUsageDayCurves,
+  type TokenUsageSample,
   type TokenUsageSnapshot,
 } from "../token-usage-snapshot";
 import type { TextProcessExecutor } from "./claude-ghostty-binding";
@@ -180,6 +181,37 @@ const retainLatestHalfHourPoints = (points: readonly TokenUsageDayCurvePoint[]):
   return retained;
 };
 
+const recoverActiveDayCurve = (
+  curves: TokenUsageDayCurves | undefined,
+  day: string,
+  samples: readonly TokenUsageSample[],
+): TokenUsageDayCurves | undefined => {
+  if (curves === undefined || curves.today.providerDay !== day) {
+    return curves;
+  }
+  const ordered = [
+    ...curves.today.points,
+    ...samples
+      .filter((sample) => sample.providerDay === day)
+      .map(({ fetchedAt, totalTokens }) => ({ fetchedAt, totalTokens })),
+  ].sort((left, right) => left.fetchedAt.localeCompare(right.fetchedAt) || left.totalTokens - right.totalTokens);
+  const monotone: TokenUsageDayCurvePoint[] = [];
+  let runningMax = 0;
+  for (const point of ordered) {
+    runningMax = Math.max(runningMax, point.totalTokens);
+    const recovered = { fetchedAt: point.fetchedAt, totalTokens: runningMax };
+    if (monotone.at(-1)?.fetchedAt === point.fetchedAt) {
+      monotone[monotone.length - 1] = recovered;
+    } else {
+      monotone.push(recovered);
+    }
+  }
+  return {
+    today: { providerDay: day, points: retainLatestHalfHourPoints(monotone) },
+    yesterday: curves.yesterday,
+  };
+};
+
 /** Append a sample to the day curves: same day extends with a running max; a new day rotates date-keyed. */
 export const appendDayCurvePoint = (
   curves: TokenUsageDayCurves | undefined,
@@ -337,7 +369,8 @@ export const createTokenUsageCollector = (dependencies: TokenUsageCollectorDepen
         const samples = [...state.snapshot.samples, { fetchedAt, totalTokens: total, providerDay }].slice(
           -TOKEN_USAGE_SAMPLE_LIMIT,
         );
-        const dayCurves = appendDayCurvePoint(state.snapshot.dayCurves, providerDay, { fetchedAt, totalTokens: total });
+        const recoveredCurves = recoverActiveDayCurve(state.snapshot.dayCurves, providerDay, samples);
+        const dayCurves = appendDayCurvePoint(recoveredCurves, providerDay, { fetchedAt, totalTokens: total });
         state = {
           snapshot: {
             schemaVersion: 1,
