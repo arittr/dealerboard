@@ -56,7 +56,7 @@ import { createDismissals, flickRemoves } from "./dismissals";
  * different session when the long-press sheet opens, the flick lands, or
  * the trailing click settles the tap.
  */
-import { capturePendingPress, type PendingPress, resolveBoardClick, resolvePendingPress } from "./gesture-target";
+import { capturePendingPress, type PendingPress, resolvePendingPress } from "./gesture-target";
 import {
   createClickSuppression,
   createGestureRecognizer,
@@ -502,17 +502,19 @@ const flashCard = (card: HTMLElement): void => {
 };
 
 /**
- * The clean tap's settlement prefers the pointer-down capture: the pressed
- * identity is re-resolved against the current cards (left the grid → cancel,
- * never retarget), viewed with the pointer-down watermark. WebKit can deliver
- * a genuine click without the matching pointer release; only then does the
- * click target provide the identity and watermark instead.
+ * The clean tap's settlement. Pointer capture retargets the trailing click
+ * to the gesture surface, so the handler settles the press captured at
+ * pointer-down: the pressed identity is re-resolved against the current cards
+ * (left the grid → cancel, never retarget), viewed with the pointer-down
+ * watermark.
  */
-const onBoardClick = (event: MouseEvent): void => {
-  const pointerPress = pressAwaitingClick;
+const onSurfaceClick = (): void => {
+  const pending = pressAwaitingClick;
   pressAwaitingClick = null;
-  const clickPress = pointerPress === null ? cardFromPointerEvent(event) : null;
-  const settled = resolveBoardClick(currentCards, pointerPress, clickPress);
+  if (pending === null) {
+    return;
+  }
+  const settled = resolvePendingPress(currentCards, pending);
   if (settled === null) {
     return;
   }
@@ -1099,7 +1101,6 @@ const onSurfaceContextMenu = (event: MouseEvent): void => {
 };
 
 const wireInteraction = (): void => {
-  document.querySelector<HTMLElement>("#board")?.addEventListener("click", onBoardClick);
   // The paging region hosts the two capture-phase stroke/suppression
   // listeners; the pager is the recognizer surface, so the rail and the
   // pips never traverse a recognizer listener.
@@ -1107,6 +1108,9 @@ const wireInteraction = (): void => {
   region?.addEventListener("pointerdown", onGestureRegionStrokeBookkeeping, true);
   region?.addEventListener("click", onGestureRegionClickCapture, true);
   const surface = document.querySelector<HTMLElement>("#pager");
+  // Pointer capture retargets a clean stroke's trailing click to #pager;
+  // listening on #board leaves that click outside the handler's event path.
+  surface?.addEventListener("click", onSurfaceClick);
   surface?.addEventListener("pointerdown", onSurfacePointerDown);
   surface?.addEventListener("pointermove", onSurfacePointerMove);
   surface?.addEventListener("pointerup", onSurfacePointerUp);

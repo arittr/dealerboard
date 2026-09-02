@@ -51,13 +51,3 @@ export const resolvePendingPress = (cards: readonly PlacedCard[], pending: Pendi
   const ref = resolveInteractiveBoardCard(cards, pending.identity);
   return ref === null ? null : { index: ref.index, card: ref.card, watermark: pending.watermark };
 };
-
-/** Prefer the pointer-backed press; a direct click is only a fallback when WebKit omitted that lifecycle. */
-export const resolveBoardClick = (
-  cards: readonly PlacedCard[],
-  pointerPress: PendingPress | null,
-  clickPress: PendingPress | null,
-): SettledPress | null => {
-  const pending = pointerPress ?? clickPress;
-  return pending === null ? null : resolvePendingPress(cards, pending);
-};
