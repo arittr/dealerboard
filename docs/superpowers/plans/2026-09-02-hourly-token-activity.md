@@ -41,7 +41,7 @@
 | `docs/design.md` | Current rail contract | 4 |
 | `README.md` | User-facing feature and optional-integration wording | 4 |
 
-Task 1 adds the activity model alongside the still-live cumulative sparkline so the branch compiles between commits. Task 2 adds geometry alongside the old geometry. Task 3 performs the atomic model/renderer cutover and deletes every old sparkline type/helper in the same commit. Task 4 updates documentation and runs the initial delivery gates. The installed screenshot then triggered Drew's approved retention amendment: Task 5 repairs the collector's full-day coverage, and Task 6 tunes labels and repeats daemon/app/physical delivery.
+Task 1 adds the activity model alongside the still-live cumulative sparkline so the branch compiles between commits. Task 2 adds geometry alongside the old geometry. Task 3 performs the atomic model/renderer cutover and deletes every old sparkline type/helper in the same commit. Task 4 updates documentation and runs the initial delivery gates. The installed screenshot then triggered Drew's approved retention amendment: Task 5 repairs the collector's full-day coverage, Task 6 tunes labels and repeats daemon/app delivery, and Task 7 repairs the active curve from truthful observations already retained in the recent sample ring so the migration does not leave the chart blank.
 
 ---
 
@@ -1306,6 +1306,61 @@ State explicitly that already-destroyed history cannot reappear: coverage fills 
 
 ---
 
+### Task 7: Recover recent active-curve coverage from retained samples
+
+**Files:**
+- Modify: `src/core/token-usage.ts` (merge truthful same-day rate samples into the active curve before half-hour compaction)
+- Test: `test/token-usage.test.ts` (seeded damaged-curve recovery through a real collector poll)
+
+**Interfaces:**
+- Consume only `state.snapshot.samples` entries whose `providerDay` matches the active poll day.
+- Merge them with the matching active curve's points in chronological order, deduplicate equal timestamps deterministically, reapply the cumulative running maximum, and reuse Task 5's fixed half-hour retention helper.
+- Preserve `appendDayCurvePoint`'s public signature and every schema, point-limit, polling, accounting, command, publication, rotation, and renderer contract.
+- Samples restore only their actual retained ~2.4-hour window. Do not synthesize a boundary, interpolate across an absent interval, touch yesterday, or claim older coverage.
+
+- [ ] **Step 1: Add a failing seeded-collector regression**
+
+Seed `createTokenUsageCollector` with a valid current-day snapshot whose active curve has an early point and a newest point but no current-hour start boundary. Give the same snapshot chronological same-day `samples` spanning at least two hour boundaries. Run one successful poll and assert the published active curve contains the latest real observation from each populated half-hour sample bucket, keeps the early curve point, stays monotone, and contains no duplicate half-hour bucket.
+
+The test must fail against Task 5 because that implementation compacts only `dayCurves.today` plus the new point and ignores the retained sample ring.
+
+- [ ] **Step 2: Run focused RED**
+
+Run: `bun test test/token-usage.test.ts`
+
+Expected: the new collector recovery assertion fails for missing recent half-hour points while the existing 25 Task 5 tests remain green.
+
+- [ ] **Step 3: Implement the smallest truthful merge**
+
+Add one small helper in `src/core/token-usage.ts` that accepts current curves, provider day, and retained samples. If there is no matching active curve, preserve today's creation/rotation path. Otherwise merge only same-day sample points with the active curve, sort by canonical `fetchedAt`, reapply a running maximum while collapsing an equal timestamp, and pass the result through `retainLatestHalfHourPoints`.
+
+Call it in the successful poll immediately before `appendDayCurvePoint`, using the newly bounded `samples` array. Then append the new point through the existing function. Do not alter the persisted shape or write an explicit migration.
+
+- [ ] **Step 4: Verify and commit**
+
+Run:
+
+```bash
+bun test test/token-usage.test.ts
+bun run typecheck
+git diff --check
+```
+
+Commit with exact-path staging:
+
+```bash
+git add src/core/token-usage.ts test/token-usage.test.ts
+git commit -m "fix(core): recover recent token curve coverage" \
+  -m "Rebuild the active half-hour curve from matching observations already present in the bounded rate-sample ring before appending a successful poll. This restores truthful recent hour boundaries after the legacy downsampler damaged the curve without interpolation or schema changes." \
+  -m "Add a seeded collector regression that proves recent buckets recover, cumulative totals remain monotone, duplicate half-hour buckets disappear, and older missing history stays absent."
+```
+
+- [ ] **Step 5: Re-run delivery for the collector fix**
+
+Run `bun run check`, then `bun scripts/install-local.ts`. After a successful poll, inspect timestamps and reducer states only: require unique current-day half-hour buckets and at least one measured or current activity bucket. The already-installed app requires no rebuild because Task 7 changes only its sidecar producer.
+
+---
+
 ## Completion evidence matrix
 
 | Claim | Required evidence |
@@ -1314,6 +1369,7 @@ State explicitly that already-destroyed history cannot reappear: coverage fills 
 | SVG geometry implemented | Focused Task 2 structured rectangle/segment/label tests |
 | Rail renderer implemented | Focused Task 3 DOM tests, typecheck, `build:app`, removed-name scan |
 | Full-day retention repaired | Task 5 24-hour, legacy-compaction, and 25-hour DST tests; timestamp-only installed sidecar check |
+| Recent migration coverage recovered | Task 7 seeded collector test and installed timestamp/state-only probe with at least one observed activity bucket |
 | Labels legible | User-supplied physical RED, Task 6 app build, and Drew's post-install observation |
 | Source branch healthy | Fresh `bun run check` with exact test and failure count |
 | Installed app updated | Successful `bun run install:app` receipt and relaunched process |

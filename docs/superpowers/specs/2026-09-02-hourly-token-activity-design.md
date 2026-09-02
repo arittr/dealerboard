@@ -61,6 +61,17 @@ fills forward. The physical check also authorizes setting the sparse chart
 labels to `20px`, weight `600`, and neutral `#cbd5e1` inside the unchanged 500
 by 84 view box.
 
+The first repaired daemon restart also exposed a migration omission: compacting
+only the damaged day curve can leave no observation at or before the current
+hour boundary, so the truthful reducer omits the chart. The snapshot's existing
+288-sample rate ring still retains roughly 2.4 hours of same-day cumulative
+observations. Before appending each successful poll, the collector therefore
+rebuilds the active curve from the union of its retained curve and same-day
+sample ring, orders equal timestamps deterministically, reapplies the running
+maximum, and then performs the same fixed half-hour compaction. This recovers
+only observations already present in the validated snapshot; it neither
+interpolates nor restores older destroyed intervals.
+
 ## Visual contract
 
 The token section keeps its current two-column flow: the `/hr` and `/10m`
