@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-03
+
 ### Added
 
+- Multi-page strip boards with fill-and-continue card packing, continuation
+  markers, page indicators, and axis-locked drag navigation with live peek and
+  snap-back feedback.
+- Exact Evener session activation and recursive delegate tracking, including
+  authoritative lifecycle updates and removal of archived session trees.
+- Hourly token activity curves comparing today with yesterday, plus the two
+  daily totals on the rail.
 - Daemon stall forensics: a 10–30s poll gap logs `tick_stall`, and heartbeat
   writes failing past the staleness threshold latch one
   `snapshot_publish_overdue` — every board-blanking daemon condition now
@@ -26,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The app installer now quits and relaunches a running Dealerboard app around
+  the bundle replacement.
 - Paseo provenance moved to the harness side: the violet meta-row dot is now
   a containment ring around the provider chip — the harness enclosed by its
   multiplexer, at zero width cost to the title and meta columns. Grouped
@@ -48,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Tap-to-open now settles pointer-captured clicks on the pager, preserving the
+  original card target through browser click delivery.
+- Token activity retains enough source history to reconstruct the full current
+  and previous day without treating recovered gaps as measured zeroes.
 - Waking the Mac no longer flashes the board OFFLINE: sleep-stale snapshot
   evidence is held for a ~6s wake grace while the daemon's first post-wake
   heartbeat lands; fresh evidence — including an explicit unhealthy

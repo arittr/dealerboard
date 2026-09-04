@@ -1,6 +1,6 @@
 {
   "name": "dealerboard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A local macOS status board for coding agents.",
   "license": "MIT",
   "private": true,
