@@ -812,12 +812,12 @@ body[data-fullscreen] #rail {
 }
 .tokens-yda-sep {
   color: #475569;
-  font-size: 1.0vw;
+  font-size: 1vw;
   font-weight: 600;
 }
 .tokens-yda {
   color: #60a5fa;
-  font-size: 1.0vw;
+  font-size: 1vw;
   font-weight: 600;
 }
 /* The two rolling rates stack beside the activity chart; tokens-rate's min-width
