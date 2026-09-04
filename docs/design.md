@@ -127,7 +127,8 @@ observation age, not a claim that the agent is stalled.
 
 The rail contains:
 
-- Daily token total and rolling rates, plus an optional LA-calendar-day activity
+- Daily token total and rolling rates, with yesterday's final total beside
+  today's in the overlay line's blue, plus an optional LA-calendar-day activity
   chart: hourly bars through the current hour with adjacent yesterday overlaid
   by clock hour.
 - Exact unread count plus daemon-health indicator.
