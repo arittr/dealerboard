@@ -11,7 +11,6 @@ import {
   TOKEN_ACTIVITY_VIEWBOX,
   type TokenUsageRailModel,
   tokenActivityBarRects,
-  tokenActivityLineEndpoint,
   tokenActivityLineSegments,
 } from "../app/src/token-usage";
 import type { TokenUsageDayCurve, TokenUsageSample, TokenUsageSnapshot } from "../src/token-usage-snapshot";
@@ -546,7 +545,6 @@ describe("token activity SVG geometry", () => {
     ]);
     expect(segments[0]?.[0]?.x).toBeCloseTo(500 / 48, 5);
     expect(segments[0]?.[1]?.y).toBe(4);
-    expect(tokenActivityLineEndpoint(segments)).toEqual(segments[1]?.[1] ?? null);
   });
 
   test("publishes the fixed sparse time labels", () => {

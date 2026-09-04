@@ -271,7 +271,7 @@ describe("token block layout", () => {
     });
   });
 
-  test("renders sparse clock labels plus yda and omits the chart without activity", () => {
+  test("renders sparse clock labels and no in-chart yda marker; omits the chart without activity", () => {
     withFakeDocument((root) => {
       renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
       const svgHasClass = (node: ReturnType<typeof descendants>[number], name: string): boolean =>
@@ -281,11 +281,7 @@ describe("token block layout", () => {
           .filter((node) => svgHasClass(node, "token-activity-axis"))
           .map((node) => node.textContent),
       ).toEqual(["12a", "12p", "12a"]);
-      expect(
-        descendants(root)
-          .filter((node) => svgHasClass(node, "token-activity-yda"))
-          .map((node) => node.textContent),
-      ).toEqual(["yda"]);
+      expect(descendants(root).some((node) => svgHasClass(node, "token-activity-yda"))).toBe(false);
     });
     withFakeDocument((root) => {
       renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), activity: null } }));
@@ -293,22 +289,13 @@ describe("token block layout", () => {
     });
   });
 
-  test("places yda at the last rendered endpoint when yesterday ends early", () => {
-    withFakeDocument((root) => {
-      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
-      const label = descendants(root).find((node) => node.attributes["class"] === "token-activity-yda");
-      expect(label?.attributes["x"]).toBe("31.25");
-    });
-  });
-
-  test("today-only activity renders no yesterday line or label", () => {
+  test("today-only activity renders no yesterday line", () => {
     withFakeDocument((root) => {
       const todayOnly = activity();
       todayOnly.yesterday = null;
       renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), activity: todayOnly } }));
       const svgClasses = descendants(root).map((node) => node.attributes["class"] ?? "");
       expect(svgClasses.some((value) => value.includes("token-activity-yesterday"))).toBe(false);
-      expect(svgClasses.some((value) => value.includes("token-activity-yda"))).toBe(false);
     });
   });
 
@@ -319,6 +306,34 @@ describe("token block layout", () => {
     afterActivity.today[1] = { hour: 1, state: "measured", tokens: 20 };
     const after = { ...visibleTokens(), activity: afterActivity };
     expect(railRenderSignature(model({ tokens: after }))).not.toBe(railRenderSignature(model({ tokens: before })));
+  });
+
+  test("the top line carries yesterday's total next to today's", () => {
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ tokens: visibleTokens() }));
+      const today = descendants(root).find((node) => node.className === "tokens-today");
+      const sep = descendants(root).find((node) => node.className === "tokens-yda-sep");
+      const yda = descendants(root).find((node) => node.className === "tokens-yda");
+      expect(yda?.textContent).toBe("897.4M yda");
+      expect(sep?.textContent).toBe(" · ");
+      expect(today?.children.map((node) => node.className)).toEqual(["tokens-yda-sep", "tokens-yda"]);
+      expect(renderedText(root)).toContain("562.7M today");
+    });
+  });
+
+  test("omits the yesterday fragment when there is no yesterday total", () => {
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ tokens: { ...visibleTokens(), yesterdayTotalTokens: null } }));
+      expect(descendants(root).some((node) => node.className === "tokens-yda")).toBe(false);
+      expect(renderedText(root)).not.toContain("yda");
+    });
+  });
+
+  test("the rail signature tracks the yesterday total", () => {
+    const base = visibleTokens();
+    expect(railRenderSignature(model({ tokens: { ...base, yesterdayTotalTokens: 897_400_001 } }))).not.toBe(
+      railRenderSignature(model({ tokens: base })),
+    );
   });
 });
 

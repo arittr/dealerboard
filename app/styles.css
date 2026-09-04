@@ -810,6 +810,16 @@ body[data-fullscreen] #rail {
   font-size: 1.6vw;
   font-weight: 650;
 }
+.tokens-yda-sep {
+  color: #475569;
+  font-size: 1.0vw;
+  font-weight: 600;
+}
+.tokens-yda {
+  color: #60a5fa;
+  font-size: 1.0vw;
+  font-weight: 600;
+}
 /* The two rolling rates stack beside the activity chart; tokens-rate's min-width
    floor keeps the column width stable across realistic values. */
 .tokens-flow {
@@ -868,8 +878,7 @@ body[data-fullscreen] #rail {
   stroke-linecap: round;
   opacity: 0.68;
 }
-.token-activity-axis,
-.token-activity-yda {
+.token-activity-axis {
   fill: #cbd5e1;
   font-size: 20px;
   font-weight: 600;

@@ -28,7 +28,6 @@ import {
   type TokenUsageRailModel,
   type TokenUsageRateLine,
   tokenActivityBarRects,
-  tokenActivityLineEndpoint,
   tokenActivityLineSegments,
 } from "./token-usage";
 
@@ -111,17 +110,6 @@ const tokenActivityBlock = (activity: TokenActivityChartModel): HTMLElement => {
     svg.append(line);
   }
 
-  const endpoint = tokenActivityLineEndpoint(segments);
-  if (endpoint !== null) {
-    const label = document.createElementNS(SVG_NAMESPACE, "text");
-    label.setAttribute("class", "token-activity-yda");
-    label.setAttribute("x", endpoint.x.toFixed(2));
-    label.setAttribute("y", String(Math.max(16, endpoint.y - 6)));
-    label.setAttribute("text-anchor", "end");
-    label.textContent = "yda";
-    svg.append(label);
-  }
-
   for (const bar of tokenActivityBarRects(activity)) {
     const rect = document.createElementNS(SVG_NAMESPACE, "rect");
     rect.setAttribute("class", bar.current ? "token-activity-bar current" : "token-activity-bar");
@@ -146,6 +134,15 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
   const today = document.createElement("div");
   today.className = "tokens-today";
   today.textContent = `${formatTokensCompact(model.totalTokens)} today`;
+  if (model.yesterdayTotalTokens !== null) {
+    const sep = document.createElement("span");
+    sep.className = "tokens-yda-sep";
+    sep.textContent = " · ";
+    const yda = document.createElement("span");
+    yda.className = "tokens-yda";
+    yda.textContent = `${formatTokensCompact(model.yesterdayTotalTokens)} yda`;
+    today.append(sep, yda);
+  }
   const flow = document.createElement("div");
   flow.className = "tokens-flow";
   const rates = document.createElement("div");

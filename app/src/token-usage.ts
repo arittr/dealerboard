@@ -332,10 +332,6 @@ export const tokenActivityLineSegments = (model: TokenActivityChartModel): Token
   return segments;
 };
 
-export const tokenActivityLineEndpoint = (
-  segments: readonly (readonly TokenActivityPoint[])[],
-): TokenActivityPoint | null => segments.at(-1)?.at(-1) ?? null;
-
 /** Compact token formatting: one decimal, a trailing .0 stripped, k/M/B suffixes (1000.0k rolls up to 1M). */
 export const formatTokensCompact = (value: number): string => {
   const tokens = Math.max(0, value);
