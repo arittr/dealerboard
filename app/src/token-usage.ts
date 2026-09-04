@@ -9,6 +9,7 @@
 import {
   parseTokenUsageSnapshot,
   type TokenUsageDayCurve,
+  type TokenUsageDayCurves,
   type TokenUsageSnapshot,
 } from "../../src/token-usage-snapshot";
 import type { SnapshotPayload } from "./bridge";
@@ -28,6 +29,7 @@ export type TokenUsageRailModel =
   | {
       state: "ok" | "stale";
       totalTokens: number;
+      yesterdayTotalTokens: number | null;
       hour: TokenUsageRateLine;
       tenMin: TokenUsageRateLine;
       activity: TokenActivityChartModel | null;
@@ -165,6 +167,22 @@ const pointsWithinDay = (curve: TokenUsageDayCurve, startMs: number, endMs: numb
   curve.points
     .map((point) => ({ atMs: Date.parse(point.fetchedAt), totalTokens: point.totalTokens }))
     .filter((point) => point.atMs >= startMs && point.atMs < endMs);
+
+/**
+ * Yesterday's final total: the newest curve point inside its own LA day — the
+ * provider total resets at LA midnight, so that point is the day's end total.
+ * Deliberately not gated on the overlay's two-consecutive-bucket eligibility:
+ * the top-line total is the line's legend and is a real provider reading even
+ * when the line itself cannot render.
+ */
+const yesterdayCurveTotal = (curves: TokenUsageDayCurves): number | null => {
+  const { yesterday } = curves;
+  if (yesterday === null || yesterday.providerDay !== previousProviderDay(curves.today.providerDay)) {
+    return null;
+  }
+  const { startMs, endMs } = laDayBoundsMs(yesterday.providerDay);
+  return pointsWithinDay(yesterday, startMs, endMs).at(-1)?.totalTokens ?? null;
+};
 
 const totalAtBoundary = (
   points: readonly NumberedCurvePoint[],
@@ -348,6 +366,7 @@ export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number
     return { state: "hidden" };
   }
   const state = snapshot.unavailable || nowMs - fetchedAtMs > STALE_TOKEN_USAGE_AGE_MS ? "stale" : "ok";
+  const yesterdayTotal = snapshot.dayCurves === undefined ? null : yesterdayCurveTotal(snapshot.dayCurves);
   const daySamples: NumberedSample[] = [];
   for (const sample of snapshot.samples) {
     if (sample.providerDay !== snapshot.providerDay) {
@@ -365,6 +384,7 @@ export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number
     return {
       state,
       totalTokens: snapshot.totalTokens,
+      yesterdayTotalTokens: yesterdayTotal,
       hour: zero,
       tenMin: zero,
       activity: reduceTokenActivity(snapshot),
@@ -373,6 +393,7 @@ export const reduceTokenUsageRead = (read: SnapshotPayload | null, nowMs: number
   return {
     state,
     totalTokens: snapshot.totalTokens,
+    yesterdayTotalTokens: yesterdayTotal,
     hour: rateLine(daySamples, anchor.atMs, ONE_HOUR_MS),
     tenMin: rateLine(daySamples, anchor.atMs, TEN_MINUTES_MS),
     activity: reduceTokenActivity(snapshot),

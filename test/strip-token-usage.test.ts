@@ -9,6 +9,7 @@ import {
   STALE_TOKEN_USAGE_AGE_MS,
   TOKEN_ACTIVITY_TIME_LABELS,
   TOKEN_ACTIVITY_VIEWBOX,
+  type TokenUsageRailModel,
   tokenActivityBarRects,
   tokenActivityLineEndpoint,
   tokenActivityLineSegments,
@@ -199,6 +200,69 @@ describe("reduceTokenUsageRead", () => {
     expect(stale.state).toBe("stale");
     if (stale.state === "hidden") throw new Error("expected retained last-good activity");
     expect(stale.activity).not.toBeNull();
+  });
+
+  const withYesterday = (
+    yesterday: TokenUsageDayCurve | null,
+  ): Extract<TokenUsageRailModel, { state: "ok" | "stale" }> => {
+    const model = reduceTokenUsageRead(
+      read(
+        snapshot({
+          dayCurves: {
+            today: curve(DAY, [
+              ["2026-08-20T07:00:00.000Z", 0],
+              ["2026-08-20T08:00:00.000Z", 10],
+            ]),
+            yesterday,
+          },
+        }),
+      ),
+      NOW,
+    );
+    if (model.state === "hidden") throw new Error("expected a rendered token model");
+    return model;
+  };
+
+  test("yesterday total is the newest in-day point of the adjacent curve", () => {
+    const model = withYesterday(
+      curve("2026-08-19", [
+        ["2026-08-19T07:00:00.000Z", 0],
+        ["2026-08-19T20:00:00.000Z", 640_000],
+        ["2026-08-20T06:30:00.000Z", 897_400], // 23:30 LA, still yesterday
+      ]),
+    );
+    expect(model.yesterdayTotalTokens).toBe(897_400);
+  });
+
+  test("yesterday total never reads a point at or after LA midnight", () => {
+    const model = withYesterday(
+      curve("2026-08-19", [
+        ["2026-08-19T20:00:00.000Z", 640_000],
+        // 00:05 LA — belongs to today. The parser requires non-decreasing curve
+        // totals, so the straggler carries an inflated value rather than a
+        // post-reset one; the assertion still proves the day-bounds filter.
+        ["2026-08-20T07:05:00.000Z", 897_400],
+      ]),
+    );
+    expect(model.yesterdayTotalTokens).toBe(640_000);
+  });
+
+  test("yesterday total is null when the curve is missing, non-adjacent, or empty", () => {
+    expect(withYesterday(null).yesterdayTotalTokens).toBeNull();
+    expect(withYesterday(curve("2026-08-18", [["2026-08-18T20:00:00.000Z", 500]])).yesterdayTotalTokens).toBeNull();
+    expect(withYesterday(curve("2026-08-19", [])).yesterdayTotalTokens).toBeNull();
+  });
+
+  test("yesterday total survives a curve too sparse for the overlay", () => {
+    const model = withYesterday(curve("2026-08-19", [["2026-08-19T20:00:00.000Z", 640_000]]));
+    expect(model.yesterdayTotalTokens).toBe(640_000);
+    expect(model.activity?.yesterday).toBeNull(); // one isolated point: no line
+  });
+
+  test("yesterday total is null without day curves", () => {
+    const model = reduceTokenUsageRead(read(snapshot()), NOW);
+    if (model.state === "hidden") throw new Error("expected a rendered token model");
+    expect(model.yesterdayTotalTokens).toBeNull();
   });
 });
 

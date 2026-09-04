@@ -221,6 +221,7 @@ const activity = (): NonNullable<Extract<TokenUsageRailModel, { state: "ok" | "s
 const visibleTokens = (): Extract<TokenUsageRailModel, { state: "ok" | "stale" }> => ({
   state: "ok",
   totalTokens: 562_700_000,
+  yesterdayTotalTokens: 897_400_000,
   hour: { tokens: 31_100_000, trend: "up" },
   tenMin: { tokens: 12_200_000, trend: "up" },
   activity: activity(),
