@@ -18,6 +18,7 @@ import { ProjectionError, readProjection } from "../src/core/projection";
 import { applyRegistryEvents, syncPaseoStates, viewSession } from "../src/core/registry";
 import { initializeDatabase, openRegistryDatabase } from "../src/core/schema";
 import { writeSnapshotAtomically } from "../src/core/snapshot";
+import type { SessionFacts } from "../src/core/titles";
 import { parseSessionSnapshot, type RegistryEvent, type SessionSnapshotV2 } from "../src/protocol";
 
 const NOW = "2026-08-06T00:00:00.000Z";
@@ -426,6 +427,9 @@ describe("ProjectionDaemon maintenance", () => {
     };
   };
 
+  /** Drain settled async maintenance passes so their results reach the next poll. */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
   test("heartbeat rewrites an unchanged snapshot once the file went quiet", () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
@@ -626,11 +630,11 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("resolves titles through the injected resolver and republishes with them", () => {
+  test("resolves titles through the injected resolver and republishes with them", async () => {
     startSession("s1");
     const targets: unknown[] = [];
     const harness = makeHarness({
-      resolveFacts: (seen) => {
+      resolveFacts: async (seen) => {
         targets.push(...seen);
         return {
           titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }],
@@ -651,6 +655,9 @@ describe("ProjectionDaemon maintenance", () => {
           activityLine: null,
         },
       ]);
+      // The async pass settles off the loop; its facts apply on the next poll.
+      await settle();
+      harness.tick();
       expect(readSnapshotFile().sessions[0]?.title).toBe("Resolved from disk");
       const row = (() => {
         const db = openRegistryDatabase(paths.database, "readonly");
@@ -670,10 +677,10 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("applies resolved models through updateSessionModels and republishes with them", () => {
+  test("applies resolved models through updateSessionModels and republishes with them", async () => {
     startSession("s1");
     const harness = makeHarness({
-      resolveFacts: () => ({
+      resolveFacts: async () => ({
         titles: [],
         models: [{ provider: "claude" as const, sessionId: "s1", model: "claude-fable-5" }],
         activities: [],
@@ -681,6 +688,8 @@ describe("ProjectionDaemon maintenance", () => {
     });
     harness.daemon.start();
     try {
+      await settle();
+      harness.tick();
       expect(readSnapshotFile().sessions[0]?.model).toBe("claude-fable-5");
       const row = (() => {
         const db = openRegistryDatabase(paths.database, "readonly");
@@ -700,10 +709,10 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("applies resolved activity lines through updateSessionActivityLines and republishes with them", () => {
+  test("applies resolved activity lines through updateSessionActivityLines and republishes with them", async () => {
     startSession("s1");
     const harness = makeHarness({
-      resolveFacts: () => ({
+      resolveFacts: async () => ({
         titles: [],
         models: [],
         activities: [{ provider: "claude" as const, sessionId: "s1", activityLine: "Bash git status" }],
@@ -711,6 +720,8 @@ describe("ProjectionDaemon maintenance", () => {
     });
     harness.daemon.start();
     try {
+      await settle();
+      harness.tick();
       expect(readSnapshotFile().sessions[0]?.activityLine).toBe("Bash git status");
       const row = (() => {
         const db = openRegistryDatabase(paths.database, "readonly");
@@ -730,13 +741,13 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("runs the titles pass on its cadence, not on every poll", () => {
+  test("runs the titles pass on its cadence, not on every poll", async () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
     let resolveCalls = 0;
     const harness = makeHarness({
       nowMs: clock.nowMs,
-      resolveFacts: () => {
+      resolveFacts: async () => {
         resolveCalls += 1;
         return { titles: [], models: [], activities: [] };
       },
@@ -744,6 +755,7 @@ describe("ProjectionDaemon maintenance", () => {
     harness.daemon.start();
     try {
       expect(resolveCalls).toBe(1);
+      await settle();
       harness.tick();
       expect(resolveCalls).toBe(1);
       clock.advance(2_000);
@@ -754,17 +766,17 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("paseo pass syncs states and republishes when rows changed", () => {
+  test("paseo pass syncs states and republishes when rows changed", async () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
     let stampOrigin = false;
     const harness = makeHarness({
       nowMs: clock.nowMs,
-      syncPaseo: (db) =>
+      loadPaseo: async () =>
         stampOrigin
-          ? syncPaseoStates(db, [
+          ? [
               {
-                provider: "claude",
+                provider: "claude" as const,
                 sessionId: "s1",
                 agentId: "agent-1",
                 requiresAttention: true,
@@ -776,35 +788,43 @@ describe("ProjectionDaemon maintenance", () => {
                 title: null,
                 lastStatus: null,
               },
-            ])
-          : 0,
+            ]
+          : [],
+      applyPaseo: (db, states) => syncPaseoStates(db, states),
     });
     harness.daemon.start();
     try {
-      // The first poll ran the paseo pass as a no-op and published the plain
+      // The first poll kicked off the async paseo load and published the plain
       // snapshot; its write predates the scheduler arming.
       expect(harness.writes).toHaveLength(1);
       expect(readSnapshotFile().sessions[0]?.originKind).toBeNull();
 
-      // Same tick, nothing new: the data-version fast path holds.
+      // The settled empty load applies on the next poll; nothing changed, so
+      // the data-version fast path holds.
+      await settle();
       harness.tick();
       expect(harness.readCount()).toBe(1);
       expect(harness.writes).toHaveLength(1);
 
-      // Past the paseo cadence the pass stamps origin and unread on the
-      // daemon's own connection; the maintenance-changed signal alone forces
-      // the reprojection (own commits never bump data_version).
+      // Past the paseo cadence the next load stamps origin and unread; the
+      // join applies on the daemon's own connection at the following poll,
+      // and the maintenance-changed signal alone forces the reprojection
+      // (own commits never bump data_version).
       clock.advance(DAEMON_PASEO_INTERVAL_MS);
       stampOrigin = true;
+      harness.tick();
+      await settle();
       harness.tick();
       expect(harness.readCount()).toBe(2);
       expect(harness.writes).toHaveLength(2);
       expect(readSnapshotFile().sessions[0]).toMatchObject({ originKind: "paseo", originRef: "agent-1" });
 
-      // The next cadence pass finds nothing different — the difference guard
+      // The next cadence load finds nothing different — the difference guard
       // keeps the fast path quiet instead of republishing every 2 seconds.
       clock.advance(DAEMON_PASEO_INTERVAL_MS);
       stampOrigin = false;
+      harness.tick();
+      await settle();
       harness.tick();
       expect(harness.readCount()).toBe(2);
       expect(harness.writes).toHaveLength(2);
@@ -813,28 +833,108 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("runs the paseo pass on its cadence, not on every poll", () => {
+  test("runs the paseo pass on its cadence, not on every poll", async () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
-    let syncCalls = 0;
+    let loadCalls = 0;
     const harness = makeHarness({
       nowMs: clock.nowMs,
-      syncPaseo: () => {
-        syncCalls += 1;
-        return 0;
+      loadPaseo: async () => {
+        loadCalls += 1;
+        return [];
       },
     });
     harness.daemon.start();
     try {
       expect(DAEMON_PASEO_INTERVAL_MS).toBe(2_000);
-      expect(syncCalls).toBe(1);
+      expect(loadCalls).toBe(1);
+      await settle();
       harness.tick();
       clock.advance(1_999);
       harness.tick();
-      expect(syncCalls).toBe(1);
+      expect(loadCalls).toBe(1);
       clock.advance(1);
       harness.tick();
-      expect(syncCalls).toBe(2);
+      expect(loadCalls).toBe(2);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("a never-settling facts pass never blocks the poll loop: heartbeats keep landing", () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      // The provider-file sweep runs off the loop; a slow disk holds the
+      // pass in flight, it must never hold the tick.
+      resolveFacts: () => new Promise<never>(() => {}),
+      loadPaseo: () => new Promise<never>(() => {}),
+    });
+    harness.daemon.start();
+    try {
+      expect(harness.writes).toHaveLength(1);
+      // With the passes in flight, polls still run and the heartbeat keeps
+      // the snapshot fresh — the board's liveness signal survives a hung
+      // filesystem sweep.
+      for (let elapsed = 0; elapsed < 3 * DAEMON_HEARTBEAT_MS; elapsed += DAEMON_HEARTBEAT_MS) {
+        clock.advance(DAEMON_HEARTBEAT_MS);
+        harness.tick();
+      }
+      expect(harness.writes.length).toBeGreaterThan(1);
+      expect(harness.diagnostics).toEqual([]);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("a due facts pass waits for the in-flight one instead of stacking passes", async () => {
+    startSession("s1");
+    const clock = fakeClock(Date.parse(NOW));
+    let resolveCalls = 0;
+    let settleFacts: (facts: SessionFacts) => void = () => {
+      throw new Error("no facts pass in flight");
+    };
+    const harness = makeHarness({
+      nowMs: clock.nowMs,
+      resolveFacts: () => {
+        resolveCalls += 1;
+        return new Promise<SessionFacts>((resolve) => {
+          settleFacts = resolve;
+        });
+      },
+    });
+    harness.daemon.start();
+    try {
+      expect(resolveCalls).toBe(1);
+      clock.advance(2_000);
+      harness.tick();
+      // Still in flight: the due cadence does not stack a second sweep.
+      expect(resolveCalls).toBe(1);
+      settleFacts({ titles: [], models: [], activities: [] });
+      await settle();
+      clock.advance(2_000);
+      harness.tick();
+      // Settled: the next due pass starts.
+      expect(resolveCalls).toBe(2);
+    } finally {
+      harness.daemon.stop();
+    }
+  });
+
+  test("a rejected paseo load records one maintenance_failed and never harms publication", async () => {
+    startSession("s1");
+    const harness = makeHarness({
+      loadPaseo: async () => {
+        throw new Error("paseo sweep exploded");
+      },
+    });
+    harness.daemon.start();
+    try {
+      await settle();
+      harness.tick();
+      expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "maintenance_failed" }]);
+      expect(harness.writes.at(-1)?.health.status).toBe("ok");
     } finally {
       harness.daemon.stop();
     }
@@ -993,15 +1093,17 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("a maintenance failure records one diagnostic and never harms publication", () => {
+  test("a maintenance failure records one diagnostic and never harms publication", async () => {
     startSession("s1");
     const harness = makeHarness({
-      resolveFacts: () => {
+      resolveFacts: async () => {
         throw new Error("resolver exploded");
       },
     });
     harness.daemon.start();
     try {
+      await settle();
+      harness.tick();
       expect(harness.writes).toEqual([HEALTHY_S1]);
       expect(harness.diagnostics).toEqual([{ timestamp: NOW, component: "daemon", code: "maintenance_failed" }]);
       harness.tick();
@@ -1011,13 +1113,13 @@ describe("ProjectionDaemon maintenance", () => {
     }
   });
 
-  test("a committed title write republishes even when the model write then fails", () => {
+  test("a committed title write republishes even when the model write then fails", async () => {
     startSession("s1");
     const clock = fakeClock(Date.parse(NOW));
     let proposals = 0;
     const harness = makeHarness({
       nowMs: clock.nowMs,
-      resolveFacts: () => {
+      resolveFacts: async () => {
         proposals += 1;
         if (proposals === 1) {
           return { titles: [], models: [], activities: [] };
@@ -1037,7 +1139,10 @@ describe("ProjectionDaemon maintenance", () => {
       // First poll: clean baseline, arming the data_version fast path.
       expect(harness.writes).toEqual([HEALTHY_S1]);
 
+      await settle();
       clock.advance(2_000);
+      harness.tick();
+      await settle();
       harness.tick();
 
       // The title write committed even though the model write threw...

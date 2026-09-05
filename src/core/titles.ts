@@ -36,14 +36,17 @@
  *
  * Resolution is additive: a found title, model, or activity line is proposed
  * only when it differs from the stored one, and a missing value never clears
- * an existing one. Claude, Codex, and grok filesystem access flows through
- * injected dependencies so their tests use fakes; zcode opens its SQLite
- * database directly (read-only, one connection per pass) and its tests
- * deliberately use real fixture databases.
+ * an existing one. The filesystem reads are async — they run off the
+ * daemon's event loop, whose heartbeat the board's liveness rides on —
+ * while zcode's small, local, indexed SQLite lookups stay synchronous and
+ * fail-fast per pass. Claude, Codex, and grok filesystem access flows
+ * through injected dependencies so their tests use fakes; zcode opens its
+ * SQLite database directly (read-only, one connection per pass) and its
+ * tests deliberately use real fixture databases.
  */
 
 import { Database } from "bun:sqlite";
-import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { type FileHandle, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionActivityLineUpdate, SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
 
@@ -66,11 +69,11 @@ export type SessionFactsResolverDependencies = {
   zcodeDatabasePath: string;
   /** grok's sessions directory; resolved by the caller (GROK_HOME override lives in cli.ts). */
   grokSessionsRoot: string;
-  statPath?: (path: string) => FileStat | null;
-  readTail?: (path: string, maxBytes: number) => string | null;
-  readWhole?: (path: string) => string | null;
-  readHead?: (path: string, maxBytes: number) => string | null;
-  listDirectories?: (path: string) => string[];
+  statPath?: (path: string) => Promise<FileStat | null>;
+  readTail?: (path: string, maxBytes: number) => Promise<string | null>;
+  readWhole?: (path: string) => Promise<string | null>;
+  readHead?: (path: string, maxBytes: number) => Promise<string | null>;
+  listDirectories?: (path: string) => Promise<string[]>;
 };
 
 /** The facts one pass proposes: title, model, and activity-line updates, applied additively. */
@@ -81,33 +84,33 @@ export type SessionFacts = {
 };
 
 export type SessionFactsResolver = {
-  resolve: (targets: readonly TitleTarget[]) => SessionFacts;
+  resolve: (targets: readonly TitleTarget[]) => Promise<SessionFacts>;
 };
 
-const defaultStatPath = (path: string): FileStat | null => {
+const defaultStatPath = async (path: string): Promise<FileStat | null> => {
   try {
-    const stats = statSync(path);
+    const stats = await stat(path);
     return { mtimeMs: stats.mtimeMs, size: stats.size };
   } catch {
     return null;
   }
 };
 
-const defaultReadTail = (path: string, maxBytes: number): string | null => {
-  let fd: number | null = null;
+const defaultReadTail = async (path: string, maxBytes: number): Promise<string | null> => {
+  let handle: FileHandle | null = null;
   try {
-    fd = openSync(path, "r");
-    const size = statSync(path).size;
-    const length = Math.min(size, maxBytes);
+    handle = await open(path, "r");
+    const stats = await handle.stat();
+    const length = Math.min(stats.size, maxBytes);
     const buffer = Buffer.alloc(length);
-    readSync(fd, buffer, 0, length, size - length);
+    await handle.read(buffer, 0, length, stats.size - length);
     return buffer.toString("utf8");
   } catch {
     return null;
   } finally {
-    if (fd !== null) {
+    if (handle !== null) {
       try {
-        closeSync(fd);
+        await handle.close();
       } catch {
         // A close failure has no bearing on the read result.
       }
@@ -115,19 +118,19 @@ const defaultReadTail = (path: string, maxBytes: number): string | null => {
   }
 };
 
-const defaultReadHead = (path: string, maxBytes: number): string | null => {
-  let fd: number | null = null;
+const defaultReadHead = async (path: string, maxBytes: number): Promise<string | null> => {
+  let handle: FileHandle | null = null;
   try {
-    fd = openSync(path, "r");
+    handle = await open(path, "r");
     const buffer = Buffer.alloc(maxBytes);
-    const read = readSync(fd, buffer, 0, maxBytes, 0);
-    return buffer.toString("utf8", 0, read);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    return buffer.toString("utf8", 0, bytesRead);
   } catch {
     return null;
   } finally {
-    if (fd !== null) {
+    if (handle !== null) {
       try {
-        closeSync(fd);
+        await handle.close();
       } catch {
         // A close failure has no bearing on the read result.
       }
@@ -135,17 +138,17 @@ const defaultReadHead = (path: string, maxBytes: number): string | null => {
   }
 };
 
-const defaultReadWhole = (path: string): string | null => {
+const defaultReadWhole = async (path: string): Promise<string | null> => {
   try {
-    return readFileSync(path, "utf8");
+    return await Bun.file(path).text();
   } catch {
     return null;
   }
 };
 
-const defaultListDirectories = (path: string): string[] => {
+const defaultListDirectories = async (path: string): Promise<string[]> => {
   try {
-    return readdirSync(path);
+    return await readdir(path);
   } catch {
     return [];
   }
@@ -550,8 +553,10 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
   const grokCache = new Map<string, FileStat & { title: string | null; model: string | null }>();
   const grokSummaryPaths = new Map<string, string>();
 
-  const claudeFacts = (path: string): { title: string | null; model: string | null; activity: string | null } => {
-    const stat = statPath(path);
+  const claudeFacts = async (
+    path: string,
+  ): Promise<{ title: string | null; model: string | null; activity: string | null }> => {
+    const stat = await statPath(path);
     if (stat === null) {
       // A missing transcript is re-statted every pass; the failure is cheap
       // and there is no identity to cache against.
@@ -561,7 +566,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       return { title: cached.title, model: cached.model, activity: cached.activity };
     }
-    const tail = readTail(path, TAIL_BYTES);
+    const tail = await readTail(path, TAIL_BYTES);
     const title = tail === null ? null : claudeTitleFromTail(tail);
     const model = tail === null ? null : claudeModelFromTail(tail);
     const activity = tail === null ? null : claudeActivityFromTail(tail);
@@ -569,8 +574,10 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     return { title, model, activity };
   };
 
-  const ompFacts = (path: string): { title: string | null; model: string | null; activity: string | null } => {
-    const stat = statPath(path);
+  const ompFacts = async (
+    path: string,
+  ): Promise<{ title: string | null; model: string | null; activity: string | null }> => {
+    const stat = await statPath(path);
     if (stat === null) {
       return { title: null, model: null, activity: null };
     }
@@ -584,9 +591,9 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     // The title lives in the head slot and the model and activity in the
     // newest tail records, so one changed file costs one head read plus one
     // tail read.
-    const head = readHead(path, OMP_HEAD_BYTES);
+    const head = await readHead(path, OMP_HEAD_BYTES);
     const title = head === null ? null : ompTitleFromHead(head);
-    const tail = readTail(path, TAIL_BYTES);
+    const tail = await readTail(path, TAIL_BYTES);
     const model = tail === null ? null : ompModelFromTail(tail);
     const activity = tail === null ? null : ompActivityFromTail(tail);
     ompCache.set(path, { ...stat, title, model, activity });
@@ -600,14 +607,14 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
    * remembered; an unfound session re-scans next pass (the scan is one
    * readdir plus one stat per group, and grok rows are few).
    */
-  const grokSummaryPath = (sessionId: string): string | null => {
+  const grokSummaryPath = async (sessionId: string): Promise<string | null> => {
     const known = grokSummaryPaths.get(sessionId);
     if (known !== undefined) {
       return known;
     }
-    for (const group of listDirectories(dependencies.grokSessionsRoot)) {
+    for (const group of await listDirectories(dependencies.grokSessionsRoot)) {
       const candidate = join(dependencies.grokSessionsRoot, group, sessionId, "summary.json");
-      if (statPath(candidate) !== null) {
+      if ((await statPath(candidate)) !== null) {
         grokSummaryPaths.set(sessionId, candidate);
         return candidate;
       }
@@ -615,12 +622,12 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     return null;
   };
 
-  const grokFacts = (sessionId: string): { title: string | null; model: string | null } => {
-    const path = grokSummaryPath(sessionId);
+  const grokFacts = async (sessionId: string): Promise<{ title: string | null; model: string | null }> => {
+    const path = await grokSummaryPath(sessionId);
     if (path === null) {
       return { title: null, model: null };
     }
-    const stat = statPath(path);
+    const stat = await statPath(path);
     if (stat === null) {
       return { title: null, model: null };
     }
@@ -628,14 +635,14 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       return { title: cached.title, model: cached.model };
     }
-    const content = readWhole(path);
+    const content = await readWhole(path);
     const facts = content === null ? { title: null, model: null } : grokFactsFromSummary(content);
     grokCache.set(path, { ...stat, ...facts });
     return facts;
   };
 
-  const codexRolloutFacts = (path: string): { model: string | null; activity: string | null } => {
-    const stat = statPath(path);
+  const codexRolloutFacts = async (path: string): Promise<{ model: string | null; activity: string | null }> => {
+    const stat = await statPath(path);
     if (stat === null) {
       return { model: null, activity: null };
     }
@@ -643,22 +650,22 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       return { model: cached.model, activity: cached.activity };
     }
-    const tail = readTail(path, TAIL_BYTES);
+    const tail = await readTail(path, TAIL_BYTES);
     const model = tail === null ? null : codexModelFromTail(tail);
     const activity = tail === null ? null : codexActivityFromTail(tail);
     codexModelCache.set(path, { ...stat, model, activity });
     return { model, activity };
   };
 
-  const codexTitles = (): Map<string, string> => {
-    const stat = statPath(dependencies.codexIndexPath);
+  const codexTitles = async (): Promise<Map<string, string>> => {
+    const stat = await statPath(dependencies.codexIndexPath);
     if (stat === null) {
       return new Map();
     }
     if (codexCache !== null && codexCache.mtimeMs === stat.mtimeMs && codexCache.size === stat.size) {
       return codexCache.byId;
     }
-    const content = readWhole(dependencies.codexIndexPath);
+    const content = await readWhole(dependencies.codexIndexPath);
     const byId = content === null ? new Map<string, string>() : codexTitlesFromIndex(content);
     codexCache = { ...stat, byId };
     return byId;
@@ -666,22 +673,22 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
 
   // kimi rows register with no transcript path, so the wire transcript is
   // located through the session index — the same shape as codex titles.
-  const kimiSessionDirs = (): Map<string, string> => {
-    const stat = statPath(dependencies.kimiIndexPath);
+  const kimiSessionDirs = async (): Promise<Map<string, string>> => {
+    const stat = await statPath(dependencies.kimiIndexPath);
     if (stat === null) {
       return new Map();
     }
     if (kimiIndexCache !== null && kimiIndexCache.mtimeMs === stat.mtimeMs && kimiIndexCache.size === stat.size) {
       return kimiIndexCache.byId;
     }
-    const content = readWhole(dependencies.kimiIndexPath);
+    const content = await readWhole(dependencies.kimiIndexPath);
     const byId = content === null ? new Map<string, string>() : kimiSessionDirsFromIndex(content);
     kimiIndexCache = { ...stat, byId };
     return byId;
   };
 
-  const kimiWireActivity = (path: string): string | null => {
-    const stat = statPath(path);
+  const kimiWireActivity = async (path: string): Promise<string | null> => {
+    const stat = await statPath(path);
     if (stat === null) {
       return null;
     }
@@ -689,14 +696,14 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
     if (cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       return cached.activity;
     }
-    const tail = readTail(path, TAIL_BYTES);
+    const tail = await readTail(path, TAIL_BYTES);
     const activity = tail === null ? null : kimiActivityFromTail(tail);
     kimiWireCache.set(path, { ...stat, activity });
     return activity;
   };
 
   return {
-    resolve: (targets) => {
+    resolve: async (targets) => {
       const titles: SessionTitleUpdate[] = [];
       const models: SessionModelUpdate[] = [];
       const activities: SessionActivityLineUpdate[] = [];
@@ -708,20 +715,20 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
         let resolvedModel: string | null = null;
         let resolvedActivity: string | null = null;
         if (target.provider === "claude" && target.transcriptPath !== null) {
-          const facts = claudeFacts(target.transcriptPath);
+          const facts = await claudeFacts(target.transcriptPath);
           resolvedTitle = facts.title;
           resolvedModel = facts.model;
           resolvedActivity = facts.activity;
         } else if (target.provider === "omp" && target.transcriptPath !== null) {
-          const facts = ompFacts(target.transcriptPath);
+          const facts = await ompFacts(target.transcriptPath);
           resolvedTitle = facts.title;
           resolvedModel = facts.model;
           resolvedActivity = facts.activity;
         } else if (target.provider === "codex") {
-          codexById ??= codexTitles();
+          codexById ??= await codexTitles();
           resolvedTitle = codexById.get(target.sessionId) ?? null;
           if (target.transcriptPath !== null) {
-            const facts = codexRolloutFacts(target.transcriptPath);
+            const facts = await codexRolloutFacts(target.transcriptPath);
             resolvedModel = facts.model;
             resolvedActivity = facts.activity;
           }
@@ -732,14 +739,14 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
           );
           resolvedTitle = zcodeById.get(target.sessionId) ?? null;
         } else if (target.provider === "grok") {
-          const facts = grokFacts(target.sessionId);
+          const facts = await grokFacts(target.sessionId);
           resolvedTitle = facts.title;
           resolvedModel = facts.model;
         } else if (target.provider === "kimi") {
-          kimiById ??= kimiSessionDirs();
+          kimiById ??= await kimiSessionDirs();
           const sessionDir = kimiById.get(target.sessionId);
           if (sessionDir !== undefined) {
-            resolvedActivity = kimiWireActivity(join(sessionDir, "agents", "main", "wire.jsonl"));
+            resolvedActivity = await kimiWireActivity(join(sessionDir, "agents", "main", "wire.jsonl"));
           }
         }
         if (resolvedTitle !== null && resolvedTitle !== target.title) {

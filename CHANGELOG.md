@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The session-facts and Paseo sweeps no longer run their filesystem walks on
+  the daemon's event loop: both read provider files asynchronously and hand
+  the settled results back to the poll, so a slow or contended disk (a large
+  Time Machine backup, Spotlight) can no longer stall the heartbeat and flip
+  the board OFFLINE for a few seconds. The walks keep their cadence and
+  (mtime, size) caches, and a slow sweep now self-throttles with an
+  in-flight guard instead of stacking.
+
 ## [1.1.0] - 2026-09-03
 
 ### Added

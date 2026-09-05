@@ -29,16 +29,18 @@
  *   vocabulary (unknown values → null) — the registry sync uses a settled
  *   value as proof that a stuck working row's turn-end was missed.
  *
- * Every read flows through injected filesystem dependencies, and results are
- * cached per file on the (mtime, size) identity, so a pass over unchanged
- * records costs one stat each (mirroring the titles resolver's Claude
- * transcript cache). Entries for files missing from a pass are evicted, so
- * deleted agents never accumulate in the long-lived daemon. The loader never
- * throws: a missing agents directory yields an empty list, and malformed or
- * incomplete records are skipped without voiding the pass.
+ * Every read flows through injected async filesystem dependencies — the
+ * sweep never blocks the daemon's event loop, whose heartbeat the board's
+ * liveness rides on — and results are cached per file on the (mtime, size)
+ * identity, so a pass over unchanged records costs one stat each (mirroring
+ * the titles resolver's Claude transcript cache). Entries for files missing
+ * from a pass are evicted, so deleted agents never accumulate in the
+ * long-lived daemon. The loader never throws: a missing agents directory
+ * yields an empty list, and malformed or incomplete records are skipped
+ * without voiding the pass.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { PROVIDER_KEYS, type Provider } from "../protocol";
 
@@ -89,9 +91,9 @@ export type PaseoAgentState = {
 export type PaseoFileStat = { mtimeMs: number; size: number };
 
 export type PaseoLoaderDependencies = {
-  readWhole?: (path: string) => string | null;
-  listFiles?: (dir: string) => string[];
-  statPath?: (path: string) => PaseoFileStat | null;
+  readWhole?: (path: string) => Promise<string | null>;
+  listFiles?: (dir: string) => Promise<string[]>;
+  statPath?: (path: string) => Promise<PaseoFileStat | null>;
 };
 
 /**
@@ -219,27 +221,27 @@ const parseAgentRecord = (value: unknown): PaseoAgentState | null => {
   };
 };
 
-const defaultStatPath = (path: string): PaseoFileStat | null => {
+const defaultStatPath = async (path: string): Promise<PaseoFileStat | null> => {
   try {
-    const stats = statSync(path);
+    const stats = await stat(path);
     return { mtimeMs: stats.mtimeMs, size: stats.size };
   } catch {
     return null;
   }
 };
 
-const defaultReadWhole = (path: string): string | null => {
+const defaultReadWhole = async (path: string): Promise<string | null> => {
   try {
-    return readFileSync(path, "utf8");
+    return await Bun.file(path).text();
   } catch {
     return null;
   }
 };
 
 /** A missing or unreadable directory lists as empty; the loader never throws. */
-const defaultListFiles = (dir: string): string[] => {
+const defaultListFiles = async (dir: string): Promise<string[]> => {
   try {
-    return readdirSync(dir);
+    return await readdir(dir);
   } catch {
     return [];
   }
@@ -251,8 +253,8 @@ export const createPaseoAgentStateLoader = (dependencies: PaseoLoaderDependencie
   const listFiles = dependencies.listFiles ?? defaultListFiles;
   const cache = new Map<string, PaseoFileStat & { state: PaseoAgentState | null }>();
 
-  const readAgentFile = (path: string): PaseoAgentState | null => {
-    const stat = statPath(path);
+  const readAgentFile = async (path: string): Promise<PaseoAgentState | null> => {
+    const stat = await statPath(path);
     if (stat === null) {
       return null;
     }
@@ -261,7 +263,7 @@ export const createPaseoAgentStateLoader = (dependencies: PaseoLoaderDependencie
       return cached.state;
     }
     let state: PaseoAgentState | null = null;
-    const content = readWhole(path);
+    const content = await readWhole(path);
     if (content !== null) {
       try {
         state = parseAgentRecord(JSON.parse(content));
@@ -274,18 +276,18 @@ export const createPaseoAgentStateLoader = (dependencies: PaseoLoaderDependencie
     return state;
   };
 
-  return (paseoDir: string): PaseoAgentState[] => {
+  return async (paseoDir: string): Promise<PaseoAgentState[]> => {
     const states: PaseoAgentState[] = [];
     const seen = new Set<string>();
-    for (const workspace of listFiles(paseoDir)) {
+    for (const workspace of await listFiles(paseoDir)) {
       const workspaceDir = join(paseoDir, workspace);
-      for (const entry of listFiles(workspaceDir)) {
+      for (const entry of await listFiles(workspaceDir)) {
         if (!entry.endsWith(".json")) {
           continue;
         }
         const path = join(workspaceDir, entry);
         seen.add(path);
-        const state = readAgentFile(path);
+        const state = await readAgentFile(path);
         if (state !== null) {
           states.push(state);
         }

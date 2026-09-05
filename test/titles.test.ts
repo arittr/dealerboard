@@ -41,17 +41,17 @@ const makeResolver = (seed?: {
     kimiIndexPath: KIMI_INDEX,
     zcodeDatabasePath: seed?.zcodeDatabasePath ?? "/nonexistent/zcode/db.sqlite",
     grokSessionsRoot: seed?.grokSessionsRoot ?? "/nonexistent/grok/sessions",
-    statPath: (path) => stats.get(path) ?? null,
-    listDirectories: (path) => lists.get(path) ?? [],
-    readTail: (path) => {
+    statPath: async (path) => stats.get(path) ?? null,
+    listDirectories: async (path) => lists.get(path) ?? [],
+    readTail: async (path) => {
       tailReads += 1;
       return tails.get(path) ?? null;
     },
-    readWhole: (path) => {
+    readWhole: async (path) => {
       wholeReads += 1;
       return wholes.get(path) ?? null;
     },
-    readHead: (path) => {
+    readHead: async (path) => {
       headReads += 1;
       return heads.get(path) ?? null;
     },
@@ -85,81 +85,88 @@ const aiTitle = (title: string): string =>
   `${JSON.stringify({ type: "user" })}\n${JSON.stringify({ type: "ai-title", aiTitle: title, sessionId: "s1" })}\n`;
 
 describe("Claude transcript titles", () => {
-  test("extracts the last ai-title line from the transcript tail", () => {
+  test("returns a promise: provider-file reads never block the daemon's event loop", () => {
+    const { resolver } = makeResolver();
+    expect(resolver.resolve([claudeTarget()])).toBeInstanceOf(Promise);
+  });
+
+  test("extracts the last ai-title line from the transcript tail", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": `${aiTitle("Old title")}${aiTitle("Test PR 2085 with Cursor")}` },
     });
-    expect(resolver.resolve([claudeTarget()]).titles).toEqual([
+    expect((await resolver.resolve([claudeTarget()])).titles).toEqual([
       { provider: "claude", sessionId: "s1", title: "Test PR 2085 with Cursor" },
     ]);
   });
 
-  test("skips malformed ai-title lines and falls back to an older valid one", () => {
+  test("skips malformed ai-title lines and falls back to an older valid one", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: {
         "/transcripts/s1.jsonl": `${aiTitle("Valid title")}{"type":"ai-title","aiTitle":"truncated\n`,
       },
     });
-    expect(resolver.resolve([claudeTarget()]).titles).toEqual([
+    expect((await resolver.resolve([claudeTarget()])).titles).toEqual([
       { provider: "claude", sessionId: "s1", title: "Valid title" },
     ]);
   });
 
-  test("proposes nothing when the transcript has no ai-title, is missing, or is unchanged", () => {
+  test("proposes nothing when the transcript has no ai-title, is missing, or is unchanged", async () => {
     const noTitle = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": '{"type":"user","text":"hello"}\n' },
     });
-    expect(noTitle.resolver.resolve([claudeTarget()]).titles).toEqual([]);
+    expect((await noTitle.resolver.resolve([claudeTarget()])).titles).toEqual([]);
 
     const missing = makeResolver();
-    expect(missing.resolver.resolve([claudeTarget()]).titles).toEqual([]);
+    expect((await missing.resolver.resolve([claudeTarget()])).titles).toEqual([]);
 
     // An already-matching stored title produces no update.
     const same = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": aiTitle("Same") },
     });
-    expect(same.resolver.resolve([claudeTarget({ title: "Same" })]).titles).toEqual([]);
+    expect((await same.resolver.resolve([claudeTarget({ title: "Same" })])).titles).toEqual([]);
   });
 
-  test("bounds a resolved title to 256 code points", () => {
+  test("bounds a resolved title to 256 code points", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": aiTitle("🙂".repeat(300)) },
     });
-    const updates = resolver.resolve([claudeTarget()]).titles;
+    const updates = (await resolver.resolve([claudeTarget()])).titles;
     expect(updates).toHaveLength(1);
     expect(Array.from(updates[0]?.title ?? "")).toHaveLength(256);
   });
 
-  test("caches per path on mtime and size, re-reading only after a change", () => {
+  test("caches per path on mtime and size, re-reading only after a change", async () => {
     const { resolver, fs } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": aiTitle("First") },
     });
     const target = claudeTarget();
-    expect(resolver.resolve([target]).titles).toHaveLength(1);
+    expect((await resolver.resolve([target])).titles).toHaveLength(1);
     expect(fs.tailReads()).toBe(1);
 
     // Identical identity: stat only, no second read, and the session's stored
     // title now matches so no update is proposed.
     const titled = claudeTarget({ title: "First" });
-    expect(resolver.resolve([titled]).titles).toEqual([]);
+    expect((await resolver.resolve([titled])).titles).toEqual([]);
     expect(fs.tailReads()).toBe(1);
 
     // A grown transcript re-reads and yields the new title.
     fs.stats.set("/transcripts/s1.jsonl", { mtimeMs: 200, size: 900 });
     fs.tails.set("/transcripts/s1.jsonl", aiTitle("Second"));
-    expect(resolver.resolve([titled]).titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Second" }]);
+    expect((await resolver.resolve([titled])).titles).toEqual([
+      { provider: "claude", sessionId: "s1", title: "Second" },
+    ]);
     expect(fs.tailReads()).toBe(2);
   });
 
-  test("skips Claude rows without a transcript path", () => {
+  test("skips Claude rows without a transcript path", async () => {
     const { resolver, fs } = makeResolver();
-    expect(resolver.resolve([claudeTarget({ transcriptPath: null })]).titles).toEqual([]);
+    expect((await resolver.resolve([claudeTarget({ transcriptPath: null })])).titles).toEqual([]);
     expect(fs.tailReads()).toBe(0);
   });
 });
@@ -168,7 +175,7 @@ describe("Codex session-index titles", () => {
   const indexLine = (id: string, threadName: string): string =>
     JSON.stringify({ id, thread_name: threadName, updated_at: "2026-08-10T05:41:28.455703Z" });
 
-  test("maps thread_name by session id, last occurrence winning", () => {
+  test("maps thread_name by session id, last occurrence winning", async () => {
     const { resolver } = makeResolver({
       stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } },
       wholes: {
@@ -176,13 +183,15 @@ describe("Codex session-index titles", () => {
       },
     });
     expect(
-      resolver.resolve([
-        { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
-      ]).titles,
+      (
+        await resolver.resolve([
+          { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
+        ])
+      ).titles,
     ).toEqual([{ provider: "codex", sessionId: "c1", title: "Add AIS points to radar display" }]);
   });
 
-  test("skips malformed lines and ids without a live session", () => {
+  test("skips malformed lines and ids without a live session", async () => {
     const { resolver } = makeResolver({
       stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } },
       wholes: {
@@ -190,14 +199,23 @@ describe("Codex session-index titles", () => {
       },
     });
     expect(
-      resolver.resolve([
-        { provider: "codex", sessionId: "c2", title: null, model: null, activityLine: null, transcriptPath: null },
-        { provider: "codex", sessionId: "unknown", title: null, model: null, activityLine: null, transcriptPath: null },
-      ]).titles,
+      (
+        await resolver.resolve([
+          { provider: "codex", sessionId: "c2", title: null, model: null, activityLine: null, transcriptPath: null },
+          {
+            provider: "codex",
+            sessionId: "unknown",
+            title: null,
+            model: null,
+            activityLine: null,
+            transcriptPath: null,
+          },
+        ])
+      ).titles,
     ).toEqual([{ provider: "codex", sessionId: "c2", title: "Real name" }]);
   });
 
-  test("reparses the index only when its identity changes", () => {
+  test("reparses the index only when its identity changes", async () => {
     const { resolver, fs } = makeResolver({
       stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } },
       wholes: { [CODEX_INDEX]: `${indexLine("c1", "First")}\n` },
@@ -210,10 +228,10 @@ describe("Codex session-index titles", () => {
       activityLine: null,
       transcriptPath: null,
     };
-    expect(resolver.resolve([target]).titles).toHaveLength(1);
+    expect((await resolver.resolve([target])).titles).toHaveLength(1);
     expect(fs.wholeReads()).toBe(1);
 
-    resolver.resolve([
+    await resolver.resolve([
       target,
       { provider: "codex", sessionId: "c2", title: null, model: null, activityLine: null, transcriptPath: null },
     ]);
@@ -221,23 +239,29 @@ describe("Codex session-index titles", () => {
 
     fs.stats.set(CODEX_INDEX, { mtimeMs: 200, size: 350 });
     fs.wholes.set(CODEX_INDEX, `${indexLine("c1", "Second")}\n`);
-    expect(resolver.resolve([target]).titles).toEqual([{ provider: "codex", sessionId: "c1", title: "Second" }]);
+    expect((await resolver.resolve([target])).titles).toEqual([
+      { provider: "codex", sessionId: "c1", title: "Second" },
+    ]);
     expect(fs.wholeReads()).toBe(2);
   });
 
-  test("a missing or unreadable index resolves nothing", () => {
+  test("a missing or unreadable index resolves nothing", async () => {
     const missing = makeResolver();
     expect(
-      missing.resolver.resolve([
-        { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
-      ]).titles,
+      (
+        await missing.resolver.resolve([
+          { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
+        ])
+      ).titles,
     ).toEqual([]);
 
     const unreadable = makeResolver({ stats: { [CODEX_INDEX]: { mtimeMs: 100, size: 300 } } });
     expect(
-      unreadable.resolver.resolve([
-        { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
-      ]).titles,
+      (
+        await unreadable.resolver.resolve([
+          { provider: "codex", sessionId: "c1", title: null, model: null, activityLine: null, transcriptPath: null },
+        ])
+      ).titles,
     ).toEqual([]);
   });
 });
@@ -247,29 +271,29 @@ describe("Session model resolution", () => {
   const turnContextLine = (model: string): string =>
     `${JSON.stringify({ type: "turn_context", payload: { model } })}\n`;
 
-  test("resolves a claude model from the same transcript tail as the title", () => {
+  test("resolves a claude model from the same transcript tail as the title", async () => {
     const { resolver, fs } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": `${aiTitle("Fix the widget")}${assistantLine("claude-fable-5")}` },
     });
-    const result = resolver.resolve([claudeTarget()]);
+    const result = await resolver.resolve([claudeTarget()]);
     expect(result.titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Fix the widget" }]);
     expect(result.models).toEqual([{ provider: "claude", sessionId: "s1", model: "claude-fable-5" }]);
     // One tail read serves both facts.
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("the last authoritative record wins after a mid-session model switch", () => {
+  test("the last authoritative record wins after a mid-session model switch", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": `${assistantLine("claude-fable-5")}${assistantLine("claude-k2")}` },
     });
-    expect(resolver.resolve([claudeTarget()]).models).toEqual([
+    expect((await resolver.resolve([claudeTarget()])).models).toEqual([
       { provider: "claude", sessionId: "s1", model: "claude-k2" },
     ]);
   });
 
-  test("an assistant record's nested tool-call model argument never beats message.model", () => {
+  test("an assistant record's nested tool-call model argument never beats message.model", async () => {
     // The decoy: a subagent dispatch whose tool input names a different model.
     // Only message.model is the session's model; an unstructured scan of the
     // tail would resolve the nested argument because it occurs later.
@@ -284,36 +308,36 @@ describe("Session model resolution", () => {
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": `${assistantLine("claude-fable-5")}${dispatch}` },
     });
-    expect(resolver.resolve([claudeTarget()]).models).toEqual([
+    expect((await resolver.resolve([claudeTarget()])).models).toEqual([
       { provider: "claude", sessionId: "s1", model: "claude-fable-5" },
     ]);
   });
 
-  test("a truncated final model record is skipped without throwing", () => {
+  test("a truncated final model record is skipped without throwing", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: {
         "/transcripts/s1.jsonl": `${assistantLine("claude-fable-5")}{"type":"assistant","message":{"model":"claude-tr`,
       },
     });
-    expect(resolver.resolve([claudeTarget()]).models).toEqual([
+    expect((await resolver.resolve([claudeTarget()])).models).toEqual([
       { provider: "claude", sessionId: "s1", model: "claude-fable-5" },
     ]);
   });
 
-  test("a transcript with no model record proposes no model update", () => {
+  test("a transcript with no model record proposes no model update", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": aiTitle("Only a title") },
     });
-    const result = resolver.resolve([claudeTarget()]);
+    const result = await resolver.resolve([claudeTarget()]);
     expect(result.titles).toHaveLength(1);
     // Nothing proposed, so a stored model is never cleared — the registry
     // only applies proposed updates.
     expect(result.models).toEqual([]);
   });
 
-  test("resolves a codex model from the rollout at transcript_path", () => {
+  test("resolves a codex model from the rollout at transcript_path", async () => {
     const { resolver, fs } = makeResolver({
       stats: {
         [CODEX_INDEX]: { mtimeMs: 100, size: 300 },
@@ -322,7 +346,7 @@ describe("Session model resolution", () => {
       wholes: { [CODEX_INDEX]: `${JSON.stringify({ id: "c1", thread_name: "Index name" })}\n` },
       tails: { "/rollouts/c1.jsonl": turnContextLine("gpt-5.6-luna") },
     });
-    const result = resolver.resolve([
+    const result = await resolver.resolve([
       {
         provider: "codex",
         sessionId: "c1",
@@ -340,7 +364,7 @@ describe("Session model resolution", () => {
     expect(fs.wholeReads()).toBe(1);
   });
 
-  test("a rollout response item's model field never beats turn_context", () => {
+  test("a rollout response item's model field never beats turn_context", async () => {
     const responseItem = `${JSON.stringify({
       type: "response_item",
       payload: { type: "message", model: "gpt-5.6-sol" },
@@ -354,28 +378,30 @@ describe("Session model resolution", () => {
       tails: { "/rollouts/c1.jsonl": `${turnContextLine("gpt-5.6-luna")}${responseItem}` },
     });
     expect(
-      resolver.resolve([
-        {
-          provider: "codex",
-          sessionId: "c1",
-          title: null,
-          model: null,
-          activityLine: null,
-          transcriptPath: "/rollouts/c1.jsonl",
-        },
-      ]).models,
+      (
+        await resolver.resolve([
+          {
+            provider: "codex",
+            sessionId: "c1",
+            title: null,
+            model: null,
+            activityLine: null,
+            transcriptPath: "/rollouts/c1.jsonl",
+          },
+        ])
+      ).models,
     ).toEqual([{ provider: "codex", sessionId: "c1", model: "gpt-5.6-luna" }]);
   });
 
-  test("a stored-equal model proposes no update", () => {
+  test("a stored-equal model proposes no update", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": assistantLine("claude-fable-5") },
     });
-    expect(resolver.resolve([claudeTarget({ model: "claude-fable-5" })]).models).toEqual([]);
+    expect((await resolver.resolve([claudeTarget({ model: "claude-fable-5" })])).models).toEqual([]);
   });
 
-  test("zcode and kimi targets are never model-resolved", () => {
+  test("zcode and kimi targets are never model-resolved", async () => {
     const { resolver, fs } = makeResolver({
       stats: {
         "/transcripts/k1.jsonl": { mtimeMs: 100, size: 500 },
@@ -386,7 +412,7 @@ describe("Session model resolution", () => {
         "/transcripts/z1.jsonl": assistantLine("glm-5.3"),
       },
     });
-    const result = resolver.resolve([
+    const result = await resolver.resolve([
       {
         provider: "kimi",
         sessionId: "k1",
@@ -411,22 +437,24 @@ describe("Session model resolution", () => {
 });
 
 describe("other providers", () => {
-  test("never resolves Kimi rows, whose hooks already push titles", () => {
+  test("never resolves Kimi rows, whose hooks already push titles", async () => {
     const { resolver, fs } = makeResolver({
       stats: { "/transcripts/k1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/k1.jsonl": aiTitle("Should not be read") },
     });
     expect(
-      resolver.resolve([
-        {
-          provider: "kimi",
-          sessionId: "k1",
-          title: null,
-          model: null,
-          activityLine: null,
-          transcriptPath: "/transcripts/k1.jsonl",
-        },
-      ]).titles,
+      (
+        await resolver.resolve([
+          {
+            provider: "kimi",
+            sessionId: "k1",
+            title: null,
+            model: null,
+            activityLine: null,
+            transcriptPath: "/transcripts/k1.jsonl",
+          },
+        ])
+      ).titles,
     ).toEqual([]);
     expect(fs.tailReads()).toBe(0);
   });
@@ -435,10 +463,10 @@ describe("other providers", () => {
 describe("zcode SQLite titles", () => {
   const ZCODE_TABLE_DDL = "CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT)";
 
-  const withFixtureDb = (
+  const withFixtureDb = async (
     rows: readonly { id: string; title: string | null }[],
-    run: (dbPath: string) => void,
-  ): void => {
+    run: (dbPath: string) => Promise<void>,
+  ): Promise<void> => {
     const dir = mkdtempSync(join(tmpdir(), "dealerboard-zcode-titles-"));
     try {
       const dbPath = join(dir, "db.sqlite");
@@ -451,7 +479,7 @@ describe("zcode SQLite titles", () => {
       } finally {
         setup.close();
       }
-      run(dbPath);
+      await run(dbPath);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -466,31 +494,31 @@ describe("zcode SQLite titles", () => {
     transcriptPath: null,
   });
 
-  test("resolves titles per live zcode row", () => {
-    withFixtureDb(
+  test("resolves titles per live zcode row", async () => {
+    await withFixtureDb(
       [
         { id: "z1", title: "Fix the widget renderer" },
         { id: "z2", title: null },
       ],
-      (dbPath) => {
+      async (dbPath) => {
         const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-        expect(resolver.resolve([zcodeTarget("z1"), zcodeTarget("z2"), zcodeTarget("ghost")]).titles).toEqual([
+        expect((await resolver.resolve([zcodeTarget("z1"), zcodeTarget("z2"), zcodeTarget("ghost")])).titles).toEqual([
           { provider: "zcode", sessionId: "z1", title: "Fix the widget renderer" },
         ]);
       },
     );
   });
 
-  test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", () => {
+  test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", async () => {
     // 265 code points with astral emoji straddling the 256th: a UTF-16
     // unit slice would split the surrogate pair there, so only code-point
     // truncation can satisfy both the length and the content assertion.
     const longTitle = `${"🔧".repeat(120)}${"y".repeat(125)}${"🛠".repeat(20)}`;
     const expected = Array.from(longTitle).slice(0, 256).join("");
     expect(Array.from(longTitle).length).toBeGreaterThan(256);
-    withFixtureDb([{ id: "z1", title: longTitle }], (dbPath) => {
+    await withFixtureDb([{ id: "z1", title: longTitle }], async (dbPath) => {
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-      const updates = resolver.resolve([zcodeTarget("z1")]).titles;
+      const updates = (await resolver.resolve([zcodeTarget("z1")])).titles;
       expect(updates).toHaveLength(1);
       const title = updates[0]?.title ?? "";
       expect(Array.from(title)).toHaveLength(256);
@@ -498,14 +526,14 @@ describe("zcode SQLite titles", () => {
     });
   });
 
-  test("proposes nothing when the stored title already matches", () => {
-    withFixtureDb([{ id: "z1", title: "Same" }], (dbPath) => {
+  test("proposes nothing when the stored title already matches", async () => {
+    await withFixtureDb([{ id: "z1", title: "Same" }], async (dbPath) => {
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-      expect(resolver.resolve([zcodeTarget("z1", "Same")]).titles).toEqual([]);
+      expect((await resolver.resolve([zcodeTarget("z1", "Same")])).titles).toEqual([]);
     });
   });
 
-  test("sees a WAL commit that has not checkpointed (no stat cache)", () => {
+  test("sees a WAL commit that has not checkpointed (no stat cache)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "dealerboard-zcode-titles-"));
     try {
       const dbPath = join(dir, "db.sqlite");
@@ -523,11 +551,11 @@ describe("zcode SQLite titles", () => {
       // caching on (mtime, size) would never see this write.
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
       try {
-        expect(resolver.resolve([zcodeTarget("z1")]).titles).toEqual([
+        expect((await resolver.resolve([zcodeTarget("z1")])).titles).toEqual([
           { provider: "zcode", sessionId: "z1", title: "Initial" },
         ]);
         writer.run("UPDATE session SET title = 'Renamed mid-stream' WHERE id = 'z1'");
-        expect(resolver.resolve([zcodeTarget("z1")]).titles).toEqual([
+        expect((await resolver.resolve([zcodeTarget("z1")])).titles).toEqual([
           { provider: "zcode", sessionId: "z1", title: "Renamed mid-stream" },
         ]);
       } finally {
@@ -538,9 +566,9 @@ describe("zcode SQLite titles", () => {
     }
   });
 
-  test("a missing database or an unexpected schema resolves nothing and never throws", () => {
+  test("a missing database or an unexpected schema resolves nothing and never throws", async () => {
     const missing = makeResolver();
-    expect(missing.resolver.resolve([zcodeTarget("z1")]).titles).toEqual([]);
+    expect((await missing.resolver.resolve([zcodeTarget("z1")])).titles).toEqual([]);
 
     const dir = mkdtempSync(join(tmpdir(), "dealerboard-zcode-titles-"));
     try {
@@ -549,7 +577,7 @@ describe("zcode SQLite titles", () => {
       wrong.exec("CREATE TABLE unrelated (id TEXT PRIMARY KEY)");
       wrong.close();
       const { resolver } = makeResolver({ zcodeDatabasePath: dbPath });
-      expect(resolver.resolve([zcodeTarget("z1")]).titles).toEqual([]);
+      expect((await resolver.resolve([zcodeTarget("z1")])).titles).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -596,7 +624,7 @@ describe("omp session-file titles", () => {
       message: { role: "assistant", model, provider: "zai", content: [{ type: "text", text: "reply" }] },
     })}\n`;
 
-  test("reads the title slot and assistant-message model from a synthetic omp session file", () => {
+  test("reads the title slot and assistant-message model from a synthetic omp session file", async () => {
     // Real filesystem access against synthetic fixture data — no fs fakes.
     const resolver = createSessionFactsResolver({
       codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
@@ -604,36 +632,36 @@ describe("omp session-file titles", () => {
       zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
       grokSessionsRoot: "/nonexistent/grok/sessions",
     });
-    const updates = resolver.resolve([
+    const updates = await resolver.resolve([
       { provider: "omp", sessionId: "o1", title: null, model: null, activityLine: null, transcriptPath: FIXTURE_PATH },
     ]);
     expect(updates.titles).toEqual([{ provider: "omp", sessionId: "o1", title: FIXTURE_TITLE }]);
     expect(updates.models).toEqual([{ provider: "omp", sessionId: "o1", model: FIXTURE_MODEL }]);
   });
 
-  test("caches per path on mtime and size", () => {
+  test("caches per path on mtime and size", async () => {
     const { resolver, fs } = makeResolver({
       zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
       heads: { "/sessions/o1.jsonl": `${slotRecord("Auto-titled session")}{"type":"session","version":3}\n` },
     });
-    expect(resolver.resolve([ompTarget()]).titles).toEqual([
+    expect((await resolver.resolve([ompTarget()])).titles).toEqual([
       { provider: "omp", sessionId: "o1", title: "Auto-titled session" },
     ]);
     expect(fs.headReads()).toBe(1);
 
-    expect(resolver.resolve([ompTarget({ title: "Auto-titled session" })]).titles).toEqual([]);
+    expect((await resolver.resolve([ompTarget({ title: "Auto-titled session" })])).titles).toEqual([]);
     expect(fs.headReads()).toBe(1);
 
     fs.stats.set("/sessions/o1.jsonl", { mtimeMs: 200, size: 1200 });
     fs.heads.set("/sessions/o1.jsonl", slotRecord("Retitled"));
-    expect(resolver.resolve([ompTarget({ title: "Auto-titled session" })]).titles).toEqual([
+    expect((await resolver.resolve([ompTarget({ title: "Auto-titled session" })])).titles).toEqual([
       { provider: "omp", sessionId: "o1", title: "Retitled" },
     ]);
     expect(fs.headReads()).toBe(2);
   });
 
-  test("falls back to the first parseable JSONL title line after the untitled 256-byte slot", () => {
+  test("falls back to the first parseable JSONL title line after the untitled 256-byte slot", async () => {
     // Wire-exact boundary: the untitled slot occupies exactly the first
     // OMP_SLOT_BYTES bytes, and the title_change record lives beyond them.
     expect(Buffer.byteLength(slotRecord(""), "utf8")).toBe(OMP_SLOT_BYTES);
@@ -643,12 +671,12 @@ describe("omp session-file titles", () => {
         "/sessions/o1.jsonl": `${slotRecord("")}{"type":"message"}\n{"type":"title_change","id":"x","title":"Fallback title"}\n`,
       },
     });
-    expect(resolver.resolve([ompTarget()]).titles).toEqual([
+    expect((await resolver.resolve([ompTarget()])).titles).toEqual([
       { provider: "omp", sessionId: "o1", title: "Fallback title" },
     ]);
   });
 
-  test("resolves the model from the last assistant message record in the tail", () => {
+  test("resolves the model from the last assistant message record in the tail", async () => {
     const { resolver } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
       heads: { "/sessions/o1.jsonl": slotRecord("Auto-titled session") },
@@ -659,23 +687,29 @@ describe("omp session-file titles", () => {
           `${JSON.stringify({ type: "message", message: { role: "toolResult", toolName: "read", content: [] } })}\n`,
       },
     });
-    expect(resolver.resolve([ompTarget()]).models).toEqual([{ provider: "omp", sessionId: "o1", model: "glm-5.3" }]);
+    expect((await resolver.resolve([ompTarget()])).models).toEqual([
+      { provider: "omp", sessionId: "o1", model: "glm-5.3" },
+    ]);
   });
 
-  test("caches the tail read on mtime and size and skips a matching stored model", () => {
+  test("caches the tail read on mtime and size and skips a matching stored model", async () => {
     const { resolver, fs } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
       heads: { "/sessions/o1.jsonl": slotRecord("Auto-titled session") },
       tails: { "/sessions/o1.jsonl": assistantMessage("glm-5.3") },
     });
-    expect(resolver.resolve([ompTarget()]).models).toEqual([{ provider: "omp", sessionId: "o1", model: "glm-5.3" }]);
+    expect((await resolver.resolve([ompTarget()])).models).toEqual([
+      { provider: "omp", sessionId: "o1", model: "glm-5.3" },
+    ]);
     expect(fs.tailReads()).toBe(1);
 
-    expect(resolver.resolve([ompTarget({ title: "Auto-titled session", model: "glm-5.3" })]).models).toEqual([]);
+    expect((await resolver.resolve([ompTarget({ title: "Auto-titled session", model: "glm-5.3" })])).models).toEqual(
+      [],
+    );
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("proposes no model when the tail has no assistant message record", () => {
+  test("proposes no model when the tail has no assistant message record", async () => {
     // model_change records are deliberately not a source: a tail window may
     // predate the last one, so only assistant messages are authoritative.
     const { resolver } = makeResolver({
@@ -683,23 +717,23 @@ describe("omp session-file titles", () => {
       heads: { "/sessions/o1.jsonl": slotRecord("Auto-titled session") },
       tails: { "/sessions/o1.jsonl": `${JSON.stringify({ type: "model_change", model: "zai/glm-5.3" })}\n` },
     });
-    expect(resolver.resolve([ompTarget()]).models).toEqual([]);
+    expect((await resolver.resolve([ompTarget()])).models).toEqual([]);
   });
 
-  test("an untitled slot with no fallback line resolves nothing; a missing file never throws", () => {
+  test("an untitled slot with no fallback line resolves nothing; a missing file never throws", async () => {
     const { resolver } = makeResolver({
       stats: { "/sessions/o1.jsonl": { mtimeMs: 100, size: 900 } },
       heads: { "/sessions/o1.jsonl": `${slotRecord("")}not-json\n{"type":"message"}\n` },
     });
-    expect(resolver.resolve([ompTarget()]).titles).toEqual([]);
+    expect((await resolver.resolve([ompTarget()])).titles).toEqual([]);
 
     const missing = makeResolver();
-    expect(missing.resolver.resolve([ompTarget()]).titles).toEqual([]);
+    expect((await missing.resolver.resolve([ompTarget()])).titles).toEqual([]);
   });
 
-  test("skips omp rows without a transcript path", () => {
+  test("skips omp rows without a transcript path", async () => {
     const { resolver, fs } = makeResolver();
-    expect(resolver.resolve([ompTarget({ transcriptPath: null })]).titles).toEqual([]);
+    expect((await resolver.resolve([ompTarget({ transcriptPath: null })])).titles).toEqual([]);
     expect(fs.headReads()).toBe(0);
     expect(fs.tailReads()).toBe(0);
   });
@@ -727,7 +761,7 @@ describe("grok summary.json facts", () => {
     wholes: { [GROK_SUMMARY]: summary },
   });
 
-  test("resolves title and model from summary.json found by group glob", () => {
+  test("resolves title and model from summary.json found by group glob", async () => {
     const { resolver } = makeResolver(
       grokSeed(
         JSON.stringify({
@@ -738,88 +772,88 @@ describe("grok summary.json facts", () => {
         }),
       ),
     );
-    expect(resolver.resolve([grokTarget()])).toEqual({
+    expect(await resolver.resolve([grokTarget()])).toEqual({
       titles: [{ provider: "grok", sessionId: GROK_ID, title: "Pi/OMP Ghostty Activation Spec Review" }],
       models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.6" }],
       activities: [],
     });
   });
 
-  test("falls back to session_summary when generated_title is absent or empty", () => {
+  test("falls back to session_summary when generated_title is absent or empty", async () => {
     const { resolver } = makeResolver(
       grokSeed(
         JSON.stringify({ session_summary: "Fallback title", generated_title: "", current_model_id: "grok-4.6" }),
       ),
     );
-    expect(resolver.resolve([grokTarget()]).titles).toEqual([
+    expect((await resolver.resolve([grokTarget()])).titles).toEqual([
       { provider: "grok", sessionId: GROK_ID, title: "Fallback title" },
     ]);
   });
 
-  test("bounds an oversized current_model_id to the registry model column cap", () => {
+  test("bounds an oversized current_model_id to the registry model column cap", async () => {
     const { resolver } = makeResolver(
       grokSeed(JSON.stringify({ generated_title: "T", current_model_id: "x".repeat(300) })),
     );
-    expect(resolver.resolve([grokTarget()]).models).toEqual([
+    expect((await resolver.resolve([grokTarget()])).models).toEqual([
       { provider: "grok", sessionId: GROK_ID, model: "x".repeat(256) },
     ]);
   });
 
-  test("proposes nothing when the stored values already match", () => {
+  test("proposes nothing when the stored values already match", async () => {
     const { resolver } = makeResolver(
       grokSeed(JSON.stringify({ generated_title: "Same", current_model_id: "grok-4.6" })),
     );
-    expect(resolver.resolve([grokTarget({ title: "Same", model: "grok-4.6" })])).toEqual({
+    expect(await resolver.resolve([grokTarget({ title: "Same", model: "grok-4.6" })])).toEqual({
       titles: [],
       models: [],
       activities: [],
     });
   });
 
-  test("caches on (mtime, size): an unchanged summary costs one stat, no re-read", () => {
+  test("caches on (mtime, size): an unchanged summary costs one stat, no re-read", async () => {
     const { resolver, fs } = makeResolver(
       grokSeed(JSON.stringify({ generated_title: "T", current_model_id: "grok-4.6" })),
     );
-    resolver.resolve([grokTarget()]);
+    await resolver.resolve([grokTarget()]);
     const readsAfterFirst = fs.wholeReads();
-    resolver.resolve([grokTarget()]);
+    await resolver.resolve([grokTarget()]);
     expect(fs.wholeReads()).toBe(readsAfterFirst);
   });
 
-  test("re-reads when the stat identity changes", () => {
+  test("re-reads when the stat identity changes", async () => {
     const seed = grokSeed(JSON.stringify({ generated_title: "Before", current_model_id: "grok-4.6" }));
     const { resolver, fs } = makeResolver(seed);
-    expect(resolver.resolve([grokTarget()]).titles[0]?.title).toBe("Before");
+    expect((await resolver.resolve([grokTarget()])).titles[0]?.title).toBe("Before");
     fs.wholes.set(GROK_SUMMARY, JSON.stringify({ generated_title: "After", current_model_id: "grok-4.7" }));
     fs.stats.set(GROK_SUMMARY, { mtimeMs: 200, size: 60 });
-    expect(resolver.resolve([grokTarget()])).toEqual({
+    expect(await resolver.resolve([grokTarget()])).toEqual({
       titles: [{ provider: "grok", sessionId: GROK_ID, title: "After" }],
       models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.7" }],
       activities: [],
     });
   });
 
-  test("a missing session, missing summary, or malformed JSON resolves nothing and never throws", () => {
-    expect(makeResolver().resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+  test("a missing session, missing summary, or malformed JSON resolves nothing and never throws", async () => {
+    expect(await makeResolver().resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
     const emptyGroup = makeResolver({ grokSessionsRoot: GROK_ROOT, lists: { [GROK_ROOT]: [] } });
-    expect(emptyGroup.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+    expect(await emptyGroup.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
     const malformed = makeResolver({
       ...grokSeed("not json"),
       wholes: { [GROK_SUMMARY]: "not json" },
     });
-    expect(malformed.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+    expect(await malformed.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
   });
 
-  test("a summary without facts proposes nothing (never clears)", () => {
+  test("a summary without facts proposes nothing (never clears)", async () => {
     const { resolver } = makeResolver(grokSeed(JSON.stringify({ info: { id: GROK_ID } })));
-    expect(resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+    expect(await resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
   });
 
-  test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", () => {
+  test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", async () => {
     const longTitle = `${"🔧".repeat(120)}${"y".repeat(125)}${"🛠".repeat(20)}`;
     const expected = Array.from(longTitle).slice(0, 256).join("");
     const { resolver } = makeResolver(grokSeed(JSON.stringify({ generated_title: longTitle })));
-    const title = resolver.resolve([grokTarget()]).titles[0]?.title ?? "";
+    const title = (await resolver.resolve([grokTarget()])).titles[0]?.title ?? "";
     expect(Array.from(title)).toHaveLength(256);
     expect(title).toBe(expected);
   });
@@ -832,14 +866,14 @@ describe("activity line resolution", () => {
   const responseItemLine = (payload: Record<string, unknown>): string =>
     `${JSON.stringify({ type: "response_item", payload })}\n`;
 
-  test("resolves a claude title, model, and activity line from ONE tail read", () => {
+  test("resolves a claude title, model, and activity line from ONE tail read", async () => {
     const { resolver, fs } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: {
         "/transcripts/s1.jsonl": `${aiTitle("Fix the widget")}${toolUseLine("Read", { file_path: "/src/core/registry.ts" })}${toolUseLine("Bash", { command: "git status --short" })}`,
       },
     });
-    const result = resolver.resolve([claudeTarget()]);
+    const result = await resolver.resolve([claudeTarget()]);
     expect(result.titles).toEqual([{ provider: "claude", sessionId: "s1", title: "Fix the widget" }]);
     expect(result.models).toEqual([{ provider: "claude", sessionId: "s1", model: "claude-fable-5" }]);
     // The newest assistant record's tool call wins.
@@ -847,7 +881,7 @@ describe("activity line resolution", () => {
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("prefers the last tool_use item within the newest assistant record", () => {
+  test("prefers the last tool_use item within the newest assistant record", async () => {
     const both = `${JSON.stringify({
       type: "assistant",
       message: {
@@ -862,12 +896,12 @@ describe("activity line resolution", () => {
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": both },
     });
-    expect(resolver.resolve([claudeTarget()]).activities).toEqual([
+    expect((await resolver.resolve([claudeTarget()])).activities).toEqual([
       { provider: "claude", sessionId: "s1", activityLine: "File" },
     ]);
   });
 
-  test("falls back to an older assistant record when the newest carries no tool call", () => {
+  test("falls back to an older assistant record when the newest carries no tool call", async () => {
     const textOnly = `${JSON.stringify({
       type: "assistant",
       message: { model: "claude-fable-5", content: [{ type: "text", text: "Done." }] },
@@ -876,12 +910,12 @@ describe("activity line resolution", () => {
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": `${toolUseLine("Grep", { pattern: "TODO" })}${textOnly}` },
     });
-    expect(resolver.resolve([claudeTarget()]).activities).toEqual([
+    expect((await resolver.resolve([claudeTarget()])).activities).toEqual([
       { provider: "claude", sessionId: "s1", activityLine: "Search" },
     ]);
   });
 
-  test("classifies command input without retaining any argument content", () => {
+  test("classifies command input without retaining any argument content", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: {
@@ -890,13 +924,13 @@ describe("activity line resolution", () => {
         }),
       },
     });
-    const updates = resolver.resolve([claudeTarget()]).activities;
+    const updates = (await resolver.resolve([claudeTarget()])).activities;
     expect(updates).toEqual([{ provider: "claude", sessionId: "s1", activityLine: "Command" }]);
     expect(JSON.stringify(updates)).not.toContain("top-secret");
     expect(JSON.stringify(updates)).not.toContain("password");
   });
 
-  test("classifies every selected input shape without retaining paths, searches, URLs, or unknown tool names", () => {
+  test("classifies every selected input shape without retaining paths, searches, URLs, or unknown tool names", async () => {
     const cases = [
       { name: "Read", input: { file_path: "/private/customer-secret.txt" }, expected: "File" },
       { name: "Grep", input: { pattern: "CONFIDENTIAL_PATTERN" }, expected: "Search" },
@@ -914,13 +948,13 @@ describe("activity line resolution", () => {
         stats: { [path]: { mtimeMs: 100, size: 500 } },
         tails: { [path]: toolUseLine(entry.name, entry.input) },
       });
-      expect(resolver.resolve([claudeTarget({ transcriptPath: path })]).activities).toEqual([
+      expect((await resolver.resolve([claudeTarget({ transcriptPath: path })])).activities).toEqual([
         { provider: "claude", sessionId: "s1", activityLine: entry.expected },
       ]);
     }
   });
 
-  test("a tool-less transcript proposes no activity; other providers are never read", () => {
+  test("a tool-less transcript proposes no activity; other providers are never read", async () => {
     const { resolver, fs } = makeResolver({
       stats: {
         "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 },
@@ -931,7 +965,7 @@ describe("activity line resolution", () => {
         "/transcripts/k1.jsonl": toolUseLine("Bash", { command: "should not be read" }),
       },
     });
-    const result = resolver.resolve([
+    const result = await resolver.resolve([
       claudeTarget(),
       {
         provider: "kimi",
@@ -947,15 +981,15 @@ describe("activity line resolution", () => {
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("a stored-equal activity line proposes no update", () => {
+  test("a stored-equal activity line proposes no update", async () => {
     const { resolver } = makeResolver({
       stats: { "/transcripts/s1.jsonl": { mtimeMs: 100, size: 500 } },
       tails: { "/transcripts/s1.jsonl": toolUseLine("Read", { file_path: "/src/core/registry.ts" }) },
     });
-    expect(resolver.resolve([claudeTarget({ activityLine: "File" })]).activities).toEqual([]);
+    expect((await resolver.resolve([claudeTarget({ activityLine: "File" })])).activities).toEqual([]);
   });
 
-  test("resolves a codex function_call's name and cmd head from the rollout tail", () => {
+  test("resolves a codex function_call's name and cmd head from the rollout tail", async () => {
     // Provider-compatible shape: exec_command's arguments are
     // stringified JSON carrying the command under `cmd` (a plain string).
     const call = responseItemLine({
@@ -971,7 +1005,7 @@ describe("activity line resolution", () => {
       wholes: { [CODEX_INDEX]: `${JSON.stringify({ id: "c1", thread_name: "Index name" })}\n` },
       tails: { "/rollouts/c1.jsonl": call },
     });
-    const result = resolver.resolve([
+    const result = await resolver.resolve([
       {
         provider: "codex",
         sessionId: "c1",
@@ -985,7 +1019,7 @@ describe("activity line resolution", () => {
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("an exec_command emits only the safe command category", () => {
+  test("an exec_command emits only the safe command category", async () => {
     // Representative argument keys: cmd (string), workdir, max_output_tokens,
     // yield_time_ms — only cmd's first line may cross the wire.
     const call = responseItemLine({
@@ -1006,16 +1040,18 @@ describe("activity line resolution", () => {
       wholes: { [CODEX_INDEX]: "" },
       tails: { "/rollouts/c1.jsonl": call },
     });
-    const updates = resolver.resolve([
-      {
-        provider: "codex",
-        sessionId: "c1",
-        title: null,
-        model: null,
-        transcriptPath: "/rollouts/c1.jsonl",
-        activityLine: null,
-      },
-    ]).activities;
+    const updates = (
+      await resolver.resolve([
+        {
+          provider: "codex",
+          sessionId: "c1",
+          title: null,
+          model: null,
+          transcriptPath: "/rollouts/c1.jsonl",
+          activityLine: null,
+        },
+      ])
+    ).activities;
     expect(updates).toHaveLength(1);
     const line = updates[0]?.activityLine ?? "";
     expect(line).toBe("Command");
@@ -1027,7 +1063,7 @@ describe("activity line resolution", () => {
     expect(line.includes("3000")).toBe(false);
   });
 
-  test("resolves a codex local_shell_call as the safe command category", () => {
+  test("resolves a codex local_shell_call as the safe command category", async () => {
     const call = responseItemLine({
       type: "local_shell_call",
       action: { type: "exec", command: ["git", "diff", "--stat"] },
@@ -1041,16 +1077,18 @@ describe("activity line resolution", () => {
       tails: { "/rollouts/c1.jsonl": call },
     });
     expect(
-      resolver.resolve([
-        {
-          provider: "codex",
-          sessionId: "c1",
-          title: null,
-          model: null,
-          transcriptPath: "/rollouts/c1.jsonl",
-          activityLine: null,
-        },
-      ]).activities,
+      (
+        await resolver.resolve([
+          {
+            provider: "codex",
+            sessionId: "c1",
+            title: null,
+            model: null,
+            transcriptPath: "/rollouts/c1.jsonl",
+            activityLine: null,
+          },
+        ])
+      ).activities,
     ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Command" }]);
   });
 
@@ -1069,7 +1107,7 @@ describe("activity line resolution", () => {
     activityLine: null,
   });
 
-  test("resolves a kimi tool.call through the session index and the main agent's wire tail", () => {
+  test("resolves a kimi tool.call through the session index and the main agent's wire tail", async () => {
     const wirePath = "/home/test/.kimi-code/sessions/wd_repo_abc/session_k1/agents/main/wire.jsonl";
     const contentPart = `${JSON.stringify({ type: "context.append_loop_event", agentId: "main", event: { type: "content.part", uuid: "u2", part: { type: "think", think: "..." } } })}\n`;
     const { resolver } = makeResolver({
@@ -1081,21 +1119,21 @@ describe("activity line resolution", () => {
       tails: { [wirePath]: `${kimiToolCall("Bash", { command: "bun test" })}${contentPart}` },
     });
     // The non-call loop event newest in the tail falls through to the call.
-    expect(resolver.resolve([kimiTarget()]).activities).toEqual([
+    expect((await resolver.resolve([kimiTarget()])).activities).toEqual([
       { provider: "kimi", sessionId: "session_k1", activityLine: "Command" },
     ]);
   });
 
-  test("a kimi session absent from the index resolves no activity", () => {
+  test("a kimi session absent from the index resolves no activity", async () => {
     const { resolver, fs } = makeResolver({
       stats: { [KIMI_INDEX]: { mtimeMs: 100, size: 300 } },
       wholes: { [KIMI_INDEX]: kimiIndexLine("session_other", "/home/test/.kimi-code/sessions/wd_x/session_other") },
     });
-    expect(resolver.resolve([kimiTarget()]).activities).toEqual([]);
+    expect((await resolver.resolve([kimiTarget()])).activities).toEqual([]);
     expect(fs.tailReads()).toBe(0);
   });
 
-  test("resolves an omp tool_execution_start's category from the session tail", () => {
+  test("resolves an omp tool_execution_start's category from the session tail", async () => {
     const execStart = (toolName: string, args: Record<string, unknown>): string =>
       `${JSON.stringify({ type: "custom", customType: "tool_execution_start", data: { toolCallId: "call_1", toolName, startedAt: "2026-08-27T05:52:12.153Z", args } })}\n`;
     const { resolver } = makeResolver({
@@ -1105,20 +1143,22 @@ describe("activity line resolution", () => {
       },
     });
     expect(
-      resolver.resolve([
-        {
-          provider: "omp",
-          sessionId: "o1",
-          title: null,
-          model: null,
-          transcriptPath: "/transcripts/o1.jsonl",
-          activityLine: null,
-        },
-      ]).activities,
+      (
+        await resolver.resolve([
+          {
+            provider: "omp",
+            sessionId: "o1",
+            title: null,
+            model: null,
+            transcriptPath: "/transcripts/o1.jsonl",
+            activityLine: null,
+          },
+        ])
+      ).activities,
     ).toEqual([{ provider: "omp", sessionId: "o1", activityLine: "Command" }]);
   });
 
-  test("an omp tool_execution_start without classifiable args is the opaque tool category", () => {
+  test("an omp tool_execution_start without classifiable args is the opaque tool category", async () => {
     const line = `${JSON.stringify({ type: "custom", customType: "tool_execution_start", data: { toolCallId: "call_1", toolName: "edit", startedAt: "2026-08-27T05:52:12.153Z", args: {} } })}\n`;
     const other = `${JSON.stringify({ type: "custom", customType: "mid-run-todo-nudge", data: {} })}\n`;
     const { resolver } = makeResolver({
@@ -1127,20 +1167,22 @@ describe("activity line resolution", () => {
     });
     // The non-tool custom record newest in the tail falls through to the call.
     expect(
-      resolver.resolve([
-        {
-          provider: "omp",
-          sessionId: "o1",
-          title: null,
-          model: null,
-          transcriptPath: "/transcripts/o1.jsonl",
-          activityLine: null,
-        },
-      ]).activities,
+      (
+        await resolver.resolve([
+          {
+            provider: "omp",
+            sessionId: "o1",
+            title: null,
+            model: null,
+            transcriptPath: "/transcripts/o1.jsonl",
+            activityLine: null,
+          },
+        ])
+      ).activities,
     ).toEqual([{ provider: "omp", sessionId: "o1", activityLine: "Tool" }]);
   });
 
-  test("resolves a codex custom_tool_call by tool name", () => {
+  test("resolves a codex custom_tool_call by tool name", async () => {
     // Newer codex CLIs log tools as custom_tool_call records whose `input` is
     // an opaque string (harness code or patch text), so the tool name is the
     // only classification signal.
@@ -1167,21 +1209,23 @@ describe("activity line resolution", () => {
         tails: { "/rollouts/c1.jsonl": customCall(name) },
       });
       expect(
-        resolver.resolve([
-          {
-            provider: "codex",
-            sessionId: "c1",
-            title: null,
-            model: null,
-            transcriptPath: "/rollouts/c1.jsonl",
-            activityLine: null,
-          },
-        ]).activities,
+        (
+          await resolver.resolve([
+            {
+              provider: "codex",
+              sessionId: "c1",
+              title: null,
+              model: null,
+              transcriptPath: "/rollouts/c1.jsonl",
+              activityLine: null,
+            },
+          ])
+        ).activities,
       ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: expected }]);
     }
   });
 
-  test("a codex custom_tool_call's input string never crosses the wire", () => {
+  test("a codex custom_tool_call's input string never crosses the wire", async () => {
     const call = responseItemLine({
       type: "custom_tool_call",
       status: "completed",
@@ -1197,16 +1241,18 @@ describe("activity line resolution", () => {
       wholes: { [CODEX_INDEX]: "" },
       tails: { "/rollouts/c1.jsonl": call },
     });
-    const updates = resolver.resolve([
-      {
-        provider: "codex",
-        sessionId: "c1",
-        title: null,
-        model: null,
-        transcriptPath: "/rollouts/c1.jsonl",
-        activityLine: null,
-      },
-    ]).activities;
+    const updates = (
+      await resolver.resolve([
+        {
+          provider: "codex",
+          sessionId: "c1",
+          title: null,
+          model: null,
+          transcriptPath: "/rollouts/c1.jsonl",
+          activityLine: null,
+        },
+      ])
+    ).activities;
     expect(updates).toHaveLength(1);
     const line = updates[0]?.activityLine ?? "";
     expect(line).toBe("Command");
@@ -1214,7 +1260,7 @@ describe("activity line resolution", () => {
     expect(line.includes("exec_command")).toBe(false);
   });
 
-  test("a codex function_call with unparseable arguments still names the tool, and non-call items are skipped", () => {
+  test("a codex function_call with unparseable arguments still names the tool, and non-call items are skipped", async () => {
     const truncated = responseItemLine({ type: "function_call", name: "apply_patch", arguments: '{"patch":"***' });
     const message = responseItemLine({ type: "message", role: "assistant" });
     const older = responseItemLine({
@@ -1232,16 +1278,18 @@ describe("activity line resolution", () => {
     });
     // The newest call wins even with unparseable arguments (name only).
     expect(
-      resolver.resolve([
-        {
-          provider: "codex",
-          sessionId: "c1",
-          title: null,
-          model: null,
-          transcriptPath: "/rollouts/c1.jsonl",
-          activityLine: null,
-        },
-      ]).activities,
+      (
+        await resolver.resolve([
+          {
+            provider: "codex",
+            sessionId: "c1",
+            title: null,
+            model: null,
+            transcriptPath: "/rollouts/c1.jsonl",
+            activityLine: null,
+          },
+        ])
+      ).activities,
     ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Tool" }]);
 
     const { resolver: second } = makeResolver({
@@ -1254,16 +1302,18 @@ describe("activity line resolution", () => {
     });
     // A non-call newest record falls through to the older function_call.
     expect(
-      second.resolve([
-        {
-          provider: "codex",
-          sessionId: "c2",
-          title: null,
-          model: null,
-          transcriptPath: "/rollouts/c2.jsonl",
-          activityLine: null,
-        },
-      ]).activities,
+      (
+        await second.resolve([
+          {
+            provider: "codex",
+            sessionId: "c2",
+            title: null,
+            model: null,
+            transcriptPath: "/rollouts/c2.jsonl",
+            activityLine: null,
+          },
+        ])
+      ).activities,
     ).toEqual([{ provider: "codex", sessionId: "c2", activityLine: "Command" }]);
   });
 });

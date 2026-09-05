@@ -47,6 +47,7 @@ import {
   clearSession,
   type GestureWatermark,
   listSessions,
+  type PaseoSyncState,
   pruneStaleSessions,
   syncPaseoStates,
   viewSession,
@@ -543,18 +544,18 @@ const resolveDependencies = (dependencies: CliDependencies): ResolvedDependencie
       zcodeDatabasePath: join(zcodeRoot, "cli/db/db.sqlite"),
       grokSessionsRoot: join(grokRoot, "sessions"),
     }).resolve;
-    const loadPaseoStates = createPaseoAgentStateLoader();
+    const loadPaseoAgentStates = createPaseoAgentStateLoader();
     const paseoDir = join(daemonPaths.home, ".paseo", "agents");
-    // The loader skips records naming unknown providers, so the predicate
-    // narrows its string providers to the canonical union on the way into
-    // the registry sync.
-    const syncPaseo = (db: Database) =>
-      syncPaseoStates(
-        db,
-        loadPaseoStates(paseoDir).filter(isKnownProviderState),
-        new Date(Date.now() - PASEO_BACKGROUND_SETTLE_GRACE_MS).toISOString(),
-      );
-    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, syncPaseo });
+    // The sweep's halves split across the event-loop boundary: the filesystem
+    // walk runs async (a slow disk must never stall the heartbeat the board's
+    // liveness rides on), and the registry join is DB-only, applied by the
+    // daemon on a later poll. The loader skips records naming unknown
+    // providers, so the predicate narrows its string providers to the
+    // canonical union on the way into the registry sync.
+    const loadPaseo = async () => (await loadPaseoAgentStates(paseoDir)).filter(isKnownProviderState);
+    const applyPaseo = (db: Database, states: readonly PaseoSyncState[]) =>
+      syncPaseoStates(db, states, new Date(Date.now() - PASEO_BACKGROUND_SETTLE_GRACE_MS).toISOString());
+    const daemon = new ProjectionDaemon(daemonPaths, { diagnostics, resolveFacts, loadPaseo, applyPaseo });
     daemon.start();
     const applyUpdate = dependencies.applyEvenerUpdate ?? applyEvenerCollectorUpdate;
     // Evener is observed through its supported daemon-wide AppWire feed. The

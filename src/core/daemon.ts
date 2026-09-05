@@ -12,22 +12,25 @@
  * it rewrites the current snapshot every heartbeat interval so the file's
  * mtime doubles as the daemon-liveness signal the plugin watches.
  *
- * Maintenance runs inside the same poll loop, as four passes: a
- * session-facts pass (resolve session titles, models, and activity lines
- * from provider files, update rows that changed) every two seconds, a Paseo
- * overlay pass (mirror Paseo's per-agent attention and origin state onto
- * matching rows) on the same cadence, a viewed-expiry sweep (auto-dismiss
- * done/errored rows viewed more than 24 hours ago — unviewed rows never
- * expire), and a prune pass (delete sessions
- * whose whole tree is stale — the last hook of every descendant older than
- * the stale TTL, one hour for zcode, which has no SessionEnd hook, a day for
- * everyone else, skipping any tree that still holds an unviewed result or
- * a live view clock — the sweep runs first on the tick, so an overdue
- * clock is dismissed before prune looks — so a live subagent always keeps
- * its thread) every minute. A poll gap
- * beyond the clock-jump threshold — the sleep signature of the host machine
- * — records a diagnostic. Maintenance failures record their own diagnostic
- * and never affect publication health.
+ * Maintenance runs inside the same poll loop. The two provider-file sweeps —
+ * a session-facts pass (resolve session titles, models, and activity lines
+ * from provider files) and a Paseo overlay pass (mirror Paseo's per-agent
+ * attention and origin state onto matching rows) — start asynchronously on
+ * their two-second cadence: their filesystem work runs off the event loop,
+ * so a slow disk can never stall the heartbeat, and at most one sweep of
+ * each is ever in flight; a settled sweep's results apply as DB-only writes
+ * on a following poll, forcing reprojection when any row changed. The
+ * viewed-expiry sweep (auto-dismiss done/errored rows viewed more than 24
+ * hours ago — unviewed rows never expire) and the prune pass (delete
+ * sessions whose whole tree is stale — the last hook of every descendant
+ * older than the stale TTL, one hour for zcode, which has no SessionEnd
+ * hook, a day for everyone else, skipping any tree that still holds an
+ * unviewed result or a live view clock — the sweep runs first on the tick,
+ * so an overdue clock is dismissed before prune looks — so a live subagent
+ * always keeps its thread) stay inline local-SQLite work every minute. A
+ * poll gap beyond the clock-jump threshold — the sleep signature of the host
+ * machine — records a diagnostic. Maintenance failures record their own
+ * diagnostic and never affect publication health.
  *
  * `PRAGMA user_version` is validated when the connection opens; on an open,
  * read, or projection failure the daemon publishes the schema-valid unhealthy
@@ -42,6 +45,7 @@ import type { AppPaths } from "./paths";
 import { readProjection } from "./projection";
 import {
   listTitleTargets,
+  type PaseoSyncState,
   pruneStaleSessions,
   sweepExpiredResults,
   updateSessionActivityLines,
@@ -50,7 +54,7 @@ import {
 } from "./registry";
 import { openRegistryDatabase, UnsupportedSchemaVersion } from "./schema";
 import { writeSnapshotAtomically } from "./snapshot";
-import type { SessionFactsResolver } from "./titles";
+import type { SessionFacts, SessionFactsResolver } from "./titles";
 
 export const DAEMON_POLL_INTERVAL_MS = 250;
 /** How often the snapshot file is rewritten even when nothing changed. */
@@ -113,8 +117,14 @@ export type DaemonDependencies = {
   now?: () => string;
   nowMs?: () => number;
   resolveFacts?: ResolveFacts;
-  /** Paseo overlay sync: joins Paseo agent records onto rows; returns rows changed. */
-  syncPaseo?: (db: Database) => number;
+  /**
+   * The Paseo sweep's filesystem half: resolves the latest agent records
+   * asynchronously, off the event loop. A settled load's results apply
+   * through `applyPaseo` on a following poll.
+   */
+  loadPaseo?: () => Promise<readonly PaseoSyncState[]>;
+  /** The Paseo sweep's DB-only half: joins loaded states onto rows; returns rows changed. */
+  applyPaseo?: (db: Database, states: readonly PaseoSyncState[]) => number;
   diagnostics?: (record: DiagnosticRecord) => void;
 };
 
@@ -165,6 +175,11 @@ export class ProjectionDaemon {
     healthy: false,
     publishOverdueReported: false,
   };
+  /** At most one async sweep of each kind in flight; settled results apply on the next poll. */
+  private factsInFlight = false;
+  private paseoInFlight = false;
+  private pendingFacts: SessionFacts | null = null;
+  private pendingPaseoStates: readonly PaseoSyncState[] | null = null;
 
   constructor(paths: Pick<AppPaths, "database" | "snapshot">, dependencies: DaemonDependencies = {}) {
     this.paths = paths;
@@ -175,8 +190,9 @@ export class ProjectionDaemon {
       schedule: defaultSchedule,
       now: () => new Date().toISOString(),
       nowMs: () => Date.now(),
-      resolveFacts: () => ({ titles: [], models: [], activities: [] }),
-      syncPaseo: () => 0,
+      resolveFacts: async () => ({ titles: [], models: [], activities: [] }),
+      loadPaseo: async () => [],
+      applyPaseo: () => 0,
       diagnostics: () => {},
       ...dependencies,
     };
@@ -269,10 +285,14 @@ export class ProjectionDaemon {
   }
 
   /**
-   * Time-based upkeep: session facts (titles, models, activity lines) and the
-   * Paseo overlay on the fast cadence, stale pruning on the slow one. Returns
-   * true when any row changed, forcing reprojection. Failures record one
-   * diagnostic and never mark the daemon unhealthy.
+   * Time-based upkeep. The two provider-file sweeps start asynchronously when
+   * due — their filesystem work runs off the event loop, so a slow disk can
+   * never stall the heartbeat — and a settled sweep's results apply as
+   * DB-only writes on the next poll; the in-flight guard keeps a slow sweep
+   * from stacking. The expiry sweep and the prune pass stay inline
+   * local-SQLite work on the slow cadence. Returns true when any row changed,
+   * forcing reprojection. Failures record one diagnostic and never mark the
+   * daemon unhealthy.
    */
   private maintain(nowMs: number): boolean {
     if (this.connection === null) {
@@ -280,9 +300,9 @@ export class ProjectionDaemon {
     }
     let changed = false;
     try {
-      if (this.state.lastTitlePassAtMs === null || nowMs - this.state.lastTitlePassAtMs >= DAEMON_TITLE_INTERVAL_MS) {
-        this.state.lastTitlePassAtMs = nowMs;
-        const facts = this.deps.resolveFacts(listTitleTargets(this.connection));
+      if (this.pendingFacts !== null) {
+        const facts = this.pendingFacts;
+        this.pendingFacts = null;
         // The flag is set eagerly per write: each update is its own
         // transaction, so a committed change must force reprojection even
         // if the sibling write throws (own-connection commits never bump
@@ -298,11 +318,49 @@ export class ProjectionDaemon {
           changed = true;
         }
       }
-      if (this.state.lastPaseoPassAtMs === null || nowMs - this.state.lastPaseoPassAtMs >= DAEMON_PASEO_INTERVAL_MS) {
-        this.state.lastPaseoPassAtMs = nowMs;
-        if (this.deps.syncPaseo(this.connection) > 0) {
+      if (this.pendingPaseoStates !== null) {
+        const states = this.pendingPaseoStates;
+        this.pendingPaseoStates = null;
+        if (this.deps.applyPaseo(this.connection, states) > 0) {
           changed = true;
         }
+      }
+      if (
+        !this.factsInFlight &&
+        (this.state.lastTitlePassAtMs === null || nowMs - this.state.lastTitlePassAtMs >= DAEMON_TITLE_INTERVAL_MS)
+      ) {
+        this.state.lastTitlePassAtMs = nowMs;
+        this.factsInFlight = true;
+        const targets = listTitleTargets(this.connection);
+        this.deps
+          .resolveFacts(targets)
+          .then((facts) => {
+            this.pendingFacts = facts;
+          })
+          .catch(() => {
+            this.report("maintenance_failed");
+          })
+          .finally(() => {
+            this.factsInFlight = false;
+          });
+      }
+      if (
+        !this.paseoInFlight &&
+        (this.state.lastPaseoPassAtMs === null || nowMs - this.state.lastPaseoPassAtMs >= DAEMON_PASEO_INTERVAL_MS)
+      ) {
+        this.state.lastPaseoPassAtMs = nowMs;
+        this.paseoInFlight = true;
+        this.deps
+          .loadPaseo()
+          .then((states) => {
+            this.pendingPaseoStates = states;
+          })
+          .catch(() => {
+            this.report("maintenance_failed");
+          })
+          .finally(() => {
+            this.paseoInFlight = false;
+          });
       }
       if (this.state.lastPrunePassAtMs === null || nowMs - this.state.lastPrunePassAtMs >= DAEMON_PRUNE_INTERVAL_MS) {
         this.state.lastPrunePassAtMs = nowMs;

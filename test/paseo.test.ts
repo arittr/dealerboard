@@ -18,19 +18,19 @@ const makeLoader = (seed: {
   dirs?: Record<string, string[]>;
   stats?: Record<string, FileStat>;
   files?: Record<string, string>;
-}): { loader: (dir: string) => PaseoAgentState[]; fs: FakeFs } => {
+}): { loader: (dir: string) => Promise<PaseoAgentState[]>; fs: FakeFs } => {
   const dirs = new Map(Object.entries(seed.dirs ?? {}));
   const stats = new Map(Object.entries(seed.stats ?? {}));
   const files = new Map(Object.entries(seed.files ?? {}));
   let wholeReads = 0;
   let statCalls = 0;
   const loader = createPaseoAgentStateLoader({
-    listFiles: (dir) => [...(dirs.get(dir) ?? [])],
-    statPath: (path) => {
+    listFiles: async (dir) => [...(dirs.get(dir) ?? [])],
+    statPath: async (path) => {
       statCalls += 1;
       return stats.get(path) ?? null;
     },
-    readWhole: (path) => {
+    readWhole: async (path) => {
       wholeReads += 1;
       return files.get(path) ?? null;
     },
@@ -57,13 +57,18 @@ const oneRecordFs = (): Record<string, string[]> => ({
 });
 
 describe("createPaseoAgentStateLoader", () => {
-  test("joins on the current session ID and maps attention and parentage", () => {
+  test("returns a promise: the sweep's filesystem reads never block the caller's event loop", () => {
+    const { loader } = makeLoader({ dirs: {} });
+    expect(loader(AGENTS_DIR)).toBeInstanceOf(Promise);
+  });
+
+  test("joins on the current session ID and maps attention and parentage", async () => {
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: agentRecord() },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -80,27 +85,27 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("parses lastStatus for the registry's settle repair, dropping unknown values", () => {
+  test("parses lastStatus for the registry's settle repair, dropping unknown values", async () => {
     const path = join(AGENTS_DIR, "work/agent-1.json");
     const { loader, fs } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [path]: { mtimeMs: 100, size: 500 } },
       files: { [path]: agentRecord({ lastStatus: "idle" }) },
     });
-    expect(loader(AGENTS_DIR)[0]?.lastStatus).toBe("idle");
+    expect((await loader(AGENTS_DIR))[0]?.lastStatus).toBe("idle");
 
     // A value outside Paseo's lifecycle vocabulary is no settle evidence.
     fs.stats.set(path, { mtimeMs: 101, size: 501 });
     fs.files.set(path, agentRecord({ lastStatus: "haywire" }));
-    expect(loader(AGENTS_DIR)[0]?.lastStatus).toBeNull();
+    expect((await loader(AGENTS_DIR))[0]?.lastStatus).toBeNull();
 
     // Records predating the field parse as unreported.
     fs.stats.set(path, { mtimeMs: 102, size: 502 });
     fs.files.set(path, agentRecord());
-    expect(loader(AGENTS_DIR)[0]?.lastStatus).toBeNull();
+    expect((await loader(AGENTS_DIR))[0]?.lastStatus).toBeNull();
   });
 
-  test("prefers the current runtime session when it differs from the persisted session", () => {
+  test("prefers the current runtime session when it differs from the persisted session", async () => {
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
@@ -112,10 +117,10 @@ describe("createPaseoAgentStateLoader", () => {
       },
     });
 
-    expect(loader(AGENTS_DIR)[0]?.sessionId).toBe("session_current");
+    expect((await loader(AGENTS_DIR))[0]?.sessionId).toBe("session_current");
   });
 
-  test("parses attentionTimestamp and updatedAt for the registry watermark", () => {
+  test("parses attentionTimestamp and updatedAt for the registry watermark", async () => {
     const content = agentRecord({
       attentionTimestamp: "2026-08-06T00:10:00.000Z",
       updatedAt: "2026-08-06T00:12:00.000Z",
@@ -125,7 +130,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -142,24 +147,24 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("parses archivedAt canonically for the sync's viewed-equivalent path", () => {
+  test("parses archivedAt canonically for the sync's viewed-equivalent path", async () => {
     const content = agentRecord({ archivedAt: "2026-08-16T11:25:52.816-07:00" });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)[0]?.archivedAt).toBe("2026-08-16T18:25:52.816Z");
+    expect((await loader(AGENTS_DIR))[0]?.archivedAt).toBe("2026-08-16T18:25:52.816Z");
   });
 
-  test("non-string timestamps parse as null", () => {
+  test("non-string timestamps parse as null", async () => {
     const content = agentRecord({ attentionTimestamp: 42, updatedAt: false });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -176,7 +181,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("uses runtimeInfo.sessionId when persistence is absent and flags subagents from parentAgentId", () => {
+  test("uses runtimeInfo.sessionId when persistence is absent and flags subagents from parentAgentId", async () => {
     const content = agentRecord({
       id: "agent-2",
       persistence: undefined,
@@ -190,7 +195,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-2.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-2.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -207,7 +212,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("flags subagents from the paseo.parent-agent-id label (the persisted shape)", () => {
+  test("flags subagents from the paseo.parent-agent-id label (the persisted shape)", async () => {
     const content = agentRecord({
       id: "agent-2",
       labels: {
@@ -220,7 +225,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -237,14 +242,14 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("other labels alone do not mark a subagent", () => {
+  test("other labels alone do not mark a subagent", async () => {
     const content = agentRecord({ labels: { "paseo.open-agent-tab.cid123": "true" } });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -261,7 +266,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("normalizes offset-form timestamps to canonical UTC", () => {
+  test("normalizes offset-form timestamps to canonical UTC", async () => {
     const content = agentRecord({
       attentionTimestamp: "2026-08-06T02:10:00+02:00",
       updatedAt: "2026-08-06T00:12:00.000Z",
@@ -271,7 +276,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -288,14 +293,14 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("unparseable timestamp strings parse as null", () => {
+  test("unparseable timestamp strings parse as null", async () => {
     const content = agentRecord({ attentionTimestamp: "not a timestamp", updatedAt: "2026-13-40" });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -312,37 +317,37 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("evicts cache entries for files missing from a pass", () => {
+  test("evicts cache entries for files missing from a pass", async () => {
     const path = join(AGENTS_DIR, "work/agent-1.json");
     const { loader, fs } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [path]: { mtimeMs: 100, size: 500 } },
       files: { [path]: agentRecord() },
     });
-    expect(loader(AGENTS_DIR)).toHaveLength(1);
+    expect(await loader(AGENTS_DIR)).toHaveLength(1);
     expect(fs.wholeReads()).toBe(1);
 
     // The file vanishes for a pass: its cache entry must be evicted.
     fs.dirs.set(join(AGENTS_DIR, "work"), []);
     fs.stats.delete(path);
-    expect(loader(AGENTS_DIR)).toHaveLength(0);
+    expect(await loader(AGENTS_DIR)).toHaveLength(0);
 
     // It returns with the same (mtime, size) identity; without eviction this
     // would be a stale cache hit and skip the read.
     fs.dirs.set(join(AGENTS_DIR, "work"), ["agent-1.json"]);
     fs.stats.set(path, { mtimeMs: 100, size: 500 });
-    expect(loader(AGENTS_DIR)).toHaveLength(1);
+    expect(await loader(AGENTS_DIR)).toHaveLength(1);
     expect(fs.wholeReads()).toBe(2);
   });
 
-  test("requiresAttention defaults to false when absent", () => {
+  test("requiresAttention defaults to false when absent", async () => {
     const content = agentRecord({ requiresAttention: undefined });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -359,24 +364,24 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("caches unchanged files on (mtime, size): one read per identity", () => {
+  test("caches unchanged files on (mtime, size): one read per identity", async () => {
     const path = join(AGENTS_DIR, "work/agent-1.json");
     const { loader, fs } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [path]: { mtimeMs: 100, size: 500 } },
       files: { [path]: agentRecord() },
     });
-    expect(loader(AGENTS_DIR)).toHaveLength(1);
-    expect(loader(AGENTS_DIR)).toHaveLength(1);
+    expect(await loader(AGENTS_DIR)).toHaveLength(1);
+    expect(await loader(AGENTS_DIR)).toHaveLength(1);
     expect(fs.wholeReads()).toBe(1);
 
     // A new (mtime, size) identity re-reads the file.
     fs.stats.set(path, { mtimeMs: 101, size: 500 });
-    expect(loader(AGENTS_DIR)).toHaveLength(1);
+    expect(await loader(AGENTS_DIR)).toHaveLength(1);
     expect(fs.wholeReads()).toBe(2);
   });
 
-  test("malformed and incomplete records are skipped, never void the pass", () => {
+  test("malformed and incomplete records are skipped, never void the pass", async () => {
     const good = join(AGENTS_DIR, "work/agent-1.json");
     const garbage = join(AGENTS_DIR, "work/broken.json");
     const noSession = join(AGENTS_DIR, "work/no-session.json");
@@ -396,7 +401,7 @@ describe("createPaseoAgentStateLoader", () => {
         [noSession]: agentRecord({ persistence: {}, runtimeInfo: {} }),
       },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -413,45 +418,45 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("skips records whose provider is not a known provider", () => {
+  test("skips records whose provider is not a known provider", async () => {
     const content = agentRecord({ provider: "not-a-provider" });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([]);
+    expect(await loader(AGENTS_DIR)).toEqual([]);
   });
 
-  test("maps Paseo's qwen-code provider onto the registry's qwen key", () => {
+  test("maps Paseo's qwen-code provider onto the registry's qwen key", async () => {
     const content = agentRecord({ provider: "qwen-code" });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR).map((state) => state.provider)).toEqual(["qwen"]);
+    expect((await loader(AGENTS_DIR)).map((state) => state.provider)).toEqual(["qwen"]);
   });
 
-  test("maps Paseo's claude-work provider onto the registry's claude key", () => {
+  test("maps Paseo's claude-work provider onto the registry's claude key", async () => {
     const content = agentRecord({ provider: "claude-work" });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR).map((state) => state.provider)).toEqual(["claude"]);
+    expect((await loader(AGENTS_DIR)).map((state) => state.provider)).toEqual(["claude"]);
   });
 
-  test("a missing agents directory or empty workspace yields an empty list", () => {
+  test("a missing agents directory or empty workspace yields an empty list", async () => {
     const { loader } = makeLoader({ dirs: {} });
-    expect(loader(AGENTS_DIR)).toEqual([]);
+    expect(await loader(AGENTS_DIR)).toEqual([]);
 
     const empty = makeLoader({ dirs: { [AGENTS_DIR]: ["work"], [join(AGENTS_DIR, "work")]: [] } });
-    expect(empty.loader(AGENTS_DIR)).toEqual([]);
+    expect(await empty.loader(AGENTS_DIR)).toEqual([]);
   });
 
-  test("extracts title from runtimeInfo.extra.title", () => {
+  test("extracts title from runtimeInfo.extra.title", async () => {
     const content = agentRecord({
       runtimeInfo: {
         sessionId: "session_abc",
@@ -463,7 +468,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -480,7 +485,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("extracts title from persistence.metadata.title as fallback", () => {
+  test("extracts title from persistence.metadata.title as fallback", async () => {
     const content = agentRecord({
       runtimeInfo: { sessionId: "session_abc" },
       persistence: {
@@ -493,7 +498,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -510,7 +515,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("extracts the top-level title when nested titles are missing", () => {
+  test("extracts the top-level title when nested titles are missing", async () => {
     const content = agentRecord({
       title: "top-level truncated title",
       runtimeInfo: { sessionId: "session_abc" },
@@ -521,7 +526,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -538,7 +543,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("prefers a Paseo-renamed top-level title over stale nested titles", () => {
+  test("prefers a Paseo-renamed top-level title over stale nested titles", async () => {
     const content = agentRecord({
       title: "renamed in Paseo",
       runtimeInfo: {
@@ -555,10 +560,10 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)[0]?.title).toBe("renamed in Paseo");
+    expect((await loader(AGENTS_DIR))[0]?.title).toBe("renamed in Paseo");
   });
 
-  test("bounds title to 256 code points", () => {
+  test("bounds title to 256 code points", async () => {
     const longTitle = "a".repeat(300);
     const content = agentRecord({
       runtimeInfo: {
@@ -571,7 +576,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -588,7 +593,7 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("prefers runtimeInfo.extra.title over persistence.metadata.title", () => {
+  test("prefers runtimeInfo.extra.title over persistence.metadata.title", async () => {
     const content = agentRecord({
       runtimeInfo: {
         sessionId: "session_abc",
@@ -604,7 +609,7 @@ describe("createPaseoAgentStateLoader", () => {
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)).toEqual([
+    expect(await loader(AGENTS_DIR)).toEqual([
       {
         provider: "kimi",
         sessionId: "session_abc",
@@ -621,13 +626,13 @@ describe("createPaseoAgentStateLoader", () => {
     ]);
   });
 
-  test("bounds an oversized parent agent id to 256 code points", () => {
+  test("bounds an oversized parent agent id to 256 code points", async () => {
     const content = agentRecord({ parentAgentId: "a".repeat(300) });
     const { loader } = makeLoader({
       dirs: oneRecordFs(),
       stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
       files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
     });
-    expect(loader(AGENTS_DIR)[0]?.parentAgentId).toBe("a".repeat(256));
+    expect((await loader(AGENTS_DIR))[0]?.parentAgentId).toBe("a".repeat(256));
   });
 });
