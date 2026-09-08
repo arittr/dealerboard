@@ -117,9 +117,11 @@ describe("ageLineText", () => {
 describe("cardViewModel", () => {
   const NOW_MS = Date.parse("2026-08-25T00:10:00.000Z");
 
-  test("renders only safe activity categories and collapses legacy raw values", () => {
+  test("renders tool arguments without redaction", () => {
     expect(cardViewModel(placed({}, { activityLine: "Command" }), NOW_MS).activity).toBe("Command");
-    expect(cardViewModel(placed({}, { activityLine: "Bash API_TOKEN=top-secret" }), NOW_MS).activity).toBe("Activity");
+    expect(cardViewModel(placed({}, { activityLine: "Bash API_TOKEN=top-secret" }), NOW_MS).activity).toBe(
+      "Bash API_TOKEN=top-secret",
+    );
     expect(cardViewModel(placed({}, { activityLine: null }), NOW_MS).activity).toBeNull();
   });
 

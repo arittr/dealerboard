@@ -170,11 +170,6 @@ const ACTIVITY_CATEGORY_BY_KEY: Readonly<Record<string, ActivityCategory>> = {
   url: "Request",
 };
 
-const CODEX_ACTIVITY_CATEGORY_BY_KEY: Readonly<Record<string, ActivityCategory>> = {
-  cmd: "Command",
-  ...ACTIVITY_CATEGORY_BY_KEY,
-};
-
 const hasActivityValue = (value: unknown): boolean =>
   (typeof value === "string" && value.length > 0) ||
   (Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string"));
@@ -300,49 +295,51 @@ const claudeActivityFromTail = (tail: string): string | null =>
 const codexModelFromTail = (tail: string): string | null =>
   lastFromTail(tail, "turn_context", (record) => (isRecord(record["payload"]) ? record["payload"]["model"] : null));
 
-/** Classify a function_call's stringified arguments without retaining their contents. */
-const codexArgumentsActivity = (value: unknown): ActivityCategory | null => {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
+/** Prefer the useful target over execution settings in a structured tool call. */
+const codexArgumentsPreview = (value: unknown): string => {
+  if (typeof value !== "string") return "";
   try {
     const parsed: unknown = JSON.parse(value);
-    return isRecord(parsed) ? activityCategoryFrom(parsed, CODEX_ACTIVITY_CATEGORY_BY_KEY) : null;
+    if (isRecord(parsed)) {
+      for (const key of ["cmd", "command", "file_path", "path", "pattern", "query", "url"]) {
+        const target = parsed[key];
+        if (typeof target === "string") return target;
+        if (Array.isArray(target) && target.every((item) => typeof item === "string")) return target.join(" ");
+      }
+    }
   } catch {
-    return null;
+    // Partial arguments still provide a useful preview.
   }
+  return value;
 };
 
-/**
- * custom_tool_call payloads carry only an opaque `input` string (harness code
- * or patch text), so the tool name is the classification signal.
- */
-const CODEX_CUSTOM_TOOL_ACTIVITY: Readonly<Record<string, ActivityCategory>> = {
-  exec: "Command",
-  apply_patch: "File",
+/** Keep activity on one line and within the registry's Unicode character limit. */
+const codexToolPreview = (name: string, input: string): string => {
+  const text = `${name} ${input}`.replace(/\s+/gu, " ").trim();
+  const points = Array.from(text);
+  return points.length > MAX_ACTIVITY_LINE_CODE_POINTS
+    ? `${points.slice(0, MAX_ACTIVITY_LINE_CODE_POINTS - 1).join("")}…`
+    : text;
 };
 
-/**
- * The last tool call in a Codex rollout tail: response_item records whose
- * payload is a function_call, a local_shell_call, or a custom_tool_call. Only
- * a fixed semantic category crosses the wire; tool names and argument
- * contents stay local.
- */
+/** The latest Codex tool name and argument preview, including custom tool inputs. */
 const codexActivityFromTail = (tail: string): string | null =>
   lastFromTail(tail, "response_item", (record) => {
     const payload = record["payload"];
-    if (!isRecord(payload)) {
-      return null;
-    }
+    if (!isRecord(payload)) return null;
     if (payload["type"] === "function_call" && typeof payload["name"] === "string" && payload["name"].length > 0) {
-      return codexArgumentsActivity(payload["arguments"]) ?? "Tool";
+      return codexToolPreview(payload["name"], codexArgumentsPreview(payload["arguments"]));
     }
     if (payload["type"] === "local_shell_call") {
       const action = payload["action"];
-      return isRecord(action) && hasActivityValue(action["command"]) ? "Command" : "Tool";
+      const command = isRecord(action) ? action["command"] : null;
+      return codexToolPreview(
+        "shell",
+        Array.isArray(command) ? command.join(" ") : typeof command === "string" ? command : "",
+      );
     }
     if (payload["type"] === "custom_tool_call" && typeof payload["name"] === "string" && payload["name"].length > 0) {
-      return CODEX_CUSTOM_TOOL_ACTIVITY[payload["name"]] ?? "Tool";
+      return codexToolPreview(payload["name"], typeof payload["input"] === "string" ? payload["input"] : "");
     }
     return null;
   });

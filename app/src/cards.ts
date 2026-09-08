@@ -73,16 +73,6 @@ export type CardViewModel = {
   degraded: boolean;
 };
 
-const SAFE_ACTIVITY_LABELS = new Set(["File", "Command", "Search", "Request", "Tool", "Activity"]);
-
-/** Old daemons may publish raw targets; never render those on the physical display. */
-const safeActivityLabel = (activityLine: string | null): string | null => {
-  if (activityLine === null) {
-    return null;
-  }
-  return SAFE_ACTIVITY_LABELS.has(activityLine) ? activityLine : "Activity";
-};
-
 /** The unread bit the card itself renders — display-only cards contribute none.
  *  Single source for the card corner dot, the peek sliver dots, and pip aggregates. */
 export const cardShowsUnread = (card: Pick<PlacedCard, "displayOnly" | "session">): boolean =>
@@ -104,7 +94,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     modelLabel: session.model === null ? null : modelLabel(session.model, CARD_MODEL_LABEL_MAX_CODE_POINTS),
     project:
       card.subagent && card.parentProject !== null && card.parentProject === session.project ? null : session.project,
-    activity: safeActivityLabel(session.activityLine),
+    activity: session.activityLine,
     status: session.status,
     ended: session.endedAt !== null,
     word: session.endedAt !== null ? "ended" : statusWord(session.status),

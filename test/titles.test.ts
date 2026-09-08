@@ -1015,13 +1015,15 @@ describe("activity line resolution", () => {
         activityLine: null,
       },
     ]);
-    expect(result.activities).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Command" }]);
+    expect(result.activities).toEqual([
+      { provider: "codex", sessionId: "c1", activityLine: "exec_command git status --short" },
+    ]);
     expect(fs.tailReads()).toBe(1);
   });
 
-  test("an exec_command emits only the safe command category", async () => {
+  test("an exec_command previews the command before auxiliary arguments", async () => {
     // Representative argument keys: cmd (string), workdir, max_output_tokens,
-    // yield_time_ms — only cmd's first line may cross the wire.
+    // yield_time_ms — the command takes priority in the preview.
     const call = responseItemLine({
       type: "function_call",
       name: "exec_command",
@@ -1054,16 +1056,16 @@ describe("activity line resolution", () => {
     ).activities;
     expect(updates).toHaveLength(1);
     const line = updates[0]?.activityLine ?? "";
-    expect(line).toBe("Command");
-    // The command and every sibling argument stay out.
-    expect(line.includes("CLAUDE.md")).toBe(false);
-    expect(line.includes("should-not-appear")).toBe(false);
+    expect(line).toStartWith("exec_command sed -n");
+    // The short preview prioritizes the command over auxiliary arguments.
+    expect(line.includes("CLAUDE.md")).toBe(true);
+    expect(Array.from(line).length).toBeLessThanOrEqual(64);
     expect(line.includes("worktrees")).toBe(false);
     expect(line.includes("4000")).toBe(false);
     expect(line.includes("3000")).toBe(false);
   });
 
-  test("resolves a codex local_shell_call as the safe command category", async () => {
+  test("resolves a codex local_shell_call with its command", async () => {
     const call = responseItemLine({
       type: "local_shell_call",
       action: { type: "exec", command: ["git", "diff", "--stat"] },
@@ -1089,7 +1091,7 @@ describe("activity line resolution", () => {
           },
         ])
       ).activities,
-    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Command" }]);
+    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "shell git diff --stat" }]);
   });
 
   const kimiIndexLine = (sessionId: string, sessionDir: string): string =>
@@ -1185,19 +1187,19 @@ describe("activity line resolution", () => {
   test("resolves a codex custom_tool_call by tool name", async () => {
     // Newer codex CLIs log tools as custom_tool_call records whose `input` is
     // an opaque string (harness code or patch text), so the tool name is the
-    // only classification signal.
+    // preview label.
     const customCall = (name: string): string =>
       responseItemLine({
         type: "custom_tool_call",
         status: "completed",
         call_id: "call_1",
         name,
-        input: 'const r = await tools.exec_command({ cmd: "cat /repo/secret.md" })',
+        input: "cat /repo/secret.md",
       });
     const cases: readonly { name: string; expected: string }[] = [
-      { name: "exec", expected: "Command" },
-      { name: "apply_patch", expected: "File" },
-      { name: "web_search", expected: "Tool" },
+      { name: "exec", expected: "exec cat /repo/secret.md" },
+      { name: "apply_patch", expected: "apply_patch cat /repo/secret.md" },
+      { name: "web_search", expected: "web_search cat /repo/secret.md" },
     ];
     for (const { name, expected } of cases) {
       const { resolver } = makeResolver({
@@ -1225,13 +1227,13 @@ describe("activity line resolution", () => {
     }
   });
 
-  test("a codex custom_tool_call's input string never crosses the wire", async () => {
+  test("a codex custom_tool_call previews its input without redaction", async () => {
     const call = responseItemLine({
       type: "custom_tool_call",
       status: "completed",
       call_id: "call_1",
       name: "exec",
-      input: 'const r = await tools.exec_command({ cmd: "cat /repo/CLAUDE.md" })',
+      input: "API_TOKEN=top-secret cat /repo/CLAUDE.md",
     });
     const { resolver } = makeResolver({
       stats: {
@@ -1255,9 +1257,34 @@ describe("activity line resolution", () => {
     ).activities;
     expect(updates).toHaveLength(1);
     const line = updates[0]?.activityLine ?? "";
-    expect(line).toBe("Command");
-    expect(line.includes("CLAUDE.md")).toBe(false);
-    expect(line.includes("exec_command")).toBe(false);
+    expect(line).toBe("exec API_TOKEN=top-secret cat /repo/CLAUDE.md");
+  });
+
+  test("Codex previews bound Unicode, flatten newlines, and retain unknown arguments", async () => {
+    const cases = [
+      { type: "custom_tool_call", name: "exec", input: "😀".repeat(80), expected: `exec ${"😀".repeat(58)}…` },
+      { type: "custom_tool_call", name: "exec", input: "cat\n  /tmp/file", expected: "exec cat /tmp/file" },
+      { type: "function_call", name: "wait", arguments: '{"seconds":5}', expected: 'wait {"seconds":5}' },
+      { type: "function_call", name: "ping", expected: "ping" },
+    ];
+    for (const { expected, ...payload } of cases) {
+      const { resolver } = makeResolver({
+        stats: { "/rollouts/c1.jsonl": { mtimeMs: 100, size: 400 } },
+        tails: { "/rollouts/c1.jsonl": responseItemLine(payload) },
+      });
+      const result = await resolver.resolve([
+        {
+          provider: "codex",
+          sessionId: "c1",
+          title: null,
+          model: null,
+          transcriptPath: "/rollouts/c1.jsonl",
+          activityLine: null,
+        },
+      ]);
+      expect(result.activities[0]?.activityLine).toBe(expected);
+      expect(Array.from(result.activities[0]?.activityLine ?? "").length).toBeLessThanOrEqual(64);
+    }
   });
 
   test("a codex function_call with unparseable arguments still names the tool, and non-call items are skipped", async () => {
@@ -1276,7 +1303,7 @@ describe("activity line resolution", () => {
       wholes: { [CODEX_INDEX]: "" },
       tails: { "/rollouts/c1.jsonl": `${older}${truncated}` },
     });
-    // The newest call wins even with unparseable arguments (name only).
+    // The newest call wins even with unparseable arguments (raw argument preview).
     expect(
       (
         await resolver.resolve([
@@ -1290,7 +1317,7 @@ describe("activity line resolution", () => {
           },
         ])
       ).activities,
-    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: "Tool" }]);
+    ).toEqual([{ provider: "codex", sessionId: "c1", activityLine: 'apply_patch {"patch":"***' }]);
 
     const { resolver: second } = makeResolver({
       stats: {
@@ -1314,6 +1341,6 @@ describe("activity line resolution", () => {
           },
         ])
       ).activities,
-    ).toEqual([{ provider: "codex", sessionId: "c2", activityLine: "Command" }]);
+    ).toEqual([{ provider: "codex", sessionId: "c2", activityLine: "shell ls" }]);
   });
 });

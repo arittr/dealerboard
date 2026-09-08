@@ -69,11 +69,11 @@ Registry and snapshot strings are bounded. Hook payloads are decoded by
 allowlist. Transcript tails are read locally only for supported derived facts:
 title, model, and recent activity.
 
-Activity is deliberately low-cardinality. The daemon stores only `File`,
-`Command`, `Search`, `Request`, or `Tool`; it never carries a raw command,
-path, pattern, query, URL, or tool name into SQLite or a snapshot. Schema 14
-clears activity values written by older builds, and the app maps any legacy
-unknown activity string to `Activity` before rendering.
+Codex activity shows the tool name and an argument preview without redaction,
+bounded to 64 Unicode characters and flattened to one line for the slats.
+Structured calls prioritize a command, path, search, or URL over auxiliary
+execution settings; custom calls preview their input text. Other providers
+currently emit activity categories. The app renders activity as text.
 
 Snapshots are mode 0600, written through a sibling temporary file, fsynced,
 and atomically renamed. The session snapshot heartbeat is every five seconds;
@@ -106,7 +106,7 @@ The orphan tail remains one deterministic full-width block.
   age (`open 2h`); idle, waiting, and error spell their status age
   (`waiting 12m`) behind a dim `open 3h` fact. Sessions published without
   `openedAt` (an old daemon) simply omit the open facts.
-- The meta row can show model, project, and one fixed activity category.
+- The meta row can show model, project, and a recent activity preview.
 - A Paseo parent's chip wears the containment ring: a violet enclosure with
   a card-colored gap — the harness inside the multiplexer. The ring's shape
   is the semantic; each multiplexer keeps its own hue, same grammar. roborev
