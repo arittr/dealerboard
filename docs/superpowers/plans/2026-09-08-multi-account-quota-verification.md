@@ -6,14 +6,14 @@ Codex fallback defects; `823bd9a` preserves cached source timestamps and rejects
 ambiguous anonymous batches. Scoped review of `25191a5..823bd9a` confirmed both
 findings addressed with no new breakage. No review finding remains open or
 parked. Final backend verification passed 1,440 tests; the unchanged UI retains
-the browser, frontend, Rust, and bundle evidence recorded below. Native,
-installed-refresh, and physical acceptance remain pending.
+the browser, frontend, Rust, and bundle evidence recorded below. Independent
+Claude refresh and physical acceptance remain pending; the later authorized
+installation and Codex refresh results are recorded below.
 
 Local verification: 2026-09-09, branch `feat/multi-account-quota`. Feature base
 `44eb544`; Tasks 1–6 end at `529f62d`. Task 7's production source is `20b216e`,
 with the final browser driver correction at `25191a5`. The final backend fix is
-the commit containing this revised record (inspect with
-`git log -1 --format=%H -- docs/superpowers/plans/2026-09-08-multi-account-quota-verification.md` and `git show`).
+`823bd9a`; the installed code revision is `9f3fe0d`.
 The complete review diff is `git diff 44eb544..HEAD`.
 
 ## Evidence boundary
@@ -147,19 +147,34 @@ Covering command:
 final test type-narrowing correction. No production provider calls, installation,
 authentication, new dependencies, UI changes, or native changes were involved.
 
-## Separately pending acceptance
+## Installed and remaining acceptance
 
-- Native development-shell launch: **pending**. `bun run dev:app` invokes
-  `ensureAutostart`, which can modify the production LaunchAgent. Production
-  bootstrap is verified only with the synthetic browser host boundary.
-- Coordinated app/daemon installation and executable/PID validation: **pending**.
-  Neither local builds nor browser checks prove installed behavior. Installers
-  must be inspected immediately before an authorized installation.
-- Independent scheduled account refresh with selection unchanged: **pending**.
-  Both Codex source timestamps must independently advance across normal passes.
-  Claude source caching and the 45-minute backstop need installed observation;
-  a saved Claude sign-in requiring renewal leaves independent Claude refresh
-  **incomplete** even when auth rendering passes. Do not force refresh or switch.
+- Authorized installation: **passed, 2026-09-09**. Drew requested merge/install.
+  `feat/multi-account-quota` was fast-forwarded into
+  `wip/multi-account-quota-design` at `9f3fe0d`. Unrelated uncommitted Paseo edits
+  were preserved byte-for-byte; the merged checkout passed 1,441 tests. Both
+  installers were inspected, then run from the clean reviewed worktree using
+  `bun scripts/install-local.ts` and `bun run install:app`.
+- Running artifacts: **passed**. Daemon PID 68496 runs the canonical Application
+  Support executable; app PID 73140 runs
+  `/Applications/Dealerboard.app/Contents/MacOS/dealerboard`. `launchctl`, `ps`,
+  and mapped-executable checks confirmed the paths. Both installed executable
+  SHA-256 hashes match their newly built counterparts. The app installer
+  relaunched the app. A published schema-v3 snapshot passed the shared parser.
+  Native release launch is confirmed; the separate development-shell launch
+  and physical visual/touch assessment were not performed.
+- Independent Codex refresh: **passed** across two normal scheduled passes.
+  Account 1 source time advanced from `2026-09-09T16:26:39Z` to
+  `2026-09-09T16:28:40Z`; account 2 advanced from `16:26:50Z` to `16:28:42Z`.
+  Both issues remained null. No account-switch or forced-refresh command was
+  issued; Codex activity remains unknown in the source contract.
+- Independent Claude refresh: **incomplete**. Selection remained account 1.
+  Account 2 publishes `auth_required` and retains its September 2 measurement;
+  renewal through cswap is still required. Account 1 remained cached during this
+  short observation. The 45-minute backstop still needs longer observation.
+- Other source state: Kimi reported unavailable on both observed passes;
+  GLM/Qwen collected successfully. Installer builds passed with the previously
+  recorded Rollup warning and Tauri's existing `.app` bundle-identifier warning.
 - Physical-strip comfortable typography and tap targets: **pending**. Native
   resolution screenshots do not prove physical readability or touch behavior.
 - Source identity remains limited to Claude slots and Codex source-label-derived
