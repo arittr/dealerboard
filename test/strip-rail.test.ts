@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { QuotaAccountMeterModel, QuotaPanelModel } from "../app/src/quota";
+import { type QuotaAccountMeterModel, type QuotaPanelModel, reduceQuotaRead } from "../app/src/quota";
+import { QUOTA_DENSITY, QUOTA_DENSITY_PRESETS } from "../app/src/quota-density";
 import { quotaRenderModel, type RailModel, railRenderSignature, renderRail } from "../app/src/rail";
 import type { HourlyActivityBucket, TokenUsageRailModel } from "../app/src/token-usage";
+import { PREVIEW_NOW, quotaFixture } from "./fixtures/quota/preview-host";
 import { descendants, hasClass, renderedText, withFakeDocument } from "./support/fake-dom";
 
 const NOW = Date.parse("2026-08-25T20:00:00Z");
@@ -11,6 +13,7 @@ const quotaPanel = (overrides: Partial<QuotaPanelModel> = {}): QuotaPanelModel =
   windows: [{ tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 }],
   bindingIndex: 0,
   state: "ok",
+  issue: null,
   fetchedAtMs: NOW - 60_000,
   history: [],
   accounts: [],
@@ -24,6 +27,7 @@ const quotaAccount = (overrides: Partial<QuotaAccountMeterModel> = {}): QuotaAcc
   windows: [{ tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 }],
   bindingIndex: 0,
   state: "ok",
+  issue: null,
   fetchedAtMs: NOW - 60_000,
   ...overrides,
 });
@@ -37,6 +41,7 @@ const groupedClaude = (): QuotaPanelModel =>
         label: "2",
         active: true,
         state: "unavailable",
+        issue: "unavailable",
         windows: [
           { tag: "session", percentRemaining: 20, resetAtMs: NOW + 90_000 },
           { tag: "weekly", percentRemaining: 70, resetAtMs: null },
@@ -49,6 +54,7 @@ const model = (overrides: Partial<RailModel> = {}): RailModel => ({
   degraded: false,
   unreadCount: 3,
   quota: [quotaPanel()],
+  quotaDensity: QUOTA_DENSITY,
   tokens: { state: "hidden" },
   now: new Date(NOW),
   ...overrides,
@@ -68,6 +74,7 @@ describe("railRenderSignature", () => {
     const base = railRenderSignature(model());
     expect(railRenderSignature(model({ unreadCount: 4 }))).not.toBe(base);
     expect(railRenderSignature(model({ degraded: true }))).not.toBe(base);
+    expect(railRenderSignature(model({ quotaDensity: "compact" }))).not.toBe(base);
   });
 
   test("changes when a quota panel's binding percent moves", () => {
@@ -75,7 +82,7 @@ describe("railRenderSignature", () => {
     expect(railRenderSignature(model({ quota: [moved] }))).not.toBe(railRenderSignature(model()));
   });
 
-  test("changes when a non-binding window's marker moves, even with the binding untouched", () => {
+  test("tracks only visible non-binding tick positions", () => {
     const windows = (weekly: number) => [
       { tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 },
       { tag: "weekly", percentRemaining: weekly, resetAtMs: null },
@@ -83,6 +90,17 @@ describe("railRenderSignature", () => {
     const before = model({ quota: [quotaPanel({ windows: windows(90) })] });
     const after = model({ quota: [quotaPanel({ windows: windows(89) })] });
     expect(railRenderSignature(after)).not.toBe(railRenderSignature(before));
+    const tagAndResetOnly = model({
+      quota: [
+        quotaPanel({
+          windows: [
+            { tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 },
+            { tag: "monthly", percentRemaining: 90, resetAtMs: NOW + 10 * 60_000 },
+          ],
+        }),
+      ],
+    });
+    expect(railRenderSignature(tagAndResetOnly)).toBe(railRenderSignature(before));
   });
 
   test("tracks account identity, active state, state, fill, ticks, and displayed countdown", () => {
@@ -99,7 +117,46 @@ describe("railRenderSignature", () => {
     expect(
       changed({ ...second, windows: [{ tag: "session", percentRemaining: 54, resetAtMs: NOW + 90_000 }] }),
     ).not.toBe(signature);
-    expect(railRenderSignature(model({ quota: [base], now: new Date(NOW + 20_000) }))).toBe(signature);
+    expect(railRenderSignature(model({ quota: [base], now: new Date(NOW + 20_000) }))).not.toBe(signature);
+  });
+
+  test("ignores hidden ambient readings for grouped providers but tracks heading and visible account changes", () => {
+    const grouped = groupedClaude();
+    const hiddenAmbientChanged = {
+      ...grouped,
+      windows: [{ tag: "session", percentRemaining: 1, resetAtMs: NOW + 120_000 }],
+    };
+    expect(railRenderSignature(model({ quota: [hiddenAmbientChanged] }))).toBe(
+      railRenderSignature(model({ quota: [grouped] })),
+    );
+    expect(railRenderSignature(model({ quota: [{ ...grouped, state: "stale" }] }))).not.toBe(
+      railRenderSignature(model({ quota: [grouped] })),
+    );
+  });
+
+  test("changes at stale-age and reset crossings without a source update", () => {
+    const read = { mtimeMs: PREVIEW_NOW, contents: JSON.stringify(quotaFixture(2, "healthy")) };
+    // The same source read crosses Codex's six-minute measurement limit.
+    const beforeNow = PREVIEW_NOW + 4 * 60_000;
+    const afterNow = beforeNow + 1;
+    const before = model({ quota: reduceQuotaRead(read, beforeNow), now: new Date(beforeNow) });
+    const after = model({ quota: reduceQuotaRead(read, afterNow), now: new Date(afterNow) });
+    expect(before.quota.find((p) => p.provider === "codex")?.accounts[0]?.state).toBe("ok");
+    expect(after.quota.find((p) => p.provider === "codex")?.accounts[0]?.state).toBe("stale");
+    expect(railRenderSignature(before)).not.toBe(railRenderSignature(after));
+
+    const staleAccount = quotaAccount({
+      state: "stale",
+      fetchedAtMs: NOW - 60_000,
+      windows: [{ tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 }],
+    });
+    const stale = model({ quota: [quotaPanel({ accounts: [staleAccount] })] });
+    expect(railRenderSignature(stale)).not.toBe(railRenderSignature({ ...stale, now: new Date(NOW + 61_000) }));
+
+    const resetting = model({
+      quota: [quotaPanel({ windows: [{ tag: "session", percentRemaining: 55, resetAtMs: NOW }] })],
+    });
+    expect(railRenderSignature(resetting)).not.toBe(railRenderSignature({ ...resetting, now: new Date(NOW - 1) }));
   });
 });
 
@@ -112,20 +169,51 @@ test("maps grouped Claude to one provider and two stable account meters", () => 
     { id: "claude-swap:1", label: "1", active: false },
     { id: "claude-swap:2", label: "2", active: true },
   ]);
-  expect(quotaRenderModel(quotaPanel())).toMatchObject({ grouped: false, meter: { provider: "claude" } });
+  expect(quotaRenderModel(quotaPanel())).toMatchObject({ grouped: false });
 });
 
-test("the grouped section carries the ambient panel state", () => {
+test("a sole account supplies its own reading to the non-grouped render model", () => {
+  const account = quotaAccount({ windows: [{ tag: "session", percentRemaining: 10, resetAtMs: NOW + 90_000 }] });
+  const render = quotaRenderModel(quotaPanel({ accounts: [account] }));
+  expect(render).toMatchObject({ grouped: false, meter: { bindingIndex: 0, windows: [{ percentRemaining: 10 }] } });
+});
+
+test("a sole account applies its own health to the provider section", () => {
+  withFakeDocument((root) => {
+    renderRail(
+      root as unknown as HTMLElement,
+      model({ quota: [quotaPanel({ accounts: [quotaAccount({ state: "unavailable", issue: "unavailable" })] })] }),
+    );
+    expect(descendants(root).find((node) => hasClass(node, "rail-quota"))?.dataset["state"]).toBe("unavailable");
+  });
+});
+
+test("a reset-crossed healthy meter is visibly historical without hiding its last-good fill", () => {
+  withFakeDocument((root) => {
+    renderRail(
+      root as unknown as HTMLElement,
+      model({ quota: [quotaPanel({ windows: [{ tag: "session", percentRemaining: 55, resetAtMs: NOW }] })] }),
+    );
+    const meter = descendants(root).find((node) => hasClass(node, "quota-single-reading"));
+    expect(meter?.dataset["historical"]).toBe("true");
+    expect(descendants(meter!).some((node) => hasClass(node, "quota-bar-fill"))).toBe(true);
+  });
+});
+
+test("the grouped heading carries collection liveness without dimming the account rows", () => {
   withFakeDocument((root) => {
     renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }));
     const group = descendants(root).find((node) => hasClass(node, "quota-group"));
-    expect(group?.dataset["state"]).toBe("ok");
+    const heading = descendants(group!).find((node) => hasClass(node, "quota-provider-head"));
+    expect(group?.dataset["state"]).toBeUndefined();
+    expect(heading?.dataset["state"]).toBe("ok");
   });
   withFakeDocument((root) => {
     const stale = quotaPanel({ state: "stale", accounts: groupedClaude().accounts });
     renderRail(root as unknown as HTMLElement, model({ quota: [stale] }));
     const group = descendants(root).find((node) => hasClass(node, "quota-group"));
-    expect(group?.dataset["state"]).toBe("stale");
+    const heading = descendants(group!).find((node) => hasClass(node, "quota-provider-head"));
+    expect(heading?.dataset["state"]).toBe("stale");
     // The render-skip signature must see the group-level dim, or it would not rebuild.
     expect(railRenderSignature(model({ quota: [stale] }))).not.toBe(
       railRenderSignature(model({ quota: [groupedClaude()] })),
@@ -140,7 +228,7 @@ test("renders one Claude header, two bars, one active marker, and per-account di
     const headers = nodes.filter((node) => hasClass(node, "quota-provider-head"));
     const accountNodes = nodes.filter((node) => hasClass(node, "quota-account"));
     expect(headers).toHaveLength(1);
-    expect(headers[0]?.dataset["state"]).toBeUndefined();
+    expect(headers[0]?.dataset["state"]).toBe("ok");
     expect(nodes.filter((node) => node.textContent === "Claude")).toHaveLength(1);
     expect(nodes.filter((node) => node.textContent === "C")).toHaveLength(1);
     expect(accountNodes.map((node) => node.dataset["state"])).toEqual(["ok", "unavailable"]);
@@ -162,10 +250,8 @@ test("an unavailable account keeps its dimmed percent while the binding reset is
     renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }));
     const nodes = descendants(root);
     expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%", "20%"]);
-    expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
-      "2m ·",
-      "2m ·",
-    ]);
+    expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual(["2m", "2m"]);
+    expect(nodes.filter((node) => hasClass(node, "quota-age-cue")).map((node) => node.textContent)).toEqual(["1m old"]);
   });
 });
 
@@ -187,9 +273,12 @@ test("an unavailable account drops the percent once the binding reset has passed
     const nodes = descendants(root);
     expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%"]);
     expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
-      "2m ·",
+      "2m",
       "1m old",
     ]);
+    const obsolete = nodes.find((node) => node.dataset["quotaAccount"] === "claude-swap:2");
+    expect(descendants(obsolete!).some((node) => hasClass(node, "quota-bar-fill"))).toBe(false);
+    expect(descendants(obsolete!).some((node) => hasClass(node, "quota-tick"))).toBe(false);
   });
 });
 
@@ -198,7 +287,7 @@ test("groups Claude account meters in one stack after the shared provider header
     renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude()] }));
     const group = descendants(root).find((node) => hasClass(node, "quota-group"));
     expect(group?.children.map((node) => node.className)).toEqual(["quota-provider-head", "quota-account-stack"]);
-    expect(group?.children[1]?.children.map((node) => node.dataset["account"])).toEqual([
+    expect(group?.children[1]?.children.map((node) => node.dataset["quotaAccount"])).toEqual([
       "claude-swap:1",
       "claude-swap:2",
     ]);
@@ -352,7 +441,112 @@ test("quota sections sit inside one flex zone after unread", () => {
   withFakeDocument((root) => {
     renderRail(root as unknown as HTMLElement, model({ quota: [quotaPanel(), quotaPanel({ provider: "codex" })] }));
     const zone = descendants(root).find((node) => node.className === "rail-quota-zone");
-    expect(zone?.children.map((node) => node.className)).toEqual(["rail-quota", "rail-quota"]);
+    expect(zone?.children.every((node) => hasClass(node, "rail-quota") && hasClass(node, "quota-single"))).toBe(true);
+    const ambientMeter = descendants(zone!).find((node) => hasClass(node, "quota-single-reading"));
+    expect(ambientMeter?.dataset["quotaProvider"]).toBe("claude");
+    expect(ambientMeter?.dataset["quotaAccount"]).toBeUndefined();
     expect(root.children.map((node) => node.className.split(" ")[0])).toEqual(["rail-unread", "rail-quota-zone"]);
+  });
+});
+
+describe("inline quota account rows", () => {
+  test("renders one counted provider heading and targeted native rows for grouped Claude and Codex", () => {
+    const codex = quotaPanel({
+      provider: "codex",
+      accounts: [
+        quotaAccount({ id: "codexbar:one", label: "1", active: false }),
+        quotaAccount({ id: "codexbar:two", label: "2", active: null }),
+      ],
+    });
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ quota: [groupedClaude(), codex] }));
+      const nodes = descendants(root);
+      const headings = nodes.filter((node) => hasClass(node, "quota-provider-head"));
+      const rows = nodes.filter((node) => hasClass(node, "quota-account"));
+      expect(
+        headings.map((node) => descendants(node).find((child) => hasClass(child, "quota-account-count"))?.textContent),
+      ).toEqual(["2 accounts", "2 accounts"]);
+      expect(
+        headings.map((node) => descendants(node).find((child) => hasClass(child, "quota-chip"))?.textContent),
+      ).toEqual(["C", "X"]);
+      expect(rows).toHaveLength(4);
+      expect(
+        rows.map((node) => ({
+          type: node.type,
+          provider: node.dataset["quotaProvider"],
+          account: node.dataset["quotaAccount"],
+        })),
+      ).toEqual([
+        { type: "button", provider: "claude", account: "claude-swap:1" },
+        { type: "button", provider: "claude", account: "claude-swap:2" },
+        { type: "button", provider: "codex", account: "codexbar:one" },
+        { type: "button", provider: "codex", account: "codexbar:two" },
+      ]);
+      expect(
+        rows.map((node) => {
+          const label = descendants(node).find((child) => hasClass(child, "quota-account-label"));
+          return label?.children[1]?.textContent;
+        }),
+      ).toEqual(["1", "2", "1", "2"]);
+      expect(nodes.filter((node) => hasClass(node, "quota-account-active"))).toHaveLength(1);
+    });
+  });
+
+  test("uses a sole account's own target, measurement, and issue", () => {
+    const account = quotaAccount({
+      id: "codexbar:sole",
+      label: "7",
+      issue: "auth_required",
+      state: "unavailable",
+      windows: [{ tag: "weekly", percentRemaining: 10, resetAtMs: NOW + 90_000 }],
+    });
+    withFakeDocument((root) => {
+      renderRail(
+        root as unknown as HTMLElement,
+        model({ quota: [quotaPanel({ provider: "codex", accounts: [account] })] }),
+      );
+      const button = descendants(root).find((node) => hasClass(node, "quota-single-reading"));
+      expect(button?.type).toBe("button");
+      expect(button?.dataset["quotaProvider"]).toBe("codex");
+      expect(button?.dataset["quotaAccount"]).toBe("codexbar:sole");
+      expect(renderedText(button!)).toContain("Sign in again");
+      expect(renderedText(button!)).not.toContain("55%");
+      expect(descendants(button!).some((node) => hasClass(node, "quota-bar-fill"))).toBe(false);
+      expect(descendants(button!).some((node) => hasClass(node, "quota-tick"))).toBe(false);
+    });
+  });
+
+  test("keeps a healthy row independent from an unavailable sibling and orders its readout", () => {
+    const healthy = quotaAccount({
+      windows: [
+        { tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 },
+        { tag: "weekly", percentRemaining: 70, resetAtMs: null },
+      ],
+    });
+    withFakeDocument((root) => {
+      const grouped = quotaPanel({ accounts: [healthy, groupedClaude().accounts[1]!] });
+      renderRail(root as unknown as HTMLElement, model({ quota: [grouped] }));
+      const healthyRow = descendants(root).find((node) => node.dataset["quotaAccount"] === "claude-swap:1");
+      const rowNodes = descendants(healthyRow!);
+      const note = rowNodes.find((node) => hasClass(node, "quota-note"));
+      const percent = rowNodes.find((node) => hasClass(node, "quota-pct"));
+      expect(healthyRow?.dataset["historical"]).toBe("false");
+      expect(note?.textContent).toBe("2m");
+      expect(percent?.textContent).toBe("55%");
+      expect(rowNodes.indexOf(note!)).toBeLessThan(rowNodes.indexOf(percent!));
+      expect(rowNodes.filter((node) => hasClass(node, "quota-tick")).map((node) => node.style["background"])).toEqual([
+        "#94a3b8",
+      ]);
+    });
+  });
+
+  test("uses the explicit density values as CSS-variable boundaries", () => {
+    withFakeDocument((root) => {
+      renderRail(root as unknown as HTMLElement, model({ quotaDensity: "comfortable" }));
+      const zone = descendants(root).find((node) => hasClass(node, "rail-quota-zone"));
+      expect(zone?.style["--quota-scale"]).toBe(String(QUOTA_DENSITY_PRESETS.comfortable.scale));
+      expect(zone?.style["--quota-row-height"]).toBe("5.555555555555555vh");
+      expect(zone?.style["--quota-provider-gap"]).toBe("2.2222222222222223vh");
+    });
   });
 });

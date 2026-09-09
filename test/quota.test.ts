@@ -2,21 +2,37 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { reduceQuotaRead, STALE_QUOTA_AGE_MS } from "../app/src/quota";
 import { parseClaudeSwapAccounts } from "../src/core/claude-swap-quota";
+import { codexAccountId } from "../src/core/codexbar-accounts";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
 import {
   CODEXBAR_BINARY_CANDIDATES,
   CODEXBAR_PROVIDER_ARGS,
   createQuotaCollector,
+  QUOTA_EXEC_TIMEOUT_MS,
   QUOTA_POLL_INTERVAL_MS,
   type QuotaCollectorDependencies,
   type QuotaExec,
+  type QuotaExecResult,
 } from "../src/core/quota";
 import { parseQuotaSnapshot } from "../src/quota-snapshot";
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures", "quota", name), "utf8");
 
 const NOW = "2026-08-19T18:00:00.000Z";
+
+const healthyClaudeSwap = (): string => {
+  const source = JSON.parse(fixture("claude-swap-accounts.json"));
+  for (const account of source.accounts) {
+    if (account.usageStatus !== "ok") {
+      account.usageStatus = "ok";
+      account.usage = account.lastGoodUsage;
+      account.usageFetchedAt = account.lastGoodFetchedAt;
+    }
+  }
+  return JSON.stringify(source);
+};
 
 const widgetSnapshot = (generatedAt: string): string =>
   JSON.stringify({
@@ -57,11 +73,12 @@ describe("createQuotaCollector", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  type RawResponse = { exitCode: number; stdout: string };
+  type RawResponse = QuotaExecResult;
 
   type Harness = {
     deps: QuotaCollectorDependencies;
     calls: string[][];
+    timeouts: number[];
     claudeSwapCalls: string[][];
     claudeSwapTimeouts: number[];
     diagnostics: DiagnosticRecord[];
@@ -81,6 +98,7 @@ describe("createQuotaCollector", () => {
     overrides: Partial<QuotaCollectorDependencies> = {},
   ): Harness => {
     const calls: string[][] = [];
+    const timeouts: number[] = [];
     const claudeSwapCalls: string[][] = [];
     const claudeSwapTimeouts: number[] = [];
     const diagnostics: DiagnosticRecord[] = [];
@@ -96,14 +114,15 @@ describe("createQuotaCollector", () => {
     let abortAtNextStamp = false;
     const raw = new Map<string, RawResponse>();
     let claudeSwapFailed = false;
-    let claudeSwapBody = fixture("claude-swap-accounts.json");
+    let claudeSwapBody = healthyClaudeSwap();
     // Harness controls (fail/heal/omit/respondRaw) speak contract keys; the
     // spawn args carry CodexBar's --provider argument (qwen ≠ alibabatokenplan).
     const contractKeyByArg: Record<string, string> = Object.fromEntries(
       Object.entries(CODEXBAR_PROVIDER_ARGS).map(([key, arg]) => [arg, key]),
     );
-    const execSpy: QuotaExec = (args) => {
+    const execSpy: QuotaExec = (args, timeoutMs) => {
       calls.push(args);
+      timeouts.push(timeoutMs);
       const arg = args[2] ?? "";
       const provider = contractKeyByArg[arg] ?? arg;
       if (throwers.delete(provider)) {
@@ -158,6 +177,7 @@ describe("createQuotaCollector", () => {
     return {
       deps,
       calls,
+      timeouts,
       diagnostics,
       fail: (...providers) => {
         for (const provider of providers) {
@@ -195,6 +215,460 @@ describe("createQuotaCollector", () => {
     };
   };
 
+  test("publishes a successful Codex peer when the batch exits nonzero", async () => {
+    const harness = makeHarness();
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null"));
+    harness.respondRaw("codex", { exitCode: 1, stdout: fixture("codexbar-accounts-partial.json") });
+    await collector.pollNow();
+    const after = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null"));
+    const failedId = codexAccountId("synthetic-b");
+    const oldFailed = before.providers.codex?.accounts.find((a) => a.id === failedId);
+    if (oldFailed === undefined) throw new Error("expected retained Codex peer");
+    expect(after.providers.codex?.accounts.find((a) => a.id === failedId)).toEqual({
+      ...oldFailed,
+      unavailable: true,
+      issue: "unavailable",
+    });
+    expect(after.providers.codex?.accounts.find((a) => a.id === codexAccountId("synthetic-a"))).toMatchObject({
+      percentRemaining: 60,
+      fetchedAt: "2026-09-08T18:02:00.000Z",
+      issue: null,
+    });
+  });
+
+  test.each([
+    { name: "empty failure", exitCode: 1, stdout: "[]" },
+    { name: "invalid JSON", exitCode: 0, stdout: "{" },
+    { name: "truncated inventory", exitCode: 0, stdout: fixture("codexbar-accounts.json").slice(0, -8) },
+    {
+      name: "timeout with partial stdout",
+      exitCode: 0,
+      stdout: fixture("codexbar-accounts-partial.json"),
+      timedOut: true,
+    },
+    { name: "timeout with complete stdout", exitCode: 1, stdout: fixture("codexbar-accounts.json"), timedOut: true },
+  ])("failed Codex inventory retains measurements and collection age: $name", async (response) => {
+    let current = NOW;
+    const harness = makeHarness({}, { now: () => current });
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    if (before === undefined) throw new Error("expected Codex group");
+    current = "2026-09-08T18:04:00.000Z";
+    harness.respondRaw("codex", response);
+    await collector.pollNow();
+    await collector.pollNow();
+    const after = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    expect(after).toEqual({
+      ...before,
+      accounts: before?.accounts.map((a) => ({ ...a, unavailable: true, issue: "unavailable" })),
+    });
+    expect(
+      harness.diagnostics.filter((d) => d.provider === "codex" && d.code === "quota_accounts_failed"),
+    ).toHaveLength(1);
+  });
+
+  test("aborting after new Codex IDs does not advance labels, measurements, or diagnostic transitions", async () => {
+    const harness = makeHarness();
+    const initial = JSON.parse(fixture("codexbar-accounts.json")) as Array<Record<string, unknown>>;
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(initial.slice(0, 1)) });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    harness.respondRaw("codex", { exitCode: 1, stdout: fixture("codexbar-accounts-partial.json") });
+    harness.throwOnce("kimi");
+    await collector.pollNow();
+    expect(harness.writes()).toHaveLength(1);
+    expect(
+      harness.diagnostics.filter((d) => d.code === "quota_accounts_failed" && d.provider === "codex"),
+    ).toHaveLength(0);
+    harness.respondRaw("codex", { exitCode: 1, stdout: "" });
+    await collector.pollNow();
+    const after = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    expect(after?.accounts).toEqual(before?.accounts.map((a) => ({ ...a, unavailable: true, issue: "unavailable" })));
+    expect(
+      harness.diagnostics.filter((d) => d.code === "quota_accounts_failed" && d.provider === "codex"),
+    ).toHaveLength(1);
+    initial[1] = { ...initial[1], account: "synthetic-c" };
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(initial) });
+    await collector.pollNow();
+    expect(
+      parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex?.accounts.find(
+        (a) => a.id === codexAccountId("synthetic-c"),
+      )?.label,
+    ).toBe("2");
+  });
+
+  test("publication failure followed by a failed read retains only the published state", async () => {
+    const harness = makeHarness();
+    const publish = harness.deps.writeFile;
+    let failWrite = false;
+    harness.deps.writeFile = (path, payload) => {
+      if (failWrite) throw new Error("private write failure");
+      publish?.(path, payload);
+    };
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null"));
+    failWrite = true;
+    harness.respondRaw("codex", { exitCode: 1, stdout: fixture("codexbar-accounts-partial.json") });
+    await collector.pollNow();
+    expect(harness.writes()).toHaveLength(1);
+    expect(
+      harness.diagnostics.filter((d) => d.code === "quota_accounts_failed" && d.provider === "codex"),
+    ).toHaveLength(0);
+    failWrite = false;
+    harness.respondRaw("codex", { exitCode: 1, stdout: "" });
+    await collector.pollNow();
+    const after = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null"));
+    expect(after.providers.codex?.accounts).toEqual(
+      before.providers.codex?.accounts.map((a) => ({ ...a, unavailable: true, issue: "unavailable" })),
+    );
+    const published = JSON.stringify([harness.writes(), harness.diagnostics]);
+    for (const privateText of [
+      "synthetic-a",
+      "synthetic-b",
+      "synthetic-private-error",
+      "private write failure",
+      "@example.invalid",
+      "Ignored Corp",
+    ])
+      expect(published).not.toContain(privateText);
+  });
+
+  test("binary disappearance retains both groups without an ambient Claude call", async () => {
+    const harness = makeHarness({}, { fileExists: () => false });
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null"));
+    delete harness.deps.exec;
+    delete harness.deps.claudeSwapExec;
+    const callCount = harness.calls.length;
+    await collector.pollNow();
+    const after = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null"));
+    for (const provider of ["claude", "codex"] as const) {
+      expect(after.providers[provider]?.accounts).toEqual(
+        before.providers[provider]?.accounts.map((a) => ({ ...a, issue: "unavailable", unavailable: true })),
+      );
+      expect(after.providers[provider]?.fetchedAt).toBe(before.providers[provider]?.fetchedAt);
+    }
+    expect(harness.calls).toHaveLength(callCount);
+    expect(
+      harness.diagnostics
+        .filter((d) => d.code === "quota_accounts_failed")
+        .map((d) => d.provider)
+        .sort(),
+    ).toEqual(["claude", "codex"]);
+  });
+
+  test("duplicate and missing-ID records cannot overwrite peers or refresh inventory liveness", async () => {
+    let current = NOW;
+    const harness = makeHarness({}, { now: () => current });
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    const source = JSON.parse(fixture("codexbar-accounts-partial.json"));
+    current = "2026-09-08T18:04:00.000Z";
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify([source[0], source[0], source[1]]) });
+    await collector.pollNow();
+    let codex = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    expect(codex?.accounts).toEqual(before?.accounts.map((a) => ({ ...a, issue: "unavailable", unavailable: true })));
+    delete source[1].account;
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(source) });
+    await collector.pollNow();
+    codex = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    expect(codex?.fetchedAt).toBe(NOW);
+    expect(codex?.accounts).toHaveLength(2);
+    expect(codex?.accounts.find((a) => a.id === codexAccountId("synthetic-a"))).toMatchObject({
+      percentRemaining: 60,
+      issue: null,
+    });
+    expect(codex?.accounts.find((a) => a.id === codexAccountId("synthetic-b"))).toMatchObject({
+      percentRemaining: 10,
+      issue: "unavailable",
+    });
+    expect(harness.diagnostics.filter((d) => d.provider === "codex")).toHaveLength(1);
+  });
+
+  test("cached anonymous Codex reads keep source age and become stale through the reducer", async () => {
+    const fetchedAt = "2026-09-08T18:00:00.000Z";
+    const sourceMs = Date.parse(fetchedAt);
+    let currentMs = sourceMs + QUOTA_POLL_INTERVAL_MS;
+    const harness = makeHarness({}, { now: () => new Date(currentMs).toISOString() });
+    const source = JSON.parse(fixture("codexbar-codex.json"));
+    source[0].usage.updatedAt = fetchedAt;
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(source) });
+    const collector = createQuotaCollector(harness.deps);
+    for (let pass = 1; pass <= 4; pass++) {
+      await collector.pollNow();
+      const contents = harness.writes().at(-1) ?? "null";
+      const snapshot = parseQuotaSnapshot(JSON.parse(contents));
+      expect(snapshot.providers.codex).toMatchObject({ fetchedAt, unavailable: false, accounts: [] });
+      expect(snapshot.providers.codex?.history).toEqual(
+        Array.from({ length: pass }, () => ({ fetchedAt, fractionRemaining: 0.7 })),
+      );
+      expect(
+        reduceQuotaRead({ contents, mtimeMs: currentMs }, currentMs).find((p) => p.provider === "codex"),
+      ).toMatchObject({ fetchedAtMs: sourceMs, state: currentMs - sourceMs > STALE_QUOTA_AGE_MS ? "stale" : "ok" });
+      for (const provider of ["kimi", "zai", "qwen"] as const) {
+        expect(snapshot.providers[provider]?.fetchedAt).toBe(new Date(currentMs).toISOString());
+      }
+      currentMs += QUOTA_POLL_INTERVAL_MS;
+    }
+    expect(harness.diagnostics).toEqual([]);
+  });
+
+  test.each(["cold", "ambient", "named"] as const)(
+    "anonymous success plus error is unavailable and retains last-good %s state",
+    async (initial) => {
+      const harness = makeHarness();
+      const collector = createQuotaCollector(harness.deps);
+      if (initial !== "cold") {
+        if (initial === "named") {
+          harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+        }
+        await collector.pollNow();
+      }
+      const before =
+        initial === "cold"
+          ? undefined
+          : parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+      const source = JSON.parse(fixture("codexbar-codex.json"));
+      source[0].usage.extraRateWindows[0].window.usedPercent = 1;
+      source.push({ provider: "codex", error: { code: 1, kind: "provider", message: "private anonymous error" } });
+      harness.respondRaw("codex", { exitCode: 1, stdout: JSON.stringify(source) });
+      await collector.pollNow();
+      await collector.pollNow();
+      const contents = harness.writes().at(-1) ?? "null";
+      const after = parseQuotaSnapshot(JSON.parse(contents)).providers.codex;
+      if (initial === "cold") {
+        expect(after).toMatchObject({
+          unavailable: true,
+          fetchedAt: null,
+          percentRemaining: null,
+          history: [],
+          accounts: [],
+        });
+      } else {
+        if (before === undefined) throw new Error("expected last-good Codex publication");
+        if (initial === "ambient") {
+          expect(after).toEqual({ ...before, unavailable: true });
+        } else {
+          expect(after).toEqual({
+            ...before,
+            accounts: before.accounts.map((account) => ({ ...account, unavailable: true, issue: "unavailable" })),
+          });
+        }
+      }
+      const panel = reduceQuotaRead({ contents, mtimeMs: Date.parse(NOW) }, Date.parse(NOW)).find(
+        (p) => p.provider === "codex",
+      );
+      if (initial === "named") expect(panel?.accounts.every((account) => account.state === "unavailable")).toBe(true);
+      else expect(panel?.state).toBe("unavailable");
+      expect(harness.diagnostics.filter((record) => record.provider === "codex")).toEqual([
+        { timestamp: NOW, component: "quota", code: "quota_accounts_failed", provider: "codex" },
+      ]);
+      expect(JSON.stringify([contents, harness.diagnostics])).not.toContain("private anonymous error");
+    },
+  );
+
+  test("anonymous and widget readings cannot rescue named Codex rows, including a lone account", async () => {
+    const widget = JSON.stringify({
+      generatedAt: NOW,
+      entries: [
+        { provider: "codex", primary: { windowMinutes: 300, usedPercent: 1 }, secondary: null, tertiary: null },
+      ],
+    });
+    const harness = makeHarness({ files: { [widgetPath(tempDir)]: widget } });
+    const source = JSON.parse(fixture("codexbar-accounts.json"));
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(source.slice(0, 1)) });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-codex.json") });
+    await collector.pollNow();
+    const codex = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    expect(codex).toMatchObject({ percentRemaining: null, weeklyPercentRemaining: null, history: [] });
+    expect(codex?.accounts).toHaveLength(1);
+    expect(codex?.accounts[0]).toMatchObject({
+      percentRemaining: 80,
+      issue: "unavailable",
+      fetchedAt: "2026-09-08T18:00:00.000Z",
+    });
+  });
+
+  test("complete Codex removal and empty inventory clear grouping, allowing later ambient fallback", async () => {
+    const harness = makeHarness();
+    const source = JSON.parse(fixture("codexbar-accounts.json"));
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(source) });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(source.slice(1)) });
+    await collector.pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex?.accounts).toEqual(
+      before?.accounts.filter((a) => a.id === codexAccountId("synthetic-b")),
+    );
+    harness.respondRaw("codex", { exitCode: 0, stdout: "[]" });
+    await collector.pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex).toBeUndefined();
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-codex.json") });
+    await collector.pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex).toMatchObject({
+      accounts: [],
+      percentRemaining: 70,
+    });
+  });
+
+  test("restart preserves Codex labels, source timestamps, and failed diagnostic state", async () => {
+    const harness = makeHarness();
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    harness.respondRaw("codex", { exitCode: 1, stdout: fixture("codexbar-accounts-partial.json") });
+    await collector.pollNow();
+    const seed = harness.writes().at(-1) ?? "null";
+    const restarted = makeHarness({ files: { [quotaPath]: seed } });
+    restarted.respondRaw("codex", { exitCode: 1, stdout: "" });
+    const nextCollector = createQuotaCollector(restarted.deps);
+    await nextCollector.pollNow();
+    const previous = parseQuotaSnapshot(JSON.parse(seed)).providers.codex;
+    const after = parseQuotaSnapshot(JSON.parse(restarted.writes().at(-1) ?? "null")).providers.codex;
+    expect(after?.accounts).toEqual(previous?.accounts.map((a) => ({ ...a, issue: "unavailable", unavailable: true })));
+    expect(restarted.diagnostics.filter((d) => d.provider === "codex")).toEqual([]);
+    const source = JSON.parse(fixture("codexbar-accounts.json"));
+    source.push({ ...source[0], account: "synthetic-c" });
+    restarted.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(source.reverse()) });
+    await nextCollector.pollNow();
+    const recovered = parseQuotaSnapshot(JSON.parse(restarted.writes().at(-1) ?? "null")).providers.codex;
+    for (const row of previous?.accounts ?? [])
+      expect(recovered?.accounts.find((a) => a.id === row.id)?.label).toBe(row.label);
+    expect(recovered?.accounts.find((a) => a.id === codexAccountId("synthetic-c"))?.label).toBe("3");
+  });
+
+  test("partial union overflow keeps the published eight accounts and emits one sanitized transition", async () => {
+    const harness = makeHarness();
+    const source = JSON.parse(fixture("codexbar-accounts.json"))[0];
+    harness.respondRaw("codex", {
+      exitCode: 0,
+      stdout: JSON.stringify(Array.from({ length: 8 }, (_, index) => ({ ...source, account: `synthetic-${index}` }))),
+    });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    harness.respondRaw("codex", { exitCode: 1, stdout: JSON.stringify([{ ...source, account: "synthetic-new" }]) });
+    await collector.pollNow();
+    await collector.pollNow();
+    const after = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+    expect(after?.accounts).toEqual(before?.accounts.map((a) => ({ ...a, issue: "unavailable", unavailable: true })));
+    expect(after?.fetchedAt).toBe(before?.fetchedAt);
+    expect(harness.diagnostics.filter((d) => d.provider === "codex")).toHaveLength(1);
+  });
+
+  test("Claude account errors retain omitted peers, update activity, and preserve specific issues through transport failure", async () => {
+    let current = NOW;
+    const harness = makeHarness({}, { now: () => current });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.claude;
+    harness.setClaudeSwap(
+      JSON.stringify({
+        schemaVersion: 1,
+        activeAccountNumber: 1,
+        accounts: [
+          {
+            number: 1,
+            usageStatus: "relogin_required",
+            lastGoodUsage: { fiveHour: { pct: 99 } },
+            lastGoodFetchedAt: "2026-08-18T18:00:00Z",
+          },
+        ],
+      }),
+    );
+    current = "2026-08-19T18:02:00.000Z";
+    await collector.pollNow();
+    let claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.claude;
+    expect(claude?.accounts).toHaveLength(2);
+    expect(claude?.accounts[0]).toMatchObject({
+      active: true,
+      issue: "auth_required",
+      fetchedAt: before?.accounts[0]?.fetchedAt,
+      percentRemaining: 70,
+    });
+    expect(claude?.accounts[1]).toMatchObject({ active: false, issue: "unavailable" });
+    expect(claude?.fetchedAt).toBe(current);
+    harness.failClaudeSwap();
+    current = "2026-08-19T18:04:00.000Z";
+    await collector.pollNow();
+    claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.claude;
+    expect(claude?.accounts[0]?.issue).toBe("auth_required");
+    expect(claude?.fetchedAt).toBe("2026-08-19T18:02:00.000Z");
+    expect(harness.diagnostics.filter((d) => d.code === "quota_accounts_failed")).toHaveLength(1);
+    harness.healClaudeSwap();
+    harness.setClaudeSwap(healthyClaudeSwap());
+    await collector.pollNow();
+    claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.claude;
+    expect(claude?.accounts).toEqual(before?.accounts);
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
+  });
+
+  test("timed-out successful Codex output cannot introduce account identities", async () => {
+    const harness = makeHarness();
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json"), timedOut: true });
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex?.accounts).toEqual([]);
+    const source = JSON.parse(fixture("codexbar-accounts.json"))[0];
+    source.account = "synthetic-new";
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify([source]) });
+    await collector.pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex?.accounts[0]?.label).toBe(
+      "1",
+    );
+  });
+
+  test("a cold malformed Claude inventory without an ambient source logs only its first transition", async () => {
+    const harness = makeHarness(
+      { binaryPresent: false, claudeSwapBinaryPresent: false },
+      {
+        claudeSwapExec: async () => ({ exitCode: 0, stdout: "private malformed inventory" }),
+      },
+    );
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    await collector.pollNow();
+    expect(harness.diagnostics.filter((d) => d.code === "quota_accounts_failed")).toHaveLength(1);
+  });
+
+  test("initial Claude account errors log once while cached source timestamps remain unchanged", async () => {
+    let current = NOW;
+    const harness = makeHarness({}, { now: () => current });
+    harness.setClaudeSwap(fixture("claude-swap-accounts.json"));
+    const collector = createQuotaCollector(harness.deps);
+    await collector.pollNow();
+    const before = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.claude;
+    current = "2026-08-19T18:02:00.000Z";
+    await collector.pollNow();
+    const after = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.claude;
+    expect(after?.accounts).toEqual(before?.accounts);
+    expect(after?.fetchedAt).toBe(current);
+    expect(harness.diagnostics.filter((d) => d.code === "quota_accounts_failed")).toHaveLength(1);
+  });
+
+  test("the atomic file writer publishes valid v3 accounts to the temporary output path", async () => {
+    const harness = makeHarness();
+    delete harness.deps.writeFile;
+    harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+    await createQuotaCollector(harness.deps).pollNow();
+    expect(parseQuotaSnapshot(JSON.parse(readFileSync(quotaPath, "utf8"))).providers.codex?.accounts).toHaveLength(2);
+  });
+
   test("publishes all five providers in contract order after successful runs", async () => {
     const harness = makeHarness();
     await createQuotaCollector(harness.deps).pollNow();
@@ -224,10 +698,14 @@ describe("createQuotaCollector", () => {
         "json",
         "--log-level",
         "critical",
+        ...(provider === "codex" ? ["--all-accounts"] : []),
       ]),
     );
     expect(harness.claudeSwapCalls).toEqual([["list", "--json"]]);
     expect(harness.claudeSwapTimeouts).toEqual([5_000]);
+    expect(harness.timeouts).toEqual([90_000, 90_000, 90_000, 90_000]);
+    expect(QUOTA_EXEC_TIMEOUT_MS).toBe(90_000);
+    expect(QUOTA_POLL_INTERVAL_MS).toBe(120_000);
     expect(snapshot.providers["claude"]?.accounts.map((account) => account.id)).toEqual([
       "claude-swap:1",
       "claude-swap:2",
@@ -335,7 +813,7 @@ describe("createQuotaCollector", () => {
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 98,
@@ -357,16 +835,16 @@ describe("createQuotaCollector", () => {
     await createQuotaCollector(harness.deps).pollNow();
     const latest = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
     expect(latest.providers["claude"]?.accounts).toEqual(
-      seededAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+      seededAccounts.accounts.map((account) => ({ ...account, issue: "unavailable", unavailable: true })),
     );
   });
 
-  test("a legacy grouped seed whose first new read fails starves with the seeded stamp", async () => {
+  test("a grouped seed whose first new read fails starves with the seeded stamp", async () => {
     const seedStamp = "2026-08-19T17:50:00.000Z";
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -388,20 +866,22 @@ describe("createQuotaCollector", () => {
     await createQuotaCollector(harness.deps).pollNow();
     const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
     expect(claude?.fetchedAt).toBe(seedStamp);
-    expect(claude?.percentRemaining).toBe(62.5);
+    expect(claude?.percentRemaining).toBeNull();
     expect(claude?.unavailable).toBe(false);
-    expect(claude?.accounts).toEqual(seededAccounts.accounts.map((account) => ({ ...account, unavailable: true })));
+    expect(claude?.accounts).toEqual(
+      seededAccounts.accounts.map((account) => ({ ...account, issue: "unavailable", unavailable: true })),
+    );
     expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
-    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(1);
+    expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(0);
   });
 
-  test("a legacy unavailable seed starves with unavailable canonicalized false", async () => {
+  test("an unavailable v3 seed starves with unavailable canonicalized false", async () => {
     // Seed exactly as in the previous test, but with unavailable: true.
     const seedStamp = "2026-08-19T17:50:00.000Z";
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -428,13 +908,13 @@ describe("createQuotaCollector", () => {
     expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
   });
 
-  test("a legacy seed without a usable stamp falls back to the codexbar probe", async () => {
+  test("a v3 group without a usable stamp remains grouped without an ambient probe", async () => {
     // Seed ≥2 accounts under an emptyQuota()-shaped claude entry: fetchedAt
     // null, unavailable true, null windows.
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: null,
@@ -453,9 +933,9 @@ describe("createQuotaCollector", () => {
     harness.failClaudeSwap();
     await createQuotaCollector(harness.deps).pollNow();
     const claude = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
-    expect(harness.calls.some((call) => call[2] === "claude")).toBe(true); // probe ran
-    expect(claude?.percentRemaining).toBe(80); // honest ambient data under the retained rows
-    expect(claude?.fetchedAt).toBe(NOW);
+    expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
+    expect(claude?.percentRemaining).toBeNull();
+    expect(claude?.fetchedAt).toBeNull();
     expect(claude?.accounts.every((account) => account.unavailable)).toBe(true);
   });
 
@@ -492,6 +972,7 @@ describe("createQuotaCollector", () => {
 
     current = "2026-08-19T18:04:00.000Z";
     harness.healClaudeSwap();
+    harness.setClaudeSwap(fixture("claude-swap-accounts.json"));
     harness.heal("claude");
     await collector.pollNow();
     const healed = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "")).providers["claude"];
@@ -527,18 +1008,25 @@ describe("createQuotaCollector", () => {
     await collector.pollNow();
     await collector.pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
-    expect(snapshot.providers["codex"]).toMatchObject({ percentRemaining: 70, unavailable: true, fetchedAt: NOW });
+    expect(snapshot.providers["codex"]).toMatchObject({
+      percentRemaining: 70,
+      unavailable: true,
+      fetchedAt: "2030-01-01T00:00:00.000Z",
+    });
     expect(snapshot.providers["codex"]?.history.length).toBe(1);
     expect(snapshot.providers["kimi"]?.unavailable).toBe(false);
-    const failures = harness.diagnostics.filter((record) => record.code === "quota_failed");
+    const failures = harness.diagnostics.filter(
+      (record) => record.code === "quota_failed" || record.code === "quota_accounts_failed",
+    );
     expect(failures.map((record) => record.provider).sort()).toEqual(["codex", "zai"]);
     expect(failures.every((record) => record.component === "quota")).toBe(true);
   });
 
-  test("a cold-start failure emits quota_failed once per provider, not per pass, and again after recovery", async () => {
+  test("a cold-start failure emits fixed diagnostics once per provider and again after recovery", async () => {
     const harness = makeHarness();
     const collector = createQuotaCollector(harness.deps);
-    const failures = () => harness.diagnostics.filter((record) => record.code === "quota_failed");
+    const failures = () =>
+      harness.diagnostics.filter((record) => record.code === "quota_failed" || record.code === "quota_accounts_failed");
     // Grouped claude is served by cswap and never fails through the probe loop.
     const PROBING_PROVIDERS = ["codex", "kimi", "zai", "qwen"] as const;
     harness.fail(...PROBING_PROVIDERS);
@@ -730,10 +1218,12 @@ describe("createQuotaCollector", () => {
       stdout: JSON.stringify([
         {
           usage: {
+            updatedAt: NOW,
             primary: null,
             secondary: { windowMinutes: 10080, usedPercent: 25, resetsAt: "2026-08-27T06:03:05Z" },
             tertiary: null,
           },
+          provider: "codex",
         },
       ]),
     });
@@ -827,7 +1317,7 @@ describe("createQuotaCollector", () => {
 
   test("seeding from an existing file preserves last-good data across a restart", async () => {
     const seeded = JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -837,6 +1327,8 @@ describe("createQuotaCollector", () => {
           unavailable: false,
           fetchedAt: "2026-08-19T17:00:00.000Z",
           history: [{ fetchedAt: "2026-08-19T17:00:00.000Z", fractionRemaining: 0.625 }],
+          extraWindows: [],
+          accounts: [],
         },
       },
     });
@@ -849,6 +1341,37 @@ describe("createQuotaCollector", () => {
     await createQuotaCollector(harness.deps).pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
     expect(snapshot.providers["claude"]).toMatchObject({ percentRemaining: 62.5, unavailable: true });
+  });
+
+  test.each([1, 2])("quota schema v%i cannot seed retained state", async (schemaVersion) => {
+    const oldSnapshot = JSON.stringify({
+      schemaVersion,
+      providers: {
+        claude: {
+          percentRemaining: 62.5,
+          resetAt: "2026-08-19T22:00:00.000Z",
+          weeklyPercentRemaining: 88,
+          weeklyResetAt: "2026-08-24T00:00:00.000Z",
+          unavailable: false,
+          fetchedAt: "2026-08-19T17:00:00.000Z",
+          history: [{ fetchedAt: "2026-08-19T17:00:00.000Z", fractionRemaining: 0.625 }],
+          extraWindows: [],
+          accounts: [],
+        },
+      },
+    });
+    const harness = makeHarness({
+      files: { [quotaPath]: oldSnapshot },
+      claudeSwapBinaryPresent: false,
+    });
+    harness.fail("claude");
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["claude"]).toMatchObject({
+      percentRemaining: null,
+      fetchedAt: null,
+      unavailable: true,
+    });
   });
 
   test("the binary candidates prefer the homebrew symlink, then fall back", () => {
@@ -959,7 +1482,7 @@ describe("createQuotaCollector", () => {
     const harness = makeHarness({ files: { [widgetPath(tempDir)]: widgetWithClaude } });
     await createQuotaCollector(harness.deps).pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
-    const expected = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
+    const expected = parseClaudeSwapAccounts(healthyClaudeSwap());
     if (expected.kind !== "ok") throw new Error("fixture must parse");
     expect(snapshot.providers["claude"]).toEqual({
       percentRemaining: null,
@@ -1014,7 +1537,7 @@ describe("createQuotaCollector", () => {
 
   test("grouped publication carries the prior claude history ring frozen", async () => {
     const seeded = JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -1157,6 +1680,7 @@ describe("createQuotaCollector", () => {
         resetAt: "2026-08-19T22:00:00.000Z",
         weeklyPercentRemaining: 40,
         weeklyResetAt: "2026-08-24T00:00:00.000Z",
+        issue: null,
         unavailable: false,
         fetchedAt: "2026-08-19T17:00:00.000Z",
         extraWindows: [],

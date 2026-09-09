@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dealerboard · Account rail studies</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#090d13;color:#e8eef7;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button{font:inherit;color:inherit;cursor:pointer}button:focus-visible{outline:2px solid #94c9ff;outline-offset:4px}.page{max-width:1420px;padding:38px 36px 60px;margin:auto}.eyebrow{font-size:11px;letter-spacing:.16em;color:#8593a7;text-transform:uppercase}.intro{display:flex;justify-content:space-between;gap:40px;align-items:end;margin:14px 0 26px}h1{font-size:32px;letter-spacing:-.04em;margin:0 0 10px;font-weight:600}p{color:#95a3b7;line-height:1.5;margin:0;font-size:14px}.legend{font-size:12px;color:#8f9db0;text-align:right;line-height:1.8;white-space:nowrap}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;border-top:1px solid #253040;border-bottom:1px solid #253040;padding:15px 0;margin-bottom:26px}.segmented{display:flex;gap:4px;flex-wrap:wrap}.segmented button,.zoom{border:1px solid transparent;border-radius:7px;background:transparent;padding:8px 12px;color:#95a3b7;font-size:12px}.segmented button.active,.zoom{background:#1c2635;border-color:#334158;color:#e8eef7}.toolbar p{font-size:12px}.studies{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px}.study{min-width:0;border:1px solid #263140;background:#0e141e;border-radius:14px;overflow:hidden}.study.selected{border-color:#7798c2;box-shadow:0 0 0 1px #7798c244}.study-top{height:83px;padding:17px 19px}.study-top h2{font-size:16px;font-weight:550;margin:0 0 6px;letter-spacing:-.01em}.study-top p{font-size:12px}.letter{color:#8394ac;margin-right:10px;font-size:12px}.crop{position:relative;overflow:hidden;border-top:1px solid #232d3b;border-bottom:1px solid #232d3b;background:#10141c}.crop>.rail{position:absolute;transform-origin:top left}.choose{width:calc(100% - 32px);margin:16px;border:1px solid #344259;border-radius:7px;background:transparent;padding:10px;font-size:12px}.selected .choose{background:#dbe8fa;color:#142033;border-color:#dbe8fa}.context-head{display:flex;align-items:center;justify-content:space-between;margin:34px 0 14px}.context-head h2{font-size:17px;margin:0 0 5px;font-weight:550}.context-head p{font-size:12px}.context{overflow:auto;border:1px solid #2a3545;border-radius:12px;background:#10151c}.strip-wrap{position:relative;overflow:hidden}.strip{position:absolute;width:2560px;height:720px;display:grid;grid-template-columns:1922px 638px;transform-origin:top left;background:#10151c}.board{display:grid;grid-template-columns:repeat(2,886px);grid-template-rows:repeat(6,102px);gap:12px;padding:24px 0 0 40px;position:relative}.agent{height:102px;border-radius:14px;background:#1d2632;border:1px solid #283447;border-left:7px solid #20b8ff;padding:13px 20px;display:flex;gap:16px;align-items:start;min-width:0}.agent.quiet{background:#141b25;border-left-color:#375268;opacity:.65}.agent.done{border-left-color:#4ade80}.agent.wait{background:#2b2430;border-left-color:#ffb020}.agent .chip{width:42px;height:42px;font-size:29px;flex-shrink:0}.agent-title{font-size:29px;white-space:nowrap;color:#e8eef7;font-weight:600;letter-spacing:-.5px}.agent-sub{font-size:22px;color:#8e9db3;margin-top:7px}.agent-time{margin-left:auto;white-space:nowrap;font-size:23px;color:#afc0d5;padding-top:6px}.rail{width:638px;height:720px;background:#10141c;border:1px solid #232b38;border-radius:24px;padding:24px 24px 16px;display:flex;flex-direction:column;color:#94a3b8;font-variant-numeric:tabular-nums;flex-shrink:0}.tokens{font-size:40px;font-weight:650;color:#e8eef7;letter-spacing:-1px;white-space:nowrap}.yesterday{font-size:22px;color:#60a5fa;letter-spacing:0;font-weight:500;margin-left:10px}.token-flow{display:flex;align-items:center;gap:16px;height:90px;margin-top:8px}.rates{width:190px;flex-shrink:0;font-size:28px;line-height:1.55}.rates span{display:block}.rates .down{color:#ff4d67}.chart{width:100%;height:84px}.unread{display:flex;align-items:center;gap:12px;font-size:25px;color:#ffb020;margin-top:10px;margin-bottom:9px}.status-dot{width:12px;height:12px;border-radius:50%;background:#4ade80;display:inline-block;flex-shrink:0}.zone{flex:1;display:flex;flex-direction:column;justify-content:space-evenly;gap:8px;min-height:0}.provider{--brand:#d97757;min-width:0}.provider.codex{--brand:#d946ef}.provider.kimi{--brand:#3b82f6}.provider.glm{--brand:#2dd4bf}.provider.qwen{--brand:#ef4444}.provider-head{display:flex;align-items:center;gap:12px;font-size:28px;line-height:34px}.chip{background:var(--brand,#d97757);display:inline-flex;align-items:center;justify-content:center;color:#10151c;width:34px;height:34px;border-radius:7px;font-size:23px;font-weight:700}.count{font-size:18px;color:#5f718a;margin-left:1px}.provider-name{font-weight:500}.remaining{margin-left:auto;font-size:24px;color:#e8eef7;white-space:nowrap}.reset{font-size:20px;color:#8090a7;margin-left:auto}.window{font-size:19px;color:#91a0b6;background:#1c2430;border-radius:5px;padding:1px 8px}.bar{height:7px;border-radius:6px;background:#263140;position:relative;overflow:hidden}.fill{height:100%;border-radius:6px;background:#4ade80}.tick{position:absolute;left:88%;top:0;bottom:0;width:2px;background:#a5b2c575}.single .bar{margin-top:9px}.account{border:0;background:transparent;padding:0;color:inherit;text-align:left;display:flex;align-items:center;gap:10px;width:100%;height:36px;border-radius:6px}.account:hover{background:#1a2432}.slot{display:flex;gap:6px;align-items:center;min-width:39px;color:#8798b1;font-size:20px}.active-dot{height:7px;width:7px;display:inline-block;border-radius:50%;background:transparent}.active-dot.on{background:var(--brand)}.account .bar{flex:1}.account .pct{width:54px;text-align:right;color:#e8eef7;font-size:23px}.error-text{color:#d9a969;font-size:20px;white-space:nowrap}.account.error .bar{background:repeating-linear-gradient(135deg,#29313c 0px,#29313c 5px,#161f2b 5px,#161f2b 10px)}.account.error .pct{color:#d9a969}.accounts{margin-top:5px}.paired{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 20px;margin-top:8px}.pair{display:block;height:auto;padding:0 0 3px}.pair-top{display:flex;align-items:center;gap:7px;margin-bottom:7px}.pair .pct{margin-left:auto}.pair .bar{width:100%}.pair .error-text{font-size:19px;margin-left:auto}.featured{margin-top:8px}.featured .account{height:34px}.summary-foot{display:flex;align-items:center;gap:12px;margin-top:6px;font-size:18px;color:#71839c}.secondary-chip{border:0;background:#1b2430;padding:5px 9px;border-radius:6px;font-size:18px;color:#a9b8cc}.secondary-chip.error{color:#d9a969}.summary-foot .muted{margin-left:auto}.four .account{height:30px}.four .provider-head{font-size:26px;line-height:30px}.four .chip{height:30px;width:30px}.four .zone{gap:5px}.four .paired{gap:6px 20px}.footnote{font-size:12px;color:#697a92;margin-top:16px}.detail-backdrop{position:fixed;inset:0;background:#05080dbd;display:none;align-items:center;justify-content:center;z-index:20;padding:24px;backdrop-filter:blur(8px)}.detail-backdrop.open{display:flex}.detail{max-width:480px;width:100%;background:#141d29;border:1px solid #39465d;border-radius:18px;padding:28px;box-shadow:0 25px 90px #0008}.detail-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:26px}.detail h2{font-size:23px;margin:0;font-weight:550}.close{background:#232e40;border:0;border-radius:50%;font-size:20px;width:32px;height:32px}.detail .account-status{font-size:12px;color:#8fa2bf;margin-top:7px}.detail .detail-window{margin-top:24px}.detail-window label{display:flex;justify-content:space-between;font-size:14px;margin-bottom:10px;color:#c5d3e5}.detail-window p{font-size:12px;margin-top:9px}.notice{background:#4a36252e;border:1px solid #7f593c70;border-radius:9px;padding:16px;color:#dfb788}.notice strong{font-size:14px;display:block;margin-bottom:5px}.notice p{font-size:13px;color:#bca48a}.detail .last-seen{font-size:12px;margin-top:20px;color:#8393aa}.detail-note{border-top:1px solid #2c384a;padding-top:18px;margin-top:24px;font-size:11px;color:#7e91ad}@media(max-width:900px){.page{padding:24px 18px}.studies{grid-template-columns:1fr}.crop{max-width:550px;margin:auto}.legend{display:none}.intro{display:block}.toolbar{align-items:start;flex-direction:column}.study-top{height:auto}.context-head{gap:20px}h1{font-size:27px}}
+
+.studies{grid-template-columns:repeat(2,minmax(0,1fr))}
+.crop{max-width:638px;margin:auto}
+.study-top{height:83px}
+.account{height:40px;gap:12px}
+.account .window{width:76px;text-align:center;padding:2px 5px;flex-shrink:0;font-size:18px}
+.account .pct{flex-shrink:0;font-size:23px;color:#9aabc1}
+.countdown{width:105px;flex-shrink:0;text-align:right;font-size:27px;color:#e8eef7;font-weight:600;letter-spacing:-.4px;white-space:nowrap}
+.account .bar{min-width:30px}
+.account.exhausted .countdown{color:#f2bb63}
+.account.exhausted .bar{background:#5b442b66}
+.account.exhausted .pct{color:#bf9c6c}
+.reset-heading{margin-left:auto;font-size:18px;color:#6d8099;letter-spacing:.02em}
+.pair{height:auto;display:flex;flex-direction:column;align-items:stretch;gap:0;padding:2px 0 4px}
+.pair-top{gap:6px;margin-bottom:9px}
+.pair-top .slot{min-width:29px}
+.pair-top .pct{margin-left:auto;width:auto}
+.pair .bar{flex:auto}
+.pair-countdown{display:flex;align-items:baseline;justify-content:space-between;margin-top:6px;gap:7px}
+.pair-countdown .reset-label{font-size:17px;color:#7e8fa7}
+.pair-countdown .countdown{width:auto}
+.paired{gap:8px 28px}
+.error-line{margin-left:auto;color:#d9a969;font-size:21px;white-space:nowrap}
+.pair .error-line{font-size:22px;margin-left:0}
+.pair .error-age{color:#6d8099;font-size:17px}
+.four .account{height:32px}
+.four .pair{height:auto}
+.four .paired{gap:7px 24px}
+.four .pair-top{margin-bottom:4px}
+.four .pair-countdown{margin-top:3px}
+.four .pair-countdown .countdown{font-size:23px}
+.four .pair-countdown .reset-label{font-size:15px}
+.four .provider-head{line-height:30px}
+.four .zone{gap:7px}
+.four .single .provider-head{font-size:25px}
+.four .single .bar{margin-top:5px}
+.four .single .remaining{font-size:22px}
+.four .single .window{font-size:17px}
+.four .pair{padding:0}.four .pair-top{line-height:22px;margin-bottom:3px}.four .pair-top .window{line-height:20px;padding:0 5px}.four .pair-countdown{line-height:24px;margin-top:2px}.four .pair .bar{height:5px}
+.four .unread{margin-top:7px}
+@media(max-width:900px){.studies{grid-template-columns:1fr}.crop{max-width:638px}}
+</style>
+</head>
+<body>
+<main class="page">
+<div class="eyebrow">Dealerboard / visual brainstorming / 02</div>
+<div class="intro"><div><h1>Use one. Watch the other reset.</h1><p>Both treatments keep every account’s reset countdown on the rail, alongside its remaining quota and limiting window.</p></div><div class="legend">638 × 720 rail · scaled evenly<br>Illustrative values · percentages show remaining quota</div></div>
+<div class="toolbar"><div class="segmented" aria-label="Account scenario"><button class="active" data-scenario="waiting">Waiting for a reset</button><button data-scenario="healthy">Both have headroom</button><button data-scenario="error">Needs sign-in</button><button data-scenario="four">Four per provider</button></div><p>Account 1 is in use. Account 2 is exhausted, with its reset in view.</p></div>
+<div class="studies">
+<article class="study selected" data-study="rows"><div class="study-top"><h2><span class="letter">A</span>Inline countdowns</h2><p>Fixed columns keep every reset easy to scan.</p></div><div class="crop" id="rows"></div><button class="choose" data-choice="inline-countdowns" data-select="rows">Selected · Inline countdowns</button></article>
+<article class="study" data-study="paired"><div class="study-top"><h2><span class="letter">B</span>Paired countdowns</h2><p>Side-by-side accounts, each with its own countdown.</p></div><div class="crop" id="paired"></div><button class="choose" data-choice="paired-countdowns" data-select="paired">Choose paired countdowns</button></article>
+
+</div>
+<div class="context-head"><div><h2 id="context-title">Inline countdowns, on the strip</h2><p>Current renderer, with synthetic sessions. Only the rail treatment changes.</p></div><div><button class="zoom" id="baseline">Compare current rail</button> <button class="zoom" id="zoom">View at native size</button></div></div>
+<div class="context"><div class="strip-wrap"><div class="strip"><div class="board" id="board"></div><div id="context-rail"></div></div></div></div>
+<p class="footnote">Provider colors and board geometry follow Dealerboard. These are interactive mockups; no account or authentication changes are performed.</p>
+</main>
+<div class="detail-backdrop" id="backdrop"><section class="detail" role="dialog" aria-modal="true" aria-labelledby="detail-title" id="detail"></section></div>
+<script>
+const names={rows:'Inline countdowns',paired:'Paired countdowns'};
+let scenario='waiting',selected='rows',native=false,lastFocus=null,baseline=false;
+const colors={claude:'#d97757',codex:'#d946ef',kimi:'#3b82f6',glm:'#2dd4bf',qwen:'#ef4444'};
+const titles={claude:'Claude',codex:'Codex',kimi:'Kimi',glm:'GLM',qwen:'Qwen'};
+function accounts(provider){
+  const values=provider==='claude'?
+    [{pct:63,window:'Fable',reset:'4d'},{pct:0,window:'session',reset:'42m'},{pct:62,window:'weekly',reset:'1d 3h'},{pct:91,window:'session',reset:'2h 10m'}]:
+    [{pct:16,window:'weekly',reset:'2d'},{pct:0,window:'session',reset:'18m'},{pct:51,window:'weekly',reset:'3d'},{pct:95,window:'session',reset:'1h 25m'}];
+  return values.slice(0,scenario==='four'?4:2).map((a,i)=>({...a,pct:scenario==='healthy'&&i===1?43:a.pct,provider,slot:i+1,active:i===0,error:provider==='claude'&&i===1&&scenario==='error'}));
+}
+function bar(pct,error=false){return `<div class="bar"><div class="fill" style="width:${error?0:pct}%;background:${pct<25?'#ffb020':'#4ade80'}"></div>${error?'':'<span class="tick"></span>'}</div>`}
+function slot(a){return `<span class="slot"><i class="active-dot ${a.active?'on':''}"></i>${a.slot}</span>`}
+function head(provider,count=''){return `<div class="provider-head"><span class="chip">${provider==='codex'?'X':provider==='glm'?'G':titles[provider][0]}</span><span class="provider-name">${titles[provider]}</span>${count?`<span class="count">${count} accounts</span>`:''}</div>`}
+function account(a,paired=false){
+  const error=a.error;
+  const meta=`${slot(a)}${error?'':`<span class="window">${a.window}</span>`}`;
+  const pct=`<span class="pct">${a.pct}%</span>`;
+  const countdown=`<span class="countdown">${a.reset}</span>`;
+  const content=paired?
+    `<div class="pair-top">${meta}${error?'<span class="error-age">6d+ old</span>':pct}</div>${bar(a.pct,error)}<div class="pair-countdown">${error?'<span class="error-line">Sign in again ↗</span>':`<span class="reset-label">resets in</span>${countdown}`}</div>`:
+    `${meta}${bar(a.pct,error)}${error?'<span class="error-line">Sign in again ↗</span>':pct+countdown}`;
+  return `<button class="account ${paired?'pair ':''}${error?'error':a.pct===0?'exhausted':''}" data-provider="${a.provider}" data-slot="${a.slot}" aria-label="${titles[a.provider]} account ${a.slot}${a.active?', active':''}, ${error?'sign in again':a.pct+' percent remaining, '+a.window+' resets in '+a.reset}">${content}</button>`;
+}
+function provider(provider,mode){
+  const list=accounts(provider);
+  const heading=head(provider,list.length).replace('</div>',mode==='rows'?'<span class="reset-heading">resets in</span></div>':'</div>');
+  return `<section class="provider ${provider}">${heading}<div class="${mode==='paired'?'paired':'accounts'}">${list.map(a=>account(a,mode==='paired')).join('')}</div></section>`;
+}
+function single(provider,pct,reset){return `<section class="provider single ${provider}"><div class="provider-head"><span class="chip">${provider==='glm'?'G':titles[provider][0]}</span><span class="provider-name">${titles[provider]}</span><span class="window">session</span><span class="reset">${reset}</span><span class="remaining">${pct}%</span></div>${bar(pct)}</section>`}
+function chart(){const bars=[9,15,22,14,31,47,38,19,9,18,30,51,40,33,19,11,15,26,45,57,34,24,17,10];return `<svg class="chart" viewBox="0 0 350 84" aria-label="Illustrative hourly token activity"><polyline points="0,63 30,55 60,35 90,39 120,64 150,43 180,26 210,48 240,35 270,16 300,37 335,39" fill="none" stroke="#3b82f6" stroke-width="2" opacity=".6"/>${bars.map((h,i)=>`<rect x="${i*14}" y="${64-h}" width="8" height="${h}" fill="${i===23?'#20b8ff':'#94a3b8'}" opacity=".65"/>`).join('')}<g font-size="15" fill="#94a3b8"><text x="0" y="82">12a</text><text x="150" y="82">12p</text><text x="320" y="82">12a</text></g></svg>`}
+function rail(mode){return `<aside class="rail ${scenario==='four'?'four':''}"><div class="tokens">877.8M today<span class="yesterday">· 568.5M yda</span></div><div class="token-flow"><div class="rates"><span>↓ 43.3M/hr</span><span style="color:#4ade80">↑ 13.8M/10m</span></div>${chart()}</div><div class="unread"><i class="status-dot"></i>6 unread</div><div class="zone">${provider('claude',mode)}${provider('codex',mode)}${single('kimi',38,'2h 55m')}${single('glm',78,'5h')}${single('qwen',18,'55m')}</div></aside>`}
+function render(){document.querySelector('.toolbar p').textContent=scenario==='healthy'?'Both accounts have headroom. Each still shows its own reset.':scenario==='error'?'Account 2 needs sign-in; an expired reading has no trustworthy countdown.':'Account 1 is in use. Account 2 is exhausted, with its reset in view.';for(const mode of Object.keys(names))document.getElementById(mode).innerHTML=rail(mode);document.getElementById('context-rail').innerHTML=baseline?`<div style="width:638px;height:720px;background:url(${referenceUrl}) -1922px 0 / 2560px 720px no-repeat" aria-label="Current rail from the application renderer"></div>`:rail(selected);document.getElementById('context-title').textContent=baseline?'Current rail, on the strip':names[selected]+', on the strip';fit()}
+function fit(){document.querySelectorAll('.crop').forEach(el=>{const scale=el.clientWidth/638;el.style.height=(720*scale)+'px';el.firstElementChild.style.transform=`scale(${scale})`});const width=document.querySelector('.context').clientWidth,scale=native?1:width/2560;document.querySelector('.strip-wrap').style.width=(2560*scale)+'px';document.querySelector('.strip-wrap').style.height=(720*scale)+'px';document.querySelector('.strip').style.transform=`scale(${scale})`}
+const referenceUrl=location.protocol==='file:'?'../../assets/dealerboard-strip.png':'/files/dealerboard-strip.png';
+document.getElementById('board').style.cssText=`background:url(${referenceUrl}) left top / 2560px 720px no-repeat`;
+document.querySelectorAll('[data-scenario]').forEach(button=>button.addEventListener('click',()=>{scenario=button.dataset.scenario;document.querySelectorAll('[data-scenario]').forEach(b=>b.classList.toggle('active',b===button));render()}));
+document.querySelectorAll('[data-select]').forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.select;baseline=false;document.getElementById('baseline').textContent='Compare current rail';document.querySelectorAll('[data-study]').forEach(el=>el.classList.toggle('selected',el.dataset.study===selected));document.querySelectorAll('[data-select]').forEach(b=>b.textContent=(b===button?'Selected · ':'Choose ')+names[b.dataset.select]);if(typeof toggleSelect==='function')toggleSelect(button);render()}));
+document.getElementById('baseline').addEventListener('click',()=>{baseline=!baseline;document.getElementById('baseline').textContent=baseline?'Return to selected design':'Compare current rail';render()});
+document.getElementById('zoom').addEventListener('click',()=>{native=!native;document.getElementById('zoom').textContent=native?'Fit to window':'View at native size';fit()});
+function closeDetail(){document.getElementById('backdrop').classList.remove('open');if(lastFocus)lastFocus.focus()}
+document.addEventListener('click',event=>{const button=event.target.closest('[data-provider][data-slot]');if(!button)return;const a=accounts(button.dataset.provider).find(x=>x.slot===Number(button.dataset.slot));lastFocus=button;document.getElementById('detail').innerHTML=`<div class="detail-top"><div><h2 id="detail-title">${titles[a.provider]} <span style="color:#7789a2">/</span> Account ${a.slot}</h2><div class="account-status">${a.active?'● Active account':'Reserve account'}</div></div><button class="close" aria-label="Close details">×</button></div>${a.error?'<div class="notice"><strong>Sign in again to refresh usage</strong><p>This account’s saved sign-in is no longer valid. Reconnect account 2 in cswap to resume updates.</p></div><p class="last-seen">Last successful reading · September 2<br>Old percentages are hidden because their windows have expired.</p>':`<div class="detail-window"><label>${a.window}<span>${a.pct}% remaining</span></label>${bar(a.pct)}<p>Resets in ${a.reset} · limiting window</p></div><div class="detail-window"><label>${a.window==='session'?'Weekly':'Session'}<span>100% remaining</span></label>${bar(100)}<p>Resets in ${a.window==='session'?'4d':'3h 20m'}</p></div><p class="last-seen">Updated 2 minutes ago</p>`}<div class="detail-note">Mockup · account labels, balances, and reset times are illustrative.</div>`;document.getElementById('backdrop').classList.add('open');document.querySelector('.close').addEventListener('click',closeDetail);document.querySelector('.close').focus()});
+document.getElementById('backdrop').addEventListener('click',event=>{if(event.target.id==='backdrop')closeDetail()});document.addEventListener('keydown',event=>{if(!document.getElementById('backdrop').classList.contains('open'))return;if(event.key==='Escape')closeDetail();if(event.key==='Tab'){event.preventDefault();document.querySelector('.close').focus()}});window.addEventListener('resize',fit);render();
+</script>
+</body>
+</html>

@@ -9,16 +9,16 @@
 
 import type { QuotaProviderKey } from "../../src/quota-snapshot";
 import {
-  bindingResetPending,
   bindingWindow,
-  formatBindingNote,
-  formatBindingPercent,
   formatBindingTag,
   type QuotaMeterModel,
   type QuotaPanelModel,
+  type QuotaTarget,
   quotaBarColor,
+  quotaReadout,
   secondaryWindows,
 } from "./quota";
+import { QUOTA_DENSITY_PRESETS, type QuotaDensity } from "./quota-density";
 import {
   formatTokensCompact,
   TOKEN_ACTIVITY_TIME_LABELS,
@@ -35,6 +35,7 @@ export type RailModel = {
   degraded: boolean;
   unreadCount: number;
   quota: readonly QuotaPanelModel[];
+  quotaDensity: QuotaDensity;
   tokens: TokenUsageRailModel;
   now: Date;
 };
@@ -159,27 +160,34 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
 export type QuotaRenderAccount = {
   id: string;
   label: string;
-  active: boolean;
+  active: boolean | null;
   meter: QuotaMeterModel;
+  target: QuotaTarget;
 };
 
 export type QuotaRenderModel =
-  | { provider: QuotaProviderKey; grouped: false; meter: QuotaPanelModel }
-  | { provider: "claude"; grouped: true; meters: readonly QuotaRenderAccount[] };
+  | { provider: QuotaProviderKey; grouped: false; meter: QuotaMeterModel; target: QuotaTarget }
+  | { provider: QuotaProviderKey; grouped: true; meters: readonly QuotaRenderAccount[] };
 
 export const quotaRenderModel = (panel: QuotaPanelModel): QuotaRenderModel =>
-  panel.provider === "claude" && panel.accounts.length >= 2
+  (panel.provider === "claude" || panel.provider === "codex") && panel.accounts.length >= 2
     ? {
-        provider: "claude",
+        provider: panel.provider,
         grouped: true,
         meters: panel.accounts.map((account) => ({
           id: account.id,
           label: account.label,
           active: account.active,
           meter: account,
+          target: { provider: panel.provider, accountId: account.id },
         })),
       }
-    : { provider: panel.provider, grouped: false, meter: panel };
+    : {
+        provider: panel.provider,
+        grouped: false,
+        meter: panel.accounts[0] ?? panel,
+        target: { provider: panel.provider, accountId: panel.accounts[0]?.id ?? null },
+      };
 
 const quotaProviderIdentity = (provider: QuotaProviderKey): HTMLElement[] => {
   const chip = document.createElement("span");
@@ -191,45 +199,51 @@ const quotaProviderIdentity = (provider: QuotaProviderKey): HTMLElement[] => {
   return [chip, name];
 };
 
-const quotaMeter = (meter: QuotaMeterModel, nowMs: number, leading: readonly HTMLElement[]): HTMLElement => {
-  const container = document.createElement("div");
-  container.className = "quota-meter";
-  const head = document.createElement("div");
-  head.className = "quota-head";
-  head.append(...leading);
-
+const quotaTag = (meter: QuotaMeterModel): HTMLElement | null => {
   const tag = formatBindingTag(meter);
-  if (tag !== null) {
-    const pill = document.createElement("span");
-    pill.className = "quota-tag";
-    pill.textContent = tag;
-    head.append(pill);
+  if (tag === null) {
+    return null;
   }
+  const pill = document.createElement("span");
+  pill.className = "quota-tag";
+  pill.textContent = tag;
+  return pill;
+};
+
+const quotaReadoutElement = (meter: QuotaMeterModel, nowMs: number): HTMLElement => {
   const right = document.createElement("span");
   right.className = "quota-right";
-  // An unavailable meter keeps its last-good percent (dimmed by the state
-  // opacity) only while the binding reset is pending; once it passes the
-  // number is spent and the muted note stands alone.
-  const showPercent = meter.state !== "unavailable" || bindingResetPending(meter, nowMs);
-  const note = formatBindingNote(meter, nowMs);
-  if (note !== "") {
+  const readout = quotaReadout(meter, nowMs);
+  if (readout.note !== "") {
     const noteSpan = document.createElement("span");
     noteSpan.className = "quota-note";
-    noteSpan.textContent = showPercent ? `${note} ·` : note;
+    noteSpan.textContent = readout.note;
     right.append(noteSpan);
   }
-  if (showPercent) {
+  if (readout.ageCue !== null) {
+    const ageCue = document.createElement("span");
+    ageCue.className = "quota-age-cue";
+    ageCue.textContent = readout.ageCue;
+    right.append(ageCue);
+  }
+  if (readout.percent !== null) {
+    const separator = document.createElement("span");
+    separator.className = "quota-readout-separator";
+    separator.textContent = "·";
     const pct = document.createElement("span");
     pct.className = "quota-pct";
-    pct.textContent = formatBindingPercent(meter);
-    right.append(pct);
+    pct.textContent = readout.percent;
+    right.append(separator, pct);
   }
-  head.append(right);
+  return right;
+};
 
+const quotaBar = (meter: QuotaMeterModel, nowMs: number): HTMLElement => {
   const bar = document.createElement("div");
   bar.className = "quota-bar";
   const binding = bindingWindow(meter);
-  if (binding !== null) {
+  const readout = quotaReadout(meter, nowMs);
+  if (binding !== null && readout.showFill) {
     const fill = document.createElement("div");
     fill.className = "quota-bar-fill";
     fill.style.width = `${Math.max(0, Math.min(100, binding.percentRemaining))}%`;
@@ -241,42 +255,90 @@ const quotaMeter = (meter: QuotaMeterModel, nowMs: number, leading: readonly HTM
       const tick = document.createElement("span");
       tick.className = "quota-tick";
       tick.style.left = `${Math.max(0, Math.min(100, secondary.percentRemaining))}%`;
+      tick.style.background = "#94a3b8";
       bar.append(tick);
     }
   }
-  container.append(head, bar);
-  return container;
+  return bar;
 };
 
-/** Two-line compact panel: head (chip, label, binding-window tag, muted countdown then bright percent) over a bar that fills to the binding window. */
+const quotaTarget = (button: HTMLButtonElement, target: QuotaTarget): void => {
+  button.type = "button";
+  button.dataset["quotaProvider"] = target.provider;
+  if (target.accountId !== null) {
+    button.dataset["quotaAccount"] = target.accountId;
+  }
+};
+
+const quotaHistoricalState = (button: HTMLButtonElement, meter: QuotaMeterModel, nowMs: number): void => {
+  button.dataset["state"] = meter.state;
+  button.dataset["historical"] = String(quotaReadout(meter, nowMs).historical);
+};
+
+const quotaAccountRow = (entry: QuotaRenderAccount, provider: QuotaProviderKey, nowMs: number): HTMLButtonElement => {
+  const account = document.createElement("button");
+  account.className = "quota-account";
+  quotaTarget(account, entry.target);
+  quotaHistoricalState(account, entry.meter, nowMs);
+
+  const label = document.createElement("span");
+  label.className = "quota-account-label";
+  const marker = document.createElement("span");
+  marker.className = entry.active === true ? "quota-account-marker quota-account-active" : "quota-account-marker";
+  marker.dataset["provider"] = provider;
+  const number = document.createElement("span");
+  number.textContent = entry.label;
+  label.append(marker, number);
+  const tag = quotaTag(entry.meter);
+  account.append(label);
+  if (tag !== null) {
+    account.append(tag);
+  } else {
+    const placeholder = document.createElement("span");
+    placeholder.className = "quota-tag-placeholder";
+    account.append(placeholder);
+  }
+  account.append(quotaBar(entry.meter, nowMs), quotaReadoutElement(entry.meter, nowMs));
+  return account;
+};
+
+/** Provider heading plus either one native meter button or a stack of account meter buttons. */
 const quotaSection = (panel: QuotaPanelModel, nowMs: number): HTMLElement => {
   const render = quotaRenderModel(panel);
   const section = document.createElement("section");
-  section.className = render.grouped ? "rail-quota quota-group" : "rail-quota";
+  section.className = render.grouped ? "rail-quota quota-group" : "rail-quota quota-single";
   section.dataset["provider"] = panel.provider;
-  section.dataset["state"] = panel.state;
   if (!render.grouped) {
-    section.append(quotaMeter(render.meter, nowMs, quotaProviderIdentity(panel.provider)));
+    section.dataset["state"] = render.meter.state;
+    const meter = document.createElement("button");
+    meter.className = "quota-single-reading";
+    quotaTarget(meter, render.target);
+    quotaHistoricalState(meter, render.meter, nowMs);
+    const head = document.createElement("div");
+    head.className = "quota-head";
+    head.append(...quotaProviderIdentity(panel.provider));
+    const tag = quotaTag(render.meter);
+    if (tag !== null) {
+      head.append(tag);
+    }
+    head.append(quotaReadoutElement(render.meter, nowMs));
+    meter.append(head, quotaBar(render.meter, nowMs));
+    section.append(meter);
     return section;
   }
 
   const providerHead = document.createElement("div");
   providerHead.className = "quota-provider-head";
+  providerHead.dataset["state"] = panel.state;
   providerHead.append(...quotaProviderIdentity(panel.provider));
+  const count = document.createElement("span");
+  count.className = "quota-account-count";
+  count.textContent = `${render.meters.length} accounts`;
+  providerHead.append(count);
   const accountStack = document.createElement("div");
   accountStack.className = "quota-account-stack";
   for (const entry of render.meters) {
-    const account = document.createElement("div");
-    account.className = "quota-account";
-    account.dataset["account"] = entry.id;
-    account.dataset["state"] = entry.meter.state;
-    const marker = document.createElement("span");
-    marker.className = entry.active ? "quota-account-marker quota-account-active" : "quota-account-marker";
-    const label = document.createElement("span");
-    label.className = "quota-account-label";
-    label.textContent = entry.label;
-    account.append(quotaMeter(entry.meter, nowMs, [marker, label]));
-    accountStack.append(account);
+    accountStack.append(quotaAccountRow(entry, panel.provider, nowMs));
   }
   section.append(providerHead, accountStack);
   return section;
@@ -292,23 +354,39 @@ const quotaSection = (panel: QuotaPanelModel, nowMs: number): HTMLElement => {
  */
 export const railRenderSignature = (model: RailModel): string => {
   const nowMs = model.now.getTime();
-  const meterSignature = (meter: QuotaMeterModel): readonly unknown[] => [
-    meter.state,
-    formatBindingTag(meter),
-    formatBindingNote(meter, nowMs),
-    formatBindingPercent(meter),
-    bindingWindow(meter)?.percentRemaining ?? null,
-    secondaryWindows(meter),
-  ];
+  const meterSignature = (meter: QuotaMeterModel): readonly unknown[] => {
+    const readout = quotaReadout(meter, nowMs);
+    return [
+      meter.state,
+      meter.issue,
+      formatBindingTag(meter),
+      readout.note,
+      readout.percent,
+      readout.ageCue,
+      readout.historical,
+      readout.showFill,
+      bindingWindow(meter)?.percentRemaining ?? null,
+      readout.showFill ? secondaryWindows(meter).map((window) => window.percentRemaining) : [],
+    ];
+  };
+  const quotaSignature = (panel: QuotaPanelModel): readonly unknown[] => {
+    const render = quotaRenderModel(panel);
+    if (!render.grouped) {
+      return [panel.provider, "single", render.target.accountId, ...meterSignature(render.meter)];
+    }
+    return [
+      panel.provider,
+      "grouped",
+      panel.state,
+      render.meters.map((entry) => [entry.target.accountId, entry.label, entry.active, ...meterSignature(entry.meter)]),
+    ];
+  };
   return JSON.stringify({
     degraded: model.degraded,
     unreadCount: model.unreadCount,
     tokens: model.tokens,
-    quota: model.quota.map((panel) => [
-      panel.provider,
-      ...meterSignature(panel),
-      panel.accounts.map((account) => [account.id, account.label, account.active, ...meterSignature(account)]),
-    ]),
+    quotaDensity: model.quotaDensity,
+    quota: model.quota.map(quotaSignature),
   });
 };
 
@@ -317,6 +395,11 @@ export const renderRail = (root: HTMLElement, model: RailModel): void => {
   const nowMs = model.now.getTime();
   const zone = document.createElement("div");
   zone.className = "rail-quota-zone";
+  const density = QUOTA_DENSITY_PRESETS[model.quotaDensity];
+  zone.dataset["density"] = model.quotaDensity;
+  zone.style.setProperty("--quota-scale", String(density.scale));
+  zone.style.setProperty("--quota-row-height", `${(density.rowHeight / 7.2).toString()}vh`);
+  zone.style.setProperty("--quota-provider-gap", `${(density.providerGap / 7.2).toString()}vh`);
   zone.append(...model.quota.map((quota) => quotaSection(quota, nowMs)));
 
   const sections: HTMLElement[] = [];

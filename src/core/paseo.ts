@@ -57,6 +57,7 @@ const PROVIDERS: ReadonlySet<string> = new Set(PROVIDER_KEYS);
 const PROVIDER_ALIASES: ReadonlyMap<string, Provider> = new Map<string, Provider>([
   ["qwen-code", "qwen"],
   ["claude-work", "claude"],
+  ["codex-second", "codex"],
 ]);
 
 /** The canonical registry key a record's provider names, or null when it names none. */

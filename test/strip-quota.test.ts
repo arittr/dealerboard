@@ -10,12 +10,13 @@ import {
   type QuotaPanelModel,
   type QuotaWindowModel,
   quotaBarColor,
+  quotaReadout,
   reduceQuotaRead,
   STALE_QUOTA_AGE_MS,
   secondaryWindows,
   selectBindingIndex,
 } from "../app/src/quota";
-import type { ProviderQuota, ProviderQuotaAccount } from "../src/quota-snapshot";
+import { type ProviderQuota, type ProviderQuotaAccount, QUOTA_PROVIDER_KEYS } from "../src/quota-snapshot";
 
 const NOW = Date.parse("2026-08-19T18:00:00.000Z");
 
@@ -40,6 +41,7 @@ const quotaAccount = (overrides: Partial<ProviderQuotaAccount> = {}): ProviderQu
   resetAt: "2026-08-19T22:00:00.000Z",
   weeklyPercentRemaining: 80,
   weeklyResetAt: "2026-08-24T00:00:00.000Z",
+  issue: null,
   unavailable: false,
   fetchedAt: "2026-08-19T18:00:00.000Z",
   extraWindows: [],
@@ -48,7 +50,7 @@ const quotaAccount = (overrides: Partial<ProviderQuotaAccount> = {}): ProviderQu
 
 const read = (providers: Record<string, ProviderQuota>): { mtimeMs: number; contents: string } => ({
   mtimeMs: NOW,
-  contents: JSON.stringify({ schemaVersion: 1, providers }),
+  contents: JSON.stringify({ schemaVersion: 3, providers }),
 });
 
 const windowModel = (tag: string, percentRemaining: number, resetAtMs: number | null = null): QuotaWindowModel => ({
@@ -65,6 +67,7 @@ const model = (overrides: Partial<QuotaPanelModel> = {}): QuotaPanelModel => ({
   ],
   bindingIndex: 0,
   state: "ok",
+  issue: null,
   fetchedAtMs: NOW,
   history: [],
   accounts: [],
@@ -72,9 +75,20 @@ const model = (overrides: Partial<QuotaPanelModel> = {}): QuotaPanelModel => ({
 });
 
 describe("reduceQuotaRead", () => {
-  test("a missing or unparseable read yields no panels", () => {
+  test("a missing read yields no panels and rejected contents yield empty unavailable placeholders", () => {
     expect(reduceQuotaRead(null, NOW)).toEqual([]);
-    expect(reduceQuotaRead({ mtimeMs: NOW, contents: "junk" }, NOW)).toEqual([]);
+    expect(reduceQuotaRead({ mtimeMs: NOW, contents: "junk" }, NOW)).toEqual(
+      QUOTA_PROVIDER_KEYS.map((provider) => ({
+        provider,
+        windows: [],
+        bindingIndex: null,
+        state: "unavailable",
+        issue: null,
+        fetchedAtMs: null,
+        history: [],
+        accounts: [],
+      })),
+    );
   });
 
   test("providers present map to ok panels with parsed windows in contract order", () => {
@@ -106,43 +120,106 @@ describe("reduceQuotaRead", () => {
       quotaAccount({ id: "claude-swap:1", label: "1", active: false, percentRemaining: 25 }),
     ];
     const panel = reduceQuotaRead(read({ claude: quota({ accounts }) }), NOW)[0];
-    expect(panel?.accounts.map((account) => account.id)).toEqual(["claude-swap:1", "claude-swap:2"]);
+    expect(panel?.accounts.map((account) => account.id)).toEqual(["claude-swap:2", "claude-swap:1"]);
     const first = panel?.accounts[0];
     const second = panel?.accounts[1];
     if (first === undefined || second === undefined) throw new Error("expected two account meters");
-    expect(first).toMatchObject({ label: "1", active: false, bindingIndex: 0 });
-    expect(bindingWindow(second)?.tag).toBe("Fable");
-    expect(secondaryWindows(second).map((window) => window.tag)).toEqual(["session", "weekly"]);
+    expect(first).toMatchObject({ label: "2", active: true, bindingIndex: 2 });
+    expect(bindingWindow(first)?.tag).toBe("Fable");
+    expect(secondaryWindows(first).map((window) => window.tag)).toEqual(["session", "weekly"]);
+    expect(second).toMatchObject({ label: "1", active: false, bindingIndex: 0 });
   });
 
-  test("zero or one account keeps grouped presentation disabled", () => {
+  test("zero or one account stays available to the render model", () => {
     expect(reduceQuotaRead(read({ claude: quota() }), NOW)[0]?.accounts).toEqual([]);
-    expect(reduceQuotaRead(read({ claude: quota({ accounts: [quotaAccount()] }) }), NOW)[0]?.accounts).toEqual([]);
+    expect(reduceQuotaRead(read({ claude: quota({ accounts: [quotaAccount()] }) }), NOW)[0]?.accounts).toHaveLength(1);
   });
 
-  test("non-Claude provider account input never enables grouped presentation", () => {
+  test("a non-Claude provider with Claude account IDs rejects the read", () => {
     expect(
       reduceQuotaRead(
         read({ codex: quota({ accounts: [quotaAccount(), quotaAccount({ id: "claude-swap:2", label: "2" })] }) }),
         NOW,
-      )[0]?.accounts,
-    ).toEqual([]);
+      ),
+    ).toEqual(
+      QUOTA_PROVIDER_KEYS.map((provider) =>
+        expect.objectContaining({ provider, state: "unavailable", windows: [], accounts: [] }),
+      ),
+    );
   });
 
-  test("an account row's state is cswap's fetch health — reading age never dims", () => {
-    const oldFetch = new Date(NOW - STALE_QUOTA_AGE_MS - 1).toISOString();
+  test("Claude account freshness uses its 45-minute measurement boundary", () => {
+    const atBoundary = new Date(NOW - 45 * 60_000).toISOString();
+    const afterBoundary = new Date(NOW - 45 * 60_000 - 1).toISOString();
     const panel = reduceQuotaRead(
       read({
         claude: quota({
           accounts: [
-            quotaAccount({ fetchedAt: oldFetch }),
-            quotaAccount({ id: "claude-swap:2", label: "2", active: true, unavailable: true }),
+            quotaAccount({ fetchedAt: atBoundary }),
+            quotaAccount({
+              id: "claude-swap:2",
+              label: "2",
+              active: true,
+              fetchedAt: afterBoundary,
+            }),
           ],
         }),
       }),
       NOW,
     )[0];
-    expect(panel?.accounts.map((account) => account.state)).toEqual(["ok", "unavailable"]);
+    expect(panel?.accounts.map((account) => account.state)).toEqual(["ok", "stale"]);
+  });
+
+  test("Codex accounts use their six-minute measurement boundary and preserve unknown activity", () => {
+    const codexAccount = (label: string, fetchedAt: string): ProviderQuotaAccount => ({
+      ...quotaAccount({ fetchedAt, active: null }),
+      id: `codexbar:${label === "1" ? "a".repeat(64) : "b".repeat(64)}`,
+      label,
+    });
+    const panel = reduceQuotaRead(
+      read({
+        codex: quota({
+          accounts: [
+            codexAccount("2", new Date(NOW - 6 * 60_000 - 1).toISOString()),
+            codexAccount("1", new Date(NOW - 6 * 60_000).toISOString()),
+          ],
+        }),
+      }),
+      NOW,
+    )[0];
+    expect(
+      panel?.accounts.map((account) => ({ label: account.label, active: account.active, state: account.state })),
+    ).toEqual([
+      { label: "1", active: null, state: "ok" },
+      { label: "2", active: null, state: "stale" },
+    ]);
+  });
+
+  test("an account issue fails immediately while a healthy sibling keeps its own source timestamp", () => {
+    const accountFetchedAt = new Date(NOW - 10 * 60_000).toISOString();
+    const panel = reduceQuotaRead(
+      read({
+        claude: quota({
+          fetchedAt: new Date(NOW).toISOString(),
+          accounts: [
+            quotaAccount({ fetchedAt: accountFetchedAt }),
+            quotaAccount({ id: "claude-swap:2", label: "2", active: true, issue: "unavailable", unavailable: true }),
+          ],
+        }),
+      }),
+      NOW,
+    )[0];
+    expect(panel?.fetchedAtMs).toBe(NOW);
+    expect(
+      panel?.accounts.map((account) => ({
+        state: account.state,
+        issue: account.issue,
+        fetchedAtMs: account.fetchedAtMs,
+      })),
+    ).toEqual([
+      { state: "ok", issue: null, fetchedAtMs: Date.parse(accountFetchedAt) },
+      { state: "unavailable", issue: "unavailable", fetchedAtMs: NOW },
+    ]);
   });
 
   test("an exhausted seat (0% remaining, cswap healthy) stays bright", () => {
@@ -174,9 +251,9 @@ describe("reduceQuotaRead", () => {
     expect(panel?.accounts.map((account) => account.label)).toEqual(["1", "2"]);
   });
 
-  test("a v2 read maps extra windows after session and weekly, and the minimum binds", () => {
+  test("a v3 read maps extra windows after session and weekly, and the minimum binds", () => {
     const contents = JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: quota({
           percentRemaining: 96,
@@ -274,10 +351,10 @@ describe("formatBindingPercent and formatBindingNote", () => {
     expect(formatBindingNote(model(), NOW)).toBe("4h");
   });
 
-  test("no windows render an em dash and no note", () => {
+  test("no windows render an em dash and an unknown-reset note", () => {
     const bare = model({ windows: [], bindingIndex: null });
     expect(formatBindingPercent(bare)).toBe("—");
-    expect(formatBindingNote(bare, NOW)).toBe("");
+    expect(formatBindingNote(bare, NOW)).toBe("reset unknown");
   });
 
   test("the binding window drives both texts", () => {
@@ -298,10 +375,8 @@ describe("formatBindingPercent and formatBindingNote", () => {
     expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 60_000 }), NOW)).toBe("4h");
   });
 
-  test("unavailable panels with a pending reset and old last-good data add the age cue", () => {
-    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe(
-      "4h · 12m old",
-    );
+  test("unavailable panels keep the countdown primary while the readout carries its age cue", () => {
+    expect(formatBindingNote(model({ state: "unavailable", fetchedAtMs: NOW - 12 * 60_000 }), NOW)).toBe("4h");
   });
 
   test("unavailable panels whose reset has passed show the data age", () => {
@@ -364,9 +439,9 @@ describe("formatBindingPercent and formatBindingNote", () => {
     ).toBe("unavailable");
   });
 
-  test("a binding window without a reset instant has no note; past reset says resetting", () => {
+  test("a binding window without a reset instant says so; past reset says resetting", () => {
     const noReset = model({ windows: [windowModel("session", 100)], bindingIndex: 0 });
-    expect(formatBindingNote(noReset, NOW)).toBe("");
+    expect(formatBindingNote(noReset, NOW)).toBe("reset unknown");
     const resetAtMs = NOW + 4 * 3_600_000;
     const resetting = model({ windows: [windowModel("session", 10, resetAtMs)], bindingIndex: 0 });
     expect(formatBindingNote(resetting, resetAtMs)).toBe("resetting…");
@@ -385,6 +460,91 @@ describe("bindingResetPending", () => {
     ).toBe(false);
     expect(bindingResetPending(model({ windows: [windowModel("session", 100)], bindingIndex: 0 }), NOW)).toBe(false);
     expect(bindingResetPending(model({ windows: [], bindingIndex: null }), NOW)).toBe(false);
+  });
+});
+
+describe("quotaReadout", () => {
+  test("healthy usage with a future reset, including 0%, keeps the countdown, percent, and fill", () => {
+    expect(quotaReadout(model({ windows: [windowModel("session", 0, NOW + 60_000)], bindingIndex: 0 }), NOW)).toEqual({
+      note: "1m",
+      percent: "0%",
+      ageCue: null,
+      showFill: true,
+      historical: false,
+    });
+  });
+
+  test("healthy usage with an unknown reset retains its percentage", () => {
+    expect(quotaReadout(model({ windows: [windowModel("session", 70)], bindingIndex: 0 }), NOW)).toEqual({
+      note: "reset unknown",
+      percent: "70%",
+      ageCue: null,
+      showFill: true,
+      historical: false,
+    });
+  });
+
+  test("a healthy reading whose reset passed is visibly historical without inventing a refill", () => {
+    expect(quotaReadout(model({ windows: [windowModel("session", 70, NOW - 1)], bindingIndex: 0 }), NOW)).toEqual({
+      note: "resetting…",
+      percent: "70%",
+      ageCue: null,
+      showFill: true,
+      historical: true,
+    });
+  });
+
+  test("stale usage before its reset keeps dimmed last-good data with an age cue", () => {
+    expect(
+      quotaReadout(
+        model({ state: "stale", fetchedAtMs: NOW - 10 * 60_000, windows: [windowModel("session", 70, NOW + 60_000)] }),
+        NOW,
+      ),
+    ).toEqual({ note: "1m", percent: "70%", ageCue: "10m old", showFill: true, historical: true });
+  });
+
+  test("stale usage past its binding reset suppresses percentage and fill", () => {
+    const reading = model({
+      state: "stale",
+      fetchedAtMs: NOW - 10 * 60_000,
+      windows: [windowModel("session", 70, NOW - 1)],
+    });
+    expect(quotaReadout(reading, NOW)).toMatchObject({ percent: null, showFill: false, historical: true });
+  });
+
+  test("unavailable usage with an unknown reset hides its stale geometry", () => {
+    expect(
+      quotaReadout(
+        model({ state: "unavailable", fetchedAtMs: NOW - 10 * 60_000, windows: [windowModel("session", 70)] }),
+        NOW,
+      ),
+    ).toEqual({ note: "10m old", percent: null, ageCue: null, showFill: false, historical: true });
+  });
+
+  test("never measured usage is unavailable without a percentage or fill", () => {
+    expect(
+      quotaReadout(model({ state: "unavailable", fetchedAtMs: null, windows: [], bindingIndex: null }), NOW),
+    ).toEqual({ note: "unavailable", percent: null, ageCue: null, showFill: false, historical: true });
+  });
+
+  test("auth-required usage suppresses all stale geometry regardless of reset", () => {
+    expect(
+      quotaReadout(model({ issue: "auth_required", windows: [windowModel("session", 70, NOW + 60_000)] }), NOW),
+    ).toEqual({ note: "Sign in again", percent: null, ageCue: null, showFill: false, historical: true });
+  });
+
+  test("rate-limited usage follows unavailable presentation while retaining its issue for details", () => {
+    expect(
+      quotaReadout(
+        model({
+          issue: "rate_limited",
+          state: "unavailable",
+          fetchedAtMs: NOW - 10 * 60_000,
+          windows: [windowModel("session", 70, NOW + 60_000)],
+        }),
+        NOW,
+      ),
+    ).toMatchObject({ note: "1m", percent: "70%", ageCue: "10m old", showFill: true, historical: true });
   });
 });
 

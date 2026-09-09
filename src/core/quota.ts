@@ -6,12 +6,14 @@
  * `codexbar usage --provider <arg> --format json --log-level critical`,
  * spawned once per provider per pass (serialized — CodexBar's app-support
  * directory carries lock files). Claude is excepted while claude-swap serves
- * the grouped two-account view: cswap is then claude's only source and the
+ * the grouped account view: cswap is then claude's only source and the
  * CodexBar claude probe is skipped for that pass (readClaudeSwap). The
  * provider argument is the contract key
  * itself except qwen, which reads CodexBar's `alibabatokenplan` provider
- * (CODEXBAR_PROVIDER_ARGS). The binary resolves per pass from
- * CODEXBAR_BINARY_CANDIDATES; a missing binary omits every codexbar-probed provider. CodexBar's
+ * (CODEXBAR_PROVIDER_ARGS). Codex uses --all-accounts, retaining each named
+ * account independently; anonymous and widget values only serve ambient mode.
+ * The binary resolves per pass from CODEXBAR_BINARY_CANDIDATES; missing binaries
+ * retain named accounts as unavailable. CodexBar's
  * primary/secondary labels are not positional (kimi reports the weekly window
  * as primary), so windows are classified by windowMinutes: weekly = the longest
  * window of at least a day, session = the shortest window under a day, and
@@ -29,14 +31,11 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-  capQuotaExtraWindowLabel,
   type ProviderQuota,
   parseQuotaSnapshot,
-  QUOTA_EXTRA_WINDOWS_LIMIT,
   QUOTA_HISTORY_LIMIT,
   QUOTA_PROVIDER_KEYS,
   QUOTA_SNAPSHOT_SCHEMA_VERSION,
-  type QuotaExtraWindow,
   type QuotaProviderKey,
   type QuotaSnapshot,
 } from "../quota-snapshot";
@@ -46,249 +45,21 @@ import {
   claudeSwapBinaryCandidates,
   parseClaudeSwapAccounts,
 } from "./claude-swap-quota";
+import { type CodexAccountsParse, parseCodexbarAccounts } from "./codexbar-accounts";
+import { type ProviderQuotaReading, parseCodexbarUsage, parseCodexbarWidgetSnapshot } from "./codexbar-usage";
 import type { DiagnosticRecord } from "./diagnostics";
+import { type AccountInventoryRead, reconcileQuotaAccounts } from "./quota-accounts";
 import { writeFileAtomically } from "./snapshot";
 
-export type QuotaWindowReading = { percentRemaining: number; resetAt: string | null };
-
-export type ProviderQuotaReading = {
-  /** Null when the provider reports no session-class window (e.g. codex weekly-only). */
-  session: QuotaWindowReading | null;
-  weekly: QuotaWindowReading | null;
-  /** Extra windows not selected as session/weekly (claude's fable, codex's spark weekly). */
-  extras: QuotaExtraWindow[];
-};
-
-export type CodexbarUsageParse =
-  | { kind: "ok"; reading: ProviderQuotaReading }
-  /** Valid JSON with no accounts — the provider is disabled in CodexBar. */
-  | { kind: "absent" }
-  | { kind: "invalid" };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isPercentUsed = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
-
-/** Normalize a provider ISO string to canonical UTC; unparseable → null. */
-const isoOrNull = (value: unknown): string | null => {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  const ms = Date.parse(value);
-  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
-};
-
-/** CodexBar window lengths at or above this classify as the weekly window. */
-const DAY_WINDOW_MINUTES = 1440;
-
-type RawCodexbarWindow = { windowMinutes: number; usedPercent: number; resetsAt: string | null };
-
-const parseCodexbarWindow = (value: unknown): RawCodexbarWindow | null => {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const minutes = value["windowMinutes"];
-  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
-    return null;
-  }
-  if (!isPercentUsed(value["usedPercent"])) {
-    return null;
-  }
-  return { windowMinutes: minutes, usedPercent: value["usedPercent"], resetsAt: isoOrNull(value["resetsAt"]) };
-};
-
-const toWindowReading = (window: RawCodexbarWindow): QuotaWindowReading => ({
-  percentRemaining: 100 - window.usedPercent,
-  resetAt: window.resetsAt,
-});
-
-type RawCodexbarExtra = { id: string | null; title: string | null; window: RawCodexbarWindow };
-
-const parseCodexbarExtra = (value: unknown): RawCodexbarExtra | null => {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const window = parseCodexbarWindow(value["window"]);
-  if (window === null) {
-    return null;
-  }
-  const id = value["id"];
-  const title = value["title"];
-  return {
-    id: typeof id === "string" && id.length > 0 ? id : null,
-    title: typeof title === "string" && title.length > 0 ? title : null,
-    window,
-  };
-};
-
-/** CodexBar's provider id → the rail's display name, for stripping it out of window titles. */
-const CODEXBAR_DISPLAY_NAMES: Record<string, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  kimi: "Kimi",
-  zai: "GLM",
-  alibabatokenplan: "Qwen",
-};
-
-/** Extra-window tag: title minus the provider's own name, capped at 14 code points with an ellipsis. */
-const extraWindowLabel = (title: string, codexbarProvider: string): string => {
-  const displayName = CODEXBAR_DISPLAY_NAMES[codexbarProvider] ?? codexbarProvider;
-  const stripped = title.replace(new RegExp(`^${displayName}\\s+`, "iu"), "").trim();
-  const source = stripped.length === 0 ? title.trim() : stripped;
-  return capQuotaExtraWindowLabel(source);
-};
-
-type WindowSelection = { session: RawCodexbarWindow | null; weekly: RawCodexbarWindow | null };
-
-const classifyCodexbarWindows = (windows: readonly RawCodexbarWindow[]): WindowSelection | null => {
-  let weekly: RawCodexbarWindow | null = null;
-  let session: RawCodexbarWindow | null = null;
-  for (const window of windows) {
-    if (window.windowMinutes >= DAY_WINDOW_MINUTES) {
-      if (weekly === null || window.windowMinutes > weekly.windowMinutes) {
-        weekly = window;
-      }
-    } else if (session === null || window.windowMinutes < session.windowMinutes) {
-      session = window;
-    }
-  }
-  if (session === null && weekly === null) {
-    return null;
-  }
-  return { session, weekly };
-};
-
-export const parseCodexbarUsage = (body: string, provider?: string): CodexbarUsageParse => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return { kind: "invalid" };
-  }
-  if (!Array.isArray(parsed)) {
-    return { kind: "invalid" };
-  }
-  if (parsed.length === 0) {
-    return { kind: "absent" };
-  }
-  // CodexBar normally honors --provider with a single entry, but sparse
-  // environments (the daemon's launchd context) get the unfiltered
-  // all-provider array. Entries carry their provider id, so select on it when
-  // ids are present; an id-carrying array without the requested provider means
-  // the provider is disabled in the CodexBar app.
-  const ids = parsed.map((item) => (isRecord(item) && typeof item["provider"] === "string" ? item["provider"] : null));
-  let entry: unknown = parsed[0];
-  if (provider !== undefined && ids.some((id) => id !== null)) {
-    const index = ids.indexOf(provider);
-    if (index === -1) {
-      return { kind: "absent" };
-    }
-    entry = parsed[index];
-  }
-  if (!isRecord(entry) || !isRecord(entry["usage"])) {
-    return { kind: "invalid" };
-  }
-  const usage = entry["usage"];
-  const providerId = provider ?? (typeof entry["provider"] === "string" ? entry["provider"] : "");
-  const windows: RawCodexbarWindow[] = [];
-  for (const key of ["primary", "secondary", "tertiary"] as const) {
-    const window = parseCodexbarWindow(usage[key]);
-    if (window !== null) {
-      windows.push(window);
-    }
-  }
-  // Extra rate windows always parse: the session/weekly selection draws from
-  // them (codex's Spark 5-hour is its session window), and the rest publish.
-  const rawExtras: RawCodexbarExtra[] = [];
-  if (Array.isArray(usage["extraRateWindows"])) {
-    for (const item of usage["extraRateWindows"]) {
-      const extra = parseCodexbarExtra(item);
-      if (extra !== null) {
-        rawExtras.push(extra);
-      }
-    }
-  }
-  const selected = classifyCodexbarWindows([...windows, ...rawExtras.map((extra) => extra.window)]);
-  if (selected === null) {
-    return { kind: "invalid" };
-  }
-  const extras: QuotaExtraWindow[] = [];
-  for (const extra of rawExtras) {
-    if (extra.window === selected.session || extra.window === selected.weekly) {
-      continue;
-    }
-    const name = extra.id ?? extra.title;
-    if (name === null) {
-      continue; // an unnamed window can't be tagged
-    }
-    extras.push({
-      id: name,
-      label: extraWindowLabel(extra.title ?? name, providerId),
-      ...toWindowReading(extra.window),
-    });
-    if (extras.length >= QUOTA_EXTRA_WINDOWS_LIMIT) {
-      break;
-    }
-  }
-  return {
-    kind: "ok",
-    reading: {
-      session: selected.session === null ? null : toWindowReading(selected.session),
-      weekly: selected.weekly === null ? null : toWindowReading(selected.weekly),
-      extras,
-    },
-  };
-};
-
-/**
- * Parse the CodexBar widget snapshot into per-provider readings keyed by the
- * CodexBar provider id. Invalid bodies, a stale generatedAt, and windowless
- * entries yield no readings rather than throwing — the fallback must never
- * break a pass.
- */
-export const parseCodexbarWidgetSnapshot = (body: string, nowMs: number): Map<string, ProviderQuotaReading> => {
-  const readings = new Map<string, ProviderQuotaReading>();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return readings;
-  }
-  if (!isRecord(parsed)) {
-    return readings;
-  }
-  const generatedAt = typeof parsed["generatedAt"] === "string" ? Date.parse(parsed["generatedAt"]) : Number.NaN;
-  if (Number.isNaN(generatedAt) || nowMs - generatedAt > WIDGET_SNAPSHOT_MAX_AGE_MS) {
-    return readings;
-  }
-  const entries = parsed["entries"];
-  if (!Array.isArray(entries)) {
-    return readings;
-  }
-  for (const entry of entries) {
-    if (!isRecord(entry) || typeof entry["provider"] !== "string") {
-      continue;
-    }
-    const windows: RawCodexbarWindow[] = [];
-    for (const key of ["primary", "secondary", "tertiary"] as const) {
-      const window = parseCodexbarWindow(entry[key]);
-      if (window !== null) {
-        windows.push(window);
-      }
-    }
-    const selection = classifyCodexbarWindows(windows);
-    if (selection !== null) {
-      readings.set(entry["provider"], {
-        session: selection.session === null ? null : toWindowReading(selection.session),
-        weekly: selection.weekly === null ? null : toWindowReading(selection.weekly),
-        extras: [], // the widget snapshot carries no extraRateWindows
-      });
-    }
-  }
-  return readings;
-};
+export {
+  type CodexbarUsageParse,
+  type ProviderQuotaReading,
+  parseCodexbarRecord,
+  parseCodexbarUsage,
+  parseCodexbarWidgetSnapshot,
+  type QuotaWindowReading,
+  WIDGET_SNAPSHOT_MAX_AGE_MS,
+} from "./codexbar-usage";
 
 /**
  * The CodexBar menu-bar app refreshes on its own cadence with its own
@@ -299,9 +70,6 @@ export const parseCodexbarWidgetSnapshot = (body: string, nowMs: number): Map<st
  */
 export const codexbarWidgetSnapshotPath = (home: string = homedir()): string =>
   join(home, "Library/Group Containers/Y5PE65HELJ.com.steipete.codexbar/widget-snapshot.json");
-
-/** The widget snapshot only counts as a source while the app is actually refreshing it. */
-export const WIDGET_SNAPSHOT_MAX_AGE_MS = 45 * 60_000;
 
 /** Quota windows move slowly; CodexBar itself polls providers on a similar cadence. */
 export const QUOTA_POLL_INTERVAL_MS = 120_000;
@@ -327,9 +95,9 @@ const WIDGET_READ_TIMED_OUT = Symbol("widget-read-timed-out");
 
 const DIAGNOSTIC_COMPONENT = "quota";
 
-export type QuotaExecResult = { exitCode: number; stdout: string };
+export type QuotaExecResult = { exitCode: number; stdout: string; timedOut?: boolean };
 
-/** Resolves instead of rejecting: spawn failure and timeout surface as a nonzero exit code. */
+/** Resolves instead of rejecting; a timeout is distinct from an ordinary nonzero exit. */
 export type QuotaExec = (args: string[], timeoutMs: number) => Promise<QuotaExecResult>;
 
 /** Same shape as the daemon's DaemonScheduler: arms a recurring tick, returns a disarm callback. */
@@ -362,7 +130,7 @@ export type QuotaCollector = {
 };
 
 type FetchOutcome =
-  | { kind: "ok"; reading: ProviderQuotaReading }
+  | { kind: "ok"; reading: ProviderQuotaReading; fetchedAt?: string }
   /** Binary missing or provider disabled in CodexBar — the panel disappears. */
   | { kind: "absent" }
   | { kind: "failed" };
@@ -372,7 +140,7 @@ type ClaudeSwapRead =
   | { kind: "failed" }
   | { kind: "absent" };
 
-type ProviderState = { quota: ProviderQuota; failed: boolean };
+type ProviderState = { quota: ProviderQuota; failed: boolean; accountsFailed: boolean };
 
 const emptyQuota = (): ProviderQuota => ({
   percentRemaining: null,
@@ -411,6 +179,7 @@ const codexbarArgs = (provider: QuotaProviderKey): string[] => [
   "json",
   "--log-level",
   "critical",
+  ...(provider === "codex" ? ["--all-accounts"] : []),
 ];
 
 const spawnExec =
@@ -418,14 +187,16 @@ const spawnExec =
   async (args, timeoutMs) => {
     try {
       const process = Bun.spawn([binaryPath, ...args], { stdout: "pipe", stderr: "ignore" });
+      let timedOut = false;
       const timer = setTimeout(() => {
+        timedOut = true;
         process.kill();
       }, timeoutMs);
       try {
         const stream = process.stdout;
         const stdout = stream === null ? "" : await new Response(stream).text();
         const exitCode = await process.exited;
-        return { exitCode, stdout };
+        return { exitCode, stdout, timedOut };
       } finally {
         clearTimeout(timer);
       }
@@ -448,20 +219,15 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
   const diagnostics = dependencies.diagnostics ?? (() => {});
   const widgetReadTimeoutMs = dependencies.widgetReadTimeoutMs ?? WIDGET_READ_TIMEOUT_MS;
 
-  const states = new Map<QuotaProviderKey, ProviderState>();
-  type ClaudeAccountState = {
-    accounts: ProviderQuota["accounts"];
-    failed: boolean;
-  };
-  let claudeAccounts: ClaudeAccountState = { accounts: [], failed: false };
+  let states = new Map<QuotaProviderKey, ProviderState>();
   let lastWrittenJson: string | null = null;
   let polling = false;
   let started = false;
   let cancelSchedule: (() => void) | null = null;
 
-  const reportFailure = (provider: QuotaProviderKey): void => {
+  const emitDiagnostic = (record: DiagnosticRecord): void => {
     try {
-      diagnostics({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "quota_failed", provider });
+      diagnostics(record);
     } catch {
       // Diagnostics must never break the collector.
     }
@@ -518,16 +284,16 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
       const existing = await readFile(dependencies.quotaSnapshotPath);
       if (existing !== null) {
         const parsed = parseQuotaSnapshot(JSON.parse(existing));
-        claudeAccounts = {
-          accounts: parsed.providers["claude"]?.accounts ?? [],
-          failed: false,
-        };
         for (const key of QUOTA_PROVIDER_KEYS) {
           const quota = parsed.providers[key];
           if (quota !== undefined) {
             // A seeded unavailable row is already in the failed state — its
             // continuation must not re-log, only a good→failed transition may.
-            states.set(key, { quota: { ...quota, accounts: [] }, failed: quota.unavailable });
+            states.set(key, {
+              quota,
+              failed: quota.unavailable,
+              accountsFailed: quota.unavailable || quota.accounts.some((account) => account.issue !== null),
+            });
           }
         }
         lastWrittenJson = `${JSON.stringify(parsed)}\n`;
@@ -558,19 +324,6 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     return binaryPath === undefined ? null : spawnExec(binaryPath);
   };
 
-  const reportAccountFailure = (): void => {
-    try {
-      diagnostics({
-        timestamp: now(),
-        component: DIAGNOSTIC_COMPONENT,
-        code: "quota_accounts_failed",
-        provider: "claude",
-      });
-    } catch {
-      // Diagnostics must never break the collector.
-    }
-  };
-
   /** Pure read — pollNow commits the retention state, never this function. */
   const readClaudeSwap = async (exec: QuotaExec | null): Promise<ClaudeSwapRead> => {
     if (exec === null) {
@@ -582,7 +335,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     } catch {
       result = { exitCode: -1, stdout: "" };
     }
-    if (result.exitCode !== 0) {
+    if (result.exitCode !== 0 || result.timedOut) {
       return { kind: "failed" };
     }
     const parsed = parseClaudeSwapAccounts(result.stdout);
@@ -599,7 +352,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     } catch {
       return { kind: "failed" };
     }
-    if (result.exitCode !== 0) {
+    if (result.exitCode !== 0 || result.timedOut) {
       return { kind: "failed" };
     }
     const parsed = parseCodexbarUsage(result.stdout, CODEXBAR_PROVIDER_ARGS[provider]);
@@ -609,15 +362,17 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
     return parsed.kind === "ok" ? { kind: "ok", reading: parsed.reading } : { kind: "failed" };
   };
 
-  const pollProvider = async (
-    exec: QuotaExec | null,
+  const applyOutcome = (
+    nextStates: Map<QuotaProviderKey, ProviderState>,
+    queued: DiagnosticRecord[],
     provider: QuotaProviderKey,
+    outcome: FetchOutcome,
     widget: ReadonlyMap<string, ProviderQuotaReading>,
-  ): Promise<ProviderQuota | null> => {
+    reportProviderFailure = true,
+  ): ProviderQuota | null => {
     // A fresh row displays unavailable (never fetched) but has not yet failed —
     // `failed` tracks the diagnostic transition, separately from that display.
-    const state = states.get(provider) ?? { quota: emptyQuota(), failed: false };
-    let outcome: FetchOutcome = exec === null ? { kind: "absent" } : await probe(exec, provider);
+    const state = nextStates.get(provider) ?? { quota: emptyQuota(), failed: false, accountsFailed: false };
     // The widget snapshot rescues providers whose CLI auth fails in this
     // context (notably qwen's cookie auth under launchd) — the app behind the
     // widget has its own approved access and keeps the file fresh.
@@ -628,11 +383,11 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
       }
     }
     if (outcome.kind === "absent") {
-      states.delete(provider);
+      nextStates.delete(provider);
       return null;
     }
     if (outcome.kind === "ok") {
-      const fetchedAt = now();
+      const fetchedAt = outcome.fetchedAt ?? now();
       // The history ring records the session window only — a weekly-only
       // reading leaves the ring untouched.
       const history =
@@ -653,18 +408,78 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         extraWindows: outcome.reading.extras,
         accounts: [],
       };
-      states.set(provider, { quota, failed: false });
+      nextStates.set(provider, { ...state, quota, failed: false });
       return quota;
     }
-    if (!state.failed) {
+    if (!state.failed && reportProviderFailure) {
       // Log the transition into failure only — never per pass, never output text.
-      reportFailure(provider);
+      queued.push({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "quota_failed", provider });
     }
-    state.failed = true;
-    state.quota = { ...state.quota, unavailable: true };
-    states.set(provider, state);
-    return state.quota;
+    const quota = { ...state.quota, unavailable: true };
+    nextStates.set(provider, { ...state, quota, failed: true });
+    return quota;
   };
+
+  const pollProvider = async (
+    nextStates: Map<QuotaProviderKey, ProviderState>,
+    queued: DiagnosticRecord[],
+    exec: QuotaExec | null,
+    provider: QuotaProviderKey,
+    widget: ReadonlyMap<string, ProviderQuotaReading>,
+  ): Promise<ProviderQuota | null> =>
+    applyOutcome(
+      nextStates,
+      queued,
+      provider,
+      exec === null ? { kind: "absent" } : await probe(exec, provider),
+      widget,
+    );
+
+  const readCodex = async (exec: QuotaExec | null): Promise<CodexAccountsParse> => {
+    if (exec === null) return { kind: "invalid" };
+    let result: QuotaExecResult;
+    try {
+      result = await exec(codexbarArgs("codex"), QUOTA_EXEC_TIMEOUT_MS);
+    } catch {
+      return { kind: "invalid" };
+    }
+    if (result.timedOut || result.exitCode < 0) return { kind: "invalid" };
+    return parseCodexbarAccounts(result.stdout, result.exitCode, states.get("codex")?.quota.accounts ?? []);
+  };
+
+  const reconcileInventory = (
+    nextStates: Map<QuotaProviderKey, ProviderState>,
+    queued: DiagnosticRecord[],
+    provider: "claude" | "codex",
+    read: AccountInventoryRead,
+    observed: boolean,
+    absent: boolean,
+  ): { accounts: ProviderQuota["accounts"]; observed: boolean; failed: boolean } => {
+    const previous = nextStates.get(provider);
+    const retained = previous?.quota.accounts ?? [];
+    const reconciled = reconcileQuotaAccounts(retained, read);
+    const overflow = reconciled.kind === "overflow";
+    const accounts = overflow
+      ? retained.map((account) => ({ ...account, issue: account.issue ?? ("unavailable" as const), unavailable: true }))
+      : reconciled.accounts;
+    const failed = overflow || (!read.completeInventory && !(absent && retained.length === 0));
+    if (failed && !previous?.accountsFailed) {
+      queued.push({ timestamp: now(), component: DIAGNOSTIC_COMPONENT, code: "quota_accounts_failed", provider });
+    }
+    return { accounts, observed: observed && !overflow, failed };
+  };
+
+  const groupedQuota = (
+    previous: ProviderQuota | undefined,
+    inventory: { accounts: ProviderQuota["accounts"]; observed: boolean },
+    at: string | null,
+  ): ProviderQuota => ({
+    ...emptyQuota(),
+    unavailable: false,
+    fetchedAt: inventory.observed ? at : (previous?.fetchedAt ?? null),
+    history: previous?.history ?? [],
+    accounts: inventory.accounts,
+  });
 
   const pollNow = async (): Promise<void> => {
     if (polling) {
@@ -678,116 +493,103 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         (await readWidgetSnapshot(dependencies.widgetSnapshotPath ?? codexbarWidgetSnapshotPath())) ?? "",
         Date.parse(now()),
       );
-      // Claude quota has one source per situation: the cswap read runs before
-      // the probe loop, and a successful read with ≥2 accounts serves the
-      // grouped entry and skips the codexbar claude probe for this pass.
-      // Claude's STATE resolves after every other await — nothing may abort
-      // between computing claude's next state and committing both its halves.
+      const nextStates = new Map(states);
+      const queued: DiagnosticRecord[] = [];
       const swapRead = await readClaudeSwap(resolveClaudeSwapExec());
-      const providers: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
-      for (const provider of QUOTA_PROVIDER_KEYS) {
-        if (provider === "claude") {
-          continue; // resolved below, after the other providers' awaits
-        }
-        const quota = await pollProvider(exec, provider, widget);
-        if (quota !== null) {
-          providers[provider] = quota;
-        }
-      }
-      if (swapRead.kind === "ok" && swapRead.accounts.length >= 2) {
-        // Atomic commit — retained rows and the entry carrying their collector
-        // stamp land together, after the pass's last await, so an aborted pass
-        // can never leave the two halves inconsistent.
-        claudeAccounts = { accounts: swapRead.accounts, failed: false };
-        const quota: ProviderQuota = {
-          percentRemaining: null,
-          resetAt: null,
-          weeklyPercentRemaining: null,
-          weeklyResetAt: null,
-          unavailable: false,
-          fetchedAt: swapRead.at,
-          // The ambient history ring stops accumulating in grouped mode; the
-          // carried ring stays frozen for a later return to the probe path.
-          history: states.get("claude")?.quota.history ?? [],
-          extraWindows: [],
-          accounts: swapRead.accounts,
-        };
-        states.set("claude", { quota, failed: false });
-        providers["claude"] = quota;
-      } else if (
-        swapRead.kind === "failed" &&
-        claudeAccounts.accounts.length >= 2 &&
-        states.get("claude")?.quota.fetchedAt != null
-      ) {
-        // Grouped starvation — settled contract (decisions.md 2026-08-27
-        // 01:43): from ≥2 retained with a usable stamp, no fallback probe
-        // runs and the stamp is not restamped, so a persistent failure ages
-        // the group stale while a transient one only dims the rows for one
-        // pass. unavailable is canonicalized false — group health rides the
-        // stamp's age, and a legacy seed persisted with unavailable: true
-        // must not dim the group forever.
-        if (!claudeAccounts.failed) {
-          reportAccountFailure();
-        }
-        claudeAccounts = {
-          accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
-          failed: true,
-        };
-        // The stamp condition above guarantees the entry exists; the guard
-        // satisfies the Map lookup's type.
-        const previous = states.get("claude");
-        if (previous !== undefined) {
-          const quota: ProviderQuota = {
-            ...previous.quota,
-            unavailable: false,
-            accounts: claudeAccounts.accounts,
-          };
-          states.set("claude", { quota, failed: previous.failed });
-          providers["claude"] = quota;
-        }
+      const codexRead = await readCodex(exec);
+      const priorCodex = nextStates.get("codex");
+      const codexInventory = reconcileInventory(
+        nextStates,
+        queued,
+        "codex",
+        codexRead.kind === "ok" ? codexRead : { accounts: [], completeInventory: false },
+        codexRead.kind === "ok" &&
+          codexRead.inventoryObserved &&
+          (codexRead.completeInventory || codexRead.accounts.length > 0),
+        exec === null || (codexRead.kind === "ok" && codexRead.ambient !== null),
+      );
+      if (codexInventory.accounts.length > 0) {
+        nextStates.set("codex", {
+          quota: groupedQuota(priorCodex?.quota, codexInventory, codexInventory.observed ? now() : null),
+          failed: false,
+          accountsFailed: codexInventory.failed,
+        });
       } else {
-        // Not grouped this pass — cswap absent, <2 accounts reported, or a
-        // failed read below the starvation conditions: claude stays on the
-        // codexbar probe. The probe is the final await; everything from its
-        // return to the paired retention update is synchronous.
-        const ambient = await pollProvider(exec, "claude", widget);
-        if (swapRead.kind === "failed") {
-          if (!claudeAccounts.failed) {
-            reportAccountFailure();
-          }
-          claudeAccounts = {
-            accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
-            failed: true,
-          };
-        } else {
-          claudeAccounts = { accounts: swapRead.kind === "absent" ? [] : swapRead.accounts, failed: false };
-        }
-        if (ambient !== null) {
-          providers["claude"] = { ...ambient, accounts: claudeAccounts.accounts };
-        } else if (claudeAccounts.accounts.length > 0) {
-          providers["claude"] = { ...emptyQuota(), accounts: claudeAccounts.accounts };
+        const outcome: FetchOutcome =
+          codexRead.kind === "ok" && codexRead.ambient !== null
+            ? { kind: "ok", ...codexRead.ambient }
+            : exec === null || (codexRead.kind === "ok" && codexRead.completeInventory)
+              ? { kind: "absent" }
+              : { kind: "failed" };
+        applyOutcome(nextStates, queued, "codex", outcome, widget, false);
+        const ambient = nextStates.get("codex");
+        if (ambient !== undefined)
+          nextStates.set("codex", {
+            ...ambient,
+            accountsFailed: codexInventory.failed,
+            quota: { ...ambient.quota, accounts: [] },
+          });
+      }
+      for (const provider of QUOTA_PROVIDER_KEYS) {
+        if (provider === "claude" || provider === "codex") continue;
+        await pollProvider(nextStates, queued, exec, provider, widget);
+      }
+      const priorClaude = nextStates.get("claude");
+      const claudeInventory = reconcileInventory(
+        nextStates,
+        queued,
+        "claude",
+        swapRead.kind === "ok"
+          ? {
+              accounts: swapRead.accounts,
+              completeInventory: swapRead.accounts.every((account) => account.issue === null),
+            }
+          : { accounts: [], completeInventory: false },
+        swapRead.kind === "ok",
+        swapRead.kind === "absent",
+      );
+      if (claudeInventory.accounts.length >= 2) {
+        nextStates.set("claude", {
+          quota: groupedQuota(priorClaude?.quota, claudeInventory, swapRead.kind === "ok" ? swapRead.at : null),
+          failed: false,
+          accountsFailed: claudeInventory.failed,
+        });
+      } else {
+        const ambient = await pollProvider(nextStates, queued, exec, "claude", widget);
+        if (ambient !== null || claudeInventory.accounts.length > 0 || claudeInventory.failed) {
+          const quota = ambient ?? emptyQuota();
+          nextStates.set("claude", {
+            quota: {
+              ...quota,
+              accounts: claudeInventory.accounts,
+              fetchedAt:
+                claudeInventory.accounts.length > 0
+                  ? claudeInventory.observed && swapRead.kind === "ok"
+                    ? swapRead.at
+                    : (priorClaude?.quota.fetchedAt ?? null)
+                  : quota.fetchedAt,
+            },
+            failed: nextStates.get("claude")?.failed ?? false,
+            accountsFailed: claudeInventory.failed,
+          });
         }
       }
       const orderedProviders: Partial<Record<QuotaProviderKey, ProviderQuota>> = {};
       for (const provider of QUOTA_PROVIDER_KEYS) {
-        const quota = providers[provider];
-        if (quota !== undefined) {
-          orderedProviders[provider] = quota;
-        }
+        const state = nextStates.get(provider);
+        if (state !== undefined) orderedProviders[provider] = state.quota;
       }
       const snapshot: QuotaSnapshot = {
         schemaVersion: QUOTA_SNAPSHOT_SCHEMA_VERSION,
         providers: orderedProviders,
       };
       const json = `${JSON.stringify(snapshot)}\n`;
-      if (json !== lastWrittenJson) {
-        try {
-          writeFile(dependencies.quotaSnapshotPath, json);
-          lastWrittenJson = json;
-        } catch {
-          // A publication I/O failure retries on the next pass.
-        }
-      }
+      // No awaits or shared-state mutations: only a successful publication
+      // advances retained measurements, labels, and diagnostic transitions.
+      if (json !== lastWrittenJson) writeFile(dependencies.quotaSnapshotPath, json);
+      states = nextStates;
+      lastWrittenJson = json;
+      for (const record of queued) emitDiagnostic(record);
     } catch {
       // The exported contract promises pollNow never throws. An unexpected
       // dependency/runtime exception is contained here — one provider-less

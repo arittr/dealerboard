@@ -448,6 +448,16 @@ describe("createPaseoAgentStateLoader", () => {
     expect((await loader(AGENTS_DIR)).map((state) => state.provider)).toEqual(["claude"]);
   });
 
+  test("maps Paseo's codex-second provider onto the registry's codex key", async () => {
+    const content = agentRecord({ provider: "codex-second" });
+    const { loader } = makeLoader({
+      dirs: oneRecordFs(),
+      stats: { [join(AGENTS_DIR, "work/agent-1.json")]: { mtimeMs: 100, size: 500 } },
+      files: { [join(AGENTS_DIR, "work/agent-1.json")]: content },
+    });
+    expect((await loader(AGENTS_DIR)).map((state) => state.provider)).toEqual(["codex"]);
+  });
+
   test("a missing agents directory or empty workspace yields an empty list", async () => {
     const { loader } = makeLoader({ dirs: {} });
     expect(await loader(AGENTS_DIR)).toEqual([]);
