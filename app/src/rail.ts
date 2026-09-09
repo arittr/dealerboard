@@ -366,7 +366,7 @@ export const railRenderSignature = (model: RailModel): string => {
       readout.historical,
       readout.showFill,
       bindingWindow(meter)?.percentRemaining ?? null,
-      readout.showFill ? secondaryWindows(meter) : [],
+      readout.showFill ? secondaryWindows(meter).map((window) => window.percentRemaining) : [],
     ];
   };
   const quotaSignature = (panel: QuotaPanelModel): readonly unknown[] => {

@@ -81,7 +81,7 @@ describe("railRenderSignature", () => {
     expect(railRenderSignature(model({ quota: [moved] }))).not.toBe(railRenderSignature(model()));
   });
 
-  test("changes when a non-binding window's marker moves, even with the binding untouched", () => {
+  test("tracks only visible non-binding tick positions", () => {
     const windows = (weekly: number) => [
       { tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 },
       { tag: "weekly", percentRemaining: weekly, resetAtMs: null },
@@ -89,6 +89,17 @@ describe("railRenderSignature", () => {
     const before = model({ quota: [quotaPanel({ windows: windows(90) })] });
     const after = model({ quota: [quotaPanel({ windows: windows(89) })] });
     expect(railRenderSignature(after)).not.toBe(railRenderSignature(before));
+    const tagAndResetOnly = model({
+      quota: [
+        quotaPanel({
+          windows: [
+            { tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 },
+            { tag: "monthly", percentRemaining: 90, resetAtMs: NOW + 10 * 60_000 },
+          ],
+        }),
+      ],
+    });
+    expect(railRenderSignature(tagAndResetOnly)).toBe(railRenderSignature(before));
   });
 
   test("tracks account identity, active state, state, fill, ticks, and displayed countdown", () => {
