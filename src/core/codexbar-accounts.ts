@@ -18,6 +18,13 @@ export const codexAccountId = (label: string): string =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const isCodexbarError = (value: unknown): value is Record<string, unknown> =>
+  isRecord(value) &&
+  typeof value["code"] === "number" &&
+  Number.isFinite(value["code"]) &&
+  typeof value["message"] === "string" &&
+  (value["kind"] === undefined || value["kind"] === null || typeof value["kind"] === "string");
+
 const isoOrNull = (value: unknown): string | null => {
   if (typeof value !== "string" || value.length === 0) return null;
   const ms = Date.parse(value);
@@ -78,10 +85,14 @@ export const parseCodexbarAccounts = (
     }
     const account = entry["account"];
     const label = typeof account === "string" ? account.trim() : "";
-    const hasError = isRecord(entry["error"]);
+    const error = entry["error"];
+    const hasError = isCodexbarError(error);
+    const malformedError = error !== undefined && error !== null && !hasError;
     if (label.length === 0) {
       anonymous = true;
-      if (!hasError) {
+      if (malformedError) {
+        malformed = true;
+      } else if (!hasError) {
         const reading = parseCodexbarRecord(entry, "codex");
         const fetchedAt = isRecord(entry["usage"]) ? isoOrNull(entry["usage"]["updatedAt"]) : null;
         if (reading !== null && fetchedAt !== null) anonymousSuccesses.push({ reading, fetchedAt });
@@ -90,6 +101,11 @@ export const parseCodexbarAccounts = (
       continue;
     }
     const id = codexAccountId(label);
+    if (malformedError) {
+      malformed = true;
+      candidates.push({ id, error: false, reading: null, fetchedAt: null });
+      continue;
+    }
     if (hasError) {
       candidates.push({ id, error: true, reading: null, fetchedAt: null });
       continue;

@@ -173,4 +173,23 @@ describe("parseCodexbarAccounts", () => {
     expect(output).not.toContain("private account failure");
     expect(output).not.toContain("private identity");
   });
+
+  test("does not accept malformed source errors as successful measurements", () => {
+    for (const error of [
+      "not a CodexBar error object",
+      [],
+      { code: 1, kind: "provider" },
+      { code: "1", kind: "provider", message: "wrong code type" },
+    ]) {
+      const parsed = parseCodexbarAccounts(
+        JSON.stringify([codexRecord("success", 10), { ...codexRecord("malformed-error", 20), error }]),
+        0,
+        [],
+      );
+      expect(parsed).toMatchObject({ kind: "ok", completeInventory: false, inventoryObserved: false });
+      if (parsed.kind !== "ok") throw new Error("expected parsed accounts");
+      expect(parsed.accounts).toHaveLength(1);
+      expect(parsed.accounts[0]).toMatchObject({ id: codexAccountId("success"), percentRemaining: 90 });
+    }
+  });
 });
