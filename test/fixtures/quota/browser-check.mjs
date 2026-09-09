@@ -133,6 +133,13 @@ try {
     await page.touchscreen.tap(100, 100);
     assert.equal(await dialog.count(), 0);
     // Real mouse stroke, source update and countdown rollover before release.
+    await page.evaluate(async () => {
+      const q = globalThis.quotaPreview;
+      q.preview.quota = q.quotaFixture(q.preview.count, "healthy");
+      q.preview.quota.providers.codex.accounts[1].resetAt = new Date(q.preview.now + 90_000).toISOString();
+      await q.update(0, true);
+    });
+    assert.equal(await account.locator(".quota-note").innerText(), "2m");
     const box = await account.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
@@ -141,7 +148,6 @@ try {
     });
     await page.evaluate(async () => {
       const q = globalThis.quotaPreview;
-      q.preview.quota = q.quotaFixture(q.preview.count, "healthy");
       q.preview.quota.providers.codex.accounts[1].percentRemaining = 37;
       await q.update(60_000, true);
     });
@@ -149,8 +155,11 @@ try {
       await account.evaluate((e) => e === globalThis.pressedQuotaElement),
       "rail must defer replacement during press",
     );
+    assert.equal(await account.locator(".quota-note").innerText(), "2m", "held rail keeps its pre-press countdown");
     await page.mouse.up();
     await title();
+    assert.equal(await account.locator(".quota-note").innerText(), "1m");
+    assert.equal(await dialog.locator(".quota-detail-reset").first().innerText(), "1m");
     assert((await dialog.innerText()).includes("37% remaining"));
     assert((await dialog.innerText()).includes("Last measured 4m ago"));
     // Modal gestures cannot reach board routing or paging.

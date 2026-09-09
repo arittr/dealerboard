@@ -45,8 +45,9 @@ age and `Sign in again`; geometry alone is insufficient.
 Both engines and densities passed keyboard opening, focus trapping,
 Escape/Close/outside-touch dismissal, focus restoration after rail replacement,
 correct touch/mouse account targeting, and a real mouse stroke spanning a source
-update plus countdown rollover. The rail stayed mounted during the stroke;
-details opened with the same account's newest 37% measurement. Sibling release
+update plus a visible `2m` → `1m` countdown rollover. The rail stayed mounted
+with `2m` during the stroke; after release the rail and details both showed
+`1m`, and details showed the same account's newest 37% measurement. Sibling release
 was rejected. Ten-window details stayed scrollable and preserved their actual
 scroll offset and Close focus across updates. Removing the account dismissed
 details to the rail; later ticks did not reopen them. Modal wheel gestures did
@@ -71,7 +72,9 @@ named density values, token/unread geometry, or rail padding.
 
 ## Required gates
 
-All six gates ran after the final implementation edits.
+All six gates ran after the final production implementation edits at `20b216e`.
+The subsequent countdown-race test correction reran both browser drivers and
+focused formatting; unchanged repository/Rust/build gates were not repeated.
 
 | Command | Result |
 | --- | --- |
@@ -86,6 +89,14 @@ All six gates ran after the final implementation edits.
 warning for generated decorator helpers in `session-grid-action.js` and three
 other occurrences. Build and tests passed; no quota source or test emitted an
 unexpected error. Rust tests emitted no warnings.
+
+Baseline-noise evidence for that warning: `git diff --exit-code 44eb544..20b216e
+-- src/plugin rollup.config.mjs package.json bun.lock tsconfig.json` is empty.
+`git ls-tree` confirms identical baseline/current blobs for the reported source,
+Rollup configuration, manifest, lockfile and TypeScript configuration. The
+existing generated JS contains `(this && this.__esDecorate)` at the warning
+location. This establishes unchanged warning-producing inputs; a separate
+baseline build was not rerun and no plugin cleanup was included.
 
 The carried test minors are resolved: failed Codex inventory cases have short
 descriptive names; the rail signature regression reduces the same raw source
