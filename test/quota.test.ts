@@ -335,7 +335,7 @@ describe("createQuotaCollector", () => {
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 98,
@@ -357,16 +357,16 @@ describe("createQuotaCollector", () => {
     await createQuotaCollector(harness.deps).pollNow();
     const latest = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
     expect(latest.providers["claude"]?.accounts).toEqual(
-      seededAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+      seededAccounts.accounts.map((account) => ({ ...account, issue: "unavailable", unavailable: true })),
     );
   });
 
-  test("a legacy grouped seed whose first new read fails starves with the seeded stamp", async () => {
+  test("a grouped seed whose first new read fails starves with the seeded stamp", async () => {
     const seedStamp = "2026-08-19T17:50:00.000Z";
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -390,18 +390,20 @@ describe("createQuotaCollector", () => {
     expect(claude?.fetchedAt).toBe(seedStamp);
     expect(claude?.percentRemaining).toBe(62.5);
     expect(claude?.unavailable).toBe(false);
-    expect(claude?.accounts).toEqual(seededAccounts.accounts.map((account) => ({ ...account, unavailable: true })));
+    expect(claude?.accounts).toEqual(
+      seededAccounts.accounts.map((account) => ({ ...account, issue: "unavailable", unavailable: true })),
+    );
     expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
     expect(harness.diagnostics.filter((record) => record.code === "quota_accounts_failed")).toHaveLength(1);
   });
 
-  test("a legacy unavailable seed starves with unavailable canonicalized false", async () => {
+  test("an unavailable v3 seed starves with unavailable canonicalized false", async () => {
     // Seed exactly as in the previous test, but with unavailable: true.
     const seedStamp = "2026-08-19T17:50:00.000Z";
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -428,13 +430,13 @@ describe("createQuotaCollector", () => {
     expect(harness.calls.some((call) => call[2] === "claude")).toBe(false);
   });
 
-  test("a legacy seed without a usable stamp falls back to the codexbar probe", async () => {
+  test("a v3 seed without a usable stamp falls back to the codexbar probe", async () => {
     // Seed ≥2 accounts under an emptyQuota()-shaped claude entry: fetchedAt
     // null, unavailable true, null windows.
     const seededAccounts = parseClaudeSwapAccounts(fixture("claude-swap-accounts.json"));
     if (seededAccounts.kind !== "ok") throw new Error("fixture must parse");
     const seeded = parseQuotaSnapshot({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: null,
@@ -827,7 +829,7 @@ describe("createQuotaCollector", () => {
 
   test("seeding from an existing file preserves last-good data across a restart", async () => {
     const seeded = JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -837,6 +839,8 @@ describe("createQuotaCollector", () => {
           unavailable: false,
           fetchedAt: "2026-08-19T17:00:00.000Z",
           history: [{ fetchedAt: "2026-08-19T17:00:00.000Z", fractionRemaining: 0.625 }],
+          extraWindows: [],
+          accounts: [],
         },
       },
     });
@@ -849,6 +853,37 @@ describe("createQuotaCollector", () => {
     await createQuotaCollector(harness.deps).pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
     expect(snapshot.providers["claude"]).toMatchObject({ percentRemaining: 62.5, unavailable: true });
+  });
+
+  test("an old quota snapshot cannot seed retained state", async () => {
+    const oldSnapshot = JSON.stringify({
+      schemaVersion: 2,
+      providers: {
+        claude: {
+          percentRemaining: 62.5,
+          resetAt: "2026-08-19T22:00:00.000Z",
+          weeklyPercentRemaining: 88,
+          weeklyResetAt: "2026-08-24T00:00:00.000Z",
+          unavailable: false,
+          fetchedAt: "2026-08-19T17:00:00.000Z",
+          history: [{ fetchedAt: "2026-08-19T17:00:00.000Z", fractionRemaining: 0.625 }],
+          extraWindows: [],
+          accounts: [],
+        },
+      },
+    });
+    const harness = makeHarness({
+      files: { [quotaPath]: oldSnapshot },
+      claudeSwapBinaryPresent: false,
+    });
+    harness.fail("claude");
+    await createQuotaCollector(harness.deps).pollNow();
+    const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes()[0] ?? ""));
+    expect(snapshot.providers["claude"]).toMatchObject({
+      percentRemaining: null,
+      fetchedAt: null,
+      unavailable: true,
+    });
   });
 
   test("the binary candidates prefer the homebrew symlink, then fall back", () => {
@@ -1014,7 +1049,7 @@ describe("createQuotaCollector", () => {
 
   test("grouped publication carries the prior claude history ring frozen", async () => {
     const seeded = JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: {
           percentRemaining: 62.5,
@@ -1157,6 +1192,7 @@ describe("createQuotaCollector", () => {
         resetAt: "2026-08-19T22:00:00.000Z",
         weeklyPercentRemaining: 40,
         weeklyResetAt: "2026-08-24T00:00:00.000Z",
+        issue: null,
         unavailable: false,
         fetchedAt: "2026-08-19T17:00:00.000Z",
         extraWindows: [],

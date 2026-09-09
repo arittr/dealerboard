@@ -43,7 +43,7 @@ export type QuotaAccountState = "ok" | "unavailable";
 export type QuotaAccountMeterModel = Omit<QuotaMeterModel, "state"> & {
   id: string;
   label: string;
-  active: boolean;
+  active: boolean | null;
   /** cswap's fetch health only — the account's reading age never dims its row. */
   state: QuotaAccountState;
 };

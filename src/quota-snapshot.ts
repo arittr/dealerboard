@@ -8,7 +8,7 @@
  * src/protocol.ts are deliberately untouched: quota rides its own file.
  */
 
-export const QUOTA_SNAPSHOT_SCHEMA_VERSION = 2;
+export const QUOTA_SNAPSHOT_SCHEMA_VERSION = 3;
 
 /** Per-provider sample cap: at the 120s poll cadence, 128 samples cover ~4.3 hours. */
 export const QUOTA_HISTORY_LIMIT = 128;
@@ -55,14 +55,17 @@ export type QuotaExtraWindow = {
   resetAt: string | null;
 };
 
+export type QuotaAccountIssue = "auth_required" | "rate_limited" | "unavailable";
+
 export type ProviderQuotaAccount = {
   id: string;
   label: string;
-  active: boolean;
+  active: boolean | null;
   percentRemaining: number | null;
   resetAt: string | null;
   weeklyPercentRemaining: number | null;
   weeklyResetAt: string | null;
+  issue: QuotaAccountIssue | null;
   unavailable: boolean;
   fetchedAt: string | null;
   extraWindows: QuotaExtraWindow[];
@@ -83,14 +86,14 @@ export type ProviderQuota = {
   fetchedAt: string | null;
   /** Bounded ring of session-window samples, oldest first. */
   history: QuotaHistoryPoint[];
-  /** Extra rate windows not selected as session/weekly, in CodexBar order; empty for v1 input. */
+  /** Extra rate windows not selected as session/weekly, in source order. */
   extraWindows: QuotaExtraWindow[];
-  /** Privacy-safe claude-swap account rows; empty when the field is absent. */
+  /** Privacy-safe account rows; empty when the provider has no account detail. */
   accounts: ProviderQuotaAccount[];
 };
 
 export type QuotaSnapshot = {
-  schemaVersion: 1 | 2;
+  schemaVersion: 3;
   providers: Partial<Record<QuotaProviderKey, ProviderQuota>>;
 };
 
@@ -166,7 +169,9 @@ const parseExtraWindows = (value: unknown): QuotaExtraWindow[] => {
   return value.map(parseExtraWindow);
 };
 
-const parseProviderQuotaAccount = (value: unknown): ProviderQuotaAccount => {
+const QUOTA_ACCOUNT_ISSUES: ReadonlySet<string> = new Set(["auth_required", "rate_limited", "unavailable"]);
+
+const parseProviderQuotaAccount = (value: unknown, provider: QuotaProviderKey): ProviderQuotaAccount => {
   if (!isRecord(value)) {
     return invalid("provider account must be an object");
   }
@@ -177,11 +182,15 @@ const parseProviderQuotaAccount = (value: unknown): ProviderQuotaAccount => {
   if (!Number.isSafeInteger(slot) || slot <= 0 || String(slot) !== value["label"]) {
     return invalid("provider account label must be a decimal slot");
   }
-  if (value["id"] !== `claude-swap:${value["label"]}`) {
-    return invalid("provider account id must match its claude-swap slot");
+  const validId =
+    provider === "claude"
+      ? value["id"] === `claude-swap:${value["label"]}`
+      : provider === "codex" && typeof value["id"] === "string" && /^codexbar:[a-f0-9]{64}$/u.test(value["id"]);
+  if (!validId) {
+    return invalid("provider account id must match its provider namespace");
   }
-  if (typeof value["active"] !== "boolean") {
-    return invalid("provider account active must be a boolean");
+  if (value["active"] !== null && typeof value["active"] !== "boolean") {
+    return invalid("provider account active must be null or a boolean");
   }
   if (!isNullablePercent(value["percentRemaining"])) {
     return invalid("provider account percentRemaining must be null or a 0..100 number");
@@ -195,11 +204,28 @@ const parseProviderQuotaAccount = (value: unknown): ProviderQuotaAccount => {
   if (!isNullableIsoInstant(value["weeklyResetAt"])) {
     return invalid("provider account weeklyResetAt must be null or an ISO instant");
   }
+  if (value["issue"] !== null && (typeof value["issue"] !== "string" || !QUOTA_ACCOUNT_ISSUES.has(value["issue"]))) {
+    return invalid("provider account issue must be null or a recognized issue");
+  }
   if (typeof value["unavailable"] !== "boolean") {
     return invalid("provider account unavailable must be a boolean");
   }
+  if (value["unavailable"] !== (value["issue"] !== null)) {
+    return invalid("provider account unavailable must agree with issue");
+  }
   if (!isNullableIsoInstant(value["fetchedAt"])) {
     return invalid("provider account fetchedAt must be null or an ISO instant");
+  }
+  const extraWindows = parseExtraWindows(value["extraWindows"]);
+  if (
+    value["fetchedAt"] === null &&
+    (value["percentRemaining"] !== null ||
+      value["resetAt"] !== null ||
+      value["weeklyPercentRemaining"] !== null ||
+      value["weeklyResetAt"] !== null ||
+      extraWindows.length > 0)
+  ) {
+    return invalid("provider account measurements require fetchedAt");
   }
   return {
     id: value["id"] as string,
@@ -209,17 +235,18 @@ const parseProviderQuotaAccount = (value: unknown): ProviderQuotaAccount => {
     resetAt: value["resetAt"],
     weeklyPercentRemaining: value["weeklyPercentRemaining"],
     weeklyResetAt: value["weeklyResetAt"],
+    issue: value["issue"] as QuotaAccountIssue | null,
     unavailable: value["unavailable"],
     fetchedAt: value["fetchedAt"],
-    extraWindows: parseExtraWindows(value["extraWindows"]),
+    extraWindows,
   };
 };
 
-const parseProviderQuotaAccounts = (value: unknown): ProviderQuotaAccount[] => {
+const parseProviderQuotaAccounts = (value: unknown, provider: QuotaProviderKey): ProviderQuotaAccount[] => {
   if (!Array.isArray(value) || value.length > QUOTA_ACCOUNTS_LIMIT) {
     return invalid(`accounts must be an array of at most ${QUOTA_ACCOUNTS_LIMIT} rows`);
   }
-  const accounts = value.map(parseProviderQuotaAccount);
+  const accounts = value.map((account) => parseProviderQuotaAccount(account, provider));
   if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {
     return invalid("account ids must be unique");
   }
@@ -232,7 +259,7 @@ const parseProviderQuotaAccounts = (value: unknown): ProviderQuotaAccount[] => {
   return accounts;
 };
 
-const parseProviderQuota = (value: unknown, legacy: boolean): ProviderQuota => {
+const parseProviderQuota = (value: unknown, provider: QuotaProviderKey): ProviderQuota => {
   if (!isRecord(value)) {
     return invalid("provider quota must be an object");
   }
@@ -265,14 +292,14 @@ const parseProviderQuota = (value: unknown, legacy: boolean): ProviderQuota => {
     unavailable: value["unavailable"],
     fetchedAt: value["fetchedAt"],
     history: value["history"].map(parseHistoryPoint),
-    extraWindows: legacy ? [] : parseExtraWindows(value["extraWindows"]),
-    accounts: value["accounts"] === undefined ? [] : parseProviderQuotaAccounts(value["accounts"]),
+    extraWindows: parseExtraWindows(value["extraWindows"]),
+    accounts: parseProviderQuotaAccounts(value["accounts"], provider),
   };
 };
 
 /**
  * Validate an unknown value as a quota snapshot, returning a newly constructed
- * snapshot (schemaVersion 1 or 2). Unknown provider keys are ignored (not
+ * v3 snapshot. Unknown provider keys are ignored (not
  * rejected) so a newer daemon adding a provider never breaks an older strip
  * app — a deliberate divergence from src/protocol.ts's provider strictness,
  * this file having exactly one reader shipped in the same repo. Throws on any
@@ -283,8 +310,8 @@ export const parseQuotaSnapshot = (value: unknown): QuotaSnapshot => {
     return invalid("snapshot must be an object");
   }
   const version: unknown = value["schemaVersion"];
-  if (version !== 1 && version !== QUOTA_SNAPSHOT_SCHEMA_VERSION) {
-    return invalid(`schemaVersion must be 1 or ${QUOTA_SNAPSHOT_SCHEMA_VERSION}`);
+  if (version !== QUOTA_SNAPSHOT_SCHEMA_VERSION) {
+    return invalid(`schemaVersion must be ${QUOTA_SNAPSHOT_SCHEMA_VERSION}`);
   }
   if (!isRecord(value["providers"])) {
     return invalid("providers must be an object");
@@ -294,7 +321,8 @@ export const parseQuotaSnapshot = (value: unknown): QuotaSnapshot => {
     if (!QUOTA_PROVIDERS.has(key)) {
       continue;
     }
-    providers[key as QuotaProviderKey] = parseProviderQuota(value["providers"][key], version === 1);
+    const provider = key as QuotaProviderKey;
+    providers[provider] = parseProviderQuota(value["providers"][key], provider);
   }
-  return { schemaVersion: version as 1 | 2, providers };
+  return { schemaVersion: QUOTA_SNAPSHOT_SCHEMA_VERSION, providers };
 };

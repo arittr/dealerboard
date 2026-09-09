@@ -4,6 +4,7 @@ import {
   type ProviderQuotaAccount,
   QUOTA_ACCOUNTS_LIMIT,
   QUOTA_EXTRA_WINDOWS_LIMIT,
+  type QuotaAccountIssue,
   type QuotaExtraWindow,
 } from "../quota-snapshot";
 
@@ -92,6 +93,19 @@ const emptyUsage = (): NormalizedUsage => ({
   hasWindow: false,
 });
 
+const CLAUDE_SWAP_FAILURE_ISSUES: ReadonlyMap<string, QuotaAccountIssue> = new Map([
+  ["relogin_required", "auth_required"],
+  ["token_expired", "unavailable"],
+  ["api_key", "unavailable"],
+  ["keychain_unavailable", "unavailable"],
+  ["foreign_credential", "unavailable"],
+  ["no_credentials", "unavailable"],
+  ["unavailable", "unavailable"],
+]);
+
+const normalizeIssue = (usageStatus: unknown): QuotaAccountIssue =>
+  typeof usageStatus === "string" ? (CLAUDE_SWAP_FAILURE_ISSUES.get(usageStatus) ?? "unavailable") : "unavailable";
+
 const normalizeAccount = (value: unknown, activeSlot: number): ProviderQuotaAccount | null => {
   if (!isRecord(value) || !isPositiveInteger(value["number"])) return null;
   const slot = value["number"];
@@ -101,10 +115,10 @@ const normalizeAccount = (value: unknown, activeSlot: number): ProviderQuotaAcco
   const lastGoodFetchedAt = isoOrNull(value["lastGoodFetchedAt"]);
   const selected =
     value["usageStatus"] === "ok" && current.hasWindow && currentFetchedAt !== null
-      ? { usage: current, fetchedAt: currentFetchedAt, unavailable: false }
+      ? { usage: current, fetchedAt: currentFetchedAt, issue: null }
       : lastGood.hasWindow && lastGoodFetchedAt !== null
-        ? { usage: lastGood, fetchedAt: lastGoodFetchedAt, unavailable: true }
-        : { usage: emptyUsage(), fetchedAt: null, unavailable: true };
+        ? { usage: lastGood, fetchedAt: lastGoodFetchedAt, issue: normalizeIssue(value["usageStatus"]) }
+        : { usage: emptyUsage(), fetchedAt: null, issue: normalizeIssue(value["usageStatus"]) };
   return {
     id: `claude-swap:${slot}`,
     label: String(slot),
@@ -113,7 +127,8 @@ const normalizeAccount = (value: unknown, activeSlot: number): ProviderQuotaAcco
     resetAt: selected.usage.session.resetAt,
     weeklyPercentRemaining: selected.usage.weekly.percentRemaining,
     weeklyResetAt: selected.usage.weekly.resetAt,
-    unavailable: selected.unavailable,
+    issue: selected.issue,
+    unavailable: selected.issue !== null,
     fetchedAt: selected.fetchedAt,
     extraWindows: selected.usage.extras,
   };

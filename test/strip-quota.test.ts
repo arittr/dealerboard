@@ -40,6 +40,7 @@ const quotaAccount = (overrides: Partial<ProviderQuotaAccount> = {}): ProviderQu
   resetAt: "2026-08-19T22:00:00.000Z",
   weeklyPercentRemaining: 80,
   weeklyResetAt: "2026-08-24T00:00:00.000Z",
+  issue: null,
   unavailable: false,
   fetchedAt: "2026-08-19T18:00:00.000Z",
   extraWindows: [],
@@ -48,7 +49,7 @@ const quotaAccount = (overrides: Partial<ProviderQuotaAccount> = {}): ProviderQu
 
 const read = (providers: Record<string, ProviderQuota>): { mtimeMs: number; contents: string } => ({
   mtimeMs: NOW,
-  contents: JSON.stringify({ schemaVersion: 1, providers }),
+  contents: JSON.stringify({ schemaVersion: 3, providers }),
 });
 
 const windowModel = (tag: string, percentRemaining: number, resetAtMs: number | null = null): QuotaWindowModel => ({
@@ -120,12 +121,12 @@ describe("reduceQuotaRead", () => {
     expect(reduceQuotaRead(read({ claude: quota({ accounts: [quotaAccount()] }) }), NOW)[0]?.accounts).toEqual([]);
   });
 
-  test("non-Claude provider account input never enables grouped presentation", () => {
+  test("a non-Claude provider with Claude account IDs rejects the read", () => {
     expect(
       reduceQuotaRead(
         read({ codex: quota({ accounts: [quotaAccount(), quotaAccount({ id: "claude-swap:2", label: "2" })] }) }),
         NOW,
-      )[0]?.accounts,
+      ),
     ).toEqual([]);
   });
 
@@ -136,7 +137,13 @@ describe("reduceQuotaRead", () => {
         claude: quota({
           accounts: [
             quotaAccount({ fetchedAt: oldFetch }),
-            quotaAccount({ id: "claude-swap:2", label: "2", active: true, unavailable: true }),
+            quotaAccount({
+              id: "claude-swap:2",
+              label: "2",
+              active: true,
+              issue: "unavailable",
+              unavailable: true,
+            }),
           ],
         }),
       }),
@@ -174,9 +181,9 @@ describe("reduceQuotaRead", () => {
     expect(panel?.accounts.map((account) => account.label)).toEqual(["1", "2"]);
   });
 
-  test("a v2 read maps extra windows after session and weekly, and the minimum binds", () => {
+  test("a v3 read maps extra windows after session and weekly, and the minimum binds", () => {
     const contents = JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       providers: {
         claude: quota({
           percentRemaining: 96,

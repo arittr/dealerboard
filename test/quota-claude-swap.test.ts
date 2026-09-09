@@ -25,6 +25,7 @@ describe("parseClaudeSwapAccounts", () => {
           resetAt: "2030-01-01T05:00:00.000Z",
           weeklyPercentRemaining: 40,
           weeklyResetAt: "2030-01-08T00:00:00.000Z",
+          issue: null,
           unavailable: false,
           fetchedAt: "2030-01-01T01:00:00.000Z",
           extraWindows: [
@@ -44,6 +45,7 @@ describe("parseClaudeSwapAccounts", () => {
           resetAt: null,
           weeklyPercentRemaining: 50,
           weeklyResetAt: "2030-01-08T00:00:00.000Z",
+          issue: "unavailable",
           unavailable: true,
           fetchedAt: "2030-01-01T00:00:00.000Z",
           extraWindows: [
@@ -60,6 +62,37 @@ describe("parseClaudeSwapAccounts", () => {
     expect(JSON.stringify(parsed)).not.toContain("@");
     expect(JSON.stringify(parsed)).not.toContain("organization");
     expect(JSON.stringify(parsed)).not.toContain("Ignored");
+  });
+
+  test.each([
+    ["relogin_required", "auth_required"],
+    ["token_expired", "unavailable"],
+    ["keychain_unavailable", "unavailable"],
+    ["ok", null],
+  ] as const)("normalizes %s account health without leaking source identity", (usageStatus, issue) => {
+    const source = JSON.parse(fixture("claude-swap-accounts.json")) as {
+      accounts: Array<Record<string, unknown>>;
+    };
+    const account = source.accounts.find((candidate) => candidate["number"] === 2);
+    if (account === undefined) throw new Error("fixture must contain account 2");
+    account["usageStatus"] = usageStatus;
+    if (usageStatus === "ok") {
+      account["usage"] = account["lastGoodUsage"];
+      account["usageFetchedAt"] = account["lastGoodFetchedAt"];
+    }
+    const parsed = parseClaudeSwapAccounts(JSON.stringify(source));
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind !== "ok") throw new Error("fixture must parse");
+    expect(parsed.accounts[1]).toMatchObject({
+      issue,
+      unavailable: issue !== null,
+      fetchedAt: "2030-01-01T00:00:00.000Z",
+      percentRemaining: 90,
+      weeklyPercentRemaining: 50,
+    });
+    expect(JSON.stringify(parsed)).not.toContain("example.invalid");
+    expect(JSON.stringify(parsed)).not.toContain("Ignored Corp");
+    expect(JSON.stringify(parsed)).not.toContain("ignored-uuid");
   });
 
   test("accepts an empty account collection", () => {
@@ -89,8 +122,21 @@ describe("parseClaudeSwapAccounts", () => {
     expect(parsed).toMatchObject({
       kind: "ok",
       accounts: [
-        { id: "claude-swap:1", unavailable: true, weeklyPercentRemaining: 70, fetchedAt: "2026-08-25T19:30:00.000Z" },
-        { id: "claude-swap:2", unavailable: true, percentRemaining: null, fetchedAt: null, extraWindows: [] },
+        {
+          id: "claude-swap:1",
+          issue: "unavailable",
+          unavailable: true,
+          weeklyPercentRemaining: 70,
+          fetchedAt: "2026-08-25T19:30:00.000Z",
+        },
+        {
+          id: "claude-swap:2",
+          issue: "unavailable",
+          unavailable: true,
+          percentRemaining: null,
+          fetchedAt: null,
+          extraWindows: [],
+        },
       ],
     });
   });

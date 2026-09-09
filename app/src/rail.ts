@@ -159,7 +159,7 @@ const tokensSection = (model: TokenUsageRailModel): HTMLElement | null => {
 export type QuotaRenderAccount = {
   id: string;
   label: string;
-  active: boolean;
+  active: boolean | null;
   meter: QuotaMeterModel;
 };
 

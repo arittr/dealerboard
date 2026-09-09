@@ -724,13 +724,17 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
         // runs and the stamp is not restamped, so a persistent failure ages
         // the group stale while a transient one only dims the rows for one
         // pass. unavailable is canonicalized false — group health rides the
-        // stamp's age, and a legacy seed persisted with unavailable: true
-        // must not dim the group forever.
+        // stamp's age, and a seed persisted with unavailable: true must not
+        // dim the group forever.
         if (!claudeAccounts.failed) {
           reportAccountFailure();
         }
         claudeAccounts = {
-          accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+          accounts: claudeAccounts.accounts.map((account) => ({
+            ...account,
+            issue: "unavailable",
+            unavailable: true,
+          })),
           failed: true,
         };
         // The stamp condition above guarantees the entry exists; the guard
@@ -756,7 +760,11 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
             reportAccountFailure();
           }
           claudeAccounts = {
-            accounts: claudeAccounts.accounts.map((account) => ({ ...account, unavailable: true })),
+            accounts: claudeAccounts.accounts.map((account) => ({
+              ...account,
+              issue: "unavailable",
+              unavailable: true,
+            })),
             failed: true,
           };
         } else {
