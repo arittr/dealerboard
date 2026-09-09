@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { QuotaAccountMeterModel, QuotaPanelModel } from "../app/src/quota";
+import { type QuotaAccountMeterModel, type QuotaPanelModel, reduceQuotaRead } from "../app/src/quota";
 import { QUOTA_DENSITY, QUOTA_DENSITY_PRESETS } from "../app/src/quota-density";
 import { quotaRenderModel, type RailModel, railRenderSignature, renderRail } from "../app/src/rail";
 import type { HourlyActivityBucket, TokenUsageRailModel } from "../app/src/token-usage";
+import { PREVIEW_NOW, quotaFixture } from "./fixtures/quota/preview-host";
 import { descendants, hasClass, renderedText, withFakeDocument } from "./support/fake-dom";
 
 const NOW = Date.parse("2026-08-25T20:00:00Z");
@@ -134,6 +135,16 @@ describe("railRenderSignature", () => {
   });
 
   test("changes at stale-age and reset crossings without a source update", () => {
+    const read = { mtimeMs: PREVIEW_NOW, contents: JSON.stringify(quotaFixture(2, "healthy")) };
+    // The same source read crosses Codex's six-minute measurement limit.
+    const beforeNow = PREVIEW_NOW + 4 * 60_000;
+    const afterNow = beforeNow + 1;
+    const before = model({ quota: reduceQuotaRead(read, beforeNow), now: new Date(beforeNow) });
+    const after = model({ quota: reduceQuotaRead(read, afterNow), now: new Date(afterNow) });
+    expect(before.quota.find((p) => p.provider === "codex")?.accounts[0]?.state).toBe("ok");
+    expect(after.quota.find((p) => p.provider === "codex")?.accounts[0]?.state).toBe("stale");
+    expect(railRenderSignature(before)).not.toBe(railRenderSignature(after));
+
     const staleAccount = quotaAccount({
       state: "stale",
       fetchedAtMs: NOW - 60_000,

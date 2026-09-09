@@ -178,9 +178,11 @@ itself.
 - **Evener:** supplies local inventory and lifecycle state over authenticated
   AppWire v3.
 - **[CodexBar](https://github.com/steipete/CodexBar):** supplies quota windows
-  for Claude, Codex, Kimi, GLM/zai, and Qwen.
-- **`cswap`:** adds privacy-safe numeric Claude account meters when two or
-  more accounts are present.
+  for Claude, Codex, Kimi, GLM/zai, and Qwen. Codex collection discovers all
+  saved accounts with `--all-accounts`; each retains its own source measurement.
+- **`cswap`:** supplies numeric Claude account meters and saved sign-in health.
+  `Sign in again` means renew that saved sign-in through cswap; the strip's
+  read-only details do not switch accounts, sign in, or force a refresh.
 - **[`agentsview`](https://github.com/kenn-io/agentsview):** supplies aggregate
   daily token totals, rolling rates, and today/yesterday activity curves.
 - **Ghostty:** enables exact Claude terminal focus for direct, non-tmux
@@ -190,6 +192,36 @@ itself.
   bundled shim. Point `claude_code_cmd` in `~/.roborev/config.toml` at
   `<repo>/scripts/roborev-claude-shim` (absolute path); identified cards
   wear the containment ring in cyan.
+
+Quota numbers read **reset countdown · remaining percentage**. Historical
+readings retain their source age; a reset passing does not invent fresh quota.
+Codex measurements become stale after six minutes, Claude after 45 minutes.
+Those are display limits, not polling intervals: collection remains every
+120 seconds and respects source caching and backoff. Claude's 45-minute limit
+still needs verification against normal installed source pacing.
+
+Account labels are numeric, not names or emails. Claude numbers follow cswap
+slots; Codex numbers retain ordering by an opaque ID derived from its source
+label, so a changed source label can become a new identity. The Claude dot
+means selected in the source switcher, not which account every agent uses.
+Codex activity is unknown and has no active dot. Tap a meter for all published
+windows, measurement age, and normalized health guidance.
+
+The internal `QUOTA_DENSITY` setting lives in `app/src/quota-density.ts` and
+defaults to `"comfortable"`. At 2560 × 720, comfortable supports two Claude
+and two Codex accounts plus Kimi, GLM, and Qwen; compact supports four of each
+plus the same singles. There is no automatic shrinking or quota scrolling.
+Other combinations need a separate capacity decision. The coordinated app
+and daemon use quota schema v3 only: old quota snapshots are ignored until
+recollection, so install both artifacts together.
+
+For a synthetic full-app preview, run `bun scripts/quota-preview.ts` and open
+its loopback URL at 2560 × 720. Density, account count, scenario, and clock
+controls sit below the screenshot canvas. It uses production bootstrap,
+reducers, cards, rail, and details with synthetic native IO; it never invokes
+providers or writes production data. Local browser evidence and the separate
+native, installed-refresh, and physical acceptance gates are recorded in the
+[verification record](docs/superpowers/plans/2026-09-08-multi-account-quota-verification.md).
 
 ## Local data and privacy
 

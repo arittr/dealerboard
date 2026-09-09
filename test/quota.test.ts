@@ -239,12 +239,17 @@ describe("createQuotaCollector", () => {
   });
 
   test.each([
-    { exitCode: 1, stdout: "[]" },
-    { exitCode: 0, stdout: "{" },
-    { exitCode: 0, stdout: fixture("codexbar-accounts.json").slice(0, -8) },
-    { exitCode: 0, stdout: fixture("codexbar-accounts-partial.json"), timedOut: true },
-    { exitCode: 1, stdout: fixture("codexbar-accounts.json"), timedOut: true },
-  ])("failed Codex inventory retains measurements and collection age: %j", async (response) => {
+    { name: "empty failure", exitCode: 1, stdout: "[]" },
+    { name: "invalid JSON", exitCode: 0, stdout: "{" },
+    { name: "truncated inventory", exitCode: 0, stdout: fixture("codexbar-accounts.json").slice(0, -8) },
+    {
+      name: "timeout with partial stdout",
+      exitCode: 0,
+      stdout: fixture("codexbar-accounts-partial.json"),
+      timedOut: true,
+    },
+    { name: "timeout with complete stdout", exitCode: 1, stdout: fixture("codexbar-accounts.json"), timedOut: true },
+  ])("failed Codex inventory retains measurements and collection age: $name", async (response) => {
     let current = NOW;
     const harness = makeHarness({}, { now: () => current });
     harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });

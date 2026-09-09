@@ -942,7 +942,7 @@ body[data-fullscreen] #rail {
   opacity: 0.45;
 }
 .quota-group {
-  gap: calc(0.4166667vh * var(--quota-scale)); /* 3px native */
+  gap: calc(0.1388889vh * var(--quota-scale)); /* 1px native; retain room for eleven compact accounts */
 }
 .quota-account-stack {
   position: relative;
@@ -968,7 +968,7 @@ body[data-fullscreen] #rail {
   grid-template-columns: calc(1.171875vw * var(--quota-scale)) minmax(0, calc(2.734375vw * var(--quota-scale))) minmax(
       25px,
       1fr
-    ) calc(6.5234375vw * var(--quota-scale)); /* 30 | 70 | meter | 167px */
+    ) max-content; /* 30 | 70 | meter | complete readout */
   align-items: center;
   gap: calc(0.46875vw * var(--quota-scale)); /* 12px */
   width: 100%;
@@ -1055,14 +1055,14 @@ body[data-fullscreen] #rail {
   align-items: baseline;
   justify-content: flex-end;
   gap: calc(0.2734375vw * var(--quota-scale)); /* 7px */
-  width: calc(6.5234375vw * var(--quota-scale)); /* 167px */
-  min-width: 0;
+  width: max-content;
+  min-width: calc(6.5234375vw * var(--quota-scale)); /* 167px; longer state/age text borrows meter space */
   white-space: nowrap;
 }
 .quota-pct {
   color: #e8eef7;
   flex: none;
-  width: calc(2.03125vw * var(--quota-scale)); /* 52px */
+  width: calc(2.734375vw * var(--quota-scale)); /* 70px: includes 100% at native size */
   font-size: calc(0.9765625vw * var(--quota-scale)); /* 25px */
   font-weight: 400;
   font-variant-numeric: tabular-nums;
@@ -1132,7 +1132,7 @@ body[data-fullscreen] #rail {
   appearance: none;
   display: flex;
   flex-direction: column;
-  gap: calc(0.8333333vh * var(--quota-scale)); /* 6px */
+  gap: 0;
   width: 100%;
   margin: 0;
   padding: 0;
@@ -1146,9 +1146,6 @@ body[data-fullscreen] #rail {
 .quota-single-reading .quota-tag {
   flex: none;
   max-width: calc(3.4375vw * var(--quota-scale)); /* 88px */
-}
-.quota-single-reading .quota-bar {
-  margin-top: calc(0.2777778vh * var(--quota-scale)); /* 2px */
 }
 
 .card.flash {

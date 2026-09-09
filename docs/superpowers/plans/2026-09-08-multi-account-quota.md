@@ -91,7 +91,7 @@ export type QuotaAccountIssue = "auth_required" | "rate_limited" | "unavailable"
 // QuotaSnapshot: schemaVersion: 3;
 ```
 
-- [ ] Add v3 round-trip and rejection cases: both ID namespaces under the correct provider, duplicate ID/label, invalid positive-decimal labels, two `active: true` rows, nullable activity/timestamps, absent issue, and disagreement between issue/unavailable. An account with any measurement/reset/extra window needs a valid measurement timestamp; a never-measured account has all measurement fields null and `extraWindows: []`. Non-account providers cannot accept Claude/Codex account IDs.
+- [x] Add v3 round-trip and rejection cases: both ID namespaces under the correct provider, duplicate ID/label, invalid positive-decimal labels, two `active: true` rows, nullable activity/timestamps, absent issue, and disagreement between issue/unavailable. An account with any measurement/reset/extra window needs a valid measurement timestamp; a never-measured account has all measurement fields null and `extraWindows: []`. Non-account providers cannot accept Claude/Codex account IDs.
 
   Use the existing `claudeQuota()` builder for this focused legacy rejection test:
 
@@ -101,9 +101,9 @@ export type QuotaAccountIssue = "auth_required" | "rate_limited" | "unavailable"
   });
   ```
 
-- [ ] Run `bun test test/quota-snapshot.test.ts test/quota-claude-swap.test.ts`; confirm the new v3/issue cases fail on the old contract.
+- [x] Run `bun test test/quota-snapshot.test.ts test/quota-claude-swap.test.ts`; confirm the new v3/issue cases fail on the old contract.
 
-- [ ] Pass the provider key into account validation and remove the legacy parsing branch. Require arrays in v3 rather than substituting v1/v2 defaults. Retain existing unknown-provider-key behavior and history/window bounds. The identity checks are:
+- [x] Pass the provider key into account validation and remove the legacy parsing branch. Require arrays in v3 rather than substituting v1/v2 defaults. Retain existing unknown-provider-key behavior and history/window bounds. The identity checks are:
 
   ```ts
   const validId = provider === "claude"
@@ -115,13 +115,13 @@ export type QuotaAccountIssue = "auth_required" | "rate_limited" | "unavailable"
   // Require unavailable === (issue !== null), after validating issue's enum.
   ```
 
-- [ ] Add `issue` to Claude normalization and every collector-created failed account. A valid `ok` usage clears issue; invalid/missing `ok` data is unavailable. Keep source last-good windows and timestamps. Normalize failures using a fixed table/switch, including the explicit `relogin_required → auth_required` mapping; all other installed failure statuses map to `unavailable`.
+- [x] Add `issue` to Claude normalization and every collector-created failed account. A valid `ok` usage clears issue; invalid/missing `ok` data is unavailable. Keep source last-good windows and timestamps. Normalize failures using a fixed table/switch, including the explicit `relogin_required → auth_required` mapping; all other installed failure statuses map to `unavailable`.
 
   In `test/quota-claude-swap.test.ts`, clone the existing fixture, set account 2's `usageStatus` to `relogin_required`, and assert `issue: "auth_required"`, `unavailable: true`, and unchanged `lastGoodFetchedAt`/last-good percentages. Repeat with `token_expired` and `keychain_unavailable` expecting `unavailable`, then a valid `ok` response expecting `issue: null`. Assert output excludes the fixture's email/organization/credential sentinels.
 
-- [ ] Update all quota snapshot builders to v3 and all account constructors to explicit issue values. Widen `QuotaAccountMeterModel.active` and `QuotaRenderAccount.active` to `boolean | null` in this task so the v3 propagation type-checks; rendering still draws a marker only for `true`. Leave cswap upstream fixture `schemaVersion: 1` intact: it is a different contract. Convert old-reader acceptance tests into explicit rejection tests, preserving equivalent validation tests on v3. The collector's existing writer uses the shared version constant; startup parsing now rejects old snapshots automatically. Update comments that promise v1/v2 compatibility.
+- [x] Update all quota snapshot builders to v3 and all account constructors to explicit issue values. Widen `QuotaAccountMeterModel.active` and `QuotaRenderAccount.active` to `boolean | null` in this task so the v3 propagation type-checks; rendering still draws a marker only for `true`. Leave cswap upstream fixture `schemaVersion: 1` intact: it is a different contract. Convert old-reader acceptance tests into explicit rejection tests, preserving equivalent validation tests on v3. The collector's existing writer uses the shared version constant; startup parsing now rejects old snapshots automatically. Update comments that promise v1/v2 compatibility.
 
-- [ ] Run the focused baseline command above and `bun run typecheck`. Inspect the diff for unintended non-quota schema edits. Deliverable: writer/reader compile against v3, Claude issue survives serialization, and old snapshots cannot seed retained state. Suggested commit: `feat: define quota v3 account health contract`.
+- [x] Run the focused baseline command above and `bun run typecheck`. Inspect the diff for unintended non-quota schema edits. Deliverable: writer/reader compile against v3, Claude issue survives serialization, and old snapshots cannot seed retained state. Suggested commit: `feat: define quota v3 account health contract`.
 
 ### Task 2: Parse Codex account batches without losing identity or partial successes
 
@@ -152,7 +152,7 @@ export function parseCodexbarAccounts(
 
 `completeInventory` permits removals only on exit 0 with every relevant row valid, identified, unique, and successful (or a valid empty inventory). `inventoryObserved` means a complete identity inventory was decoded, including identified source errors; it does not imply measurement freshness or permission to remove. An anonymous ambient reading never proves the prior identified inventory is empty.
 
-- [ ] Add a synthetic record helper inside the new test file:
+- [x] Add a synthetic record helper inside the new test file:
 
   ```ts
   const codexRecord = (account: string, usedPercent: number) => ({
@@ -180,11 +180,11 @@ export function parseCodexbarAccounts(
 
   Additional cases: whitespace trimming; empty label; distinct labels differing internally; duplicate trimmed labels; a source-label rename; unrelated provider records; malformed/truncated root; missing/invalid `usage.updatedAt`; no usable window; extras/scoped windows; empty exit-0 versus empty exit-1; one anonymous record versus multiple anonymous records; mixed named/anonymous rows; success plus identified error on exit 1. Assert an error's raw `message` and `usage.identity` fields never escape the adapter.
 
-- [ ] Run `bun test test/quota-codexbar-accounts.test.ts` and confirm it fails before the new adapter exists.
+- [x] Run `bun test test/quota-codexbar-accounts.test.ts` and confirm it fails before the new adapter exists.
 
-- [ ] Extract the current per-record window parsing unchanged and have `parseCodexbarUsage` call it after its existing ambient provider selection. Keep widget normalization and other providers' selection behavior. Reuse the exact parser for every identified Codex success, including Spark session and extra weekly windows.
+- [x] Extract the current per-record window parsing unchanged and have `parseCodexbarUsage` call it after its existing ambient provider selection. Keep widget normalization and other providers' selection behavior. Reuse the exact parser for every identified Codex success, including Spark session and extra weekly windows.
 
-- [ ] Implement the account adapter in two passes: validate/filter/identify rows and count duplicate labels first, then accept measurements only for unique identities. This prevents the first duplicate from updating an account before the collision is discovered. Hash source labels and assign display labels without mutating `previous`:
+- [x] Implement the account adapter in two passes: validate/filter/identify rows and count duplicate labels first, then accept measurements only for unique identities. This prevents the first duplicate from updating an account before the collision is discovered. Hash source labels and assign display labels without mutating `previous`:
 
   ```ts
   import { createHash } from "node:crypto";
@@ -199,9 +199,9 @@ export function parseCodexbarAccounts(
 
   Normalize `usage.updatedAt` to canonical ISO; never fall back to collection time. Valid current errors become identified, never-measured unavailable observations. Duplicate IDs produce no successful observation for that ID; retained state is handled in Task 3. Unknown duplicate accounts are not assigned invented identities. Source label changes are new accounts. Return rows sorted by numeric display label.
 
-- [ ] Keep ambiguity explicit: any malformed/unidentified candidate or source error prevents removal; explicit non-Codex provider records are ignored for measurements, and malformed/CLI-level error records must not turn into a successful empty Codex inventory. If more than eight identified accounts are reported, reject the batch as invalid and retain the previous inventory; never slice off accounts silently.
+- [x] Keep ambiguity explicit: any malformed/unidentified candidate or source error prevents removal; explicit non-Codex provider records are ignored for measurements, and malformed/CLI-level error records must not turn into a successful empty Codex inventory. If more than eight identified accounts are reported, reject the batch as invalid and retain the previous inventory; never slice off accounts silently.
 
-- [ ] Run `bun test test/quota-codexbar.test.ts test/quota-codexbar-accounts.test.ts` and `bun run typecheck`. Deliverable: deterministic sanitized batches retain identifiable successes independently of process exit code. Suggested commit: `feat: parse labeled Codex quota accounts`.
+- [x] Run `bun test test/quota-codexbar.test.ts test/quota-codexbar-accounts.test.ts` and `bun run typecheck`. Deliverable: deterministic sanitized batches retain identifiable successes independently of process exit code. Suggested commit: `feat: parse labeled Codex quota accounts`.
 
 ### Task 3: Reconcile retained accounts and publish complete passes atomically
 
@@ -225,9 +225,9 @@ export function reconcileQuotaAccounts(
 
 An invalid/transport read is `{accounts: [], completeInventory: false}`. Claude `completeInventory` is true only for a valid exit-0 inventory with no account errors. A valid inventory containing account failures can still update known active-slot information and successful peers; it cannot remove an omitted account. If retained plus new accounts would exceed eight during a partial inventory, return overflow, retain the prior inventory as unavailable, and emit the fixed account-failure diagnostic.
 
-- [ ] Add reconciliation tests for success/error merging, missing peers during incomplete inventory, duplicate observations already suppressed by Task 2, successful removal, zero/one/two transitions, account-specific issue clearing, cached timestamps, and union overflow. Freeze input objects/arrays in these tests to catch accidental mutation. A failed observation with older or no history cannot replace the previous measurement; compare canonical source timestamps before choosing last-good data.
+- [x] Add reconciliation tests for success/error merging, missing peers during incomplete inventory, duplicate observations already suppressed by Task 2, successful removal, zero/one/two transitions, account-specific issue clearing, cached timestamps, and union overflow. Freeze input objects/arrays in these tests to catch accidental mutation. A failed observation with older or no history cannot replace the previous measurement; compare canonical source timestamps before choosing last-good data.
 
-- [ ] Add collector coverage using the existing `makeHarness`, `respondRaw`, `throwOnce`, and temporary output paths. This partial-result case exercises the actual publication boundary:
+- [x] Add collector coverage using the existing `makeHarness`, `respondRaw`, `throwOnce`, and temporary output paths. This partial-result case exercises the actual publication boundary:
 
   ```ts
   test("publishes a successful Codex peer when the batch exits nonzero", async () => {
@@ -250,13 +250,13 @@ An invalid/transport read is `{accounts: [], completeInventory: false}`. Claude 
 
   The initial fixture has `synthetic-a` at 80% remaining, `synthetic-b` at 10%, both measured at `18:00Z`; the partial fixture has A at 60% measured at `18:02Z`, plus B's `{code: 1, kind: "provider", message: "synthetic-private-error"}`. Give both successful records future session/weekly reset windows. Import `codexAccountId` in this test file.
 
-- [ ] Run `bun test test/quota-accounts.test.ts test/quota.test.ts`; confirm failures are in the changed retention/invocation/publication behavior.
+- [x] Run `bun test test/quota-accounts.test.ts test/quota.test.ts`; confirm failures are in the changed retention/invocation/publication behavior.
 
-- [ ] Implement reconciliation keyed only by opaque ID. Keep old labels, use explicit observed activity, and sort the result numerically. On an incomplete inventory, omitted retained rows keep their own measurement and become unavailable. On a complete inventory, omit removed IDs. If an observed active Claude slot changes, clear any retained `true` on other slots so incomplete retention cannot create two active rows; unknown activity remains null. Preserve a retained specific issue across generic transport failure, and clear it only on a valid success for that account.
+- [x] Implement reconciliation keyed only by opaque ID. Keep old labels, use explicit observed activity, and sort the result numerically. On an incomplete inventory, omitted retained rows keep their own measurement and become unavailable. On a complete inventory, omit removed IDs. If an observed active Claude slot changes, clear any retained `true` on other slots so incomplete retention cannot create two active rows; unknown activity remains null. Preserve a retained specific issue across generic transport failure, and clear it only on a valid success for that account.
 
-- [ ] Generalize collector state to store both providers' accounts alongside each provider quota, eliminating the separate mutable Claude-only inventory. Seed the whole v3 provider/account state from the snapshot. Preserve the diagnostic transition flag from stored availability/issues; never log source payloads. Keep `quota_failed` and `quota_accounts_failed` fixed codes, parameterizing the latter's provider. Invalid/ambiguous batch failures use the latter on transitions, not on every poll.
+- [x] Generalize collector state to store both providers' accounts alongside each provider quota, eliminating the separate mutable Claude-only inventory. Seed the whole v3 provider/account state from the snapshot. Preserve the diagnostic transition flag from stored availability/issues; never log source payloads. Keep `quota_failed` and `quota_accounts_failed` fixed codes, parameterizing the latter's provider. Invalid/ambiguous batch failures use the latter on transitions, not on every poll.
 
-- [ ] Stage a pass in a fresh provider-state map; all required reads and normalization operate on that candidate state. Make `pollProvider` work against the candidate map rather than closing over committed `states`. Seed labels from the committed snapshot and do not maintain a separately advancing label counter. Publish before swapping retained state:
+- [x] Stage a pass in a fresh provider-state map; all required reads and normalization operate on that candidate state. Make `pollProvider` work against the candidate map rather than closing over committed `states`. Seed labels from the committed snapshot and do not maintain a separately advancing label counter. Publish before swapping retained state:
 
   ```ts
   // nextStates contains newly constructed values; no shared ProviderState is mutated.
@@ -270,13 +270,13 @@ An invalid/transport read is `{accounts: [], completeInventory: false}`. Claude 
 
   Keep this synchronous tail after the final await. A write failure or unexpected later-provider exception must leave account IDs, numeric labels, windows, timestamps, and failure-transition state at the previous publication. `pollNow` still contains exceptions and clears its reentrancy guard. Keep the existing atomic-file writer; no new persistence file is needed.
 
-- [ ] Add Codex `--all-accounts` to its existing JSON/critical-log invocation and bypass the ordinary Codex `pollProvider` probe. Feed stdout to the adapter even when exit is nonzero. Keep all other provider calls serialized. Treat missing binary/timeout/malformed responses as failed inventory while named rows are retained. Disable Codex widget rescue whenever identified rows are retained; an eligible anonymous/ambient fallback cannot overwrite any named account. Grouped ambient windows stay null and history is frozen; a single named account is selected only by the view model.
+- [x] Add Codex `--all-accounts` to its existing JSON/critical-log invocation and bypass the ordinary Codex `pollProvider` probe. Feed stdout to the adapter even when exit is nonzero. Keep all other provider calls serialized. Treat missing binary/timeout/malformed responses as failed inventory while named rows are retained. Disable Codex widget rescue whenever identified rows are retained; an eligible anonymous/ambient fallback cannot overwrite any named account. Grouped ambient windows stay null and history is frozen; a single named account is selected only by the view model.
 
-- [ ] Keep Claude's successful single/absent-source ambient path; skip ambient probing for two or more successfully discovered or retained accounts. Reconcile Claude observations independently of ambient readings. A valid complete empty inventory may clear the group; a disappeared binary alone may not. Preserve source `usageFetchedAt`/`lastGoodFetchedAt`, even if cswap returns the same successful cache repeatedly.
+- [x] Keep Claude's successful single/absent-source ambient path; skip ambient probing for two or more successfully discovered or retained accounts. Reconcile Claude observations independently of ambient readings. A valid complete empty inventory may clear the group; a disappeared binary alone may not. Preserve source `usageFetchedAt`/`lastGoodFetchedAt`, even if cswap returns the same successful cache repeatedly.
 
-- [ ] Extend integration tests to cover: exactly one all-account Codex call; unchanged deadlines/cadence; no grouped Claude ambient call; binary disappearance; malformed/truncated/duplicate/missing-ID inventories; anonymous/widget isolation; valid removal and empty inventory; restart with v3 source timestamps and stable labels; v1/v2 restart rejection; abort after newly discovered Codex IDs; publication failure followed by a failed read; reentrancy; privacy of published JSON and collected diagnostics. Keep the existing widget timeout/non-account provider regressions.
+- [x] Extend integration tests to cover: exactly one all-account Codex call; unchanged deadlines/cadence; no grouped Claude ambient call; binary disappearance; malformed/truncated/duplicate/missing-ID inventories; anonymous/widget isolation; valid removal and empty inventory; restart with v3 source timestamps and stable labels; v1/v2 restart rejection; abort after newly discovered Codex IDs; publication failure followed by a failed read; reentrancy; privacy of published JSON and collected diagnostics. Keep the existing widget timeout/non-account provider regressions.
 
-- [ ] Run `bun test test/quota-accounts.test.ts test/quota.test.ts test/quota-codexbar-accounts.test.ts test/quota-claude-swap.test.ts` and `bun run typecheck`. Deliverable: each account retains its own last-good state across failures/restart and publishes only as part of a complete pass. Suggested commit: `feat: retain quota accounts through partial collection failures`.
+- [x] Run `bun test test/quota-accounts.test.ts test/quota.test.ts test/quota-codexbar-accounts.test.ts test/quota-claude-swap.test.ts` and `bun run typecheck`. Deliverable: each account retains its own last-good state across failures/restart and publishes only as part of a complete pass. Suggested commit: `feat: retain quota accounts through partial collection failures`.
 
 ### Task 4: Derive generic account freshness and honest readouts
 
@@ -298,7 +298,7 @@ export function quotaReadout(model: QuotaMeterModel, now: number): QuotaReadout;
 
 Add `issue: QuotaAccountIssue | null` to the common meter model (ambient meters use null) so single/grouped paths call the same readout function. Keep source-specific state derivation in the pure model, and use the existing six-minute ambient freshness rule for other providers.
 
-- [ ] Add clock-controlled tests for each row below. Extend the existing `model()` helper with `issue: null`, then pin the obsolete-fill bug:
+- [x] Add clock-controlled tests for each row below. Extend the existing `model()` helper with `issue: null`, then pin the obsolete-fill bug:
 
   ```ts
   test("stale usage past its binding reset suppresses percentage and fill", () => {
@@ -321,15 +321,15 @@ Add `issue: QuotaAccountIssue | null` to the common meter model (ambient meters 
   | `auth_required`, irrespective of reset | `Sign in again`; no percentage/fill; history retained internally |
   | `rate_limited` | Unavailable presentation rules with specific explanation available to details |
 
-- [ ] Run `bun test test/strip-quota.test.ts`; confirm failures in the new state/readout cases.
+- [x] Run `bun test test/strip-quota.test.ts`; confirm failures in the new state/readout cases.
 
-- [ ] Build account meter models for both providers, including a sole account. Derive issue failure immediately; otherwise compare the account measurement timestamp with the named provider limit. Keep panel inventory liveness separate. Build invalid-read placeholders from `QUOTA_PROVIDER_KEYS` and empty unavailable models without examining rejected snapshot contents. Update the old tests that intentionally ignored Claude reading age to assert the 45-minute boundary, including exactly-at-boundary and one millisecond beyond.
+- [x] Build account meter models for both providers, including a sole account. Derive issue failure immediately; otherwise compare the account measurement timestamp with the named provider limit. Keep panel inventory liveness separate. Build invalid-read placeholders from `QUOTA_PROVIDER_KEYS` and empty unavailable models without examining rejected snapshot contents. Update the old tests that intentionally ignored Claude reading age to assert the 45-minute boundary, including exactly-at-boundary and one millisecond beyond.
 
-- [ ] Implement one visibility decision for text and meter geometry. Existing formatting helpers can delegate to this boundary where needed, but avoid a cycle between `quotaReadout` and `formatBindingNote`. Keep the exact binding window even if its reset crossed; no filtering elapsed windows before selecting the minimum. Use `ageCue` as a compact rail fact rather than hiding it in a title attribute.
+- [x] Implement one visibility decision for text and meter geometry. Existing formatting helpers can delegate to this boundary where needed, but avoid a cycle between `quotaReadout` and `formatBindingNote`. Keep the exact binding window even if its reset crossed; no filtering elapsed windows before selecting the minimum. Use `ageCue` as a compact rail fact rather than hiding it in a title attribute.
 
-- [ ] Retain the latest raw quota read in `main.ts` and run `reduceQuotaRead` against the current clock on the existing rail tick, as well as on new reads. This is necessary because current account state is otherwise computed only when the snapshot is read. It also ensures stale/reset transitions advance during repeated cached reads. Continue using `railRenderSignature` to avoid unnecessary DOM replacement.
+- [x] Retain the latest raw quota read in `main.ts` and run `reduceQuotaRead` against the current clock on the existing rail tick, as well as on new reads. This is necessary because current account state is otherwise computed only when the snapshot is read. It also ensures stale/reset transitions advance during repeated cached reads. Continue using `railRenderSignature` to avoid unnecessary DOM replacement.
 
-- [ ] Cover single-account own-reading selection in the model/render interface, scoped-window binding and stable ties, source cache timestamp preservation, unknown Codex activity, and one failed sibling leaving the other healthy. Run `bun test test/strip-quota.test.ts test/strip-rail.test.ts` and `bun run typecheck`. Deliverable: the renderer receives explicit, consistent visibility decisions. Suggested commit: `feat: model account freshness and reset states`.
+- [x] Cover single-account own-reading selection in the model/render interface, scoped-window binding and stable ties, source cache timestamp preservation, unknown Codex activity, and one failed sibling leaving the other healthy. Run `bun test test/strip-quota.test.ts test/strip-rail.test.ts` and `bun run typecheck`. Deliverable: the renderer receives explicit, consistent visibility decisions. Suggested commit: `feat: model account freshness and reset states`.
 
 ### Task 5: Render inline accounts with one density preset boundary
 
@@ -343,11 +343,11 @@ export type QuotaTarget = { provider: QuotaProviderKey; accountId: string | null
 
 Render each meter as a native `button type="button"` with `data-quota-provider` and, for identified accounts, `data-quota-account`. Single-account presentation still carries that account ID. Ambient targets carry no account ID; never use source-array indexes as targets.
 
-- [ ] Add DOM tests using the existing fake document: grouped Codex and Claude each have one provider heading/count and one inline row per account; a single named account uses its own measurement/issue; only known `true` draws the active marker. Assert note precedes percentage, secondary ticks remain neutral, auth/obsolete readings omit fill/ticks, and an unavailable sibling does not alter a healthy row. Assert button type, numeric label and target IDs, not complete HTML strings.
+- [x] Add DOM tests using the existing fake document: grouped Codex and Claude each have one provider heading/count and one inline row per account; a single named account uses its own measurement/issue; only known `true` draws the active marker. Assert note precedes percentage, secondary ticks remain neutral, auth/obsolete readings omit fill/ticks, and an unavailable sibling does not alter a healthy row. Assert button type, numeric label and target IDs, not complete HTML strings.
 
-- [ ] Run `bun test test/strip-rail.test.ts`; confirm failures before changing renderer structure.
+- [x] Run `bun test test/strip-rail.test.ts`; confirm failures before changing renderer structure.
 
-- [ ] Define the preset table in one module and export a single application default:
+- [x] Define the preset table in one module and export a single application default:
 
   ```ts
   export type QuotaDensity = "comfortable" | "compact";
@@ -360,13 +360,13 @@ Render each meter as a native `button type="button"` with `data-quota-provider` 
 
   `renderRail` writes `--quota-scale`, `--quota-row-height`, and `--quota-provider-gap` on the quota zone. Convert vertical native dimensions through `720px → 100vh`; type and horizontal dimensions through `2560px → 100vw`, matching the existing viewport conventions. Base percentage `25px`, countdown `21.875px`, meter `5px` multiply by the quota scale. The table therefore yields 30/26.25/6px in comfortable. Provider headings, tags, chips, labels, gaps, and readout widths use the same scale. Token sizing remains independent.
 
-- [ ] Replace `space-evenly` in the quota zone with packed preset gaps. Use inline row columns for marker/number, binding tag, flexible meter, and countdown/percentage. Keep the single-provider heading/readout with its meter below. Adapt the selected mockup's geometry; do not transplant its illustrative data logic. Use a separate small age cue inside the fixed row when showing history, preserving the countdown-first numeric readout.
+- [x] Replace `space-evenly` in the quota zone with packed preset gaps. Use inline row columns for marker/number, binding tag, flexible meter, and countdown/percentage. Keep the single-provider heading/readout with its meter below. Adapt the selected mockup's geometry; do not transplant its illustrative data logic. Use a separate small age cue inside the fixed row when showing history, preserving the countdown-first numeric readout.
 
-- [ ] Apply `quotaReadout` to both text and bar creation. Keep countdown and percentage at normal weight and shared baseline, with the specified colors. Group collection staleness applies to the heading only; account dimming is local. Replace Claude-only group accents with each provider's existing color. Reset button defaults without removing a visible `:focus-visible` treatment. Long tags may ellipsize within their allotted label area; details preserve the complete published capped tag. Do not clip the countdown or hide rows to fit.
+- [x] Apply `quotaReadout` to both text and bar creation. Keep countdown and percentage at normal weight and shared baseline, with the specified colors. Group collection staleness applies to the heading only; account dimming is local. Replace Claude-only group accents with each provider's existing color. Reset button defaults without removing a visible `:focus-visible` treatment. Long tags may ellipsize within their allotted label area; details preserve the complete published capped tag. Do not clip the countdown or hide rows to fit.
 
-- [ ] Include density, issue, age cue, historical flag, and fill visibility in `railRenderSignature`, alongside identity/window/active information already tracked. Preserve the signature's stability between visible changes. Add assertions that stale-age and reset crossings change it without a source update.
+- [x] Include density, issue, age cue, historical flag, and fill visibility in `railRenderSignature`, alongside identity/window/active information already tracked. Preserve the signature's stability between visible changes. Add assertions that stale-age and reset crossings change it without a source update.
 
-- [ ] Run `bun test test/strip-quota.test.ts test/strip-rail.test.ts` and `bun run typecheck`. Deliverable: the real renderer uses the approved layout and one preset setting. Native-size fit is verified in Task 7, not inferred from fake-DOM tests. Suggested commit: `feat: render condensed quota accounts with density presets`.
+- [x] Run `bun test test/strip-quota.test.ts test/strip-rail.test.ts` and `bun run typecheck`. Deliverable: the real renderer uses the approved layout and one preset setting. Native-size fit is verified in Task 7, not inferred from fake-DOM tests. Suggested commit: `feat: render condensed quota accounts with density presets`.
 
 ### Task 6: Add account-specific, read-only details and safe tap handling
 
@@ -404,7 +404,7 @@ export function createQuotaDetailsController(options: {
 }): QuotaDetailsController;
 ```
 
-- [ ] Add pure tests showing that `{provider: "codex", accountId: ID}` resolves that ID after reordering, never a sibling; missing IDs return null; an ambient target resolves only an ambient meter; one identified account preserves its ID in single form. Construct models using synthetic windows and normalized issues. Assert all windows/reset values, numeric title, source measurement age, and `Active account is not reported` for Codex null activity. Include `auth_required`, `rate_limited`, historical windows, and unknown resets.
+- [x] Add pure tests showing that `{provider: "codex", accountId: ID}` resolves that ID after reordering, never a sibling; missing IDs return null; an ambient target resolves only an ambient meter; one identified account preserves its ID in single form. Construct models using synthetic windows and normalized issues. Assert all windows/reset values, numeric title, source measurement age, and `Active account is not reported` for Codex null activity. Include `auth_required`, `rate_limited`, historical windows, and unknown resets.
 
   ```ts
   test("a removed account never retargets to another row", () => {
@@ -414,33 +414,35 @@ export function createQuotaDetailsController(options: {
   });
   ```
 
-- [ ] Run `bun test test/strip-quota-details.test.ts` and confirm failures before implementing details.
+- [x] Run `bun test test/strip-quota-details.test.ts` and confirm failures before implementing details.
 
-- [ ] Implement the model from published fields only. Display every window's percentage/reset together and label history as last measured. For Claude auth use guidance such as `Renew this saved sign-in through cswap.` For generic failure explain that collection is unavailable without prescribing re-login. For rate limit explain that source retry/backoff controls the next measurement. Activity copy means source switcher selection, not every running agent. Use `textContent` for all DOM output.
+- [x] Implement the model from published fields only. Display every window's percentage/reset together and label history as last measured. For Claude auth use guidance such as `Renew this saved sign-in through cswap.` For generic failure explain that collection is unavailable without prescribing re-login. For rate limit explain that source retry/backoff controls the next measurement. Activity copy means source switcher selection, not every running agent. Use `textContent` for all DOM output.
 
-- [ ] Build an overlay following `.sheet-overlay`/`.action-sheet` conventions, with `role="dialog"`, `aria-modal="true"`, title, close button, and outside-tap dismissal. Include no refresh, switch, login, shell, or credential action. Bound the detail body within the viewport; scrolling here is acceptable for all windows and must not page the board.
+- [x] Build an overlay following `.sheet-overlay`/`.action-sheet` conventions, with `role="dialog"`, `aria-modal="true"`, title, close button, and outside-tap dismissal. Include no refresh, switch, login, shell, or credential action. Bound the detail body within the viewport; scrolling here is acceptable for all windows and must not page the board.
 
-- [ ] Implement the controller's detail lifecycle and instantiate it from `main.ts` beside the action sheet lifecycle. `beforeOpen` dismisses the session action sheet; opening a session action sheet calls the quota controller's `dismiss`. Only one overlay is open at once. Escape dismisses the current overlay; focus enters the close button, stays inside the dialog, and returns to the originating meter resolved by provider/ID after any rail rerender. If the account disappeared, restore to a safe focusable rail root. Clear the detail target on dismissal so a later source update cannot reopen it. `refresh` re-resolves the open target and updates changed content; `dispose` removes listeners and closes the overlay.
+- [x] Implement the controller's detail lifecycle and instantiate it from `main.ts` beside the action sheet lifecycle. `beforeOpen` dismisses the session action sheet; opening a session action sheet calls the quota controller's `dismiss`. Only one overlay is open at once. Escape dismisses the current overlay; focus enters the close button, stays inside the dialog, and returns to the originating meter resolved by provider/ID after any rail rerender. If the account disappeared, restore to a safe focusable rail root. Clear the detail target on dismissal so a later source update cannot reopen it. `refresh` re-resolves the open target and updates changed content; `dispose` removes listeners and closes the overlay.
 
-- [ ] The controller wires rail events on `#rail`, which is outside `#paging-region` and `#pager`. Capture the provider/account target on pointer-down and resolve it again when the tap settles; cancel if a different/removed target is under the release or the stroke is canceled. `main.ts` skips rail DOM replacement while `isPressing()` is true, leaving the render signature uncommitted; `afterPress` reruns `renderRailNow` after click/cancel settlement. Keyboard-generated button clicks resolve directly. Keep the newest data by target while a detail view is open and dismiss if that target is removed. Do not modify the board gesture recognizer or invoke its paging functions.
+- [x] The controller wires rail events on `#rail`, which is outside `#paging-region` and `#pager`. Capture the provider/account target on pointer-down and resolve it again when the tap settles; cancel if a different/removed target is under the release or the stroke is canceled. `main.ts` skips rail DOM replacement while `isPressing()` is true, leaving the render signature uncommitted; `afterPress` reruns `renderRailNow` after click/cancel settlement. Keyboard-generated button clicks resolve directly. Keep the newest data by target while a detail view is open and dismiss if that target is removed. Do not modify the board gesture recognizer or invoke its paging functions.
 
-- [ ] Run `bun test test/strip-quota-details.test.ts test/strip-rail.test.ts test/strip-action-sheet.test.ts test/strip-gesture-target.test.ts` and `bun run typecheck`. Test pure targeting and DOM content in Bun; verify real event propagation, Escape/outside-tap/focus, and pointer-update races in the browser in Task 7. Deliverable: each meter opens its own safe details without affecting sessions. Suggested commit: `feat: add read-only quota account details`.
+- [x] Run `bun test test/strip-quota-details.test.ts test/strip-rail.test.ts test/strip-action-sheet.test.ts test/strip-gesture-target.test.ts` and `bun run typecheck`. Test pure targeting and DOM content in Bun; verify real event propagation, Escape/outside-tap/focus, and pointer-update races in the browser in Task 7. Deliverable: each meter opens its own safe details without affecting sessions. Suggested commit: `feat: add read-only quota account details`.
 
 ### Task 7: Verify integrated rendering, document behavior, and record installed acceptance
+
+Execution note: local browser bootstrap uses the unchanged production `main.ts` with a synthetic native host boundary. Native shell launch, coordinated installation, scheduled-refresh observation, and physical acceptance remain pending; see [verification record](2026-09-08-multi-account-quota-verification.md). Browser interaction checks passed in Chromium and WebKit. The combined interaction/native-shell checkbox below remains open solely for native acceptance.
 
 **Files:** create `scripts/quota-preview.ts`; update `README.md`, `docs/assets/dealerboard-strip.png`, and synthetic fixtures under `test/fixtures/quota/`; add a concise implementation verification record at `docs/superpowers/plans/2026-09-08-multi-account-quota-verification.md` when executing.
 
 **Interfaces:** Use production `reduceQuotaRead`, `renderRail`, `renderBoard`, card rendering, and detail components. The preview script is a synthetic harness with no live provider subprocesses or production-path writes. It builds a temporary browser entry with Bun, serves it on loopback, and imports the real stylesheet; it is not another hand-built HTML quota mockup.
 
-- [ ] Make `bun scripts/quota-preview.ts` serve a full 2560 × 720 synthetic board/rail, print the loopback URL, and clean up its temporary generated assets on shutdown. Expose controls outside the screenshot canvas for density, account count, time advance, and these normalized scenarios: healthy; exhausted waiting account; auth required; unavailable with future reset; stale after reset; unknown reset; long scoped tags. Controls pass `quotaDensity` to the renderer and `now` to the model, without changing the application default.
+- [x] Make `bun scripts/quota-preview.ts` serve a full 2560 × 720 synthetic board/rail, print the loopback URL, and clean up its temporary generated assets on shutdown. Expose controls outside the screenshot canvas for density, account count, time advance, and these normalized scenarios: healthy; exhausted waiting account; auth required; unavailable with future reset; stale after reset; unknown reset; long scoped tags. Controls pass `quotaDensity` to the renderer and `now` to the model, without changing the application default.
 
-- [ ] Use a real browser at 2560 × 720 to check comfortable with 2 Claude + 2 Codex + Kimi + GLM + Qwen, and compact with 4 Claude + 4 Codex + the same three singles. Include token chart and unread block. Test both normal and fullscreen rail padding. Assert the quota zone and each row/readout remain inside the rail and do not overlap; inspect screenshots because bounding boxes alone do not establish readability. Check `100%`, hours/minutes and days, maximum capped scoped labels, age cues, and `Sign in again` at both densities. No hidden accounts, rail scrolling, or automatic shrinking.
+- [x] Use a real browser at 2560 × 720 to check comfortable with 2 Claude + 2 Codex + Kimi + GLM + Qwen, and compact with 4 Claude + 4 Codex + the same three singles. Include token chart and unread block. Test both normal and fullscreen rail padding. Assert the quota zone and each row/readout remain inside the rail and do not overlap; inspect screenshots because bounding boxes alone do not establish readability. Check `100%`, hours/minutes and days, maximum capped scoped labels, age cues, and `Sign in again` at both densities. No hidden accounts, rail scrolling, or automatic shrinking.
 
 - [ ] Instantiate `createQuotaDetailsController` in the preview with the same getter, before-open, after-press, and render-deferral wiring as `main.ts`. Verify close/outside-tap/Escape, keyboard focus restoration after rail rerender, touch/mouse opening the correct account, and a countdown/snapshot update between pointer-down/up. While details are open, verify no board paging or session action occurs; after dismissal, existing board gestures still work. Check app bootstrap wiring in the Tauri development shell (`bun run dev:app`); the synthetic preview provides deterministic data and exercises the production controller rather than a second set of mock interaction handlers. Record which environment supplied each proof.
 
-- [ ] Update README quota documentation: CodexBar all-account discovery; cswap saved sign-in recovery; numeric identity limitations and unknown Codex activity; countdown-first readout and source age; `QUOTA_DENSITY` location/default. Explain that v3 ignores old quota snapshots until recollection and the app/daemon must be installed together. Replace the README screenshot from the real renderer using only synthetic session/account data.
+- [x] Update README quota documentation: CodexBar all-account discovery; cswap saved sign-in recovery; numeric identity limitations and unknown Codex activity; countdown-first readout and source age; `QUOTA_DENSITY` location/default. Explain that v3 ignores old quota snapshots until recollection and the app/daemon must be installed together. Replace the README screenshot from the real renderer using only synthetic session/account data.
 
-- [ ] Run the required repository gates once after the final changes:
+- [x] Run the required repository gates once after the final changes:
 
   ```sh
   bun run typecheck
@@ -453,7 +455,7 @@ export function createQuotaDetailsController(options: {
 
   `bun run check` includes Biome, the daemon/plugin build, and Bun tests; it does not exercise the Rust host or build the web frontend. The extra app gates above come from README. Record exit results and any concrete outstanding failures; do not claim installed success from these checks.
 
-- [ ] Record the reviewable local result: source revision/diff, focused and required check results, both native-density screenshots, interaction results, and source-contract limitations. Suggested commit: `docs: verify and document multi-account quota rail`. Do not publish or install as part of merely drafting this plan.
+- [x] Record the reviewable local result: source revision/diff, focused and required check results, both native-density screenshots, interaction results, and source-contract limitations. Suggested commit: `docs: verify and document multi-account quota rail`. Do not publish or install as part of merely drafting this plan.
 
 - [ ] When installation is authorized, build/install both artifacts using the established commands:
 
