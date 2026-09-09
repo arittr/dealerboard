@@ -26,6 +26,9 @@ export const ACCOUNT_STALE_AGE_MS = { codex: 6 * 60_000, claude: 45 * 60_000 } a
 
 export type QuotaPanelState = "ok" | "stale" | "unavailable";
 
+/** A rail meter's stable interaction identity; ambient provider readings have no account. */
+export type QuotaTarget = { provider: QuotaProviderKey; accountId: string | null };
+
 export type QuotaWindowModel = {
   /** Pill tag: "session", "weekly", or an extra window's published label. */
   tag: string;

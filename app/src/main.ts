@@ -80,6 +80,7 @@ import { elapsedLabel, livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulse
 import { createDeferredLatest, createPagingSession, type DragSettle, type PageDirection } from "./paging";
 import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
+import { QUOTA_DENSITY } from "./quota-density";
 import { railRenderSignature, renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
@@ -186,6 +187,7 @@ const renderRailNow = (): void => {
     degraded: currentView.degraded,
     unreadCount: countUnreadSessions(currentView.snapshot),
     quota: currentQuota,
+    quotaDensity: QUOTA_DENSITY,
     tokens: currentTokenUsage,
     now: new Date(nowMs),
   };
