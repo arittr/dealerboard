@@ -130,7 +130,7 @@ export type QuotaCollector = {
 };
 
 type FetchOutcome =
-  | { kind: "ok"; reading: ProviderQuotaReading }
+  | { kind: "ok"; reading: ProviderQuotaReading; fetchedAt?: string }
   /** Binary missing or provider disabled in CodexBar — the panel disappears. */
   | { kind: "absent" }
   | { kind: "failed" };
@@ -387,7 +387,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
       return null;
     }
     if (outcome.kind === "ok") {
-      const fetchedAt = now();
+      const fetchedAt = outcome.fetchedAt ?? now();
       // The history ring records the session window only — a weekly-only
       // reading leaves the ring untouched.
       const history =
@@ -517,7 +517,7 @@ export const createQuotaCollector = (dependencies: QuotaCollectorDependencies): 
       } else {
         const outcome: FetchOutcome =
           codexRead.kind === "ok" && codexRead.ambient !== null
-            ? { kind: "ok", reading: codexRead.ambient.reading }
+            ? { kind: "ok", ...codexRead.ambient }
             : exec === null || (codexRead.kind === "ok" && codexRead.completeInventory)
               ? { kind: "absent" }
               : { kind: "failed" };

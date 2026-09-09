@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { reduceQuotaRead, STALE_QUOTA_AGE_MS } from "../app/src/quota";
 import { parseClaudeSwapAccounts } from "../src/core/claude-swap-quota";
 import { codexAccountId } from "../src/core/codexbar-accounts";
 import type { DiagnosticRecord } from "../src/core/diagnostics";
@@ -395,6 +396,88 @@ describe("createQuotaCollector", () => {
     });
     expect(harness.diagnostics.filter((d) => d.provider === "codex")).toHaveLength(1);
   });
+
+  test("cached anonymous Codex reads keep source age and become stale through the reducer", async () => {
+    const fetchedAt = "2026-09-08T18:00:00.000Z";
+    const sourceMs = Date.parse(fetchedAt);
+    let currentMs = sourceMs + QUOTA_POLL_INTERVAL_MS;
+    const harness = makeHarness({}, { now: () => new Date(currentMs).toISOString() });
+    const source = JSON.parse(fixture("codexbar-codex.json"));
+    source[0].usage.updatedAt = fetchedAt;
+    harness.respondRaw("codex", { exitCode: 0, stdout: JSON.stringify(source) });
+    const collector = createQuotaCollector(harness.deps);
+    for (let pass = 1; pass <= 4; pass++) {
+      await collector.pollNow();
+      const contents = harness.writes().at(-1) ?? "null";
+      const snapshot = parseQuotaSnapshot(JSON.parse(contents));
+      expect(snapshot.providers.codex).toMatchObject({ fetchedAt, unavailable: false, accounts: [] });
+      expect(snapshot.providers.codex?.history).toEqual(
+        Array.from({ length: pass }, () => ({ fetchedAt, fractionRemaining: 0.7 })),
+      );
+      expect(
+        reduceQuotaRead({ contents, mtimeMs: currentMs }, currentMs).find((p) => p.provider === "codex"),
+      ).toMatchObject({ fetchedAtMs: sourceMs, state: currentMs - sourceMs > STALE_QUOTA_AGE_MS ? "stale" : "ok" });
+      for (const provider of ["kimi", "zai", "qwen"] as const) {
+        expect(snapshot.providers[provider]?.fetchedAt).toBe(new Date(currentMs).toISOString());
+      }
+      currentMs += QUOTA_POLL_INTERVAL_MS;
+    }
+    expect(harness.diagnostics).toEqual([]);
+  });
+
+  test.each(["cold", "ambient", "named"] as const)(
+    "anonymous success plus error is unavailable and retains last-good %s state",
+    async (initial) => {
+      const harness = makeHarness();
+      const collector = createQuotaCollector(harness.deps);
+      if (initial !== "cold") {
+        if (initial === "named") {
+          harness.respondRaw("codex", { exitCode: 0, stdout: fixture("codexbar-accounts.json") });
+        }
+        await collector.pollNow();
+      }
+      const before =
+        initial === "cold"
+          ? undefined
+          : parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? "null")).providers.codex;
+      const source = JSON.parse(fixture("codexbar-codex.json"));
+      source[0].usage.extraRateWindows[0].window.usedPercent = 1;
+      source.push({ provider: "codex", error: { code: 1, kind: "provider", message: "private anonymous error" } });
+      harness.respondRaw("codex", { exitCode: 1, stdout: JSON.stringify(source) });
+      await collector.pollNow();
+      await collector.pollNow();
+      const contents = harness.writes().at(-1) ?? "null";
+      const after = parseQuotaSnapshot(JSON.parse(contents)).providers.codex;
+      if (initial === "cold") {
+        expect(after).toMatchObject({
+          unavailable: true,
+          fetchedAt: null,
+          percentRemaining: null,
+          history: [],
+          accounts: [],
+        });
+      } else {
+        if (before === undefined) throw new Error("expected last-good Codex publication");
+        if (initial === "ambient") {
+          expect(after).toEqual({ ...before, unavailable: true });
+        } else {
+          expect(after).toEqual({
+            ...before,
+            accounts: before.accounts.map((account) => ({ ...account, unavailable: true, issue: "unavailable" })),
+          });
+        }
+      }
+      const panel = reduceQuotaRead({ contents, mtimeMs: Date.parse(NOW) }, Date.parse(NOW)).find(
+        (p) => p.provider === "codex",
+      );
+      if (initial === "named") expect(panel?.accounts.every((account) => account.state === "unavailable")).toBe(true);
+      else expect(panel?.state).toBe("unavailable");
+      expect(harness.diagnostics.filter((record) => record.provider === "codex")).toEqual([
+        { timestamp: NOW, component: "quota", code: "quota_accounts_failed", provider: "codex" },
+      ]);
+      expect(JSON.stringify([contents, harness.diagnostics])).not.toContain("private anonymous error");
+    },
+  );
 
   test("anonymous and widget readings cannot rescue named Codex rows, including a lone account", async () => {
     const widget = JSON.stringify({
@@ -925,7 +1008,11 @@ describe("createQuotaCollector", () => {
     await collector.pollNow();
     await collector.pollNow();
     const snapshot = parseQuotaSnapshot(JSON.parse(harness.writes().at(-1) ?? ""));
-    expect(snapshot.providers["codex"]).toMatchObject({ percentRemaining: 70, unavailable: true, fetchedAt: NOW });
+    expect(snapshot.providers["codex"]).toMatchObject({
+      percentRemaining: 70,
+      unavailable: true,
+      fetchedAt: "2030-01-01T00:00:00.000Z",
+    });
     expect(snapshot.providers["codex"]?.history.length).toBe(1);
     expect(snapshot.providers["kimi"]?.unavailable).toBe(false);
     const failures = harness.diagnostics.filter(

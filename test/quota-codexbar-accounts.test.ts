@@ -145,6 +145,26 @@ describe("parseCodexbarAccounts", () => {
     });
   });
 
+  test.each([0, 1])("anonymous success plus source error cannot become ambient on exit %i", (exitCode) => {
+    const success = { ...codexRecord("", 30), account: undefined };
+    const failure = { provider: "codex", error: { code: 1, kind: "provider", message: "private failure" } };
+    for (const records of [
+      [success, failure],
+      [failure, success],
+    ]) {
+      expect(parseCodexbarAccounts(JSON.stringify(records), exitCode, [])).toEqual({
+        kind: "ok",
+        accounts: [],
+        completeInventory: false,
+        inventoryObserved: false,
+        ambient: null,
+      });
+    }
+    expect(
+      parseCodexbarAccounts(JSON.stringify([success, { ...failure, provider: "claude" }]), exitCode, []),
+    ).toMatchObject({ ambient: { fetchedAt: "2026-09-08T18:00:00.000Z" } });
+  });
+
   test("returns identified source errors as unavailable without leaking raw source fields", () => {
     const source = [
       codexRecord("success", 10),

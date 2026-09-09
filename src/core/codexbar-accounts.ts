@@ -72,6 +72,7 @@ export const parseCodexbarAccounts = (
 
   const candidates: IdentifiedCandidate[] = [];
   const anonymousSuccesses: Array<{ reading: ProviderQuotaReading; fetchedAt: string }> = [];
+  let codexRecordCount = 0;
   let malformed = false;
   let anonymous = false;
 
@@ -83,6 +84,7 @@ export const parseCodexbarAccounts = (
       malformed = true;
       continue;
     }
+    codexRecordCount++;
     const account = entry["account"];
     const label = typeof account === "string" ? account.trim() : "";
     const error = entry["error"];
@@ -161,7 +163,7 @@ export const parseCodexbarAccounts = (
     inventoryObserved &&
     candidates.every((candidate) => !candidate.error && candidate.reading !== null);
   const ambient =
-    candidates.length === 0 && previous.length === 0 && anonymousSuccesses.length === 1 && !malformed
+    codexRecordCount === 1 && previous.length === 0 && anonymousSuccesses.length === 1 && !malformed
       ? (anonymousSuccesses[0] ?? null)
       : null;
   return { kind: "ok", accounts, completeInventory, inventoryObserved, ambient };

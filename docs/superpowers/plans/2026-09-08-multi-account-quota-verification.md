@@ -1,8 +1,10 @@
 # Multi-account quota implementation verification
 
 Local verification: 2026-09-09, branch `feat/multi-account-quota`. Feature base
-`44eb544`; Tasks 1–6 end at `529f62d`. Task 7's source is the commit containing
-this record (inspect with `git log -1 --format=%H -- docs/superpowers/plans/2026-09-08-multi-account-quota-verification.md` and `git show`).
+`44eb544`; Tasks 1–6 end at `529f62d`. Task 7's production source is `20b216e`,
+with the final browser driver correction at `25191a5`. The final backend fix is
+the commit containing this revised record (inspect with
+`git log -1 --format=%H -- docs/superpowers/plans/2026-09-08-multi-account-quota-verification.md` and `git show`).
 The complete review diff is `git diff 44eb544..HEAD`.
 
 ## Evidence boundary
@@ -72,14 +74,17 @@ named density values, token/unread geometry, or rail padding.
 
 ## Required gates
 
-All six gates ran after the final production implementation edits at `20b216e`.
-The subsequent countdown-race test correction reran both browser drivers and
-focused formatting; unchanged repository/Rust/build gates were not repeated.
+All six gates originally ran after the production implementation edits at
+`20b216e`. Both browser drivers then reran against the corrected countdown-race
+driver at `25191a5`. After final review, the backend-only fix reran `bun run check`
+(including root/app typecheck and the daemon/plugin build) and whitespace checks.
+Frontend, Rust, native bundle, preview, browser driver, and screenshots are
+unchanged from `25191a5`; their earlier evidence remains pinned to those sources.
 
 | Command | Result |
 | --- | --- |
 | `bun run typecheck` | Exit 0; root and app TypeScript |
-| `bun run check` | Exit 0; Biome 145 files, daemon/plugin build, 1434 tests / 6429 expectations |
+| `bun run check` | Exit 0 after final backend fix; Biome 145 files, daemon/plugin build, 1440 tests / 6472 expectations |
 | `bun run build:app` | Exit 0; 37 modules, 87.45 KB frontend |
 | `cargo test --manifest-path app/src-tauri/Cargo.toml` | Exit 0; 11 Rust tests |
 | `bun run bundle:app` | Exit 0; release executable and `Dealerboard.app` bundle built locally |
@@ -103,6 +108,35 @@ descriptive names; the rail signature regression reduces the same raw source
 read just before/after Codex's healthy-to-stale threshold. Focused command
 `bun test test/quota.test.ts test/strip-rail.test.ts`: 96 passed, 0 failed,
 330 expectations.
+
+## Final review fixes
+
+Both Important findings from the whole-branch review at `25191a5` are resolved:
+
+- Anonymous Codex success now carries the adapter's canonical source `fetchedAt`
+  through the collector outcome into the published measurement and session
+  history. A collector-to-reducer regression repeats the same cache at source
+  age 2, 4, 6, and 8 minutes, preserves source time throughout, and proves the
+  real reducer changes from healthy to stale. Kimi, GLM, and Qwen still use their
+  existing collection timestamps; named accounts and Claude retain their prior
+  behavior.
+- Ambient eligibility now counts all relevant Codex records, including source
+  errors, and requires exactly one eligible anonymous record. Parser regressions
+  reject success-plus-anonymous-error in both orders on exit 0 and exit 1 while
+  ignoring unrelated providers. Collector/reducer regressions prove cold
+  unavailable state, unchanged last-good ambient/named measurements, one fixed
+  failure diagnostic across repeated failed reads, and no raw error leakage.
+
+Focused regression command:
+`bun test test/quota-codexbar-accounts.test.ts test/quota.test.ts --test-name-pattern 'cached anonymous|anonymous success plus'`:
+6 passed, 0 failed, 43 expectations. Before implementation, 5 failed for the
+reported defects and the existing named-account retention case passed.
+
+Covering command:
+`bun test test/quota-codexbar-accounts.test.ts test/quota-codexbar.test.ts test/quota-accounts.test.ts test/quota-claude-swap.test.ts test/quota.test.ts test/strip-quota.test.ts`:
+164 passed, 0 failed, 467 expectations. The subsequent full check also covers the
+final test type-narrowing correction. No production provider calls, installation,
+authentication, new dependencies, UI changes, or native changes were involved.
 
 ## Separately pending acceptance
 
