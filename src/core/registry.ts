@@ -1483,21 +1483,14 @@ export const syncCodexSubagents = (db: Database, children: readonly CodexSubagen
     const current = db.query("PRAGMA data_version").get() as { data_version: number };
     if (current.data_version !== dataVersion) return 0;
     let changed = 0;
+    const stopped: { sessionId: string; observedAt: string }[] = [];
     for (const child of children) {
       const parent = getRow(db, "codex", child.parentSessionId);
       const existing = getRow(db, "codex", child.sessionId);
       if (parent === null || (existing !== null && existing.parent_session_id !== child.parentSessionId)) continue;
       const turn = child.turn;
-      if (turn?.status === "stopped") {
-        if (existing !== null && existing.updated_at <= turn.observedAt) {
-          changed += db.run("DELETE FROM active_sessions WHERE provider = 'codex' AND session_id = ?", [
-            child.sessionId,
-          ]).changes;
-        }
-        continue;
-      }
       if (existing === null) {
-        if (turn === null || turn.startedAt < parent.opened_at) continue;
+        if (turn === null || turn.status !== "working" || turn.startedAt < parent.opened_at) continue;
         const result = applySubagentStart(db, {
           kind: "SubagentStart",
           provider: "codex",
@@ -1528,8 +1521,17 @@ export const syncCodexSubagents = (db: Database, children: readonly CodexSubagen
           child.transcriptPath,
         ],
       ).changes;
+      if (turn?.status === "stopped" && existing !== null && existing.updated_at <= turn.observedAt) {
+        stopped.push({ sessionId: child.sessionId, observedAt: turn.observedAt });
+        changed += db.run(
+          `UPDATE active_sessions SET status = 'idle',
+          status_since = CASE WHEN status IS NOT 'idle' THEN ? ELSE status_since END, updated_at = ?
+          WHERE provider = 'codex' AND session_id = ? AND (status IS NOT 'idle' OR updated_at < ?)`,
+          [turn.observedAt, turn.observedAt, child.sessionId, turn.observedAt],
+        ).changes;
+      }
       if (
-        turn !== null &&
+        turn?.status === "working" &&
         (existing === null ||
           existing.updated_at <= turn.observedAt ||
           (existing.status === "idle" && existing.updated_at === existing.opened_at))
@@ -1541,5 +1543,22 @@ export const syncCodexSubagents = (db: Database, children: readonly CodexSubagen
         ).changes;
       }
     }
+    // A turn ending says nothing about its descendants. Remove confirmed
+    // stopped leaves first, then their stopped ancestors; unknown or live
+    // descendants keep an intermediate parent available for projection.
+    let removed: number;
+    do {
+      removed = 0;
+      for (const child of stopped) {
+        removed += db.run(
+          `DELETE FROM active_sessions
+          WHERE provider = 'codex' AND session_id = ? AND updated_at <= ?
+          AND NOT EXISTS (SELECT 1 FROM active_sessions AS descendant
+            WHERE descendant.provider = 'codex' AND descendant.parent_session_id = ?)`,
+          [child.sessionId, child.observedAt, child.sessionId],
+        ).changes;
+      }
+      changed += removed;
+    } while (removed > 0);
     return changed;
   });

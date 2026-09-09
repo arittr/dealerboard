@@ -270,3 +270,36 @@ test("rollout scanning progresses past a message larger than its per-pass budget
   await runPass();
   expect(row()).toBeNull();
 });
+
+test("retains a stopped intermediate child until its nested child also stops", async () => {
+  const grandchildPath = join(home, "grandchild.jsonl");
+  codex.run("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, 0)", [
+    "grandchild",
+    JSON.stringify({ subagent: { thread_spawn: { parent_thread_id: "child" } } }),
+    "/root/artifact_image_builds/verify",
+    "Curie",
+    "gpt-5.6-sol",
+    grandchildPath,
+  ]);
+  writeFileSync(
+    grandchildPath,
+    `${JSON.stringify({ type: "session_meta", payload: { id: "grandchild" } })}\n${event("task_started", "grandchild-turn", 5)}`,
+  );
+  applyRegistryEvents(
+    db,
+    decodeNativeHook("codex", { hook_event_name: "SubagentStart", session_id: "child", agent_id: "grandchild" }, at(6)),
+  );
+  appendFileSync(rolloutPath, event("task_complete", "turn-1", 7));
+  await runPass();
+  expect(
+    db
+      .query("SELECT session_id, status FROM active_sessions WHERE parent_session_id IS NOT NULL ORDER BY session_id")
+      .all(),
+  ).toEqual([
+    { session_id: "child", status: "idle" },
+    { session_id: "grandchild", status: "working" },
+  ]);
+  appendFileSync(grandchildPath, event("task_complete", "grandchild-turn", 8));
+  await runPass();
+  expect(db.query("SELECT session_id FROM active_sessions WHERE parent_session_id IS NOT NULL").all()).toEqual([]);
+});
