@@ -9,14 +9,12 @@
 
 import type { QuotaProviderKey } from "../../src/quota-snapshot";
 import {
-  bindingResetPending,
   bindingWindow,
-  formatBindingNote,
-  formatBindingPercent,
   formatBindingTag,
   type QuotaMeterModel,
   type QuotaPanelModel,
   quotaBarColor,
+  quotaReadout,
   secondaryWindows,
 } from "./quota";
 import {
@@ -164,13 +162,13 @@ export type QuotaRenderAccount = {
 };
 
 export type QuotaRenderModel =
-  | { provider: QuotaProviderKey; grouped: false; meter: QuotaPanelModel }
-  | { provider: "claude"; grouped: true; meters: readonly QuotaRenderAccount[] };
+  | { provider: QuotaProviderKey; grouped: false; meter: QuotaMeterModel }
+  | { provider: QuotaProviderKey; grouped: true; meters: readonly QuotaRenderAccount[] };
 
 export const quotaRenderModel = (panel: QuotaPanelModel): QuotaRenderModel =>
-  panel.provider === "claude" && panel.accounts.length >= 2
+  (panel.provider === "claude" || panel.provider === "codex") && panel.accounts.length >= 2
     ? {
-        provider: "claude",
+        provider: panel.provider,
         grouped: true,
         meters: panel.accounts.map((account) => ({
           id: account.id,
@@ -179,7 +177,7 @@ export const quotaRenderModel = (panel: QuotaPanelModel): QuotaRenderModel =>
           meter: account,
         })),
       }
-    : { provider: panel.provider, grouped: false, meter: panel };
+    : { provider: panel.provider, grouped: false, meter: panel.accounts[0] ?? panel };
 
 const quotaProviderIdentity = (provider: QuotaProviderKey): HTMLElement[] => {
   const chip = document.createElement("span");
@@ -207,21 +205,19 @@ const quotaMeter = (meter: QuotaMeterModel, nowMs: number, leading: readonly HTM
   }
   const right = document.createElement("span");
   right.className = "quota-right";
-  // An unavailable meter keeps its last-good percent (dimmed by the state
-  // opacity) only while the binding reset is pending; once it passes the
-  // number is spent and the muted note stands alone.
-  const showPercent = meter.state !== "unavailable" || bindingResetPending(meter, nowMs);
-  const note = formatBindingNote(meter, nowMs);
-  if (note !== "") {
+  const readout = quotaReadout(meter, nowMs);
+  if (readout.note !== "") {
     const noteSpan = document.createElement("span");
     noteSpan.className = "quota-note";
-    noteSpan.textContent = showPercent ? `${note} ·` : note;
+    noteSpan.textContent = `${readout.note}${readout.ageCue === null ? "" : ` · ${readout.ageCue}`}${
+      readout.percent === null ? "" : " ·"
+    }`;
     right.append(noteSpan);
   }
-  if (showPercent) {
+  if (readout.percent !== null) {
     const pct = document.createElement("span");
     pct.className = "quota-pct";
-    pct.textContent = formatBindingPercent(meter);
+    pct.textContent = readout.percent;
     right.append(pct);
   }
   head.append(right);
@@ -229,7 +225,7 @@ const quotaMeter = (meter: QuotaMeterModel, nowMs: number, leading: readonly HTM
   const bar = document.createElement("div");
   bar.className = "quota-bar";
   const binding = bindingWindow(meter);
-  if (binding !== null) {
+  if (binding !== null && readout.showFill) {
     const fill = document.createElement("div");
     fill.className = "quota-bar-fill";
     fill.style.width = `${Math.max(0, Math.min(100, binding.percentRemaining))}%`;
@@ -254,11 +250,13 @@ const quotaSection = (panel: QuotaPanelModel, nowMs: number): HTMLElement => {
   const section = document.createElement("section");
   section.className = render.grouped ? "rail-quota quota-group" : "rail-quota";
   section.dataset["provider"] = panel.provider;
-  section.dataset["state"] = panel.state;
   if (!render.grouped) {
+    section.dataset["state"] = render.meter.state;
     section.append(quotaMeter(render.meter, nowMs, quotaProviderIdentity(panel.provider)));
     return section;
   }
+
+  section.dataset["state"] = panel.state;
 
   const providerHead = document.createElement("div");
   providerHead.className = "quota-provider-head";
@@ -294,11 +292,11 @@ export const railRenderSignature = (model: RailModel): string => {
   const nowMs = model.now.getTime();
   const meterSignature = (meter: QuotaMeterModel): readonly unknown[] => [
     meter.state,
+    meter.issue,
     formatBindingTag(meter),
-    formatBindingNote(meter, nowMs),
-    formatBindingPercent(meter),
+    quotaReadout(meter, nowMs),
     bindingWindow(meter)?.percentRemaining ?? null,
-    secondaryWindows(meter),
+    quotaReadout(meter, nowMs).showFill ? secondaryWindows(meter) : [],
   ];
   return JSON.stringify({
     degraded: model.degraded,

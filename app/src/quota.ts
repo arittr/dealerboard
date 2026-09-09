@@ -10,6 +10,7 @@ import {
   type ProviderQuota,
   parseQuotaSnapshot,
   QUOTA_PROVIDER_KEYS,
+  type QuotaAccountIssue,
   type QuotaExtraWindow,
   type QuotaHistoryPoint,
   type QuotaProviderKey,
@@ -19,6 +20,9 @@ import type { SnapshotPayload } from "./bridge";
 
 /** Three missed 120s collector passes without a success marks the panel stale. */
 export const STALE_QUOTA_AGE_MS = 3 * 120_000;
+
+/** Source-measurement freshness for identified provider accounts. */
+export const ACCOUNT_STALE_AGE_MS = { codex: 6 * 60_000, claude: 45 * 60_000 } as const;
 
 export type QuotaPanelState = "ok" | "stale" | "unavailable";
 
@@ -35,17 +39,15 @@ export type QuotaMeterModel = {
   /** Index of the binding (lowest-percent) window; null when windows is empty. */
   bindingIndex: number | null;
   state: QuotaPanelState;
+  /** Account failures; ambient provider meters always carry null. */
+  issue: QuotaAccountIssue | null;
   fetchedAtMs: number | null;
 };
 
-export type QuotaAccountState = "ok" | "unavailable";
-
-export type QuotaAccountMeterModel = Omit<QuotaMeterModel, "state"> & {
+export type QuotaAccountMeterModel = QuotaMeterModel & {
   id: string;
   label: string;
   active: boolean | null;
-  /** cswap's fetch health only — the account's reading age never dims its row. */
-  state: QuotaAccountState;
 };
 
 export type QuotaPanelModel = QuotaMeterModel & {
@@ -108,22 +110,37 @@ const meterModel = (quota: QuotaMeterInput, now: number): QuotaMeterModel => {
     windows,
     bindingIndex: selectBindingIndex(windows),
     state: panelState(quota, fetchedAtMs, now),
+    issue: null,
     fetchedAtMs,
   };
+};
+
+const accountMeterModel = (
+  provider: "claude" | "codex",
+  account: ProviderQuota["accounts"][number],
+  now: number,
+): QuotaAccountMeterModel => {
+  const meter = meterModel(account, now);
+  const fetchedAtMs = meter.fetchedAtMs;
+  const state: QuotaPanelState =
+    account.issue !== null || fetchedAtMs === null
+      ? "unavailable"
+      : now - fetchedAtMs > ACCOUNT_STALE_AGE_MS[provider]
+        ? "stale"
+        : "ok";
+  return { id: account.id, label: account.label, active: account.active, ...meter, state, issue: account.issue };
 };
 
 const panelModel = (provider: QuotaProviderKey, quota: ProviderQuota, now: number): QuotaPanelModel => {
   const ambient = meterModel(quota, now);
   const accounts =
-    provider !== "claude" || quota.accounts.length < 2
-      ? []
-      : [...quota.accounts]
-          .sort((a, b) => Number(a.label) - Number(b.label))
-          .map((account) => {
-            const meter = meterModel(account, now);
-            const state: QuotaAccountState = account.unavailable ? "unavailable" : "ok";
-            return { id: account.id, label: account.label, active: account.active, ...meter, state };
-          });
+    provider === "claude"
+      ? quota.accounts.map((account) => accountMeterModel(provider, account, now))
+      : provider === "codex"
+        ? [...quota.accounts]
+            .sort((a, b) => Number(a.label) - Number(b.label))
+            .map((account) => accountMeterModel(provider, account, now))
+        : [];
   return {
     provider,
     ...ambient,
@@ -140,7 +157,16 @@ export const reduceQuotaRead = (read: SnapshotPayload | null, now: number): Quot
   try {
     snapshot = parseQuotaSnapshot(JSON.parse(read.contents));
   } catch {
-    return [];
+    return QUOTA_PROVIDER_KEYS.map((provider) => ({
+      provider,
+      windows: [],
+      bindingIndex: null,
+      state: "unavailable",
+      issue: null,
+      fetchedAtMs: null,
+      history: [],
+      accounts: [],
+    }));
   }
   const models: QuotaPanelModel[] = [];
   for (const provider of QUOTA_PROVIDER_KEYS) {
@@ -215,33 +241,66 @@ const formatDataAge = (fetchedAtMs: number, now: number): string => {
 };
 
 /** Muted right text of the head line: unavailable age or countdown, binding reset countdown, or empty. */
-export const formatBindingNote = (model: QuotaMeterModel, now: number): string => {
-  const binding = bindingWindow(model);
-  if (model.state === "unavailable") {
-    if (model.fetchedAtMs === null || binding === null) {
-      return "unavailable";
-    }
-    // A reset schedule stays trustworthy after the probe stops (the percent
-    // does not), so a pending reset keeps its countdown — bare, like the
-    // ok-state note; once it passes, the last-good numbers are spent and only
-    // the data age remains honest. The age rides along once it crosses the
-    // stale threshold, so an old reading never masquerades as a live one.
-    if (binding.resetAtMs !== null && bindingResetPending(model, now)) {
-      const countdown = formatResetCountdown(binding.resetAtMs, now);
-      return now - model.fetchedAtMs > STALE_QUOTA_AGE_MS
-        ? `${countdown} · ${formatDataAge(model.fetchedAtMs, now)}`
-        : countdown;
-    }
-    return formatDataAge(model.fetchedAtMs, now);
-  }
-  if (binding === null || binding.resetAtMs === null) {
-    return "";
-  }
-  if (binding.resetAtMs <= now) {
-    return "resetting…";
-  }
-  return formatResetCountdown(binding.resetAtMs, now);
+export type QuotaReadout = {
+  note: string;
+  percent: string | null;
+  ageCue: string | null;
+  showFill: boolean;
+  historical: boolean;
 };
+
+/** One visibility decision for a quota meter's text and geometry. */
+export const quotaReadout = (model: QuotaMeterModel, now: number): QuotaReadout => {
+  const binding = bindingWindow(model);
+  if (model.issue === "auth_required") {
+    return { note: "Sign in again", percent: null, ageCue: null, showFill: false, historical: true };
+  }
+  if (binding === null) {
+    return {
+      note: model.fetchedAtMs === null || model.state === "unavailable" ? "unavailable" : "reset unknown",
+      percent: null,
+      ageCue: null,
+      showFill: false,
+      historical: model.state !== "ok",
+    };
+  }
+  const resetPending = bindingResetPending(model, now);
+  const percent = formatPercentRemaining(binding.percentRemaining);
+  if (model.state === "ok") {
+    if (binding.resetAtMs === null) {
+      return { note: "reset unknown", percent, ageCue: null, showFill: true, historical: false };
+    }
+    if (!resetPending) {
+      return { note: "resetting…", percent, ageCue: null, showFill: true, historical: true };
+    }
+    return {
+      note: formatResetCountdown(binding.resetAtMs, now),
+      percent,
+      ageCue: null,
+      showFill: true,
+      historical: false,
+    };
+  }
+  if (resetPending && binding.resetAtMs !== null) {
+    return {
+      note: formatResetCountdown(binding.resetAtMs, now),
+      percent,
+      ageCue: model.fetchedAtMs === null ? null : formatDataAge(model.fetchedAtMs, now),
+      showFill: true,
+      historical: true,
+    };
+  }
+  return {
+    note: model.fetchedAtMs === null ? "unavailable" : formatDataAge(model.fetchedAtMs, now),
+    percent: null,
+    ageCue: null,
+    showFill: false,
+    historical: true,
+  };
+};
+
+/** Legacy note helper for callers that only need the primary text. */
+export const formatBindingNote = (model: QuotaMeterModel, now: number): string => quotaReadout(model, now).note;
 
 /**
  * The non-binding windows in published order — the binding window owns the

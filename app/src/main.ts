@@ -97,6 +97,7 @@ let pulseEntries: ReadonlyMap<string, PulseEntry> = new Map();
 let currentView: SnapshotView | null = null;
 let lastPayload: SnapshotPayload | null = null;
 let currentQuota: QuotaPanelModel[] = [];
+let latestQuotaRead: SnapshotPayload | null = null;
 let currentTokenUsage: TokenUsageRailModel = { state: "hidden" };
 let stalenessTimer: ReturnType<typeof setTimeout> | null = null;
 let currentPage = 0;
@@ -176,12 +177,17 @@ const renderRailNow = (): void => {
   if (root === null || currentView === null) {
     return;
   }
+  const nowMs = Date.now();
+  // Quota account health and reset state are clock-derived. Re-reduce the
+  // latest sidecar payload on the rail tick so cached data ages honestly
+  // between collector reads without adding provider refreshes.
+  currentQuota = reduceQuotaRead(latestQuotaRead, nowMs);
   const model = {
     degraded: currentView.degraded,
     unreadCount: countUnreadSessions(currentView.snapshot),
     quota: currentQuota,
     tokens: currentTokenUsage,
-    now: new Date(),
+    now: new Date(nowMs),
   };
   // Skip the rebuild while nothing rendered would change: the 1s cadence
   // exists only for countdown minute rollovers, and rebuilding every second
@@ -450,7 +456,8 @@ const readAndIngest = async (): Promise<void> => {
  * a rejection is a missing file, i.e. "no data yet".
  */
 const slowPass = async (): Promise<void> => {
-  currentQuota = reduceQuotaRead(await readQuotaSnapshot().catch(() => null), Date.now());
+  latestQuotaRead = await readQuotaSnapshot().catch(() => null);
+  currentQuota = reduceQuotaRead(latestQuotaRead, Date.now());
   currentTokenUsage = reduceTokenUsageRead(await readTokenUsageSnapshot().catch(() => null), Date.now());
   if (lastPayload !== null && currentView !== null && !currentView.degraded) {
     return;

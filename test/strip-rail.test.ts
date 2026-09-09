@@ -11,6 +11,7 @@ const quotaPanel = (overrides: Partial<QuotaPanelModel> = {}): QuotaPanelModel =
   windows: [{ tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 }],
   bindingIndex: 0,
   state: "ok",
+  issue: null,
   fetchedAtMs: NOW - 60_000,
   history: [],
   accounts: [],
@@ -24,6 +25,7 @@ const quotaAccount = (overrides: Partial<QuotaAccountMeterModel> = {}): QuotaAcc
   windows: [{ tag: "session", percentRemaining: 55, resetAtMs: NOW + 90_000 }],
   bindingIndex: 0,
   state: "ok",
+  issue: null,
   fetchedAtMs: NOW - 60_000,
   ...overrides,
 });
@@ -37,6 +39,7 @@ const groupedClaude = (): QuotaPanelModel =>
         label: "2",
         active: true,
         state: "unavailable",
+        issue: "unavailable",
         windows: [
           { tag: "session", percentRemaining: 20, resetAtMs: NOW + 90_000 },
           { tag: "weekly", percentRemaining: 70, resetAtMs: null },
@@ -99,7 +102,7 @@ describe("railRenderSignature", () => {
     expect(
       changed({ ...second, windows: [{ tag: "session", percentRemaining: 54, resetAtMs: NOW + 90_000 }] }),
     ).not.toBe(signature);
-    expect(railRenderSignature(model({ quota: [base], now: new Date(NOW + 20_000) }))).toBe(signature);
+    expect(railRenderSignature(model({ quota: [base], now: new Date(NOW + 20_000) }))).not.toBe(signature);
   });
 });
 
@@ -112,7 +115,23 @@ test("maps grouped Claude to one provider and two stable account meters", () => 
     { id: "claude-swap:1", label: "1", active: false },
     { id: "claude-swap:2", label: "2", active: true },
   ]);
-  expect(quotaRenderModel(quotaPanel())).toMatchObject({ grouped: false, meter: { provider: "claude" } });
+  expect(quotaRenderModel(quotaPanel())).toMatchObject({ grouped: false });
+});
+
+test("a sole account supplies its own reading to the non-grouped render model", () => {
+  const account = quotaAccount({ windows: [{ tag: "session", percentRemaining: 10, resetAtMs: NOW + 90_000 }] });
+  const render = quotaRenderModel(quotaPanel({ accounts: [account] }));
+  expect(render).toMatchObject({ grouped: false, meter: { bindingIndex: 0, windows: [{ percentRemaining: 10 }] } });
+});
+
+test("a sole account applies its own health to the provider section", () => {
+  withFakeDocument((root) => {
+    renderRail(
+      root as unknown as HTMLElement,
+      model({ quota: [quotaPanel({ accounts: [quotaAccount({ state: "unavailable", issue: "unavailable" })] })] }),
+    );
+    expect(descendants(root).find((node) => hasClass(node, "rail-quota"))?.dataset["state"]).toBe("unavailable");
+  });
 });
 
 test("the grouped section carries the ambient panel state", () => {
@@ -164,7 +183,7 @@ test("an unavailable account keeps its dimmed percent while the binding reset is
     expect(nodes.filter((node) => hasClass(node, "quota-pct")).map((node) => node.textContent)).toEqual(["55%", "20%"]);
     expect(nodes.filter((node) => hasClass(node, "quota-note")).map((node) => node.textContent)).toEqual([
       "2m ·",
-      "2m ·",
+      "2m · 1m old ·",
     ]);
   });
 });
