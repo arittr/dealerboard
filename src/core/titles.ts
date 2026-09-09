@@ -48,6 +48,7 @@
 import { Database } from "bun:sqlite";
 import { type FileHandle, open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { type CodexSubagent, createCodexSubagentResolver } from "./codex-subagents";
 import type { SessionActivityLineUpdate, SessionModelUpdate, SessionTitleUpdate, TitleTarget } from "./registry";
 
 export const TAIL_BYTES = 64 * 1024;
@@ -63,6 +64,7 @@ export type FileStat = { mtimeMs: number; size: number };
 
 export type SessionFactsResolverDependencies = {
   codexIndexPath: string;
+  codexDatabasePath: string;
   /** kimi's session index; maps registry session ids to on-disk session dirs. */
   kimiIndexPath: string;
   /** zcode's SQLite store; resolved by the caller (ZCODE_HOME override lives in cli.ts). */
@@ -78,6 +80,7 @@ export type SessionFactsResolverDependencies = {
 
 /** The facts one pass proposes: title, model, and activity-line updates, applied additively. */
 export type SessionFacts = {
+  codexSubagents: CodexSubagent[];
   titles: SessionTitleUpdate[];
   models: SessionModelUpdate[];
   activities: SessionActivityLineUpdate[];
@@ -529,6 +532,7 @@ const readZcodeTitles = (databasePath: string, sessionIds: readonly string[]): M
 };
 
 export const createSessionFactsResolver = (dependencies: SessionFactsResolverDependencies): SessionFactsResolver => {
+  const resolveCodexSubagents = createCodexSubagentResolver(dependencies.codexDatabasePath);
   const statPath = dependencies.statPath ?? defaultStatPath;
   const readTail = dependencies.readTail ?? defaultReadTail;
   const readWhole = dependencies.readWhole ?? defaultReadWhole;
@@ -701,6 +705,10 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
 
   return {
     resolve: async (targets) => {
+      const codexSubagents = await resolveCodexSubagents(
+        targets.filter((target) => target.provider === "codex").map((target) => target.sessionId),
+      );
+      const codexChildIds = new Set(codexSubagents.map((child) => child.sessionId));
       const titles: SessionTitleUpdate[] = [];
       const models: SessionModelUpdate[] = [];
       const activities: SessionActivityLineUpdate[] = [];
@@ -723,7 +731,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
           resolvedActivity = facts.activity;
         } else if (target.provider === "codex") {
           codexById ??= await codexTitles();
-          resolvedTitle = codexById.get(target.sessionId) ?? null;
+          resolvedTitle = codexChildIds.has(target.sessionId) ? null : (codexById.get(target.sessionId) ?? null);
           if (target.transcriptPath !== null) {
             const facts = await codexRolloutFacts(target.transcriptPath);
             resolvedModel = facts.model;
@@ -756,7 +764,7 @@ export const createSessionFactsResolver = (dependencies: SessionFactsResolverDep
           activities.push({ provider: target.provider, sessionId: target.sessionId, activityLine: resolvedActivity });
         }
       }
-      return { titles, models, activities };
+      return { titles, models, activities, codexSubagents };
     },
   };
 };

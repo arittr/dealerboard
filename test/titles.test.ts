@@ -38,6 +38,7 @@ const makeResolver = (seed?: {
   let headReads = 0;
   const resolver = createSessionFactsResolver({
     codexIndexPath: CODEX_INDEX,
+    codexDatabasePath: "/nonexistent/codex/state_5.sqlite",
     kimiIndexPath: KIMI_INDEX,
     zcodeDatabasePath: seed?.zcodeDatabasePath ?? "/nonexistent/zcode/db.sqlite",
     grokSessionsRoot: seed?.grokSessionsRoot ?? "/nonexistent/grok/sessions",
@@ -628,6 +629,7 @@ describe("omp session-file titles", () => {
     // Real filesystem access against synthetic fixture data — no fs fakes.
     const resolver = createSessionFactsResolver({
       codexIndexPath: "/nonexistent/.codex/session_index.jsonl",
+      codexDatabasePath: "/nonexistent/.codex/state_5.sqlite",
       kimiIndexPath: "/nonexistent/.kimi-code/session_index.jsonl",
       zcodeDatabasePath: "/nonexistent/.zcode/cli/db/db.sqlite",
       grokSessionsRoot: "/nonexistent/grok/sessions",
@@ -776,6 +778,7 @@ describe("grok summary.json facts", () => {
       titles: [{ provider: "grok", sessionId: GROK_ID, title: "Pi/OMP Ghostty Activation Spec Review" }],
       models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.6" }],
       activities: [],
+      codexSubagents: [],
     });
   });
 
@@ -807,6 +810,7 @@ describe("grok summary.json facts", () => {
       titles: [],
       models: [],
       activities: [],
+      codexSubagents: [],
     });
   });
 
@@ -830,23 +834,44 @@ describe("grok summary.json facts", () => {
       titles: [{ provider: "grok", sessionId: GROK_ID, title: "After" }],
       models: [{ provider: "grok", sessionId: GROK_ID, model: "grok-4.7" }],
       activities: [],
+      codexSubagents: [],
     });
   });
 
   test("a missing session, missing summary, or malformed JSON resolves nothing and never throws", async () => {
-    expect(await makeResolver().resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+    expect(await makeResolver().resolver.resolve([grokTarget()])).toEqual({
+      titles: [],
+      models: [],
+      activities: [],
+      codexSubagents: [],
+    });
     const emptyGroup = makeResolver({ grokSessionsRoot: GROK_ROOT, lists: { [GROK_ROOT]: [] } });
-    expect(await emptyGroup.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+    expect(await emptyGroup.resolver.resolve([grokTarget()])).toEqual({
+      titles: [],
+      models: [],
+      activities: [],
+      codexSubagents: [],
+    });
     const malformed = makeResolver({
       ...grokSeed("not json"),
       wholes: { [GROK_SUMMARY]: "not json" },
     });
-    expect(await malformed.resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+    expect(await malformed.resolver.resolve([grokTarget()])).toEqual({
+      titles: [],
+      models: [],
+      activities: [],
+      codexSubagents: [],
+    });
   });
 
   test("a summary without facts proposes nothing (never clears)", async () => {
     const { resolver } = makeResolver(grokSeed(JSON.stringify({ info: { id: GROK_ID } })));
-    expect(await resolver.resolve([grokTarget()])).toEqual({ titles: [], models: [], activities: [] });
+    expect(await resolver.resolve([grokTarget()])).toEqual({
+      titles: [],
+      models: [],
+      activities: [],
+      codexSubagents: [],
+    });
   });
 
   test("bounds a stored title to exactly 256 code points, cutting at an astral boundary", async () => {

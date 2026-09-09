@@ -332,13 +332,14 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
       if (childId === undefined) {
         return [];
       }
+      const agentType = firstAllowlistedString(value, SAFE_FIELDS.agentType) ?? null;
       return [
         {
           kind: "SubagentStart",
           provider,
           sessionId: childId,
           parentSessionId: sessionId,
-          title: firstAllowlistedString(value, SAFE_FIELDS.agentType) ?? null,
+          title: provider === "codex" && agentType === "default" ? null : agentType,
           project: projectFromCwd(firstAllowlistedString(value, SAFE_FIELDS.cwd)),
           model: null,
           observedAt: now,

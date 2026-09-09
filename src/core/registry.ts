@@ -51,6 +51,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { Provider, RegistryEvent, SessionOriginKind, SessionStatus } from "../protocol";
+import type { CodexSubagent } from "./codex-subagents";
 import type { EvenerCollectorUpdate } from "./evener";
 import type { PaseoAgentStatus } from "./paseo";
 import { resolvePaseoParentLinks } from "./projection";
@@ -630,14 +631,14 @@ export const listSessions = (db: Database): ActiveSession[] => {
 
 /**
  * The session-facts-resolver view: every top-level row's identity, stored
- * title, model, activity line, and transcript path. Children never carry
- * resolvable titles. Read-only.
+ * title, model, activity line, and transcript path, plus native Codex children
+ * whose rollouts supply the same facts. Read-only.
  */
 export const listTitleTargets = (db: Database): TitleTarget[] =>
   db
     .query(
       `SELECT provider, session_id, title, model, activity_line, transcript_path FROM active_sessions
-       WHERE parent_session_id IS NULL
+       WHERE parent_session_id IS NULL OR provider = 'codex'
        ORDER BY logical_slot ASC`,
     )
     .all()
@@ -1474,4 +1475,71 @@ export const sweepExpiredResults = (db: Database, cutoffIso: string, sweptAt: st
       [sweptAt, cutoffIso],
     );
     return result.changes;
+  });
+
+/** Reconcile recorded Codex turns without refreshing leases from polling time. */
+export const syncCodexSubagents = (db: Database, children: readonly CodexSubagent[], dataVersion: number): number =>
+  inWriteTransaction(db, () => {
+    const current = db.query("PRAGMA data_version").get() as { data_version: number };
+    if (current.data_version !== dataVersion) return 0;
+    let changed = 0;
+    for (const child of children) {
+      const parent = getRow(db, "codex", child.parentSessionId);
+      const existing = getRow(db, "codex", child.sessionId);
+      if (parent === null || (existing !== null && existing.parent_session_id !== child.parentSessionId)) continue;
+      const turn = child.turn;
+      if (turn?.status === "stopped") {
+        if (existing !== null && existing.updated_at <= turn.observedAt) {
+          changed += db.run("DELETE FROM active_sessions WHERE provider = 'codex' AND session_id = ?", [
+            child.sessionId,
+          ]).changes;
+        }
+        continue;
+      }
+      if (existing === null) {
+        if (turn === null || turn.startedAt < parent.opened_at) continue;
+        const result = applySubagentStart(db, {
+          kind: "SubagentStart",
+          provider: "codex",
+          sessionId: child.sessionId,
+          parentSessionId: child.parentSessionId,
+          title: child.title,
+          model: child.model,
+          project: parent.project,
+          observedAt: turn.startedAt,
+        });
+        if (result !== "applied") continue;
+        changed += 1;
+      }
+      changed += db.run(
+        `UPDATE active_sessions SET
+          title = COALESCE(?, title), model = COALESCE(?, model), transcript_path = ?
+          WHERE provider = 'codex' AND session_id = ? AND
+          ((? IS NOT NULL AND title IS NOT ?) OR (? IS NOT NULL AND model IS NOT ?) OR transcript_path IS NOT ?)`,
+        [
+          child.title,
+          child.model,
+          child.transcriptPath,
+          child.sessionId,
+          child.title,
+          child.title,
+          child.model,
+          child.model,
+          child.transcriptPath,
+        ],
+      ).changes;
+      if (
+        turn !== null &&
+        (existing === null ||
+          existing.updated_at <= turn.observedAt ||
+          (existing.status === "idle" && existing.updated_at === existing.opened_at))
+      ) {
+        changed += db.run(
+          `UPDATE active_sessions SET status = 'working', status_since = CASE WHEN status IS NOT 'working' THEN ? ELSE status_since END, updated_at = MAX(updated_at, ?)
+          WHERE provider = 'codex' AND session_id = ? AND (status IS NOT 'working' OR updated_at < ?)`,
+          [turn.startedAt, turn.observedAt, child.sessionId, turn.observedAt],
+        ).changes;
+      }
+    }
+    return changed;
   });

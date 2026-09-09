@@ -48,6 +48,7 @@ import {
   type PaseoSyncState,
   pruneStaleSessions,
   sweepExpiredResults,
+  syncCodexSubagents,
   updateSessionActivityLines,
   updateSessionModels,
   updateSessionTitles,
@@ -178,7 +179,7 @@ export class ProjectionDaemon {
   /** At most one async sweep of each kind in flight; settled results apply on the next poll. */
   private factsInFlight = false;
   private paseoInFlight = false;
-  private pendingFacts: SessionFacts | null = null;
+  private pendingFacts: { facts: SessionFacts; dataVersion: number } | null = null;
   private pendingPaseoStates: readonly PaseoSyncState[] | null = null;
 
   constructor(paths: Pick<AppPaths, "database" | "snapshot">, dependencies: DaemonDependencies = {}) {
@@ -190,7 +191,7 @@ export class ProjectionDaemon {
       schedule: defaultSchedule,
       now: () => new Date().toISOString(),
       nowMs: () => Date.now(),
-      resolveFacts: async () => ({ titles: [], models: [], activities: [] }),
+      resolveFacts: async () => ({ titles: [], models: [], activities: [], codexSubagents: [] }),
       loadPaseo: async () => [],
       applyPaseo: () => 0,
       diagnostics: () => {},
@@ -301,8 +302,15 @@ export class ProjectionDaemon {
     let changed = false;
     try {
       if (this.pendingFacts !== null) {
-        const facts = this.pendingFacts;
+        const { facts, dataVersion } = this.pendingFacts;
         this.pendingFacts = null;
+        // A concurrent hook invalidates lifecycle observations from this sweep.
+        if (
+          facts.codexSubagents.length > 0 &&
+          syncCodexSubagents(this.connection, facts.codexSubagents, dataVersion) > 0
+        ) {
+          changed = true;
+        }
         // The flag is set eagerly per write: each update is its own
         // transaction, so a committed change must force reprojection even
         // if the sibling write throws (own-connection commits never bump
@@ -331,11 +339,12 @@ export class ProjectionDaemon {
       ) {
         this.state.lastTitlePassAtMs = nowMs;
         this.factsInFlight = true;
+        const dataVersion = readDataVersion(this.connection);
         const targets = listTitleTargets(this.connection);
         this.deps
           .resolveFacts(targets)
           .then((facts) => {
-            this.pendingFacts = facts;
+            this.pendingFacts = { facts, dataVersion };
           })
           .catch(() => {
             this.report("maintenance_failed");

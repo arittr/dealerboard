@@ -637,6 +637,7 @@ describe("ProjectionDaemon maintenance", () => {
       resolveFacts: async (seen) => {
         targets.push(...seen);
         return {
+          codexSubagents: [],
           titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }],
           models: [],
           activities: [],
@@ -681,6 +682,7 @@ describe("ProjectionDaemon maintenance", () => {
     startSession("s1");
     const harness = makeHarness({
       resolveFacts: async () => ({
+        codexSubagents: [],
         titles: [],
         models: [{ provider: "claude" as const, sessionId: "s1", model: "claude-fable-5" }],
         activities: [],
@@ -713,6 +715,7 @@ describe("ProjectionDaemon maintenance", () => {
     startSession("s1");
     const harness = makeHarness({
       resolveFacts: async () => ({
+        codexSubagents: [],
         titles: [],
         models: [],
         activities: [{ provider: "claude" as const, sessionId: "s1", activityLine: "Bash git status" }],
@@ -749,7 +752,7 @@ describe("ProjectionDaemon maintenance", () => {
       nowMs: clock.nowMs,
       resolveFacts: async () => {
         resolveCalls += 1;
-        return { titles: [], models: [], activities: [] };
+        return { titles: [], models: [], activities: [], codexSubagents: [] };
       },
     });
     harness.daemon.start();
@@ -911,7 +914,7 @@ describe("ProjectionDaemon maintenance", () => {
       harness.tick();
       // Still in flight: the due cadence does not stack a second sweep.
       expect(resolveCalls).toBe(1);
-      settleFacts({ titles: [], models: [], activities: [] });
+      settleFacts({ titles: [], models: [], activities: [], codexSubagents: [] });
       await settle();
       clock.advance(2_000);
       harness.tick();
@@ -1122,9 +1125,10 @@ describe("ProjectionDaemon maintenance", () => {
       resolveFacts: async () => {
         proposals += 1;
         if (proposals === 1) {
-          return { titles: [], models: [], activities: [] };
+          return { titles: [], models: [], activities: [], codexSubagents: [] };
         }
         return {
+          codexSubagents: [],
           titles: [{ provider: "claude" as const, sessionId: "s1", title: "Resolved from disk" }],
           // 300 code points violates the v6 CHECK (length BETWEEN 1 AND 256),
           // so updateSessionModels throws AFTER the title write committed —

@@ -680,11 +680,20 @@ codex plugin list
   waiting while an approval is pending, back to idle when the turn stops, and
   removed at `SessionEnd`. Every live child increments the tile's descendant
   badge; `SubagentStop` removes that child and its active descendants. Error
-  transitions are not reported (Codex has no `StopFailure` event). A missed
-  `SubagentStop` leaves a stale badge until the parent ends or the row is
-  repaired, and a missed `SessionEnd` leaves a stale session until the
+  transitions are not reported (Codex has no `StopFailure` event). Native children are also reconciled from the local Codex thread index and
+  recorded turns: matching completion or interruption removes a child even
+  when its stop hook is absent, and a new recorded turn restores it. A missed
+  `SessionEnd` leaves a stale session until the
   daemon's 24-hour prune removes it — or `sessions clear` / `sessions prune`
   repairs it first.
+- Native Codex child names come from the task path in
+  `~/.codex/state_5.sqlite`, with the agent nickname as a fallback. The same
+  lookup supplies model and rollout path. The generic `default` profile is
+  not a task title. Child rollout reads are incremental and bounded; missing,
+  incomplete, or unrecognized turn evidence never implies completion.
+  Lifecycle results from a sweep are discarded if a hook changed the registry
+  while the sweep ran. Codex documents that `Interrupt` does not run for
+  subagents, so configuring that hook alone cannot repair this case.
 - Tile titles come from `~/.codex/session_index.jsonl`: the daemon reads the
   thread's `thread_name` and shows it instead of the project name once Codex
   has named the thread.
