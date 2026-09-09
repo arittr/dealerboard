@@ -180,6 +180,7 @@ describe("parseCodexbarAccounts", () => {
       [],
       { code: 1, kind: "provider" },
       { code: "1", kind: "provider", message: "wrong code type" },
+      { code: 1.5, kind: "provider", message: "non-integer code" },
     ]) {
       const parsed = parseCodexbarAccounts(
         JSON.stringify([codexRecord("success", 10), { ...codexRecord("malformed-error", 20), error }]),

@@ -21,7 +21,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isCodexbarError = (value: unknown): value is Record<string, unknown> =>
   isRecord(value) &&
   typeof value["code"] === "number" &&
-  Number.isFinite(value["code"]) &&
+  Number.isSafeInteger(value["code"]) &&
   typeof value["message"] === "string" &&
   (value["kind"] === undefined || value["kind"] === null || typeof value["kind"] === "string");
 
