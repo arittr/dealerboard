@@ -1220,3 +1220,66 @@ body[data-fullscreen] #rail {
   color: #ff4d67;
   font-weight: 700;
 }
+
+/* Read-only quota details share the session sheet surface, with a bounded
+   body so every published window remains reachable on the native strip. */
+.quota-details {
+  top: 4vh;
+  right: 1vw;
+  width: min(38vw, calc(100vw - 2vw));
+  max-height: 92vh;
+  box-sizing: border-box;
+}
+.quota-details .sheet-title {
+  flex-shrink: 0;
+  max-width: none;
+}
+.quota-details-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: 0.6vh 0.6vw;
+  color: #94a3b8;
+  font-size: 1vw;
+  line-height: 1.4;
+}
+.quota-detail-measurement,
+.quota-detail-guidance,
+.quota-detail-heading {
+  margin-top: 1.2vh;
+}
+.quota-detail-guidance {
+  color: #e8eef7;
+}
+.quota-detail-heading {
+  padding-bottom: 0.6vh;
+  border-bottom: 1px solid #2a3342;
+}
+.quota-detail-window {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1vw;
+  padding-top: 1vh;
+}
+.quota-detail-tag {
+  overflow-wrap: anywhere;
+}
+.quota-detail-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3vw;
+  flex-shrink: 0;
+  color: #e8eef7;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+.quota-detail-reset,
+.quota-detail-separator {
+  color: #94a3b8;
+  font-size: 0.875em;
+}
+.quota-details-close {
+  flex-shrink: 0;
+}

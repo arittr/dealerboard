@@ -81,6 +81,7 @@ import { createDeferredLatest, createPagingSession, type DragSettle, type PageDi
 import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
 import { QUOTA_DENSITY } from "./quota-density";
+import { createQuotaDetailsController, type QuotaDetailsController } from "./quota-details";
 import { railRenderSignature, renderRail } from "./rail";
 import { countUnreadSessions, msUntilStale, reduceSnapshotRead } from "./snapshot-view";
 import { reduceTokenUsageRead, type TokenUsageRailModel } from "./token-usage";
@@ -147,6 +148,7 @@ type SheetContext = {
 let sheetOverlay: HTMLElement | null = null;
 let sheetActions: SheetActionState = initialSheetActionState();
 let sheetRestoreFocus: HTMLElement | null = null;
+let quotaDetails: QuotaDetailsController | null = null;
 
 const loadStoredSettings = (): unknown => {
   try {
@@ -183,6 +185,9 @@ const renderRailNow = (): void => {
   // latest sidecar payload on the rail tick so cached data ages honestly
   // between collector reads without adding provider refreshes.
   currentQuota = reduceQuotaRead(latestQuotaRead, nowMs);
+  // Details include source age and secondary metadata absent from the rail signature.
+  quotaDetails?.refresh();
+  if (quotaDetails?.isPressing()) return;
   const model = {
     degraded: currentView.degraded,
     unreadCount: countUnreadSessions(currentView.snapshot),
@@ -460,6 +465,7 @@ const readAndIngest = async (): Promise<void> => {
 const slowPass = async (): Promise<void> => {
   latestQuotaRead = await readQuotaSnapshot().catch(() => null);
   currentQuota = reduceQuotaRead(latestQuotaRead, Date.now());
+  quotaDetails?.refresh();
   currentTokenUsage = reduceTokenUsageRead(await readTokenUsageSnapshot().catch(() => null), Date.now());
   if (lastPayload !== null && currentView !== null && !currentView.degraded) {
     return;
@@ -575,6 +581,7 @@ const dismissActionSheet = (): void => {
 const clipboardAvailable = (): boolean => "clipboard" in navigator;
 
 const openActionSheet = (context: SheetContext, error: string | null = null): void => {
+  quotaDetails?.dismiss();
   // Only the first open of a sheet session captures the focus to restore;
   // re-renders (armed clear, in-flight disable, error retry) must keep the
   // original capture.
@@ -1110,6 +1117,16 @@ const onSurfaceContextMenu = (event: MouseEvent): void => {
 };
 
 const wireInteraction = (): void => {
+  const rail = document.querySelector<HTMLElement>("#rail");
+  if (rail !== null) {
+    quotaDetails = createQuotaDetailsController({
+      rail,
+      getPanels: () => currentQuota,
+      now: Date.now,
+      beforeOpen: dismissActionSheet,
+      afterPress: renderRailNow,
+    });
+  }
   // The paging region hosts the two capture-phase stroke/suppression
   // listeners; the pager is the recognizer surface, so the rail and the
   // pips never traverse a recognizer listener.
