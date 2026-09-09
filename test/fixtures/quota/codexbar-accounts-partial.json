@@ -1,0 +1,16 @@
+[
+  {
+    "provider": "codex",
+    "account": "synthetic-a",
+    "usage": {
+      "updatedAt": "2026-09-08T18:02:00Z",
+      "primary": { "windowMinutes": 300, "usedPercent": 40, "resetsAt": "2030-01-01T05:00:00Z" },
+      "secondary": { "windowMinutes": 10080, "usedPercent": 35, "resetsAt": "2030-01-08T00:00:00Z" }
+    }
+  },
+  {
+    "provider": "codex",
+    "account": "synthetic-b",
+    "error": { "code": 1, "kind": "provider", "message": "synthetic-private-error" }
+  }
+]
