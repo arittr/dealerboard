@@ -13,6 +13,7 @@ import {
   cardViewModel,
   elapsedSince,
   planCardPatches,
+  preciseElapsedSince,
   renderBoard,
   statusWord,
 } from "../app/src/cards";
@@ -78,8 +79,8 @@ describe("card source hygiene", () => {
 });
 
 describe("statusWord", () => {
-  test("working cards headline the session age as open; the other states spell themselves", () => {
-    expect(statusWord("working")).toBe("open");
+  test("every state spells itself, working included", () => {
+    expect(statusWord("working")).toBe("working");
     expect(statusWord("idle")).toBe("idle");
     expect(statusWord("waiting")).toBe("waiting");
     expect(statusWord("error")).toBe("error");
@@ -101,6 +102,27 @@ describe("elapsedSince", () => {
     expect(elapsedSince("2026-08-20T00:00:00.000Z", NOW_MS)).toBe("0s");
     expect(elapsedSince(null, NOW_MS)).toBeNull();
     expect(elapsedSince("not a timestamp", NOW_MS)).toBeNull();
+  });
+});
+
+describe("preciseElapsedSince", () => {
+  const NOW_MS = Date.parse("2026-08-19T00:10:00.000Z");
+
+  test("keeps the seconds under a minute and carries the trailing unit above it", () => {
+    expect(preciseElapsedSince("2026-08-19T00:09:18.000Z", NOW_MS)).toBe("42s");
+    expect(preciseElapsedSince("2026-08-19T00:09:00.000Z", NOW_MS)).toBe("1m");
+    expect(preciseElapsedSince("2026-08-18T23:42:59.000Z", NOW_MS)).toBe("27m 01s");
+    expect(preciseElapsedSince("2026-08-18T23:58:00.000Z", NOW_MS)).toBe("12m");
+    expect(preciseElapsedSince("2026-08-18T22:06:00.000Z", NOW_MS)).toBe("2h 04m");
+    expect(preciseElapsedSince("2026-08-18T22:10:00.000Z", NOW_MS)).toBe("2h");
+    expect(preciseElapsedSince("2026-08-16T00:10:00.000Z", NOW_MS)).toBe("3d");
+    expect(preciseElapsedSince("2026-08-15T22:10:00.000Z", NOW_MS)).toBe("3d 2h");
+  });
+
+  test("clamps a future stamp to 0s and returns null for a missing or unparseable one", () => {
+    expect(preciseElapsedSince("2026-08-20T00:00:00.000Z", NOW_MS)).toBe("0s");
+    expect(preciseElapsedSince(null, NOW_MS)).toBeNull();
+    expect(preciseElapsedSince("not a timestamp", NOW_MS)).toBeNull();
   });
 });
 
@@ -181,7 +203,7 @@ describe("cardViewModel", () => {
     expect(cardViewModel(placed(), NOW_MS).continuation).toBe(false);
   });
 
-  test("unread tracks the ledger stamp; a working card's bright corner is the session age", () => {
+  test("unread tracks the ledger stamp; a working card's bright corner is the run time", () => {
     const model = cardViewModel(
       placed(
         {},
@@ -195,36 +217,56 @@ describe("cardViewModel", () => {
       NOW_MS,
     );
     expect(model.unread).toBe(true);
-    expect(model.word).toBe("open");
-    expect(model.timer).toBe("10m");
-    expect(model.timerSince).toBe("2026-08-25T00:00:00.000Z");
+    expect(model.word).toBe("working");
+    // The working episode start (statusSince), not the 10m session age.
+    expect(model.timer).toBe("2m");
+    expect(model.timerSince).toBe("2026-08-25T00:08:00.000Z");
     // The gap slot owns the working card's dim position; no open fact there.
     expect(model.age).toBeNull();
     expect(model.ageSince).toBeNull();
   });
 
-  test("idle, waiting, and error corners pair their status age with a dim open fact", () => {
-    for (const status of ["idle", "waiting", "error"] as const) {
+  test("a waiting corner pairs its block age with a dim open fact", () => {
+    const model = cardViewModel(
+      placed({}, { status: "waiting", statusSince: "2026-08-25T00:08:00.000Z", openedAt: "2026-08-25T00:00:00.000Z" }),
+      NOW_MS,
+    );
+    expect(model.word).toBe("waiting");
+    expect(model.timer).toBe("2m");
+    expect(model.timerSince).toBe("2026-08-25T00:08:00.000Z");
+    expect(model.age).toBe("open 10m");
+    expect(model.ageSince).toBe("2026-08-25T00:00:00.000Z");
+  });
+
+  test("settled idle and error corners keep the dim open fact but run no counter", () => {
+    for (const status of ["idle", "error"] as const) {
       const model = cardViewModel(
         placed({}, { status, statusSince: "2026-08-25T00:08:00.000Z", openedAt: "2026-08-25T00:00:00.000Z" }),
         NOW_MS,
       );
       expect(model.word).toBe(status);
-      expect(model.timer).toBe("2m");
-      expect(model.timerSince).toBe("2026-08-25T00:08:00.000Z");
+      expect(model.timer).toBeNull();
+      expect(model.timerSince).toBeNull();
       expect(model.age).toBe("open 10m");
       expect(model.ageSince).toBe("2026-08-25T00:00:00.000Z");
     }
   });
 
-  test("a legacy session without openedAt renders no open facts", () => {
+  test("a legacy session without openedAt falls back to statusSince; a stampless one shows nothing", () => {
     const working = cardViewModel(placed({}, { status: "working", statusSince: "2026-08-25T00:08:00.000Z" }), NOW_MS);
-    expect(working.timer).toBeNull();
-    expect(working.timerSince).toBeNull();
+    expect(working.timer).toBe("2m");
+    expect(working.timerSince).toBe("2026-08-25T00:08:00.000Z");
+    const stampless = cardViewModel(placed({}, { status: "working", statusSince: null }), NOW_MS);
+    expect(stampless.timer).toBeNull();
+    expect(stampless.timerSince).toBeNull();
     const waiting = cardViewModel(placed({}, { status: "waiting", statusSince: "2026-08-25T00:08:00.000Z" }), NOW_MS);
     expect(waiting.timer).toBe("2m");
     expect(waiting.age).toBeNull();
     expect(waiting.ageSince).toBeNull();
+    // A settled card shows no counter even with a usable statusSince.
+    const idle = cardViewModel(placed({}, { status: "idle", statusSince: "2026-08-25T00:08:00.000Z" }), NOW_MS);
+    expect(idle.timer).toBeNull();
+    expect(idle.timerSince).toBeNull();
   });
 
   test("a graph-backed display-only child has no unread dot or descendant badge", () => {
@@ -366,7 +408,10 @@ describe("liveness reconciliation", () => {
 const OPENED_AT = "2026-08-25T00:00:00.000Z";
 const STATUS_SINCE = "2026-08-25T00:08:00.000Z";
 
-const pageWith = (status: ProjectedSession["status"], overrides: { openedAt?: string } = { openedAt: OPENED_AT }) => ({
+const pageWith = (
+  status: ProjectedSession["status"],
+  overrides: Partial<ProjectedSession> & { openedAt?: string } = { openedAt: OPENED_AT },
+) => ({
   cards: [placed({}, { status, statusSince: STATUS_SINCE, ...overrides })],
 });
 
@@ -376,55 +421,81 @@ const statusRowOf = (root: FakeElement): FakeElement | undefined =>
 const cornerClasses = (row: FakeElement | undefined): string[] => (row?.children ?? []).map((node) => node.className);
 
 describe("status corner anatomy", () => {
-  test("a working card reads gap slot, open word, session-age timer, dot last", () => {
+  test("a working card reads gap slot, run word, run timer, dot last", () => {
     withFakeDocument((root) => {
       renderBoard(root as unknown as HTMLElement, pageWith("working"), false);
       const row = statusRowOf(root);
       expect(cornerClasses(row)).toEqual(["cardgap", "status-word", "cardtimer", "status-dot"]);
       const [gap, word, timer] = row?.children ?? [];
       expect(gap?.textContent).toBe("");
-      expect(word?.textContent).toBe("open");
-      expect(timer?.dataset["since"]).toBe(OPENED_AT);
+      expect(word?.textContent).toBe("working");
+      expect(timer?.dataset["since"]).toBe(STATUS_SINCE);
     });
   });
 
-  test("idle, waiting, and error cards read open fact, status word, status-age timer, dot last", () => {
-    for (const status of ["idle", "waiting", "error"] as const) {
+  test("a waiting card reads open fact, word, block-age timer, dot last", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, pageWith("waiting"), false);
+      const row = statusRowOf(root);
+      expect(cornerClasses(row)).toEqual(["cardage", "status-word", "cardtimer", "status-dot"]);
+      const [age, word, timer] = row?.children ?? [];
+      expect(age?.textContent).toMatch(/^open \d+[smhd]$/u);
+      expect(age?.dataset["since"]).toBe(OPENED_AT);
+      expect(word?.textContent).toBe("waiting");
+      expect(timer?.dataset["since"]).toBe(STATUS_SINCE);
+    });
+  });
+
+  test("settled idle and error cards read open fact, word, dot — no counter", () => {
+    for (const status of ["idle", "error"] as const) {
       withFakeDocument((root) => {
         renderBoard(root as unknown as HTMLElement, pageWith(status), false);
         const row = statusRowOf(root);
-        expect(cornerClasses(row)).toEqual(["cardage", "status-word", "cardtimer", "status-dot"]);
-        const [age, word, timer] = row?.children ?? [];
-        // renderBoard stamps the initial text from the wall clock; the exact
-        // number is the 1s ticker's business, the grammar and anchor are ours.
+        expect(cornerClasses(row)).toEqual(["cardage", "status-word", "status-dot"]);
+        const [age, word] = row?.children ?? [];
         expect(age?.textContent).toMatch(/^open \d+[smhd]$/u);
-        expect(age?.dataset["since"]).toBe(OPENED_AT);
         expect(word?.textContent).toBe(status);
-        expect(timer?.dataset["since"]).toBe(STATUS_SINCE);
       });
     }
   });
 
-  test("a legacy working card without openedAt degrades to the gap slot and dot alone", () => {
+  test("a working card without openedAt still counts its run from statusSince", () => {
     withFakeDocument((root) => {
       renderBoard(root as unknown as HTMLElement, pageWith("working", {}), false);
-      expect(cornerClasses(statusRowOf(root))).toEqual(["cardgap", "status-dot"]);
+      const row = statusRowOf(root);
+      expect(cornerClasses(row)).toEqual(["cardgap", "status-word", "cardtimer", "status-dot"]);
+      expect((row?.children ?? [])[2]?.dataset["since"]).toBe(STATUS_SINCE);
     });
   });
 
-  test("legacy waiting and error cards keep their worded status age without an open fact", () => {
-    for (const status of ["waiting", "error"] as const) {
-      withFakeDocument((root) => {
-        renderBoard(root as unknown as HTMLElement, pageWith(status, {}), false);
-        expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "cardtimer", "status-dot"]);
-      });
-    }
+  test("a working card with no stamps at all still spells working beside the gap slot and dot", () => {
+    withFakeDocument((root) => {
+      const stampless = { cards: [placed({}, { status: "working", statusSince: null })] };
+      renderBoard(root as unknown as HTMLElement, stampless, false);
+      const row = statusRowOf(root);
+      expect(cornerClasses(row)).toEqual(["cardgap", "status-word", "status-dot"]);
+      expect((row?.children ?? [])[1]?.textContent).toBe("working");
+    });
   });
 
-  test("a legacy idle card without openedAt still spells its status age", () => {
+  test("a legacy waiting card keeps its block-age timer without an open fact", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, pageWith("waiting", {}), false);
+      expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "cardtimer", "status-dot"]);
+    });
+  });
+
+  test("a legacy error card keeps its word alone — the settled states do not count", () => {
+    withFakeDocument((root) => {
+      renderBoard(root as unknown as HTMLElement, pageWith("error", {}), false);
+      expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "status-dot"]);
+    });
+  });
+
+  test("a legacy idle card without openedAt reads its word alone — no counter, no open fact", () => {
     withFakeDocument((root) => {
       renderBoard(root as unknown as HTMLElement, pageWith("idle", {}), false);
-      expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "cardtimer", "status-dot"]);
+      expect(cornerClasses(statusRowOf(root))).toEqual(["status-word", "status-dot"]);
     });
   });
 });

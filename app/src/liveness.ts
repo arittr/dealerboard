@@ -6,7 +6,8 @@
 
 import type { SessionStatus } from "../../src/protocol";
 
-/** Compact elapsed label shared by the status timer and the quiet label: 42s, 12m, 3h, 2d. */
+/** Compact elapsed label for the coarse facts (the quiet label, the dim session
+ *  age): 42s, 12m, 3h, 2d. */
 export const elapsedLabel = (elapsedMs: number): string => {
   const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
   if (seconds < 60) {
@@ -21,6 +22,32 @@ export const elapsedLabel = (elapsedMs: number): string => {
     return `${hours}h`;
   }
   return `${Math.floor(hours / 24)}d`;
+};
+
+/**
+ * Precise elapsed label for the bright status timer, where the run duration is
+ * the point: 42s, 27m 01s, 3h 04m, 2d 6h. The trailing unit is zero-padded so
+ * a right-aligned timer under tabular-nums does not change width every time it
+ * crosses a digit boundary (9s -> 10s), which would nudge it into the title.
+ */
+export const preciseElapsedLabel = (elapsedMs: number): string => {
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const rem = seconds % 60;
+    return rem === 0 ? `${minutes}m` : `${minutes}m ${String(rem).padStart(2, "0")}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    const rem = minutes % 60;
+    return rem === 0 ? `${hours}h` : `${hours}h ${String(rem).padStart(2, "0")}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const rem = hours % 24;
+  return rem === 0 ? `${days}d` : `${days}d ${rem}h`;
 };
 
 /** Silence this long is the quiet treatment's threshold (see the spec's gap percentiles). */

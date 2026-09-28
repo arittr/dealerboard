@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The board card's counter now indicates activity instead of session age. A
+  working card reads `working 27m 01s`, ticking from the working episode start
+  (falling back to `openedAt` on old daemons) with seconds under an hour; a
+  waiting card reads `waiting 12m`. The settled idle and error states no longer
+  count up — a counter there read as work that was not happening — and instead
+  show their state beside the coarse dim `open 3h` session age, with their
+  freshness left to the unread dot. The quiet label stays coarse.
+
 ### Fixed
 
 - The session-facts and Paseo sweeps no longer run their filesystem walks on

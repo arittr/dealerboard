@@ -76,7 +76,7 @@ import {
   returnSliverModel,
 } from "./indicators";
 import { createIngestGate } from "./ingest-gate";
-import { elapsedLabel, livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses } from "./liveness";
+import { livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses, preciseElapsedLabel } from "./liveness";
 import { createDeferredLatest, createPagingSession, type DragSettle, type PageDirection } from "./paging";
 import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
@@ -245,7 +245,7 @@ const tickStatusLines = (): void => {
     if (Number.isNaN(startedMs)) {
       continue;
     }
-    const text = elapsedLabel(nowMs - startedMs);
+    const text = preciseElapsedLabel(nowMs - startedMs);
     if (timer.textContent !== text) {
       timer.textContent = text;
     }

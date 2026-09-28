@@ -9,16 +9,19 @@
 import { modelLabel, PROVIDER_LETTERS } from "../../src/plugin/render";
 import type { SessionStatus } from "../../src/protocol";
 import type { BoardPage, BoardSession, PlacedCard, SpineSegment } from "./board";
-import { breathAnimationDelay, elapsedLabel } from "./liveness";
+import { breathAnimationDelay, elapsedLabel, preciseElapsedLabel } from "./liveness";
 
-/** The corner's bright word: a working card headlines its session age; the other states spell themselves. */
-export const statusWord = (status: SessionStatus): string => (status === "working" ? "open" : status);
+/** The corner's bright word: every state spells itself; working included. */
+export const statusWord = (status: SessionStatus): string => status;
 
-/**
- * Compact elapsed text from an ISO stamp, or null when the stamp is absent
- * or unparseable — an old daemon simply shows no number.
- */
-export const elapsedSince = (since: string | null, nowMs: number): string | null => {
+/** Parse an ISO stamp and format its age, or null when absent/unparseable —
+ *  an old daemon simply shows no number. One parse shared by the coarse and
+ *  precise labels so the two never drift. */
+const elapsedFromStamp = (
+  since: string | null,
+  nowMs: number,
+  format: (elapsedMs: number) => string,
+): string | null => {
   if (since === null) {
     return null;
   }
@@ -26,8 +29,18 @@ export const elapsedSince = (since: string | null, nowMs: number): string | null
   if (Number.isNaN(startedMs)) {
     return null;
   }
-  return elapsedLabel(nowMs - startedMs);
+  return format(nowMs - startedMs);
 };
+
+/** Coarse elapsed text (12m, 3h) for the dim facts: the quiet label and the
+ *  session-age line. */
+export const elapsedSince = (since: string | null, nowMs: number): string | null =>
+  elapsedFromStamp(since, nowMs, elapsedLabel);
+
+/** Precise elapsed text (27m 01s) for the bright status timer, where the run
+ *  duration is the point. */
+export const preciseElapsedSince = (since: string | null, nowMs: number): string | null =>
+  elapsedFromStamp(since, nowMs, preciseElapsedLabel);
 
 /** The dim corner fact "open 3h" — the session's age as a worded line; null without a usable stamp. */
 export const ageLineText = (openedAt: string | null, nowMs: number): string | null => {
@@ -49,12 +62,15 @@ export type CardViewModel = {
   project: string | null;
   activity: string | null;
   status: SessionStatus;
-  /** The corner word beside the bright number: "open" on working cards, the status elsewhere. */
+  /** The corner word beside the bright number: the status name (working included), or "ended". */
   word: string;
   /** True when the session ended holding an unviewed result — the card outlives its session. */
   ended: boolean;
-  /** The bright number's anchor: openedAt on working cards, statusSince elsewhere; null shows no number. */
+  /** The bright number's anchor: the working episode start on working cards
+   *  (statusSince, falling back to openedAt for legacy rows), statusSince on a
+   *  waiting card; null whenever the corner shows no counter. */
   timerSince: string | null;
+  /** The live counter, or null on a settled card that should not count. */
   timer: string | null;
   /** The dim leading "open <age>" fact on idle/waiting/error cards; null on working
    *  (the gap slot owns that position) and on sessions without an openedAt stamp. */
@@ -82,8 +98,19 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
   const { session } = card;
   // Only agent-graph sessions carry openedAt; a legacy snapshot renders no open facts.
   const openedAt = "openedAt" in session ? session.openedAt : null;
-  const timerSince = session.status === "working" ? openedAt : session.statusSince;
-  const timer = elapsedSince(timerSince, nowMs);
+  // Counting is a claim of activity. Only a working card runs a live timer
+  // (precise, from the working episode start; the session open is a legacy
+  // fallback). Waiting shows how long it has been blocked, coarsely. The
+  // settled idle and error states show no counter — counting up while an agent
+  // sits finished reads as work that is not happening; the unread dot already
+  // carries their freshness.
+  const timerSince = session.status === "working" ? (session.statusSince ?? openedAt) : session.statusSince;
+  const timer =
+    session.status === "working"
+      ? preciseElapsedSince(timerSince, nowMs)
+      : session.status === "waiting"
+        ? elapsedSince(timerSince, nowMs)
+        : null;
   const age = session.status === "working" ? null : ageLineText(openedAt, nowMs);
   return {
     provider: session.provider,
@@ -198,8 +225,8 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
   meta.append(metaRight);
   element.append(meta);
 
-  // The corner reads dim fact, worded bright number, dot — the dot last so
-  // every card's number and dot share the board column's right rail.
+  // The corner reads dim fact, bright word, optional counter, dot — the dot
+  // last so every card's word and dot share the board column's right rail.
   const statusRow = document.createElement("div");
   statusRow.className = "card-status";
   if (model.status === "working") {
@@ -209,13 +236,11 @@ const cardElement = (card: PlacedCard, index: number, nowMs: number): HTMLElemen
     const age = appendText(statusRow, "cardage", model.age);
     age.dataset["since"] = model.ageSince;
   }
+  // Every card spells its state; only a counting card adds the number beside it.
+  appendText(statusRow, "status-word", model.word);
   if (model.timer !== null && model.timerSince !== null) {
-    appendText(statusRow, "status-word", model.word);
     const timer = appendText(statusRow, "cardtimer", model.timer);
     timer.dataset["since"] = model.timerSince;
-  } else if (model.status === "waiting" || model.status === "error") {
-    // The attention states spell themselves even when an old daemon has no stamp.
-    appendText(statusRow, "status-word", model.word);
   }
   const statusDot = document.createElement("span");
   statusDot.className = "status-dot";

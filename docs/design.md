@@ -100,12 +100,16 @@ The orphan tail remains one deterministic full-width block.
   `#FF4D67`.
 - Provider chips: Claude `C`, Codex `X`, Kimi `K`, Pi `P`, oh-my-pi `O`,
   ZCode `Z`, DeepSeek `D`, Grok `G`, Qwen `Q`, Evener `E`.
-- The head shows the title and the status corner: an optional dim fact, a
-  worded bright number, and the status dot last, so every card's number and
-  dot align down the column's right rail. Working cards headline the session
-  age (`open 2h`); idle, waiting, and error spell their status age
-  (`waiting 12m`) behind a dim `open 3h` fact. Sessions published without
-  `openedAt` (an old daemon) simply omit the open facts.
+- The head shows the title and the status corner: an optional dim fact, the
+  status word, an optional counter, and the status dot last, so every card's
+  word and dot align down the column's right rail. Counting is a claim of
+  activity, so only two states count: working runs a precise live timer
+  (`working 27m 01s`) from the working episode start (`statusSince`, falling
+  back to `openedAt` on an old daemon), and waiting shows how long it has been
+  blocked, coarsely (`waiting 12m`). The settled idle and error states show no
+  counter — their freshness is the unread dot's job. The dim facts stay coarse
+  (`open 3h`, `quiet 12m`); idle, waiting, and error carry the dim session age
+  inline, while the working card's dim slot belongs to its quiet label.
 - The meta row can show model, project, and a recent activity preview.
 - A Paseo parent's chip wears the containment ring: a violet enclosure with
   a card-colored gap — the harness inside the multiplexer. The ring's shape
