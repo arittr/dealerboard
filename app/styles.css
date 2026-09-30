@@ -281,8 +281,7 @@ body[data-fullscreen] #return-band {
   cursor: default;
 }
 
-/* Status edges and motion (colors and semantics mirror
-   src/plugin/render.ts): working carries the liveness treatment: the 1s
+/* Status edges and motion: working carries the liveness treatment: the 1s
    ticker decays the edge and dot from data-last-event, the shared-phase
    breath animates the dot, and ten silent minutes hollow the card to
    quiet; waiting breathes its full frame, error pulses at 2s, idle is
