@@ -59,14 +59,6 @@
       "linter": { "rules": { "style": { "noNonNullAssertion": "off" } } }
     },
     {
-      "includes": ["rollup.config.mjs"],
-      "linter": {
-        "rules": {
-          "style": { "noProcessEnv": "off", "noDefaultExport": "off" }
-        }
-      }
-    },
-    {
       "includes": ["extensions/pi/dealerboard.ts", "extensions/omp/dealerboard.ts"],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     }
