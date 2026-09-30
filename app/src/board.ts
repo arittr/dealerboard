@@ -5,15 +5,25 @@
  * I/O; the rendering layer is app/src/cards.ts and the driver app/src/main.ts.
  */
 
-import {
-  DEFAULT_LAYOUT_SETTINGS,
-  type LayoutSettingsV1,
-  labelForSession,
-  validateLayoutSettings,
-} from "../../src/plugin/layout";
 import type { AgentIdentity, ProjectedAgentNode, ProjectedSession, SnapshotView } from "../../src/protocol";
+import { type BoardSettingsV1, DEFAULT_BOARD_SETTINGS, validateBoardSettings } from "./board-settings";
 
 export type BoardSession = ProjectedSession | ProjectedAgentNode;
+
+const SHORT_SESSION_ID_LENGTH = 8;
+
+export type SessionLabelSource = Pick<ProjectedSession, "provider" | "sessionId" | "title" | "project">;
+
+/** The card's label: the session title, else the project, else provider plus a short id. */
+export const labelForSession = (session: SessionLabelSource): string => {
+  if (session.title !== null && session.title.length > 0) {
+    return session.title;
+  }
+  if (session.project !== null && session.project.length > 0) {
+    return session.project;
+  }
+  return `${session.provider} ${session.sessionId.slice(0, SHORT_SESSION_ID_LENGTH)}`;
+};
 
 export type BoardCardSeed = {
   session: BoardSession;
@@ -278,7 +288,7 @@ export const packBoard = (groups: readonly BoardGroup[], degraded: boolean): Boa
 };
 
 export type BoardResult = {
-  settings: LayoutSettingsV1;
+  settings: BoardSettingsV1;
   dirty: boolean;
   pages: BoardPage[];
   pageCount: number;
@@ -290,10 +300,10 @@ export const reduceBoard = (view: SnapshotView, storedState: unknown): BoardResu
   const packed = packBoard(groups, view.degraded);
   const pages = packed.length > 0 ? packed : [{ cards: [] }];
   const pageCount = pages.length;
-  const { settings: restored, defaulted } = validateLayoutSettings(storedState);
+  const { settings: restored, defaulted } = validateBoardSettings(storedState);
   const currentPage = Math.min(restored.currentPage, pageCount - 1);
-  const settings: LayoutSettingsV1 = { ...DEFAULT_LAYOUT_SETTINGS, currentPage };
-  const dirty = defaulted || restored.currentPage !== currentPage || restored.overflowLatched;
+  const settings: BoardSettingsV1 = { ...DEFAULT_BOARD_SETTINGS, currentPage };
+  const dirty = defaulted || restored.currentPage !== currentPage;
   return { settings, dirty, pages, pageCount };
 };
 

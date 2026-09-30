@@ -6,6 +6,7 @@ import {
   groupedAgentOrder,
   groupedOrder,
   jumpBoard,
+  labelForSession,
   packBoard,
   reduceBoard,
 } from "../app/src/board";
@@ -395,12 +396,12 @@ describe("reduceBoard", () => {
     expect(result.dirty).toBe(true);
   });
 
-  test("keeps a valid page clean and always persists overflowLatched false", () => {
+  test("keeps a valid page clean and ignores a legacy overflowLatched", () => {
     const sessions = Array.from({ length: 13 }, (_, i) => session(i + 1));
     const result = reduceBoard(view(sessions), { schemaVersion: 1, overflowLatched: true, currentPage: 1 });
     expect(result.pageCount).toBe(2);
-    expect(result.settings).toEqual({ schemaVersion: 1, overflowLatched: false, currentPage: 1 });
-    expect(result.dirty).toBe(true); // latched true was persisted → rewrite
+    expect(result.settings).toEqual({ schemaVersion: 1, currentPage: 1 });
+    expect(result.dirty).toBe(false);
   });
 
   test("session-count boundaries: 1-3 stay one sparse page, exactly 12 one page, 13 two pages", () => {
@@ -517,5 +518,23 @@ describe("jumpBoard", () => {
     expect(jumpBoard(twoPages(), stored, -3).settings.currentPage).toBe(0);
     expect(jumpBoard(twoPages(), stored, -3).dirty).toBe(true);
     expect(jumpBoard(twoPages(), stored, 1).dirty).toBe(false);
+  });
+});
+
+describe("labelForSession", () => {
+  const source = (over: Partial<Parameters<typeof labelForSession>[0]>) => ({
+    provider: "claude" as const,
+    sessionId: "abcdef1234567890",
+    title: null,
+    project: null,
+    ...over,
+  });
+
+  test("falls back title, then project, then provider plus short session id", () => {
+    expect(labelForSession(source({ title: "Fix the bug", project: "proj" }))).toBe("Fix the bug");
+    expect(labelForSession(source({ title: null, project: "proj" }))).toBe("proj");
+    expect(labelForSession(source({ title: "", project: "proj" }))).toBe("proj");
+    expect(labelForSession(source({ title: null, project: null, provider: "kimi" }))).toBe("kimi abcdef12");
+    expect(labelForSession(source({ title: null, project: "" }))).toBe("claude abcdef12");
   });
 });
