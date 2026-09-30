@@ -12,8 +12,7 @@ Dealerboard has three layers:
    lifecycle signals into a small normalized event union.
 2. One per-user LaunchAgent daemon runs maintenance, lineage projection,
    quota/token collectors, and atomic snapshot publication.
-3. Thin consumers render snapshots. The Tauri strip app is current; the
-   Stream Deck consumer is deprecated but remains build-tested.
+3. The Tauri strip app renders snapshots.
 
 Short-lived event/session helpers and the daemon write through independent
 SQLite connections. The daemon is the only long-lived maintenance process and
@@ -51,7 +50,7 @@ rows are display-only and disappear when they finish.
 Reading a result never removes a card. A view clears the unread badge and
 starts a 24-hour expiry clock (`viewedSince`); the card leaves only
 through an explicit dismiss (app flick, action-sheet Dismiss, CLI
-`sessions ack`, Stream Deck key press), a manual clear, a reused session
+`sessions ack`), a manual clear, a reused session
 start, the viewed-expiry sweep, or the stale prune — which skips any tree
 holding an unviewed result. Viewing in Paseo is inert. A turn completion
 (`Stop`) retains its finished result, but an authoritative session close or

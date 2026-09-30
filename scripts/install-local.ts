@@ -1,9 +1,7 @@
 /**
  * Explicit macOS-local installer for the hook-driven session registry.
  *
- * The Elgato Stream Deck plugin is deprecated: `bun run build` still bundles
- * it, but this installer neither packages nor installs it — it manages the
- * daemon, LaunchAgent, shims, and grok hook only.
+ * The installer manages the daemon, LaunchAgent, shims, and grok hook only.
  *
  * Step order (any pre-hook failure exits nonzero immediately; this script
  * installs its own managed artifacts — the pi/omp shims and the grok hook

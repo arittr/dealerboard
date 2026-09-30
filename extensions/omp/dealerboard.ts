@@ -409,6 +409,6 @@ export const createExtension = (
 };
 
 /** omp's extension contract: a default-exported factory invoked with the ExtensionAPI. */
-export default function streamDeckAgents(host: OmpHost): void {
+export default function dealerboardExtension(host: OmpHost): void {
   createExtension(host);
 }

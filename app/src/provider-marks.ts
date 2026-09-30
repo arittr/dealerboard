@@ -1,7 +1,7 @@
 /**
  * Strip-side provider mark and model-label helpers, split out of the retired
- * Stream Deck tile renderer. Pure and dependency-free so the browser bundle
- * can import them.
+ * keypad tile renderer. Pure and dependency-free so the browser bundle can
+ * import them.
  */
 
 import type { Provider } from "../../src/protocol";

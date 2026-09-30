@@ -417,6 +417,6 @@ export const createExtension = (
 };
 
 /** pi's extension contract: a default-exported factory invoked with the ExtensionAPI. */
-export default function streamDeckAgents(host: PiHost): void {
+export default function dealerboardExtension(host: PiHost): void {
   createExtension(host);
 }

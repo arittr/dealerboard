@@ -37,7 +37,7 @@ same-user processes are outside your trust boundary.
 
 ## Release artifacts
 
-No prebuilt app, daemon, or Stream Deck plugin is currently distributed from
+No prebuilt app or daemon is currently distributed from
 this repository. A future binary release must add third-party notices and,
 for macOS, Developer ID signing and notarization before it is considered a
 supported artifact.

@@ -58,10 +58,9 @@ Evener + maintenance -> daemon ------/
                                       |
                                       v
                               daemon snapshots
-                                  |       |
-                                  v       v
-                            macOS strip  deprecated
-                               app       Stream Deck UI
+                                  |
+                                  v
+                            macOS strip app
 ```
 
 Short-lived event/session helpers and the daemon write through independent
@@ -75,8 +74,8 @@ only long-lived maintenance process and snapshot publisher.
 - [Bun](https://bun.sh/) 1.3.14 (pinned in `package.json`).
 - Rust 1.97.0 (pinned by `rust-toolchain.toml`).
 - Xcode Command Line Tools for the Tauri/macOS build.
-- Node.js 24+ is declared for the deprecated Stream Deck integration; the
-  normal source workflow uses Bun.
+- Node.js 24+ is declared in `package.json`; the normal source workflow uses
+  Bun.
 
 The Xeneon Edge is recommended, not required. Dealerboard automatically pins
 to a display whose model contains `Xeneon Edge` or whose physical resolution
@@ -349,21 +348,14 @@ pre-push hook runs `bun run check`.
 - `src/core/` — event decoding, registry, projection daemon, and collectors.
 - `app/` — strip frontend and Tauri host.
 - `extensions/` — installer-managed Pi, oh-my-pi, and Grok adapters.
-- `src/plugin/` and `com.drewritter.dealerboard.sdPlugin/` — deprecated
-  Stream Deck integration retained for regression coverage.
 - `test/` — behavioral tests.
 
 ## Release scope
 
 This repository is ready for source distribution. It does not currently ship
-prebuilt daemon, app, or Stream Deck plugin artifacts. Binary distribution
+prebuilt daemon or app artifacts. Binary distribution
 still needs a target-specific third-party notice bundle; the macOS app also
 needs Developer ID signing and notarization.
-
-The Stream Deck integration is deprecated. It remains in `bun run build` so
-its source keeps compiling, but the core installer does not deploy it and the
-public source tree does not include a device-bound Stream Deck profile. Do not
-run `bun run pack:plugin` as part of the supported setup.
 
 ## Security
 

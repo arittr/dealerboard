@@ -1,7 +1,7 @@
 /**
  * Persisted page settings for the strip board, superseding the retired
- * Stream Deck plugin's layout settings. Unknown keys are ignored so a stored
- * value from an older build (notably a legacy `overflowLatched`) still reads.
+ * keypad layout settings. Unknown keys are ignored so a stored value from an
+ * older build (notably a legacy `overflowLatched`) still reads.
  */
 
 export type BoardSettingsV1 = {

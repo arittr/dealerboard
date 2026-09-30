@@ -1,8 +1,8 @@
 /**
  * Shared contracts for the hook-driven session registry.
  *
- * This module is imported by both the Bun core and the Node.js Stream Deck
- * plugin bundle, so it must stay free of runtime-specific and SDK imports.
+ * This module is imported by both the Bun core and the strip app, so it must
+ * stay free of runtime-specific and SDK imports.
  */
 
 export const PROVIDER_KEYS = [

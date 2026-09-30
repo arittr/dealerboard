@@ -546,11 +546,10 @@ describe("parseSessionSnapshot", () => {
     });
   });
 
-  test("plugin compat: a snapshot carrying the five fields parses with values intact", () => {
-    // The installed Stream Deck plugin parses the same snapshot-v2.json with
-    // this exact parser: new-daemon output must round-trip with values, and
-    // old-daemon output must default (the previous test) — old-plugin/new-
-    // daemon and new-app/old-daemon interoperate.
+  test("a snapshot carrying the five data-surface fields parses with values intact", () => {
+    // Old daemons omit these fields and new daemons emit them: new-daemon
+    // output must round-trip with values, and old-daemon output must default
+    // (the previous test).
     const parsed = parseSessionSnapshot(
       withSession({
         unreadSince: "2026-08-19T00:00:00.000Z",

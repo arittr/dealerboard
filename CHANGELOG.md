@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   show their state beside the coarse dim `open 3h` session age, with their
   freshness left to the unread dot. The quiet label stays coarse.
 
+### Removed
+
+- The deprecated Stream Deck integration is removed in full: `src/plugin/`,
+  the `com.drewritter.dealerboard.sdPlugin` package, `rollup.config.mjs`, ten
+  plugin-only test files, and the `build:plugin`/`pack:plugin` scripts. Its
+  dependencies (`@elgato/streamdeck`, `@elgato/cli`, `rollup` and its plugins,
+  `tslib`) are gone, and the provider-mark and board-settings helpers the strip
+  reused now live under `app/src/`.
+
 ### Fixed
 
 - The session-facts and Paseo sweeps no longer run their filesystem walks on
