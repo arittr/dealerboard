@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-30
+
 ### Changed
 
 - The board card's counter now indicates activity instead of session age. A
