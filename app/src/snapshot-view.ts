@@ -1,15 +1,14 @@
 /**
- * Webview port of the plugin's SnapshotCache semantics
- * (src/plugin/snapshot-reader.ts) over an async read: a missing, stale,
- * unparseable, or explicitly unhealthy snapshot degrades to the last-good
- * view, or to an empty degraded view before the first healthy read. File age
- * IS the daemon-liveness signal: a live daemon rewrites the snapshot every 5s
+ * Snapshot read semantics over an async read: a missing, stale, unparseable,
+ * or explicitly unhealthy snapshot degrades to the last-good view, or to an
+ * empty degraded view before the first healthy read. File age IS the
+ * daemon-liveness signal: a live daemon rewrites the snapshot every 5s
  * heartbeat, so anything past the stale threshold is a dead daemon.
  */
 
 import { parseSessionSnapshot, type SessionSnapshotV2, type SnapshotView } from "../../src/protocol";
 
-/** Two missed daemon heartbeats; mirrors STALE_SNAPSHOT_AGE_MS in src/plugin/snapshot-reader.ts. */
+/** Two missed daemon heartbeats. */
 export const STALE_SNAPSHOT_AGE_MS = 10_000;
 
 export type SnapshotRead = { mtimeMs: number; contents: string };

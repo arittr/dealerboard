@@ -1,6 +1,5 @@
 /**
- * Tile-press routing rules, ported from the Stream Deck controller's keyDown
- * (src/plugin/controller.ts): a Paseo origin with a known agent ref wins over
+ * Tile-press routing rules: a Paseo origin with a known agent ref wins over
  * provider routing; claude focuses its Ghostty terminal; codex and kimi open
  * deep links; evener activates its exact session; everything else flashes the
  * tile. Pure — no Tauri imports.
