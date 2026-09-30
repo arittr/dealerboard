@@ -11,10 +11,10 @@
  * result remains.
  */
 
-import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../../src/plugin/ghostty-focus";
 import type { Provider } from "../../src/protocol";
 import type { BoardSession } from "./board";
 import type { GestureWatermark } from "./bridge";
+import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "./ghostty-focus";
 import { routeForSession } from "./routing";
 
 export type PressDeps = {

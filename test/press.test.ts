@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { GestureWatermark } from "../app/src/bridge";
+import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../app/src/ghostty-focus";
 import { type PressDeps, pressBoardCard, pressSessionTile } from "../app/src/press";
-import { FOCUS_GHOSTTY_TERMINAL_SCRIPT } from "../src/plugin/ghostty-focus";
 import type { ProjectedSession } from "../src/protocol";
 
 const session = (overrides: Partial<ProjectedSession> = {}): ProjectedSession => ({
