@@ -897,8 +897,9 @@ yours, never touches it again, and it stops receiving updates.
 ### Behavior to expect
 
 - A tile appears when a session starts. Extensions load in every pi process,
-  but only interactive TUI sessions are reported — print (`pi -p`), JSON, and
-  RPC processes never produce tiles.
+  so the shim reports only sessions with a UI (`ctx.hasUI`, true in both the
+  terminal and the RPC modes Paseo drives pi in) and a session file. Headless
+  print (`pi -p`), JSON, and subprocess sessions never produce tiles.
 - The tile shows the current model id right of the provider chip: the shim
   forwards pi's current model (`ExtensionContext.model`, pinned on 0.84.2)
   at session start. A mid-session model switch is not reported.

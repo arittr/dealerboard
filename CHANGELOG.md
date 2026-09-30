@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Pi sessions driven by Paseo now register board cards. The shim required
+  `ctx.mode === "tui"`, but Paseo runs pi headless in RPC mode, where pi
+  reports `mode: "rpc"` with `hasUI: true` — so every Paseo pi session was
+  filtered as a ghost. The gate now matches the oh-my-pi shim's
+  `ctx.hasUI === true` rule, and headless print/JSON sessions stay invisible.
 - The session-facts and Paseo sweeps no longer run their filesystem walks on
   the daemon's event loop: both read provider files asynchronously and hand
   the settled results back to the poll, so a slow or contended disk (a large
