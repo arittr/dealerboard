@@ -13,32 +13,44 @@ type WirePayload = Record<string, unknown>;
 type Handler = (event: unknown, ctx: PiContext) => void;
 
 const TUI_CTX: PiContext = {
-  mode: "tui",
+  hasUI: true,
   sessionManager: {
     getSessionId: () => "pi-s1",
     getSessionFile: () => "/sessions/pi-s1.jsonl",
   },
 };
 
+// A Paseo-driven RPC session: hasUI is true for TUI and RPC alike.
+const RPC_CTX: PiContext = {
+  hasUI: true,
+  sessionManager: {
+    getSessionId: () => "pi-rpc",
+    getSessionFile: () => "/sessions/pi-rpc.jsonl",
+  },
+};
+
+// Headless: hasUI false, no session file.
 const GHOST_CTX: PiContext = {
-  mode: "print",
+  hasUI: false,
   sessionManager: {
     getSessionId: () => "pi-ghost",
     getSessionFile: () => undefined,
   },
 };
 
-// Ghost-matrix contexts: each fails exactly one liveSession predicate.
-const NON_TUI_WITH_FILE: PiContext = {
-  mode: "print",
+// Ghost matrix: each fixture fails exactly one liveSession predicate.
+// A headless print/json process that still records a transcript.
+const NO_UI_WITH_FILE: PiContext = {
+  hasUI: false,
   sessionManager: {
     getSessionId: () => "pi-ghost",
     getSessionFile: () => "/sessions/pi-ghost.jsonl",
   },
 };
 
-const TUI_WITHOUT_FILE: PiContext = {
-  mode: "tui",
+// A UI-capable process that keeps no transcript.
+const UI_WITHOUT_FILE: PiContext = {
+  hasUI: true,
   sessionManager: {
     getSessionId: () => "pi-ghost",
     getSessionFile: () => undefined,
@@ -296,7 +308,7 @@ describe("pi shim terminal latch", () => {
 });
 
 describe("pi shim ghost filter", () => {
-  test("a non-TUI process without a session file emits nothing for any event", () => {
+  test("a headless process without a session file emits nothing for any event", () => {
     const { sent, fire } = makeHarness({ sessionName: "Ghost" });
     for (const [event, payload] of ALL_EVENTS) {
       fire(event, payload, GHOST_CTX);
@@ -304,27 +316,48 @@ describe("pi shim ghost filter", () => {
     expect(sent).toEqual([]);
   });
 
-  test("a non-TUI context with a valid session file emits nothing for any event", () => {
+  test("a headless process with a session file emits nothing for any event", () => {
     const { sent, fire } = makeHarness({ sessionName: "Ghost" });
     for (const [event, payload] of ALL_EVENTS) {
-      fire(event, payload, NON_TUI_WITH_FILE);
+      fire(event, payload, NO_UI_WITH_FILE);
     }
     expect(sent).toEqual([]);
   });
 
-  test("a TUI context without a session file emits nothing for any event", () => {
+  test("a UI context without a session file emits nothing for any event", () => {
     const { sent, fire } = makeHarness({ sessionName: "Ghost" });
     for (const [event, payload] of ALL_EVENTS) {
-      fire(event, payload, TUI_WITHOUT_FILE);
+      fire(event, payload, UI_WITHOUT_FILE);
     }
     expect(sent).toEqual([]);
+  });
+
+  test("an RPC context with a UI and a session file is reported end to end", () => {
+    const { sent, fire } = makeHarness({ sessionName: "Paseo agent" });
+    fire("session_start", {}, RPC_CTX);
+    fire("input", { source: "interactive" }, RPC_CTX);
+    fire("tool_execution_start", { toolName: "Bash" }, RPC_CTX);
+    fire("agent_end", agentEnd("stop"), RPC_CTX);
+    fire("agent_settled", {}, RPC_CTX);
+    expect(sent).toEqual([
+      {
+        hook_event_name: "SessionStart",
+        session_id: "pi-rpc",
+        cwd: process.cwd(),
+        transcript_path: "/sessions/pi-rpc.jsonl",
+        title: "Paseo agent",
+      },
+      { hook_event_name: "UserPromptSubmit", session_id: "pi-rpc" },
+      { hook_event_name: "PreToolUse", session_id: "pi-rpc", tool_name: "Bash" },
+      { hook_event_name: "Stop", session_id: "pi-rpc" },
+    ]);
   });
 
   test("ghost events never latch the visible session: the next turn settles cleanly", () => {
     const { sent, fire } = makeHarness();
     for (const [event, payload] of ALL_EVENTS) {
-      fire(event, payload, NON_TUI_WITH_FILE);
-      fire(event, payload, TUI_WITHOUT_FILE);
+      fire(event, payload, NO_UI_WITH_FILE);
+      fire(event, payload, UI_WITHOUT_FILE);
     }
     fire("input", { source: "interactive" });
     fire("agent_end", agentEnd("stop"));

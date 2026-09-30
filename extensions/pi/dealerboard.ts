@@ -30,7 +30,8 @@ export type SpawnPort = (json: string) => void | Promise<void>;
 
 /** The slice of pi's ExtensionAPI this shim reads — structural, never imported. */
 export type PiContext = {
-  mode: string;
+  /** pi's ExtensionContext.hasUI (true in TUI and RPC modes). */
+  hasUI: boolean;
   sessionManager: {
     getSessionId(): string | undefined;
     getSessionFile(): string | undefined;
@@ -244,14 +245,15 @@ export const createExtension = (
   };
 
   /**
-   * Ghost filter: extensions load in every pi process — print/json/rpc modes
-   * and subagent subprocesses included. Only interactive TUI sessions with a
-   * session file are grid-visible.
+   * Ghost filter: extensions load in every pi process — print/json modes and
+   * headless subprocesses included. Only sessions with a UI and a session file
+   * are grid-visible, so a headless process never becomes a card. `hasUI` is
+   * true in both the terminal and the RPC mode Paseo drives pi in.
    */
   const liveSession = (ctx: PiContext): { sessionId: string; sessionFile: string } | undefined => {
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionFile = ctx.sessionManager.getSessionFile();
-    if (ctx.mode !== "tui" || sessionId === undefined || sessionFile === undefined) {
+    if (ctx.hasUI !== true || sessionId === undefined || sessionFile === undefined) {
       return undefined;
     }
     return { sessionId, sessionFile };
