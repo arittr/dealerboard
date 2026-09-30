@@ -11,9 +11,6 @@ import type { SessionStatus } from "../../src/protocol";
 import type { BoardPage, BoardSession, PlacedCard, SpineSegment } from "./board";
 import { breathAnimationDelay, elapsedLabel, preciseElapsedLabel } from "./liveness";
 
-/** The corner's bright word: every state spells itself; working included. */
-export const statusWord = (status: SessionStatus): string => status;
-
 /** Parse an ISO stamp and format its age, or null when absent/unparseable —
  *  an old daemon simply shows no number. One parse shared by the coarse and
  *  precise labels so the two never drift. */
@@ -124,7 +121,7 @@ export const cardViewModel = (card: PlacedCard, nowMs: number): CardViewModel =>
     activity: session.activityLine,
     status: session.status,
     ended: session.endedAt !== null,
-    word: session.endedAt !== null ? "ended" : statusWord(session.status),
+    word: session.endedAt !== null ? "ended" : session.status,
     timerSince: timer === null ? null : timerSince,
     timer,
     age,

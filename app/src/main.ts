@@ -47,7 +47,14 @@ import {
   type SnapshotPayload,
   viewSession,
 } from "./bridge";
-import { ageLineText, boardRenderSignature, cardKey, renderBoard, sessionLastEventAt } from "./cards";
+import {
+  ageLineText,
+  boardRenderSignature,
+  cardKey,
+  preciseElapsedSince,
+  renderBoard,
+  sessionLastEventAt,
+} from "./cards";
 import { createDismissals, flickRemoves } from "./dismissals";
 /**
  * A pending press is bound to the pressed session's identity, never to a
@@ -76,7 +83,7 @@ import {
   returnSliverModel,
 } from "./indicators";
 import { createIngestGate } from "./ingest-gate";
-import { livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses, preciseElapsedLabel } from "./liveness";
+import { livenessFrame, PULSE_SWEEP_MS, type PulseEntry, planPulses } from "./liveness";
 import { createDeferredLatest, createPagingSession, type DragSettle, type PageDirection } from "./paging";
 import { pressBoardCard, pressSessionTile } from "./press";
 import { type QuotaPanelModel, reduceQuotaRead } from "./quota";
@@ -237,16 +244,8 @@ const renderIndicatorsNow = (): void => {
 const tickStatusLines = (): void => {
   const nowMs = Date.now();
   for (const timer of document.querySelectorAll<HTMLElement>("#board .cardtimer")) {
-    const since = timer.dataset["since"];
-    if (since === undefined) {
-      continue;
-    }
-    const startedMs = Date.parse(since);
-    if (Number.isNaN(startedMs)) {
-      continue;
-    }
-    const text = preciseElapsedLabel(nowMs - startedMs);
-    if (timer.textContent !== text) {
+    const text = preciseElapsedSince(timer.dataset["since"] ?? null, nowMs);
+    if (text !== null && timer.textContent !== text) {
       timer.textContent = text;
     }
   }

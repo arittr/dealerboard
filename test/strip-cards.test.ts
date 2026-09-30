@@ -15,7 +15,6 @@ import {
   planCardPatches,
   preciseElapsedSince,
   renderBoard,
-  statusWord,
 } from "../app/src/cards";
 import type { ProjectedSession } from "../src/protocol";
 import { descendants, FakeElement, hasClass, withFakeDocument } from "./support/fake-dom";
@@ -75,15 +74,6 @@ describe("card source hygiene", () => {
   test("contains no literal NUL bytes", () => {
     const source = readFileSync(join(import.meta.dir, "..", "app", "src", "cards.ts"));
     expect(source.includes(0x00)).toBe(false);
-  });
-});
-
-describe("statusWord", () => {
-  test("every state spells itself, working included", () => {
-    expect(statusWord("working")).toBe("working");
-    expect(statusWord("idle")).toBe("idle");
-    expect(statusWord("waiting")).toBe("waiting");
-    expect(statusWord("error")).toBe("error");
   });
 });
 
