@@ -6,10 +6,10 @@
  * through textContent; no innerHTML anywhere.
  */
 
-import { modelLabel, PROVIDER_LETTERS } from "../../src/plugin/render";
 import type { SessionStatus } from "../../src/protocol";
 import type { BoardPage, BoardSession, PlacedCard, SpineSegment } from "./board";
 import { breathAnimationDelay, elapsedLabel, preciseElapsedLabel } from "./liveness";
+import { modelLabel, PROVIDER_LETTERS } from "./provider-marks";
 
 /** Parse an ISO stamp and format its age, or null when absent/unparseable —
  *  an old daemon simply shows no number. One parse shared by the coarse and
