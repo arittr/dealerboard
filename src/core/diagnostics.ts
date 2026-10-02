@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 export type DiagnosticCode =
   | "invalid_input"
+  | "payload_too_large"
   | "unsupported_provider"
   | "missing_database"
   | "unsupported_schema"

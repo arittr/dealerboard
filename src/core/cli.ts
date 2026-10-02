@@ -13,11 +13,11 @@
  *   dealerboard sessions clear-all
  *   dealerboard sessions prune [max-age-hours]
  *
- * The event path is fail-open for provider hooks: it reads at most 65,536
- * stdin bytes, parses one JSON object, applies the decoded events in one
- * transaction with a single bounded retry for SQLite contention, logs only
- * fixed diagnostic codes, prints nothing, and always exits zero. The daemon
- * subcommand starts the long-lived projection and maintenance loop and
+ * The event path is fail-open for provider hooks: it reads a bounded stdin
+ * payload (see `MAX_STDIN_BYTES`), parses one JSON object, applies the decoded
+ * events in one transaction with a single bounded retry for SQLite contention,
+ * logs only fixed diagnostic codes, prints nothing, and always exits zero. The
+ * daemon subcommand starts the long-lived projection and maintenance loop and
  * normally runs until the process is terminated. The other subcommands report
  * concise errors on stderr and return nonzero.
  */
@@ -56,7 +56,7 @@ import { initializeDatabase, openRegistryDatabase, UnsupportedSchemaVersion } fr
 import { createSessionFactsResolver } from "./titles";
 import { createTokenUsageCollector, resolveAgentsviewBin } from "./token-usage";
 
-export const MAX_STDIN_BYTES = 65_536;
+export const MAX_STDIN_BYTES = 4 * 1024 * 1024;
 const RETRY_DELAY_MS = 25;
 const DIAGNOSTIC_COMPONENT = "cli";
 
@@ -238,7 +238,10 @@ const runEvent = async (args: readonly string[], deps: ResolvedDependencies): Pr
 
     const input = await readBoundedStdin(deps.stdin, MAX_STDIN_BYTES);
     if (input === null) {
-      report({ code: "invalid_input", provider: providerArg });
+      // Over the cap is distinct from malformed input: a provider that sends a
+      // large tool payload (a file write or patch) must be able to bound the
+      // failure without it looking like an unparseable event.
+      report({ code: "payload_too_large", provider: providerArg });
       return 0;
     }
     let payload: unknown;

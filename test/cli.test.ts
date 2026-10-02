@@ -695,14 +695,52 @@ describe("event ingress", () => {
     expect(await runCli(["event", "claude"], overLimit.deps)).toBe(0);
     expect(overLimit.stdout()).toBe("");
     expect(overLimit.diagnostics).toEqual([
-      { timestamp: NOW, component: "cli", code: "invalid_input", provider: "claude" },
+      { timestamp: NOW, component: "cli", code: "payload_too_large", provider: "claude" },
     ]);
+  });
+
+  test("accepts a realistic over-64KB Codex tool payload that used to be dropped", async () => {
+    initRegistry();
+    // Codex's apply_patch embeds the whole patch in tool_input; file writes
+    // routinely exceed the old 65,536-byte cap (observed: 80,081 bytes).
+    const toolPayload = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "codex-large-1",
+      cwd: "/users/test/project-x",
+      transcript_path: "/users/test/.codex/sessions/rollout.jsonl",
+      model: "gpt-6.1-sol",
+      tool_name: "apply_patch",
+      tool_input: { patch: "Z".repeat(80_000) },
+    });
+    expect(new TextEncoder().encode(toolPayload).byteLength).toBeGreaterThan(65_536);
+
+    // A large prompt late-joins and registers the session...
+    const promptPayload = JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "codex-large-1",
+      cwd: "/users/test/project-x",
+      transcript_path: "/users/test/.codex/sessions/rollout.jsonl",
+      model: "gpt-6.1-sol",
+      prompt: "P".repeat(80_000),
+    });
+    expect(new TextEncoder().encode(promptPayload).byteLength).toBeGreaterThan(65_536);
+    const register = makeHarness({ stdin: stdinOf(promptPayload) });
+    expect(await runCli(["event", "codex"], register.deps)).toBe(0);
+    expect(register.diagnostics).toEqual([]);
+    expect(listRows()).toHaveLength(1);
+
+    // ...and a large tool event updates it instead of being silently dropped.
+    const tool = makeHarness({ stdin: stdinOf(toolPayload) });
+    expect(await runCli(["event", "codex"], tool.deps)).toBe(0);
+    expect(tool.diagnostics).toEqual([]);
+    expect(listRows()).toHaveLength(1);
+    expect(listRows()[0]).toMatchObject({ provider: "codex", sessionId: "codex-large-1", status: "working" });
   });
 
   test("stops reading stdin as soon as the byte cap is exceeded", async () => {
     initRegistry();
     let pulls = 0;
-    const chunk = new Uint8Array(40_000);
+    const chunk = new Uint8Array(MAX_STDIN_BYTES);
     const stdin = (async function* () {
       pulls += 1;
       yield chunk;
@@ -713,8 +751,8 @@ describe("event ingress", () => {
     })();
     const harness = makeHarness({ stdin });
     expect(await runCli(["event", "claude"], harness.deps)).toBe(0);
-    expect(harness.diagnostics.map((record) => record.code)).toEqual(["invalid_input"]);
-    // 2 chunks cross 65,536 bytes; the third chunk is never pulled.
+    expect(harness.diagnostics.map((record) => record.code)).toEqual(["payload_too_large"]);
+    // The second chunk crosses the cap; the third chunk is never pulled.
     expect(pulls).toBe(2);
   });
 
