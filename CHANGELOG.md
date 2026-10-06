@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Compaction no longer drops a Codex (or Claude) card off the board. Both
+  harnesses re-fire `SessionStart` with `source: "compact"` after summarizing
+  a live thread; the decoder treated it as a fresh session, resetting the row
+  to idle and clearing its done/unread ledgers, so the card vanished until
+  work resumed and a finished result lost its unread mark. A compaction start
+  now maps to a metadata-only `SessionObserved`.
+
 ## [2.0.0] - 2026-09-30
 
 ### Changed

@@ -528,6 +528,64 @@ describe("event mapping", () => {
     ]);
   });
 
+  test("maps a compaction SessionStart to SessionObserved instead of a new life", () => {
+    // Codex (and Claude) re-fire SessionStart with source "compact" after
+    // summarizing a live thread. It is not a new life: SessionStart would
+    // reset the row to idle and clear its done/unread ledgers, dropping the
+    // card off the board until the next turn. SessionObserved refreshes
+    // membership metadata only, preserving the recorded lifecycle.
+    expect(
+      decode(
+        {
+          hook_event_name: "SessionStart",
+          session_id: "c1",
+          cwd: "/work/app",
+          transcript_path: "/Users/test/.codex/sessions/rollout-1.jsonl",
+          source: "compact",
+        },
+        "codex",
+      ),
+    ).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "codex",
+        sessionId: "c1",
+        title: null,
+        project: "app",
+        transcriptPath: "/Users/test/.codex/sessions/rollout-1.jsonl",
+        model: null,
+        observedAt: NOW,
+      },
+    ]);
+    // Claude emits the same compaction start; it maps identically.
+    expect(decode({ hook_event_name: "SessionStart", session_id: "s1", source: "compact" })).toEqual([
+      {
+        kind: "SessionObserved",
+        provider: "claude",
+        sessionId: "s1",
+        title: null,
+        project: null,
+        transcriptPath: null,
+        model: null,
+        observedAt: NOW,
+      },
+    ]);
+    // Ordinary starts remain a new life.
+    expect(decode({ hook_event_name: "SessionStart", session_id: "s2", source: "startup" })).toEqual([
+      {
+        kind: "SessionStart",
+        provider: "claude",
+        sessionId: "s2",
+        title: null,
+        project: null,
+        ghosttyTerminalId: null,
+        transcriptPath: null,
+        model: null,
+        observedAt: NOW,
+      },
+    ]);
+  });
+
   test("returns no events for unknown hook names", () => {
     for (const name of ["PostToolUseFailure", "PreCompact", "SessionHeartbeat", "Banana"]) {
       expect(decode({ hook_event_name: name, session_id: "s1" })).toEqual([]);

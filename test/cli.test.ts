@@ -658,6 +658,32 @@ describe("event ingress", () => {
     ]);
   });
 
+  test("keeps a finished Codex card on the board across a compaction SessionStart", async () => {
+    // Codex re-fires SessionStart with source "compact" after summarizing a
+    // live thread. Treating it as a new life reset the row to idle and cleared
+    // its done/unread ledgers, so the finished card dropped off the board
+    // until work resumed. Compaction must leave the recorded lifecycle intact.
+    initRegistry();
+    const send = async (payload: Record<string, unknown>): Promise<void> => {
+      const harness = makeHarness({
+        stdin: stdinOf(JSON.stringify({ session_id: "codex-compact", cwd: "/users/test/project-x", ...payload })),
+      });
+      expect(await runCli(["event", "codex"], harness.deps)).toBe(0);
+      expect(harness.diagnostics).toEqual([]);
+    };
+
+    await send({ hook_event_name: "SessionStart", source: "startup" });
+    await send({ hook_event_name: "Stop" });
+    expect(listRows()[0]).toMatchObject({ status: "idle", unreadSince: NOW });
+    expect(projectedRows().map((session) => session.sessionId)).toEqual(["codex-compact"]);
+
+    await send({ hook_event_name: "SessionStart", source: "compact" });
+
+    // Still idle with its finished result intact — the card does not drop.
+    expect(listRows()[0]).toMatchObject({ status: "idle", unreadSince: NOW });
+    expect(projectedRows().map((session) => session.sessionId)).toEqual(["codex-compact"]);
+  });
+
   test("returns zero with an invalid_input diagnostic for malformed JSON", async () => {
     initRegistry();
     const harness = makeHarness({ stdin: stdinOf('{"hook_event_name":"SessionStart",') });

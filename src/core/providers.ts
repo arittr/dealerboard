@@ -249,6 +249,16 @@ export const decodeNativeHook = (provider: Provider, value: unknown, now: string
   }
   switch (hookName) {
     case "SessionStart": {
+      // Codex and Claude re-fire SessionStart with source "compact" after
+      // summarizing a live thread. That is not a new life: a SessionStart
+      // would reset the row to idle and clear its done/unread ledgers,
+      // dropping a working or finished card off the board until the next
+      // turn. SessionObserved refreshes membership metadata only, so the
+      // recorded lifecycle survives compaction (and a pruned row still
+      // late-joins).
+      if (firstAllowlistedString(value, SAFE_FIELDS.source) === "compact") {
+        return [sessionObservedEvent(provider, sessionId, value, now)];
+      }
       // Kimi emits SessionStart eagerly for blank Web pages, so a titleless
       // start is not evidence of a user-visible session — but the row still
       // registers: an idle, never-unread row is projection-invisible (the
