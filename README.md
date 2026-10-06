@@ -175,7 +175,7 @@ itself.
 - **Paseo:** supplies agent lineage, attention/view state, names, and exact
   `paseo://` routes.
 - **Evener:** supplies local inventory and lifecycle state over authenticated
-  AppWire v3.
+  AppWire v7.
 - **[CodexBar](https://github.com/steipete/CodexBar):** supplies quota windows
   for Claude, Codex, Kimi, GLM/zai, and Qwen. Codex collection discovers all
   saved accounts with `--all-accounts`; each retains its own source measurement.

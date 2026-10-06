@@ -75,7 +75,7 @@ configured loopback port and receive it. A missing hub or token is an
 optional-provider condition; the collector stays quiet and retries every five
 seconds.
 
-After the AppWire v3 handshake, the collector lists only Evener's `local`
+After the AppWire v7 handshake, the collector lists only Evener's `local`
 source, hydrates roots before live subagents, subscribes to ordered updates,
 and refreshes every two seconds to discover new sessions. Status mapping is:
 

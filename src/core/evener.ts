@@ -4,7 +4,13 @@ import type { RegistryEvent, SessionStatus } from "../protocol";
 import type { DiagnosticRecord } from "./diagnostics";
 
 /** Evener's current exact AppWire handshake version. */
-export const EVENER_APPWIRE_PROTOCOL_VERSION = "evener-appwire-v3";
+export const EVENER_APPWIRE_PROTOCOL_VERSION = "evener-appwire-v7";
+/**
+ * The navigation read representation the collector reads. v7 requires the
+ * field to be present and equal to 3; the location fields it returns live
+ * under `data.metadata`.
+ */
+export const EVENER_NAVIGATION_REPRESENTATION_VERSION = 3;
 export const EVENER_DEFAULT_HUB_ADDRESS = "127.0.0.1:9180";
 export const EVENER_REFRESH_INTERVAL_MS = 2_000;
 export const EVENER_RECONNECT_INTERVAL_MS = 5_000;
@@ -17,12 +23,9 @@ const MAX_WIRE_STRING_CODE_POINTS = 256;
 const MAX_TOKEN_CODE_UNITS = 4_096;
 const LOCAL_SOURCE_ID = "local";
 
-const HIGH_VOLUME_NOTIFICATIONS = [
-  "item/agentMessage/delta",
-  "item/agentMessage/reset",
-  "item/reasoning/summaryTextDelta",
-  "item/toolOutput/delta",
-] as const;
+// v6 retired the item/* delta notifications; overlay/delta is the streamed
+// text the collector never reads.
+const HIGH_VOLUME_NOTIFICATIONS = ["overlay/delta"] as const;
 
 const THREAD_STATUSES = ["idle", "active", "awaiting", "warning", "systemError"] as const;
 const KNOWN_THREAD_STATUSES = new Set<string>([...THREAD_STATUSES, "closed", "notLoaded"]);
@@ -308,6 +311,13 @@ type EvenerThreadState = {
   failedTurn: boolean;
   registered: boolean;
   cleanupEmitted: boolean;
+  /** The newest terminal turn reported by history/updated, so its Stop or
+   *  StopFailure is announced exactly once despite later re-sends. */
+  terminalTurnId: string | null;
+  terminalTurnVersion: number;
+  /** The live turn already announced as activity, so repeated history/updated
+   *  frames for one turn do not re-fire it. */
+  liveTurnId: string | null;
 };
 
 type EvenerDelegateInfo = Readonly<{
@@ -449,6 +459,9 @@ const parseThread = (value: unknown, previous?: EvenerThreadState): EvenerThread
     failedTurn: rawStatus === "active" || rawStatus === "awaiting" ? false : (previous?.failedTurn ?? false),
     registered: previous?.registered ?? false,
     cleanupEmitted: previous?.cleanupEmitted ?? false,
+    terminalTurnId: previous?.terminalTurnId ?? null,
+    terminalTurnVersion: previous?.terminalTurnVersion ?? 0,
+    liveTurnId: previous?.liveTurnId ?? null,
   };
 };
 
@@ -550,10 +563,12 @@ const endEvent = (state: EvenerThreadState, observedAt: string): RegistryEvent =
     ? { kind: "SubagentStop", provider: "evener", sessionId: state.sessionId, observedAt }
     : { kind: "SessionEnd", provider: "evener", sessionId: state.sessionId, observedAt };
 
-const parseTurnStatus = (params: Record<string, unknown>): string | null => {
-  const turn = params["turn"];
-  return isRecord(turn) && typeof turn["status"] === "string" ? turn["status"] : null;
-};
+// Turn.Status on the wire (appwire.Turn). v6 removed turn/started and
+// turn/completed; the recorded form now arrives in history/updated.
+const TURN_STATUS_IN_PROGRESS = "inProgress";
+const TURN_STATUS_COMPLETED = "completed";
+const TURN_STATUS_FAILED = "failed";
+const TURN_STATUS_INTERRUPTED = "interrupted";
 
 const delegateImmutableFields = ["ownerSessionId", "rootSessionId", "parentDelegateId"] as const;
 const delegateTrackedFields = [
@@ -1275,17 +1290,25 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         .sort((left, right) => left.sessionId.localeCompare(right.sessionId));
       for (const root of roots) {
         const ref = `${LOCAL_SOURCE_ID}:${root.sessionId}`;
-        const result = await request(target, "evener/navigation/read", { resource: "location", ref });
+        const result = await request(target, "evener/navigation/read", {
+          representationVersion: EVENER_NAVIGATION_REPRESENTATION_VERSION,
+          resource: "location",
+          ref,
+        });
         assertRefreshGeneration(expectedGeneration);
         if (!isRecord(result) || result["status"] !== "ok" || !isRecord(result["data"])) {
           throw new EvenerCandidateRejected("invalid Evener navigation location response");
         }
         const location = result["data"];
-        const tier = nonEmptyString(location["tier"]);
+        if (!isRecord(location["metadata"])) {
+          throw new EvenerCandidateRejected("invalid Evener navigation location response");
+        }
+        const metadata = location["metadata"];
+        const tier = nonEmptyString(metadata["tier"]);
         if (
-          wireIdentity(location["ref"]) !== ref ||
-          wireIdentity(location["top_level_ref"]) !== ref ||
-          location["top_level"] !== true ||
+          wireIdentity(metadata["ref"]) !== ref ||
+          wireIdentity(metadata["top_level_ref"]) !== ref ||
+          metadata["top_level"] !== true ||
           tier === null ||
           !NAVIGATION_TIERS.has(tier)
         ) {
@@ -1420,49 +1443,88 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
     emitIncremental([liveStatusEvent(state, previousStatus, observedAt)]);
   };
 
-  const handleTurnStarted = (params: Record<string, unknown>): void => {
+  /**
+   * history/updated is v6+'s record of a thread's recorded turns and items —
+   * the replacement for the removed turn/started and turn/completed
+   * notifications. A live inProgress turn is activity; a completed, failed,
+   * or interrupted turn settles the session exactly as turn/completed did.
+   * Only the newest terminal turn announces, and only once, so a re-sent
+   * update cannot duplicate a Stop.
+   */
+  const handleHistoryUpdated = (params: Record<string, unknown>): void => {
     const state = stateForParams(params);
     if (state === null) {
       scheduleRefresh(0);
       return;
     }
-    state.rawStatus = "active";
-    state.askPending = false;
-    state.failedTurn = false;
-    const observedAt = now();
-    if (isChild(state) && !state.registered) {
-      emitIncremental(hydrateState(indices, state, true, observedAt));
-      return;
-    }
-    emitIncremental([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt }]);
-  };
-
-  const handleTurnCompleted = (params: Record<string, unknown>): void => {
-    const state = stateForParams(params);
-    const turnStatus = parseTurnStatus(params);
-    if (state === null || turnStatus === null) {
-      scheduleRefresh(0);
+    const turns = params["turns"];
+    if (!Array.isArray(turns)) {
       return;
     }
     const observedAt = now();
-    if (isChild(state)) {
-      const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
-      state.registered = false;
-      state.cleanupEmitted = true;
-      emitIncremental(events);
-      return;
+    let newestTerminal: { id: string; status: string; version: number } | null = null;
+    let inProgressTurnId: string | null = null;
+    for (const value of turns) {
+      if (!isRecord(value)) {
+        continue;
+      }
+      const id = nonEmptyString(value["id"]);
+      const status = nonEmptyString(value["status"]);
+      if (id === null || status === null) {
+        continue;
+      }
+      if (status === TURN_STATUS_IN_PROGRESS) {
+        inProgressTurnId = id;
+        continue;
+      }
+      if (status !== TURN_STATUS_COMPLETED && status !== TURN_STATUS_FAILED && status !== TURN_STATUS_INTERRUPTED) {
+        continue;
+      }
+      const versionValue = value["version"];
+      const version =
+        typeof versionValue === "number" && Number.isSafeInteger(versionValue) && versionValue >= 0 ? versionValue : 0;
+      if (newestTerminal === null || version >= newestTerminal.version) {
+        newestTerminal = { id, status, version };
+      }
     }
-    if (turnStatus === "failed") {
-      state.failedTurn = true;
-      state.rawStatus = "idle";
-      emitIncremental([{ kind: "StopFailure", provider: "evener", sessionId: state.sessionId, observedAt }]);
-    } else if (turnStatus === "completed" || turnStatus === "interrupted") {
+    if (newestTerminal !== null) {
+      if (state.terminalTurnId === newestTerminal.id && state.terminalTurnVersion === newestTerminal.version) {
+        return; // already announced
+      }
+      state.terminalTurnId = newestTerminal.id;
+      state.terminalTurnVersion = newestTerminal.version;
+      state.liveTurnId = null;
+      if (isChild(state)) {
+        const events = state.cleanupEmitted ? [] : [endEvent(state, observedAt)];
+        state.registered = false;
+        state.cleanupEmitted = true;
+        emitIncremental(events);
+        return;
+      }
+      if (newestTerminal.status === TURN_STATUS_FAILED) {
+        state.failedTurn = true;
+        state.rawStatus = "idle";
+        emitIncremental([{ kind: "StopFailure", provider: "evener", sessionId: state.sessionId, observedAt }]);
+        return;
+      }
       state.failedTurn = false;
       const events: RegistryEvent[] = [{ kind: "Stop", provider: "evener", sessionId: state.sessionId, observedAt }];
-      if (turnStatus === "completed" && requiresAttention(state)) {
+      if (newestTerminal.status === TURN_STATUS_COMPLETED && requiresAttention(state)) {
         events.push({ kind: "Attention", provider: "evener", sessionId: state.sessionId, observedAt });
       }
       emitIncremental(events);
+      return;
+    }
+    if (inProgressTurnId !== null && state.liveTurnId !== inProgressTurnId) {
+      state.liveTurnId = inProgressTurnId;
+      state.rawStatus = "active";
+      state.askPending = false;
+      state.failedTurn = false;
+      if (isChild(state) && !state.registered) {
+        emitIncremental(hydrateState(indices, state, true, observedAt));
+        return;
+      }
+      emitIncremental([{ kind: "Activity", provider: "evener", sessionId: state.sessionId, observedAt }]);
     }
   };
 
@@ -1623,13 +1685,9 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         invalidateRefreshGeneration();
         handleModelChanged(params);
         return;
-      case "turn/started":
+      case "history/updated":
         invalidateRefreshGeneration();
-        handleTurnStarted(params);
-        return;
-      case "turn/completed":
-        invalidateRefreshGeneration();
-        handleTurnCompleted(params);
+        handleHistoryUpdated(params);
         return;
       case "evener/sandbox/escalation/requested": {
         invalidateRefreshGeneration();
@@ -1655,7 +1713,8 @@ export const createEvenerCollector = (dependencies: EvenerCollectorDependencies)
         return;
       }
       case "evener/thread/resync":
-      case "evener/tree/changed":
+      case "evener/jobs/treeUpdated":
+      case "evener/task/updated":
       case "evener/delegate/updated":
       case "evener/navigation/invalidated":
         invalidateRefreshGeneration();

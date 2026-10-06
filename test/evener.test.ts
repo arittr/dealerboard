@@ -223,12 +223,14 @@ const respondToLocations = async (socket: FakeSocket, tiersByRef: ReadonlyMap<st
       revision: 1,
       etag: `etag-${ref}`,
       data: {
-        generation_id: "generation-1",
-        revision: 1,
-        ref,
-        top_level_ref: ref,
-        top_level: true,
-        tier,
+        metadata: {
+          generation_id: "generation-1",
+          revision: 1,
+          ref,
+          top_level_ref: ref,
+          top_level: true,
+          tier,
+        },
       },
     });
     await flush();
@@ -249,7 +251,7 @@ const acceptBaseline = async (
   values: Record<string, unknown>[] = [thread("baseline", "active")],
 ): Promise<void> => {
   socket.open();
-  respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+  respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
   await flush();
   respond(socket, requestByMethod(socket, "thread/list"), { data: values });
   await flush();
@@ -416,7 +418,7 @@ describe("Evener AppWire collector", () => {
 
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), { data: values });
     await flush();
@@ -491,19 +493,14 @@ describe("Evener AppWire collector", () => {
     socket.open();
     const initialize = requestByMethod(socket, "initialize");
     expect(initialize["params"]).toEqual({
-      protocolVersion: "evener-appwire-v3",
+      protocolVersion: "evener-appwire-v7",
       clientInfo: { name: "dealerboard", version: "1" },
       capabilities: {
         experimentalApi: false,
-        optOutNotificationMethods: [
-          "item/agentMessage/delta",
-          "item/agentMessage/reset",
-          "item/reasoning/summaryTextDelta",
-          "item/toolOutput/delta",
-        ],
+        optOutNotificationMethods: ["overlay/delta"],
       },
     });
-    respond(socket, initialize, { protocolVersion: "evener-appwire-v3" });
+    respond(socket, initialize, { protocolVersion: "evener-appwire-v7" });
     await flush();
     expect(socket.sent).toContainEqual({ method: "initialized", params: {} });
 
@@ -654,7 +651,7 @@ describe("Evener AppWire collector", () => {
       });
       collector.start();
       socket.open();
-      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
       await flush();
       const list = requestByMethod(socket, "thread/list");
       respond(socket, list, { data: order.map((sessionId) => fixtureBySession.get(sessionId)!) });
@@ -714,7 +711,7 @@ describe("Evener AppWire collector", () => {
 
       collector.start();
       socket.open();
-      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+      respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
       await flush();
       respond(socket, requestByMethod(socket, "thread/list"), {
         data: order.map((sessionId) => fixtureBySession.get(sessionId)!),
@@ -991,7 +988,7 @@ describe("Evener AppWire collector", () => {
     });
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), { data: [] });
     await flush();
@@ -1013,7 +1010,7 @@ describe("Evener AppWire collector", () => {
     });
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     const baseline = thread("baseline", "active");
     respond(socket, requestByMethod(socket, "thread/list"), { data: [baseline] });
@@ -1031,8 +1028,8 @@ describe("Evener AppWire collector", () => {
     expect(diagnostics).toHaveLength(1);
 
     socket.message({
-      method: "turn/started",
-      params: { ref: "local:baseline", threadId: "baseline", turn: { status: "inProgress" } },
+      method: "history/updated",
+      params: { ref: "local:baseline", threadId: "baseline", turns: [{ id: "turn_1", status: "inProgress" }] },
     });
     expect(updates.at(-1)).toMatchObject({
       activeChildSessionIds: null,
@@ -1111,7 +1108,7 @@ describe("Evener AppWire collector", () => {
 
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     // The hub's Go struct marks model and terminal omitempty: a delegate with
     // no model and terminal=false arrives with both keys missing entirely.
@@ -1147,7 +1144,7 @@ describe("Evener AppWire collector", () => {
 
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     // Live hub behavior: thread/list aliases a delegate child under its
     // root's workspace ref, while thread/read returns the child under its
@@ -1190,7 +1187,7 @@ describe("Evener AppWire collector", () => {
 
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), {
       data: [
@@ -1387,7 +1384,7 @@ describe("Evener AppWire collector", () => {
     timers.run(5_000);
     expect(socketIndex).toBe(2);
     sockets[1]!.open();
-    respond(sockets[1]!, requestByMethod(sockets[1]!, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(sockets[1]!, requestByMethod(sockets[1]!, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     sockets[1]!.message({
       method: "thread/status/changed",
@@ -1530,7 +1527,7 @@ describe("Evener AppWire collector", () => {
 
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
 
     let lists = socket.sent.filter((frame) => frame["method"] === "thread/list" && "id" in frame);
@@ -1563,7 +1560,7 @@ describe("Evener AppWire collector", () => {
 
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), {
       data: [thread("first", "active"), thread("second", "active")],
@@ -1587,7 +1584,7 @@ describe("Evener AppWire collector", () => {
     });
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), { data: [thread("root", "awaiting")] });
     await flush();
@@ -1597,8 +1594,8 @@ describe("Evener AppWire collector", () => {
 
     events.length = 0;
     socket.message({
-      method: "turn/completed",
-      params: { ref: "local:root", threadId: "root", turnId: "turn_1", turn: { status: "completed" } },
+      method: "history/updated",
+      params: { ref: "local:root", threadId: "root", turns: [{ id: "turn_1", status: "completed", version: 1 }] },
     });
     socket.message({
       method: "thread/status/changed",
@@ -1617,6 +1614,41 @@ describe("Evener AppWire collector", () => {
     collector.stop();
   });
 
+  test("reads the v7 navigation representation and settles a turn only once", async () => {
+    const socket = new FakeSocket();
+    const events: EvenerCollectorUpdate["events"] = [];
+    const collector = createEvenerCollector({
+      connection: () => ({ url: "ws://127.0.0.1:9180/rpc", token: "capability" }),
+      socketFactory: () => socket,
+      now: () => "2026-08-26T05:00:30.000Z",
+      onUpdate: collectIncrementalEvents(events),
+    });
+    collector.start();
+    socket.open();
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
+    await flush();
+    respond(socket, requestByMethod(socket, "thread/list"), { data: [thread("root", "active")] });
+    await flush();
+    await respondToReads(socket, threadFixtures(thread("root", "active")));
+
+    expect(requestsByMethod(socket, "evener/navigation/read").map((request) => request["params"])).toEqual([
+      { representationVersion: 3, resource: "location", ref: "local:root" },
+    ]);
+
+    events.length = 0;
+    const completion = {
+      ref: "local:root",
+      threadId: "root",
+      turns: [{ id: "turn_1", status: "completed", version: 1 }],
+    };
+    socket.message({ method: "history/updated", params: completion });
+    socket.message({ method: "history/updated", params: completion });
+    expect(events).toEqual([
+      { kind: "Stop", provider: "evener", sessionId: "root", observedAt: "2026-08-26T05:00:30.000Z" },
+    ]);
+    collector.stop();
+  });
+
   test("hydrates concrete Evener questions and sandbox escalations as waiting", async () => {
     const socket = new FakeSocket();
     const events: EvenerCollectorUpdate["events"] = [];
@@ -1627,7 +1659,7 @@ describe("Evener AppWire collector", () => {
     });
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), {
       data: [
@@ -1663,7 +1695,7 @@ describe("Evener AppWire collector", () => {
     });
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), {
       data: [thread("root", "active"), thread("child", "awaiting", { parentRef: "local:root", kind: "subagent" })],
@@ -1702,7 +1734,7 @@ describe("Evener AppWire collector", () => {
     });
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), {
       data: [
@@ -1727,8 +1759,8 @@ describe("Evener AppWire collector", () => {
       params: { ref: "local:status-child", threadId: "status-child", status: { type: "active" } },
     });
     socket.message({
-      method: "turn/started",
-      params: { ref: "local:turn-child", threadId: "turn-child", turn: { status: "inProgress" } },
+      method: "history/updated",
+      params: { ref: "local:turn-child", threadId: "turn-child", turns: [{ id: "turn_1", status: "inProgress" }] },
     });
 
     for (const sessionId of ["status-child", "turn-child"]) {
@@ -1757,7 +1789,7 @@ describe("Evener AppWire collector", () => {
     });
     collector.start();
     socket.open();
-    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v3" });
+    respond(socket, requestByMethod(socket, "initialize"), { protocolVersion: "evener-appwire-v7" });
     await flush();
     respond(socket, requestByMethod(socket, "thread/list"), {
       data: [
@@ -1813,7 +1845,7 @@ describe("Evener AppWire collector", () => {
     collector.start();
     socket.open();
     const initialize = requestByMethod(socket, "initialize");
-    respond(socket, initialize, { protocolVersion: "evener-appwire-v3" });
+    respond(socket, initialize, { protocolVersion: "evener-appwire-v7" });
     await flush();
     const list = requestByMethod(socket, "thread/list");
     respond(socket, list, {
@@ -1830,8 +1862,8 @@ describe("Evener AppWire collector", () => {
     events.length = 0;
 
     socket.message({
-      method: "turn/completed",
-      params: { ref: "local:root", threadId: "root", turnId: "turn_1", turn: { status: "completed" } },
+      method: "history/updated",
+      params: { ref: "local:root", threadId: "root", turns: [{ id: "turn_1", status: "completed", version: 1 }] },
     });
     socket.message({
       method: "thread/status/changed",
@@ -1846,20 +1878,20 @@ describe("Evener AppWire collector", () => {
       params: { ref: "local:root", threadId: "root", modelProvider: "openai", model: "gpt-5.6-terra" },
     });
     socket.message({
-      method: "turn/started",
-      params: { ref: "local:root", threadId: "root", turn: { status: "inProgress" } },
+      method: "history/updated",
+      params: { ref: "local:root", threadId: "root", turns: [{ id: "turn_2", status: "inProgress" }] },
     });
     socket.message({
-      method: "turn/completed",
-      params: { ref: "local:root", threadId: "root", turnId: "turn_2", turn: { status: "failed" } },
+      method: "history/updated",
+      params: { ref: "local:root", threadId: "root", turns: [{ id: "turn_2", status: "failed", version: 2 }] },
     });
     socket.message({
       method: "thread/status/changed",
       params: { ref: "local:root", threadId: "root", status: { type: "idle" } },
     });
     socket.message({
-      method: "turn/completed",
-      params: { ref: "local:child", threadId: "child", turnId: "turn_1", turn: { status: "completed" } },
+      method: "history/updated",
+      params: { ref: "local:child", threadId: "child", turns: [{ id: "turn_1", status: "completed", version: 1 }] },
     });
     socket.message({ method: "thread/closed", params: { ref: "local:root", threadId: "root" } });
 
@@ -2031,15 +2063,15 @@ describe("Evener AppWire collector", () => {
       { kind: "StopFailure", provider: "evener", sessionId: "child", observedAt: expect.any(String) },
     ]);
     socket.message({
-      method: "turn/started",
-      params: { ref: "local:root", threadId: "grandchild", turn: { status: "inProgress" } },
+      method: "history/updated",
+      params: { ref: "local:root", threadId: "grandchild", turns: [{ id: "turn_1", status: "inProgress" }] },
     });
     expect(updates.at(-1)?.events).toEqual([
       { kind: "Activity", provider: "evener", sessionId: "grandchild", observedAt: expect.any(String) },
     ]);
     socket.message({
-      method: "turn/completed",
-      params: { ref: "local:root", threadId: "root", turn: { status: "completed" } },
+      method: "history/updated",
+      params: { ref: "local:root", threadId: "root", turns: [{ id: "turn_1", status: "completed", version: 1 }] },
     });
     expect(updates.at(-1)?.events).toEqual([
       { kind: "Stop", provider: "evener", sessionId: "root", observedAt: expect.any(String) },

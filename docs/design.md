@@ -170,7 +170,7 @@ interaction path.
 - `cswap list --json` adds privacy-safe Claude account meters.
 - `agentsview` runs every 30 seconds for aggregate daily token totals.
 - Paseo overlay state refreshes every two seconds.
-- Evener uses authenticated loopback AppWire v3 and refreshes every two
+- Evener uses authenticated loopback AppWire v7 and refreshes every two
   seconds. Each accepted refresh reads the navigation location of every root;
   archived roots and their descendants are removed. Navigation invalidation
   triggers an immediate refresh. Lists are capped at 16 pages and 4,096
