@@ -45,6 +45,52 @@ describe("roborev claude shim", () => {
     expect(spawned.argv).toEqual(["-p", "--output-format", "stream-json"]);
   });
 
+  // Argument shapes below mirror roborev's ClaudeAgent buildArgs/buildPlanningArgs.
+  const reviewArgs = [
+    "-p",
+    "--verbose",
+    "--output-format",
+    "stream-json",
+    "--model",
+    "claude-opus-5-5",
+    "--effort",
+    "xhigh",
+    "--allowedTools",
+    "Read,Glob,Grep",
+  ];
+  const readOnlyConfinement = ["--permission-mode", "plan", "--tools", "Read,Glob,Grep", "--disallowedTools", "mcp__*"];
+
+  test("confines review runs to read-only tools", () => {
+    const spawned = runShim(reviewArgs, {});
+    expect(spawned.argv).toEqual([...reviewArgs, ...readOnlyConfinement]);
+  });
+
+  test("confines structured review runs without disturbing the schema", () => {
+    const structuredArgs = [...reviewArgs, "--json-schema", '{"type":"object"}'];
+    const spawned = runShim(structuredArgs, {});
+    expect(spawned.argv).toEqual([...structuredArgs, ...readOnlyConfinement]);
+  });
+
+  test("leaves agentic fix and refine runs their write tools", () => {
+    const agenticArgs = [
+      "-p",
+      "--verbose",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--allowedTools",
+      "Edit,MultiEdit,Write,Read,Glob,Grep,Bash",
+    ];
+    const spawned = runShim(agenticArgs, {});
+    expect(spawned.argv).toEqual(agenticArgs);
+  });
+
+  test("leaves runs roborev already confined unchanged", () => {
+    const planningArgs = [...reviewArgs, ...readOnlyConfinement];
+    const spawned = runShim(planningArgs, {});
+    expect(spawned.argv).toEqual(planningArgs);
+  });
+
   test("scrubs spawn markers the roborev daemon inherited from its starting shell", () => {
     const spawned = runShim([], { PASEO_AGENT_ID: "stale-agent", TERM_PROGRAM: "ghostty" });
     expect(spawned.environment["PASEO_AGENT_ID"]).toBeUndefined();

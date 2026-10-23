@@ -190,7 +190,8 @@ itself.
   sessions identify themselves when roborev spawns Claude through the
   bundled shim. Point `claude_code_cmd` in `~/.roborev/config.toml` at
   `<repo>/scripts/roborev-claude-shim` (absolute path); identified cards
-  wear the containment ring in cyan.
+  wear the containment ring in cyan. The shim also confines review runs to
+  Read, Glob and Grep in plan mode; fix and refine runs keep their write tools.
 
 Quota numbers read **reset countdown · remaining percentage**. Historical
 readings retain their source age; a reset passing does not invent fresh quota.

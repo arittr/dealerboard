@@ -3,8 +3,35 @@
 # dealerboard's origin detection (ROBOREV_SPAWN — src/core/origin.ts), and
 # scrubs spawn markers the roborev daemon inherited from whichever shell
 # started it, so a stale Paseo or terminal identity never wins.
+#
+# Review runs arrive with only `--allowedTools Read,Glob,Grep`, which merely
+# preapproves those tools: every other built-in and MCP tool stays loaded and
+# the user's default permission mode still applies. Confine them the way
+# roborev confines its own planning runs. Agentic fix/refine runs
+# (--dangerously-skip-permissions) and runs roborev already confined pass
+# through unchanged. Hooks keep running, so origin detection still works.
+#
 # Wire up via ~/.roborev/config.toml:
 #   claude_code_cmd = "<repo>/scripts/roborev-claude-shim"
 unset PASEO_AGENT_ID TERM_PROGRAM
 export ROBOREV_SPAWN=shim
+
+review_run=no
+previous=
+for argument in "$@"; do
+  case "$argument" in
+    --dangerously-skip-permissions | --permission-mode* | --tools*)
+      review_run=no
+      break
+      ;;
+  esac
+  if [ "$previous" = "--allowedTools" ] && [ "$argument" = "Read,Glob,Grep" ]; then
+    review_run=yes
+  fi
+  previous=$argument
+done
+
+if [ "$review_run" = yes ]; then
+  set -- "$@" --permission-mode plan --tools Read,Glob,Grep --disallowedTools 'mcp__*'
+fi
 exec claude "$@"
